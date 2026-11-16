@@ -1,0 +1,208 @@
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::hash::{Hash, Hasher};
+
+use handlebars::{get_arguments, render_template};
+use lazy_static::lazy_static;
+use serde::{Deserialize, Serialize};
+use siphasher::sip::SipHasher;
+use uuid::Uuid;
+use warp_errors::report_error;
+use warp_managed_secrets::ManagedSecretValue;
+
+use crate::ai::mcp::{TemplatableMCPServer, TemplateVariable};
+
+lazy_static! {
+    static ref HASHER: SipHasher = SipHasher::new_with_keys(0, 0);
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum VariableType {
+    Text,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VariableValue {
+    pub variable_type: VariableType,
+    pub value: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TemplatableMCPServerInstallation {
+    uuid: Uuid,
+    templatable_mcp_server: TemplatableMCPServer,
+    variable_values: HashMap<String, VariableValue>,
+    /// Warp-side identity of the server this installation was resolved from:
+    /// a managed MCP server uid or a well-known integration id (e.g. `linear`),
+    /// with the same semantics as `MCPServerConfig.warp_id` in the public API.
+    /// `None` for local and ad-hoc installations. Sent to warp-server in the
+    /// request's `MCPContext` so transcripts can name the server behind the
+    /// opaque installation `uuid`.
+    #[serde(default)]
+    warp_id: Option<String>,
+}
+
+impl TemplatableMCPServerInstallation {
+    pub fn new(
+        uuid: Uuid,
+        templatable_mcp_server: TemplatableMCPServer,
+        variable_values: HashMap<String, VariableValue>,
+    ) -> TemplatableMCPServerInstallation {
+        TemplatableMCPServerInstallation {
+            uuid,
+            templatable_mcp_server,
+            variable_values,
+            warp_id: None,
+        }
+    }
+
+    /// Records the Warp-side id (managed uid or well-known integration id) this
+    /// installation was resolved from. See [`Self::warp_id`].
+    pub fn with_warp_id(mut self, warp_id: Option<String>) -> Self {
+        self.warp_id = warp_id;
+        self
+    }
+
+    /// The Warp-side id this installation was resolved from, if any.
+    pub fn warp_id(&self) -> Option<&str> {
+        self.warp_id.as_deref()
+    }
+
+    /// Returns a consistent hash for the installation based on the MCP server's name, JsonTemplate, and variable values.
+    /// Returns None if the variable values cannot be serialized.
+    pub fn hash(&self) -> Option<u64> {
+        let mut hasher = *HASHER;
+
+        let name = self.templatable_mcp_server.name.as_str();
+        let template_json = self.templatable_mcp_server.template.json.as_str();
+
+        // Converts the variable values to a sorted BTreeMap for consistent hashing
+        let variable_values: BTreeMap<String, String> = self
+            .variable_values
+            .iter()
+            .map(|(key, value)| (key.clone(), value.value.clone()))
+            .collect();
+        let variable_values_json = match serde_json::to_string(&variable_values) {
+            Ok(json) => json,
+            Err(err) => {
+                report_error!(
+                    anyhow::Error::new(err)
+                        .context("Failed to serialize variable values for hashing")
+                );
+                return None;
+            }
+        };
+
+        // Hashes the name, template JSON, and variable values
+        (name, template_json, variable_values_json).hash(&mut hasher);
+
+        Some(hasher.finish())
+    }
+
+    pub fn uuid(&self) -> Uuid {
+        self.uuid
+    }
+
+    pub fn templatable_mcp_server(&self) -> &TemplatableMCPServer {
+        &self.templatable_mcp_server
+    }
+
+    pub fn template_uuid(&self) -> Uuid {
+        self.templatable_mcp_server.uuid
+    }
+
+    pub fn template_json(&self) -> &str {
+        &self.templatable_mcp_server.template.json
+    }
+
+    pub fn template_variables(&self) -> &Vec<TemplateVariable> {
+        &self.templatable_mcp_server.template.variables
+    }
+
+    pub fn variable_values(&self) -> &HashMap<String, VariableValue> {
+        &self.variable_values
+    }
+
+    /// Apply Warp-managed secrets to the installation's variable values.
+    ///
+    /// Precedence for each template variable:
+    /// 1. Explicit reference: if the current value contains `{{secret_name}}`
+    ///    placeholders, they are rendered against the secrets map. Any other
+    ///    secrets that happen to share the variable's key name are ignored.
+    /// 2. Implicit key-name match: if the current value has no `{{...}}`
+    ///    placeholders but a secret exists whose name equals the variable key,
+    ///    that secret's value is inserted.
+    ///
+    /// Variables with no matching explicit refs and no matching secret are left
+    /// unchanged.
+    ///
+    /// Returns the sorted, deduplicated referenced secret names that are not
+    /// available as injectable raw values.
+    pub fn apply_secrets(&mut self, secrets: &HashMap<String, ManagedSecretValue>) -> Vec<String> {
+        let secret_strings: HashMap<String, String> = secrets
+            .iter()
+            .filter_map(|(k, v)| {
+                let ManagedSecretValue::RawValue { value } = v else {
+                    return None;
+                };
+                Some((k.clone(), value.clone()))
+            })
+            .collect();
+
+        let mut unresolved_secret_names = BTreeSet::new();
+
+        // Access templatable_mcp_server directly instead of using template_variables() to allow mutating
+        // variable_values while borrowing the template.
+        for variable in self.templatable_mcp_server.template.variables.iter() {
+            let explicit_refs = self
+                .variable_values
+                .get(&variable.key)
+                .map(|value| get_arguments(&value.value))
+                .unwrap_or_default();
+
+            if !explicit_refs.is_empty() {
+                for name in explicit_refs {
+                    if !secret_strings.contains_key(&name) {
+                        unresolved_secret_names.insert(name);
+                    }
+                }
+                let rendered =
+                    render_template(&self.variable_values[&variable.key].value, &secret_strings);
+                self.variable_values.insert(
+                    variable.key.clone(),
+                    VariableValue {
+                        variable_type: VariableType::Text,
+                        value: rendered,
+                    },
+                );
+            } else if let Some(secret) = secrets.get(&variable.key) {
+                let ManagedSecretValue::RawValue { value } = secret else {
+                    // We don't support injecting other secret types.
+                    continue;
+                };
+                self.variable_values.insert(
+                    variable.key.clone(),
+                    VariableValue {
+                        variable_type: VariableType::Text,
+                        value: value.clone(),
+                    },
+                );
+            }
+        }
+
+        unresolved_secret_names.into_iter().collect()
+    }
+
+    pub fn gallery_uuid(&self) -> Option<Uuid> {
+        self.templatable_mcp_server
+            .gallery_data
+            .as_ref()
+            .map(|g| g.gallery_item_id)
+    }
+
+    pub fn gallery_version(&self) -> Option<i32> {
+        self.templatable_mcp_server
+            .gallery_data
+            .as_ref()
+            .map(|g| g.version)
+    }
+}

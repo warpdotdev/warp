@@ -1,0 +1,30 @@
+[package]
+name = "command"
+version = "0.1.0"
+edition = "2024"
+publish.workspace = true
+license.workspace = true
+
+[features]
+test-util = []
+
+[dependencies]
+warp_errors.workspace = true
+log.workspace = true
+
+[dev-dependencies]
+tempfile = "3.8.0"
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+async-process = { workspace = true }
+futures-lite.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+anyhow.workspace = true
+lazy_static.workspace = true
+thiserror.workspace = true
+win32job = "2.0.2"
+windows.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true

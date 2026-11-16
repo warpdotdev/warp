@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+
+# The action ("remove" or "purge") is passed as the first argument to the
+# postrm script.
+action="$1"
+
+rm -f /usr/bin/warp-terminal@@CHANNEL_SUFFIX@@
+
+# Make sure the system forgets the newly-uninstalled desktop file.
+if hash update-desktop-database 2>/dev/null; then
+	update-desktop-database
+fi

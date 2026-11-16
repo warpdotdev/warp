@@ -1,0 +1,22 @@
+[package]
+name = "simple_logger"
+version = "0.1.0"
+edition = "2024"
+authors = ["Warp Team <dev@warp.dev>"]
+publish.workspace = true
+license.workspace = true
+description = "Simple file-based async logger for server stderr output"
+
+[dependencies]
+async-channel = { workspace = true }
+async-fs = { workspace = true }
+chrono = { workspace = true }
+futures = { workspace = true }
+log = { workspace = true }
+thiserror.workspace = true
+warp_core = { workspace = true }
+warpui_core.workspace = true
+
+[dev-dependencies]
+instant = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt"] }

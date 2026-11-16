@@ -1,0 +1,3224 @@
+use std::collections::HashMap;
+use std::ffi::OsString;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
+use std::time::Duration;
+
+use chrono::Local;
+use cloud_object_models::CodeForge;
+use command::blocking::Command as ProcessCommand;
+use futures::channel::oneshot;
+use futures::executor::block_on;
+use futures::poll;
+use mockito::Matcher;
+use repo_metadata::{DirectoryWatcher, RepoMetadataEvent, RepoMetadataModel, RepositoryIdentifier};
+use serde_json::json;
+use session_sharing_protocol::common::{AgentAttachment, ParticipantId};
+use tempfile::TempDir;
+use warp_cli::agent::{Harness, HarnessTransport};
+use warp_cli::skill::SkillSpec;
+use warp_cli::{
+    OZ_CLI_ENV, OZ_HARNESS_ENV, OZ_PARENT_RUN_ID_ENV, OZ_RUN_ID_ENV, SERVER_ROOT_URL_OVERRIDE_ENV,
+    SESSION_SHARING_SERVER_URL_OVERRIDE_ENV, WS_SERVER_URL_OVERRIDE_ENV,
+};
+use warp_core::channel::ChannelState;
+use warp_graphql::ai::AgentTaskState;
+use warp_graphql::platform_error::PlatformErrorMessageFormat;
+use warp_managed_secrets::ManagedSecretValue;
+use warp_multi_agent_api::response_event;
+use warp_util::standardized_path::StandardizedPath;
+use warpui::r#async::Timer;
+use warpui::{App, SingletonEntity as _};
+
+use super::{
+    AgentDriver, AgentDriverError, AgentRunPrompt, CLIAgentSessionStatus, DebugWindowController,
+    HarnessIdleAction, IdleTimeoutSender, LEGACY_OZ_PARENT_LISTENER_MANAGED_EXTERNALLY_ENV,
+    LEGACY_OZ_PARENT_STATE_ROOT_ENV, OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV,
+    OZ_MESSAGE_LISTENER_STATE_ROOT_ENV, PlatformErrorCode, PluginInstallError,
+    SDKConversationOutputStatus, WARP_MESSAGE_LISTENER_STATE_ROOT_ENV, build_secret_env_vars,
+    debug_turn_task_state, harness_idle_action_for_conversation_status,
+    idle_window_for_cli_session_status, idle_window_for_terminal_status,
+    setup_failure_status_update, terminal_status_log_outcome,
+};
+use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
+use crate::ai::agent::task::TaskId;
+use crate::ai::agent::{
+    AIAgentActionResult, AIAgentActionResultType, AIAgentAttachment, AIAgentInput, AIAgentOutput,
+    AIAgentOutputMessage, ArtifactCreatedData, CancellationReason, MessageId, RenderableAIError,
+    UploadArtifactResult,
+};
+use crate::ai::agent_sdk::driver::environment::PrepareEnvironmentError;
+use crate::ai::agent_sdk::driver::harness::{HarnessKind, harness_kind};
+use crate::ai::agent_sdk::task_env_vars;
+use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::blocklist::orchestration_events::{
+    OrchestrationEventService, PendingEvent, PendingEventDetail,
+};
+use crate::ai::blocklist::{
+    BlocklistAIHistoryModel, QueuedQuery, QueuedQueryModel, QueuedQueryOrigin, RequestInput,
+    ResponseStream, ResponseStreamId,
+};
+use crate::ai::cloud_environments::{GithubRepo, SourceRepo};
+use crate::ai::llms::LLMId;
+use crate::ai::skills::SkillManager;
+use crate::test_util::assert_eventually;
+use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
+use crate::workspace::view::tests::initialize_app as initialize_workspace_test_app;
+
+// ── IdleTimeoutSender tests ──────────────────────────────────────────────────────
+
+#[test]
+fn setup_timeout_does_not_retain_a_potentially_running_command() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let temp = TempDir::new().unwrap();
+        let driver = app.add_model(|ctx| {
+            let terminal_driver =
+                super::terminal::TerminalDriver::create_from_existing_view(terminal, ctx);
+            let mut driver =
+                AgentDriver::new_for_test(temp.path().to_path_buf(), terminal_driver, ctx);
+            driver.idle_on_fail = Some(Duration::from_secs(30 * 60));
+            driver
+        });
+        let spawner = driver.update(&mut app, |_, ctx| ctx.spawner());
+        let error = AgentDriverError::SetupCommandTimedOut {
+            message: "Setup command #1 timed out after 1800s: ./setup.sh".to_string(),
+        };
+        let mut linger = Box::pin(AgentDriver::linger_after_failure(
+            &spawner,
+            "environment_setup",
+            &error,
+        ));
+        assert!(poll!(linger.as_mut()).is_ready());
+        assert_eq!(
+            setup_failure_status_update(&error).error_code,
+            Some(PlatformErrorCode::EnvironmentSetupFailed)
+        );
+    });
+}
+
+#[test]
+fn driver_keeps_uninterpreted_factory_experiments() {
+    App::test((), |mut app| async move {
+        initialize_workspace_test_app(&mut app);
+        let experimental: serde_json::Map<String, serde_json::Value> =
+            serde_json::from_value(json!({
+                "identityOnlySystemPrompt": true,
+                "private-uid-sentinel": "secret-value-sentinel"
+            }))
+            .unwrap();
+        let mut options = crate::ai::agent_sdk::tests::agent_driver_options();
+        options.experimental = Some(experimental.clone());
+        let driver = app.update(|ctx| AgentDriver::create(options, ctx).unwrap());
+        driver.read(&app, |driver, _| {
+            assert_eq!(driver.experimental, Some(experimental));
+        });
+    });
+}
+
+#[test]
+fn idle_timeout_sender_send_now_delivers_value() {
+    let (tx, mut rx) = oneshot::channel::<i32>();
+    let idle_timeout = IdleTimeoutSender::new(tx);
+    idle_timeout.end_run_now(42);
+    assert_eq!(rx.try_recv().unwrap(), Some(42));
+}
+
+#[test]
+fn idle_timeout_sender_send_now_only_delivers_once() {
+    let (tx, mut rx) = oneshot::channel::<i32>();
+    let idle_timeout = IdleTimeoutSender::new(tx);
+    idle_timeout.end_run_now(1);
+    idle_timeout.end_run_now(2);
+    assert_eq!(rx.try_recv().unwrap(), Some(1));
+}
+
+#[test]
+fn idle_timeout_sender_send_after_delivers_after_timeout() {
+    let (tx, mut rx) = oneshot::channel::<i32>();
+    let idle_timeout = IdleTimeoutSender::new(tx);
+    idle_timeout.end_run_after(Duration::from_millis(50), 99);
+
+    // Not yet delivered.
+    assert_eq!(rx.try_recv().unwrap(), None);
+
+    std::thread::sleep(Duration::from_millis(100));
+    assert_eq!(rx.try_recv().unwrap(), Some(99));
+}
+
+#[test]
+fn idle_timeout_sender_cancel_prevents_delivery() {
+    let (tx, mut rx) = oneshot::channel::<i32>();
+    let idle_timeout = IdleTimeoutSender::new(tx);
+    idle_timeout.end_run_after(Duration::from_millis(50), 99);
+    idle_timeout.cancel_idle_timeout();
+
+    std::thread::sleep(Duration::from_millis(100));
+    // Sender was not consumed, so the channel is still open but empty.
+    assert_eq!(rx.try_recv().unwrap(), None);
+}
+
+#[test]
+fn idle_timeout_sender_cancel_then_send_now_delivers() {
+    let (tx, mut rx) = oneshot::channel::<i32>();
+    let idle_timeout = IdleTimeoutSender::new(tx);
+    idle_timeout.end_run_after(Duration::from_millis(50), 1);
+    idle_timeout.cancel_idle_timeout();
+    idle_timeout.end_run_now(2);
+
+    assert_eq!(rx.try_recv().unwrap(), Some(2));
+}
+
+#[test]
+fn idle_timeout_sender_later_send_after_supersedes_earlier() {
+    let (tx, mut rx) = oneshot::channel::<i32>();
+    let idle_timeout = IdleTimeoutSender::new(tx);
+    // First timer: long timeout.
+    idle_timeout.end_run_after(Duration::from_secs(10), 1);
+    // Second timer: short timeout. The first is implicitly cancelled.
+    idle_timeout.end_run_after(Duration::from_millis(50), 2);
+
+    block_on(async {
+        assert_eventually!(
+            400 => rx.try_recv().unwrap() == Some(2),
+            "the latest idle timeout did not deliver its value"
+        );
+    });
+}
+
+#[test]
+fn idle_timeout_sender_complete_with_optional_idle_none_sends_immediately() {
+    // `complete_with_optional_idle(None, value)` routes to `end_run_now` and
+    // delivers `value` synchronously.
+    let (tx, mut rx) = oneshot::channel::<i32>();
+    let idle_timeout = IdleTimeoutSender::new(tx);
+    idle_timeout.complete_with_optional_idle(None, 7);
+    assert_eq!(rx.try_recv().unwrap(), Some(7));
+}
+
+#[test]
+fn idle_timeout_sender_complete_with_optional_idle_some_defers_then_delivers() {
+    // `complete_with_optional_idle(Some(d), value)` routes to `end_run_after`
+    // and defers delivery by `d`.
+    let (tx, mut rx) = oneshot::channel::<i32>();
+    let idle_timeout = IdleTimeoutSender::new(tx);
+    idle_timeout.complete_with_optional_idle(Some(Duration::from_millis(50)), 7);
+
+    // Not delivered yet.
+    assert_eq!(rx.try_recv().unwrap(), None);
+
+    std::thread::sleep(Duration::from_millis(100));
+    assert_eq!(rx.try_recv().unwrap(), Some(7));
+}
+
+#[test]
+fn idle_timeout_sender_complete_with_zero_idle_sends_immediately() {
+    let (tx, mut rx) = oneshot::channel::<i32>();
+    let idle_timeout = IdleTimeoutSender::new(tx);
+    idle_timeout.end_run_after(Duration::from_millis(50), 1);
+
+    idle_timeout.complete_with_optional_idle(Some(Duration::ZERO), 7);
+
+    assert_eq!(rx.try_recv().unwrap(), Some(7));
+}
+
+#[test]
+fn idle_timeout_sender_complete_with_optional_idle_some_then_cancel_invalidates_timer() {
+    // Cross-path cancellation: the Stage 2c skip-initial-turn driver path
+    // schedules a deferred `Success` via `complete_with_optional_idle(Some(_), _)`
+    // *before* the history subscription is wired up; a later
+    // `AppendedExchange` in that subscription closure invalidates the timer
+    // via `cancel_idle_timeout()`. The shared `Arc<AtomicUsize>` generation
+    // counter is what makes that work across the two logical code paths.
+    // This test exercises the same sequence in isolation: schedule via the
+    // helper, then cancel via the unrelated `cancel_idle_timeout` entry point,
+    // and verify the value is never delivered.
+    let (tx, mut rx) = oneshot::channel::<i32>();
+    let idle_timeout = IdleTimeoutSender::new(tx);
+    idle_timeout.complete_with_optional_idle(Some(Duration::from_millis(50)), 7);
+    idle_timeout.cancel_idle_timeout();
+
+    std::thread::sleep(Duration::from_millis(100));
+    // Sender was never consumed by the cancelled timer, so the channel is
+    // still open but empty.
+    assert_eq!(rx.try_recv().unwrap(), None);
+}
+
+// ── DebugWindowController tests ───────────────────────────────────────────────────
+
+#[test]
+fn debug_window_controller_pin_blocks_refresh_and_finish_rearms() {
+    let (tx, mut rx) = oneshot::channel::<()>();
+    let controller = DebugWindowController::new(IdleTimeoutSender::new(tx));
+    let turn_id = AIConversationId::new();
+
+    // A short window so an unpinned controller would fire almost immediately.
+    controller.refresh_idle((), Duration::from_millis(30));
+    assert!(
+        controller.pin_for_turn(turn_id),
+        "first pin must be accepted"
+    );
+
+    std::thread::sleep(Duration::from_millis(80));
+    assert_eq!(
+        rx.try_recv().unwrap(),
+        None,
+        "a pinned debug turn must not let the idle window expire, however long it runs"
+    );
+
+    assert!(
+        controller.finish_turn(turn_id, (), Duration::from_millis(30)),
+        "finishing a tracked turn must report a real transition"
+    );
+    std::thread::sleep(Duration::from_millis(80));
+    assert_eq!(
+        rx.try_recv().unwrap(),
+        Some(()),
+        "finishing the last active turn must re-arm the full idle window"
+    );
+}
+
+#[test]
+fn debug_window_controller_duplicate_pin_is_idempotent() {
+    let (tx, _rx) = oneshot::channel::<()>();
+    let controller = DebugWindowController::new(IdleTimeoutSender::new(tx));
+    let turn_id = AIConversationId::new();
+
+    assert!(
+        controller.pin_for_turn(turn_id),
+        "first pin is a real transition"
+    );
+    assert!(
+        !controller.pin_for_turn(turn_id),
+        "a duplicate pin for the same turn id must be a no-op"
+    );
+}
+
+#[test]
+fn debug_window_controller_overlapping_turns_stay_pinned_until_the_last_turn_finishes() {
+    let (tx, _rx) = oneshot::channel::<()>();
+    let controller = DebugWindowController::new(IdleTimeoutSender::new(tx));
+    let first_turn = AIConversationId::new();
+    let second_turn = AIConversationId::new();
+
+    assert!(controller.pin_for_turn(first_turn));
+    assert!(controller.pin_for_turn(second_turn));
+    assert!(controller.finish_turn(first_turn, (), Duration::from_secs(60)));
+    assert!(controller.is_pinned());
+    assert!(controller.finish_turn(second_turn, (), Duration::from_secs(60)));
+    assert!(!controller.is_pinned());
+}
+
+#[test]
+fn debug_turn_task_state_maps_timeline_states() {
+    let blocked = ConversationStatus::Blocked {
+        blocked_action: "approval".to_string(),
+    };
+    let cases = [
+        (
+            ConversationStatus::InProgress,
+            Some(AgentTaskState::InProgress),
+        ),
+        (ConversationStatus::Success, Some(AgentTaskState::Succeeded)),
+        (ConversationStatus::Error, Some(AgentTaskState::Error)),
+        (
+            ConversationStatus::Cancelled,
+            Some(AgentTaskState::Cancelled),
+        ),
+        (blocked, Some(AgentTaskState::Blocked)),
+        (ConversationStatus::TransientError, None),
+        (ConversationStatus::WaitingForEvents, None),
+    ];
+
+    for (status, expected) in cases {
+        assert_eq!(debug_turn_task_state(&status), expected);
+    }
+}
+#[test]
+fn debug_window_controller_duplicate_finish_is_idempotent() {
+    let (tx, mut rx) = oneshot::channel::<()>();
+    let controller = DebugWindowController::new(IdleTimeoutSender::new(tx));
+    let turn_id = AIConversationId::new();
+
+    controller.pin_for_turn(turn_id);
+    assert!(controller.finish_turn(turn_id, (), Duration::from_millis(30)));
+    assert!(
+        !controller.finish_turn(turn_id, (), Duration::from_millis(30)),
+        "a duplicate terminal event for the same turn id must be a no-op"
+    );
+
+    std::thread::sleep(Duration::from_millis(80));
+    assert_eq!(
+        rx.try_recv().unwrap(),
+        Some(()),
+        "the single real finish must still re-arm exactly one full window"
+    );
+}
+
+#[test]
+fn debug_window_controller_finish_of_unknown_turn_is_a_no_op() {
+    let (tx, mut rx) = oneshot::channel::<()>();
+    let controller = DebugWindowController::new(IdleTimeoutSender::new(tx));
+
+    controller.refresh_idle((), Duration::from_millis(30));
+    assert!(
+        !controller.finish_turn(AIConversationId::new(), (), Duration::from_millis(30)),
+        "finishing a turn id that was never pinned must be a no-op"
+    );
+
+    // The unrelated finish_turn call must not have disturbed the already-armed window.
+    std::thread::sleep(Duration::from_millis(80));
+    assert_eq!(rx.try_recv().unwrap(), Some(()));
+}
+
+#[test]
+fn debug_window_controller_refresh_is_inert_while_pinned() {
+    // Both refresh entry points — the viewer-input keystroke path and the general re-arm path —
+    // must be no-ops while a debug turn is pinning the window, for the same reason: neither may
+    // move a deadline that finish_turn is about to race by re-arming the full interval anyway.
+    let (tx, _rx) = oneshot::channel::<()>();
+    let controller = DebugWindowController::new(IdleTimeoutSender::new(tx));
+
+    controller.refresh_idle((), Duration::from_secs(60));
+    controller.pin_for_turn(AIConversationId::new());
+    assert_eq!(
+        controller.refresh_from_last_armed(),
+        None,
+        "a viewer-input refresh must not move the deadline while a debug turn is pinning it"
+    );
+
+    let controller = DebugWindowController::new(IdleTimeoutSender::new(oneshot::channel::<()>().0));
+    controller.pin_for_turn(AIConversationId::new());
+    assert!(
+        !controller.refresh_idle((), Duration::from_millis(30)),
+        "refreshing while pinned must not arm a deadline that finish_turn would then race"
+    );
+}
+
+#[test]
+fn idle_timeout_sender_on_commit_runs_before_value_is_delivered() {
+    // `on_commit` must run synchronously, on whichever thread performs the completion send,
+    // strictly before the value is observable via the receiver — for both the immediate
+    // (`end_run_now`) and deferred (`end_run_after`) paths. `AgentDriver` relies on this
+    // ordering to commit a conversation's "exiting" state before anything can observe the
+    // run's completion signal (QUALITY-1801).
+    let commit_ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+    let commit_ran_for_hook = Arc::clone(&commit_ran);
+    let (tx, rx) = oneshot::channel::<i32>();
+    let idle_timeout = IdleTimeoutSender::new(tx).with_on_commit(move || {
+        commit_ran_for_hook.store(true, Ordering::SeqCst);
+    });
+    idle_timeout.end_run_now(1);
+    assert!(
+        commit_ran.load(Ordering::SeqCst),
+        "on_commit must have run by the time end_run_now returns"
+    );
+    assert_eq!(block_on(rx).unwrap(), 1);
+
+    let commit_ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let commit_ran_for_hook = Arc::clone(&commit_ran);
+    let (tx, rx) = oneshot::channel::<i32>();
+    let idle_timeout = IdleTimeoutSender::new(tx).with_on_commit(move || {
+        commit_ran_for_hook.store(true, Ordering::SeqCst);
+    });
+    idle_timeout.end_run_after(Duration::from_millis(20), 2);
+    // Awaited rather than polled: resolution only happens after `on_commit` has already run
+    // on the same background thread, so there is nothing to race here.
+    assert_eq!(block_on(rx).unwrap(), 2);
+    assert!(
+        commit_ran.load(Ordering::SeqCst),
+        "on_commit must have run before the deferred completion was delivered"
+    );
+}
+
+// ── Terminal-status idle window routing ────────────────────────────────────────────
+
+fn error_status() -> SDKConversationOutputStatus {
+    SDKConversationOutputStatus::Error {
+        error: RenderableAIError::InternalWarpError,
+    }
+}
+
+#[test]
+fn terminal_error_defers_by_idle_on_fail() {
+    // The agent process is the shared-session sharer, so a failed run must be able to outlive
+    // its own failure for the session to stay attachable while the sandbox is retained.
+    let window =
+        idle_window_for_terminal_status(&error_status(), None, Some(Duration::from_secs(15 * 60)));
+
+    assert_eq!(window, Some(Duration::from_secs(15 * 60)));
+}
+
+#[test]
+fn terminal_error_exits_immediately_without_idle_on_fail() {
+    let window =
+        idle_window_for_terminal_status(&error_status(), Some(Duration::from_secs(45 * 60)), None);
+
+    assert_eq!(
+        window, None,
+        "--idle-on-complete must not act as a fallback for a terminal error"
+    );
+}
+
+#[test]
+fn non_error_completion_defers_by_idle_on_complete() {
+    // The failure window must not leak into the success/blocked/cancelled lifecycle.
+    let cases = [
+        ("success", SDKConversationOutputStatus::Success),
+        (
+            "blocked",
+            SDKConversationOutputStatus::Blocked {
+                blocked_action: "approve".to_string(),
+            },
+        ),
+        (
+            "cancelled",
+            SDKConversationOutputStatus::Cancelled {
+                reason: CancellationReason::ManuallyCancelled,
+            },
+        ),
+    ];
+
+    for (label, status) in cases {
+        let window = idle_window_for_terminal_status(
+            &status,
+            Some(Duration::from_secs(45 * 60)),
+            Some(Duration::from_secs(15 * 60)),
+        );
+
+        assert_eq!(
+            window,
+            Some(Duration::from_secs(45 * 60)),
+            "unexpected window for {label}"
+        );
+    }
+}
+
+#[test]
+fn setup_failure_is_reported_as_an_environment_setup_failure() {
+    // Not just a label: `TaskStatusMessage::is_environment_setup_failure` matches this variant
+    // alone, and the cloud-continuation resolver uses it to decide that a setup failure with no
+    // conversation gets a tombstone with no continue CTA. A generic code silently reroutes those
+    // runs into continuation handling that has nothing to continue.
+    let status = setup_failure_status_update(&AgentDriverError::EnvironmentSetupFailed(
+        "bad command".to_string(),
+    ));
+
+    assert_eq!(
+        status.error_code,
+        Some(PlatformErrorCode::EnvironmentSetupFailed)
+    );
+}
+
+#[test]
+fn retained_setup_failure_includes_markdown_output_and_recovery_hint() {
+    let error = AgentDriverError::from(PrepareEnvironmentError::SetupCommand {
+        command: "./setup.sh".to_string(),
+        output: Some("permission denied".to_string()),
+    });
+    let status = setup_failure_status_update(&error);
+    let messages = &status.platform_error.as_ref().unwrap().user_facing_messages;
+
+    assert_eq!(
+        status.message,
+        "Environment setup failed: Failed to run setup command: ./setup.sh\nCommand output:\npermission denied. Check your repository URLs and setup commands."
+    );
+    assert_eq!(
+        messages[&PlatformErrorMessageFormat::PlainText],
+        status.message
+    );
+    assert_eq!(
+        messages[&PlatformErrorMessageFormat::Markdown],
+        "Failed to run setup command `./setup.sh`:\n\n    permission denied\n\nCheck your repository URLs and setup commands."
+    );
+}
+
+#[test]
+fn debug_window_refresh_uses_the_most_recently_armed_outcome() {
+    // A run can fail, be resumed, and fail again. The refresh subscription is installed once and
+    // outlives each individual failure, so refreshing must reschedule the *current* outcome; an
+    // outcome captured at first arm would exit the run reporting the earlier failure.
+    let (tx, rx) = oneshot::channel::<SDKConversationOutputStatus>();
+    let idle_timeout = IdleTimeoutSender::new(tx);
+
+    idle_timeout.arm_refreshable(Duration::from_secs(15 * 60), error_status());
+    idle_timeout.arm_refreshable(
+        Duration::ZERO,
+        SDKConversationOutputStatus::Blocked {
+            blocked_action: "second failure".to_string(),
+        },
+    );
+
+    assert_eq!(
+        idle_timeout.refresh(),
+        Some(Duration::ZERO),
+        "refresh should reschedule using the window most recently armed"
+    );
+
+    // Awaited rather than polled: the reschedule completes on a timer task, so a `try_recv` here
+    // races it and only passes when the machine is idle.
+    let blocked_action = match block_on(rx) {
+        Ok(SDKConversationOutputStatus::Blocked { blocked_action }) => Some(blocked_action),
+        _ => None,
+    };
+    assert_eq!(
+        blocked_action.as_deref(),
+        Some("second failure"),
+        "refresh rescheduled a stale outcome instead of the most recent failure"
+    );
+}
+
+#[test]
+fn debug_window_refresh_is_inert_before_anything_is_armed() {
+    let (tx, _rx) = oneshot::channel::<SDKConversationOutputStatus>();
+    let idle_timeout = IdleTimeoutSender::new(tx);
+
+    assert_eq!(idle_timeout.refresh(), None);
+}
+
+#[test]
+fn cancelling_the_idle_timeout_stops_a_later_refresh_from_resurrecting_it() {
+    // A follow-up cancels the pending exit, but the viewer-input subscription outlives that
+    // cancellation. Without clearing the armed outcome, typing in the session afterwards would
+    // reschedule the old failure and exit the run mid-follow-up.
+    let (tx, mut rx) = oneshot::channel::<SDKConversationOutputStatus>();
+    let idle_timeout = IdleTimeoutSender::new(tx);
+
+    // Long enough that the armed timer cannot fire before the cancellation below, which would
+    // otherwise make this race under load rather than test the cancellation.
+    idle_timeout.arm_refreshable(Duration::from_secs(60), error_status());
+    idle_timeout.cancel_idle_timeout();
+
+    assert_eq!(
+        idle_timeout.refresh(),
+        None,
+        "a cancelled debug window must not be refreshable"
+    );
+    assert!(
+        matches!(rx.try_recv(), Ok(None)),
+        "the run must not have been ended by the cancelled window"
+    );
+}
+
+#[test]
+fn failed_cli_harness_session_defers_by_idle_on_fail() {
+    // The flag lives on `warp agent run`, so it has to behave the same whichever harness the run
+    // uses; a failed CLI session is the same "process is the session sharer" situation.
+    let idle_on_complete = Some(Duration::from_secs(45 * 60));
+    let idle_on_fail = Some(Duration::from_secs(15 * 60));
+
+    let failed = CLIAgentSessionStatus::Failed {
+        error_type: None,
+        message: Some("boom".to_string()),
+    };
+    assert_eq!(
+        idle_window_for_cli_session_status(&failed, idle_on_complete, idle_on_fail),
+        idle_on_fail
+    );
+    assert_eq!(
+        idle_window_for_cli_session_status(&failed, idle_on_complete, None),
+        None,
+        "--idle-on-complete must not act as a fallback for a failed CLI session"
+    );
+    assert_eq!(
+        idle_window_for_cli_session_status(
+            &CLIAgentSessionStatus::Success,
+            idle_on_complete,
+            idle_on_fail
+        ),
+        idle_on_complete
+    );
+    assert_eq!(
+        idle_window_for_cli_session_status(
+            &CLIAgentSessionStatus::InProgress,
+            idle_on_complete,
+            idle_on_fail
+        ),
+        None
+    );
+    assert_eq!(
+        idle_window_for_cli_session_status(
+            &CLIAgentSessionStatus::Cancelled,
+            idle_on_complete,
+            idle_on_fail
+        ),
+        idle_on_complete,
+        "a Ctrl-C cancellation is a non-error completion, like Success or Blocked"
+    );
+}
+
+#[test]
+fn native_conversation_status_drives_the_harness_exit_like_a_cli_session() {
+    let idle_on_complete = Some(Duration::from_secs(45 * 60));
+    let idle_on_fail = Some(Duration::from_secs(15 * 60));
+    let action = |status: &ConversationStatus| {
+        harness_idle_action_for_conversation_status(status, idle_on_complete, idle_on_fail, false)
+    };
+
+    assert_eq!(
+        action(&ConversationStatus::InProgress),
+        HarnessIdleAction::CancelIdle
+    );
+    assert_eq!(
+        action(&ConversationStatus::Success),
+        HarnessIdleAction::Exit {
+            window: idle_on_complete,
+            failed: false,
+        }
+    );
+    assert_eq!(
+        action(&ConversationStatus::Cancelled),
+        HarnessIdleAction::Exit {
+            window: idle_on_complete,
+            failed: false,
+        }
+    );
+    assert_eq!(
+        action(&ConversationStatus::Error),
+        HarnessIdleAction::Exit {
+            window: idle_on_fail,
+            failed: true,
+        }
+    );
+    assert_eq!(
+        harness_idle_action_for_conversation_status(
+            &ConversationStatus::Error,
+            idle_on_complete,
+            None,
+            false
+        ),
+        HarnessIdleAction::Exit {
+            window: None,
+            failed: true,
+        },
+        "--idle-on-complete must not act as a fallback for a failed turn"
+    );
+    assert_eq!(
+        action(&ConversationStatus::WaitingForEvents),
+        HarnessIdleAction::Ignore
+    );
+    assert_eq!(
+        action(&ConversationStatus::TransientError),
+        HarnessIdleAction::Ignore
+    );
+}
+
+#[test]
+fn a_settling_harness_turn_defers_the_exit_but_not_the_idle_cancel() {
+    // A steer finishes the cancelled turn's stream (Success or Cancelled) moments before the
+    // follow-up's turn begins; with no idle window that status would end the run underneath
+    // the follow-up.
+    let settling = |status: &ConversationStatus| {
+        harness_idle_action_for_conversation_status(status, None, None, true)
+    };
+    assert_eq!(
+        settling(&ConversationStatus::Success),
+        HarnessIdleAction::Ignore
+    );
+    assert_eq!(
+        settling(&ConversationStatus::Cancelled),
+        HarnessIdleAction::Ignore
+    );
+    assert_eq!(
+        settling(&ConversationStatus::Error),
+        HarnessIdleAction::Ignore
+    );
+    assert_eq!(
+        settling(&ConversationStatus::InProgress),
+        HarnessIdleAction::CancelIdle,
+        "the follow-up's turn must still cancel a pending idle exit"
+    );
+    assert_eq!(
+        harness_idle_action_for_conversation_status(
+            &ConversationStatus::Cancelled,
+            None,
+            None,
+            false
+        ),
+        HarnessIdleAction::Exit {
+            window: None,
+            failed: false,
+        },
+        "once the harness is no longer settling, a cancelled turn ends the run as before"
+    );
+}
+
+#[test]
+fn terminal_status_log_outcome_labels_are_low_cardinality() {
+    assert_eq!(
+        terminal_status_log_outcome(&SDKConversationOutputStatus::Success),
+        "non_error_completion"
+    );
+    assert_eq!(terminal_status_log_outcome(&error_status()), "error");
+}
+
+#[test]
+fn task_env_vars_include_parent_run_id_when_present() {
+    let task_id: AmbientAgentTaskId = "550e8400-e29b-41d4-a716-446655440000".parse().unwrap();
+    let env_vars = task_env_vars(Some(&task_id), Some("parent-run-123"), Harness::Claude);
+    let overrides_allowed = ChannelState::channel().allows_server_url_overrides();
+
+    assert_eq!(
+        env_vars.get(&OsString::from(OZ_RUN_ID_ENV)),
+        Some(&OsString::from(task_id.to_string()))
+    );
+    assert_eq!(
+        env_vars.get(&OsString::from(OZ_PARENT_RUN_ID_ENV)),
+        Some(&OsString::from("parent-run-123"))
+    );
+    assert_eq!(
+        env_vars.get(&OsString::from(OZ_HARNESS_ENV)),
+        Some(&OsString::from("claude"))
+    );
+    assert_eq!(
+        env_vars.get(&OsString::from(OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV)),
+        Some(&OsString::from("1"))
+    );
+    assert_eq!(
+        env_vars.get(&OsString::from(
+            LEGACY_OZ_PARENT_LISTENER_MANAGED_EXTERNALLY_ENV
+        )),
+        Some(&OsString::from("1"))
+    );
+    assert!(
+        env_vars
+            .get(&OsString::from(OZ_CLI_ENV))
+            .is_some_and(|value| !value.is_empty())
+    );
+
+    let server_root_url = ChannelState::server_root_url().into_owned();
+    if overrides_allowed && !server_root_url.is_empty() {
+        assert_eq!(
+            env_vars.get(&OsString::from(SERVER_ROOT_URL_OVERRIDE_ENV)),
+            Some(&OsString::from(server_root_url))
+        );
+    } else {
+        assert!(!env_vars.contains_key(&OsString::from(SERVER_ROOT_URL_OVERRIDE_ENV)));
+    }
+
+    let ws_server_url = ChannelState::ws_server_url().into_owned();
+    if overrides_allowed && !ws_server_url.is_empty() {
+        assert_eq!(
+            env_vars.get(&OsString::from(WS_SERVER_URL_OVERRIDE_ENV)),
+            Some(&OsString::from(ws_server_url))
+        );
+    } else {
+        assert!(!env_vars.contains_key(&OsString::from(WS_SERVER_URL_OVERRIDE_ENV)));
+    }
+
+    if overrides_allowed {
+        match ChannelState::session_sharing_server_url() {
+            Some(url) if !url.is_empty() => assert_eq!(
+                env_vars.get(&OsString::from(SESSION_SHARING_SERVER_URL_OVERRIDE_ENV)),
+                Some(&OsString::from(url.into_owned()))
+            ),
+            _ => {
+                assert!(
+                    !env_vars
+                        .contains_key(&OsString::from(SESSION_SHARING_SERVER_URL_OVERRIDE_ENV))
+                )
+            }
+        }
+    } else {
+        assert!(!env_vars.contains_key(&OsString::from(SESSION_SHARING_SERVER_URL_OVERRIDE_ENV)));
+    }
+}
+
+#[test]
+fn task_env_vars_omit_parent_run_id_when_absent() {
+    let task_id: AmbientAgentTaskId = "550e8400-e29b-41d4-a716-446655440001".parse().unwrap();
+    let env_vars = task_env_vars(Some(&task_id), None, Harness::Oz);
+    let overrides_allowed = ChannelState::channel().allows_server_url_overrides();
+
+    assert_eq!(
+        env_vars.get(&OsString::from(OZ_RUN_ID_ENV)),
+        Some(&OsString::from(task_id.to_string()))
+    );
+    assert!(!env_vars.contains_key(&OsString::from(OZ_PARENT_RUN_ID_ENV)));
+    assert_eq!(
+        env_vars.get(&OsString::from(OZ_HARNESS_ENV)),
+        Some(&OsString::from("oz"))
+    );
+    assert!(!env_vars.contains_key(&OsString::from(OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV)));
+    assert!(!env_vars.contains_key(&OsString::from(
+        LEGACY_OZ_PARENT_LISTENER_MANAGED_EXTERNALLY_ENV
+    )));
+    assert_eq!(
+        env_vars.contains_key(&OsString::from(SERVER_ROOT_URL_OVERRIDE_ENV)),
+        overrides_allowed && !ChannelState::server_root_url().is_empty()
+    );
+    assert_eq!(
+        env_vars.contains_key(&OsString::from(WS_SERVER_URL_OVERRIDE_ENV)),
+        overrides_allowed && !ChannelState::ws_server_url().is_empty()
+    );
+}
+
+#[test]
+fn task_env_vars_enable_external_parent_listener_for_claude_runs_without_parent_run_id() {
+    let task_id: AmbientAgentTaskId = "550e8400-e29b-41d4-a716-446655440002".parse().unwrap();
+    let env_vars = task_env_vars(Some(&task_id), None, Harness::Claude);
+    assert_eq!(
+        env_vars.get(&OsString::from(OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV)),
+        Some(&OsString::from("1"))
+    );
+    assert_eq!(
+        env_vars.get(&OsString::from(
+            LEGACY_OZ_PARENT_LISTENER_MANAGED_EXTERNALLY_ENV
+        )),
+        Some(&OsString::from("1"))
+    );
+}
+
+#[test]
+#[serial_test::serial]
+fn task_env_vars_propagate_message_listener_state_root_with_legacy_alias() {
+    let task_id: AmbientAgentTaskId = "550e8400-e29b-41d4-a716-446655440003".parse().unwrap();
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe {
+        std::env::set_var(
+            OZ_MESSAGE_LISTENER_STATE_ROOT_ENV,
+            "/tmp/message-listener-root",
+        )
+    };
+    let env_vars = task_env_vars(Some(&task_id), None, Harness::Claude);
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var(OZ_MESSAGE_LISTENER_STATE_ROOT_ENV) };
+
+    assert_eq!(
+        env_vars.get(&OsString::from(OZ_MESSAGE_LISTENER_STATE_ROOT_ENV)),
+        Some(&OsString::from("/tmp/message-listener-root"))
+    );
+    // The WARP_ twin is only reachable when the state root is actually set, which is why it is
+    // asserted here rather than in the pairing test: that test does not populate the process
+    // env, and making it do so would need `#[serial_test::serial]` to stay race-free.
+    assert_eq!(
+        env_vars.get(&OsString::from(WARP_MESSAGE_LISTENER_STATE_ROOT_ENV)),
+        Some(&OsString::from("/tmp/message-listener-root"))
+    );
+    assert_eq!(
+        env_vars.get(&OsString::from(LEGACY_OZ_PARENT_STATE_ROOT_ENV)),
+        Some(&OsString::from("/tmp/message-listener-root"))
+    );
+}
+
+/// Every `OZ_` variable reaching a harness subprocess has a `WARP_` twin carrying the same
+/// value. This guard fails when one of a pair is injected without the other.
+///
+/// The legacy `OZ_PARENT_*` listener names are exempt: they exist only to keep an external
+/// Claude plugin working through its migration and are deliberately not given `WARP_` twins.
+#[test]
+fn task_env_vars_mirror_every_oz_var_to_a_warp_name() {
+    const LEGACY_ONLY: [&str; 2] = [
+        LEGACY_OZ_PARENT_LISTENER_MANAGED_EXTERNALLY_ENV,
+        LEGACY_OZ_PARENT_STATE_ROOT_ENV,
+    ];
+
+    let task_id: AmbientAgentTaskId = "550e8400-e29b-41d4-a716-446655440005".parse().unwrap();
+    let env_vars = task_env_vars(Some(&task_id), Some("parent-run-789"), Harness::Claude);
+
+    let mut paired = 0;
+    for (name, value) in &env_vars {
+        let Some(name) = name.to_str() else { continue };
+        let Some(suffix) = name.strip_prefix("OZ_") else {
+            continue;
+        };
+        if LEGACY_ONLY.contains(&name) {
+            continue;
+        }
+        paired += 1;
+        let warp_name = OsString::from(format!("WARP_{suffix}"));
+        assert_eq!(
+            env_vars.get(&warp_name),
+            Some(value),
+            "{name} is injected without a matching WARP_{suffix} carrying the same value"
+        );
+    }
+    assert!(
+        paired > 0,
+        "no OZ_ variables were injected, so the assertions above would prove nothing"
+    );
+}
+
+#[test]
+fn task_env_vars_can_use_opencode_harness() {
+    let task_id: AmbientAgentTaskId = "550e8400-e29b-41d4-a716-446655440004".parse().unwrap();
+    let env_vars = task_env_vars(Some(&task_id), Some("parent-run-456"), Harness::OpenCode);
+
+    assert_eq!(
+        env_vars.get(&OsString::from(OZ_HARNESS_ENV)),
+        Some(&OsString::from("opencode"))
+    );
+}
+
+#[test]
+fn json_format_output_includes_filename_for_file_artifact_created_event() {
+    let output = AIAgentOutput {
+        messages: vec![AIAgentOutputMessage::artifact_created(
+            MessageId::new("message-1".to_string()),
+            ArtifactCreatedData::File {
+                artifact_uid: "artifact-uid".to_string(),
+                filepath: "outputs/report.txt".to_string(),
+                filename: "report.txt".to_string(),
+                mime_type: "text/plain".to_string(),
+                description: Some("Build output for the latest run".to_string()),
+                size_bytes: 42,
+            },
+        )],
+        ..Default::default()
+    };
+
+    let mut bytes = Vec::new();
+    super::output::json::format_output(&output, &mut bytes).expect("json formatting should work");
+
+    let value: serde_json::Value =
+        serde_json::from_slice(&bytes).expect("output should be valid json");
+
+    assert_eq!(value["type"], "artifact_created");
+    assert_eq!(value["artifact_type"], "file");
+    assert_eq!(value["artifact_uid"], "artifact-uid");
+    assert_eq!(value["filepath"], "outputs/report.txt");
+    assert_eq!(value["filename"], "report.txt");
+    assert_eq!(value["mime_type"], "text/plain");
+    assert_eq!(value["description"], "Build output for the latest run");
+    assert_eq!(value["size_bytes"], 42);
+}
+
+#[test]
+fn json_format_input_omits_filepath_and_description_for_proto_upload_result() {
+    let input = AIAgentInput::ActionResult {
+        result: AIAgentActionResult {
+            id: "tool-call-1".to_string().into(),
+            task_id: TaskId::new("task-1".to_string()),
+            result: AIAgentActionResultType::UploadArtifact(UploadArtifactResult::Success {
+                artifact_uid: "artifact-123".to_string(),
+                filepath: None,
+                mime_type: "text/plain".to_string(),
+                description: None,
+                size_bytes: 42,
+            }),
+        },
+        context: Arc::from([]),
+    };
+
+    let mut bytes = Vec::new();
+    super::output::json::format_input(&input, &mut bytes).expect("json formatting should work");
+
+    let value: serde_json::Value =
+        serde_json::from_slice(&bytes).expect("output should be valid json");
+
+    assert_eq!(value["type"], "tool_result");
+    assert_eq!(value["tool"], "upload_artifact");
+    assert_eq!(value["artifact_uid"], "artifact-123");
+    assert_eq!(value["mime_type"], "text/plain");
+    assert_eq!(value["size_bytes"], 42);
+    assert!(value.get("filepath").is_none());
+    assert!(value.get("description").is_none());
+}
+
+// ── build_secret_env_vars tests ──────────────────────────────────────────────
+
+#[test]
+#[serial_test::serial]
+fn metadata_secret_collision_rejects_even_an_empty_injected_value() {
+    let previous = std::env::var_os("WARP_METADATA_SECRET_TEST");
+    unsafe { std::env::set_var("WARP_METADATA_SECRET_TEST", "") };
+    let secrets = HashMap::from([(
+        "warp_metadata_secret_test".to_string(),
+        ManagedSecretValue::raw_value("managed-value"),
+    )]);
+
+    let result = build_secret_env_vars(&secrets, &HashMap::new());
+
+    unsafe {
+        match previous {
+            Some(value) => std::env::set_var("WARP_METADATA_SECRET_TEST", value),
+            None => std::env::remove_var("WARP_METADATA_SECRET_TEST"),
+        }
+    }
+    assert!(
+        matches!(result, Err(AgentDriverError::EnvironmentSetupFailed(message)) if message.contains("WARP_METADATA_SECRET_TEST"))
+    );
+}
+
+#[test]
+#[serial_test::serial]
+fn llm_provider_keys_only_enter_the_environment_for_env_backed_providers() {
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("ANTHROPIC_API_KEY") };
+    let secrets = HashMap::from([
+        (
+            "GOOGLE".to_owned(),
+            ManagedSecretValue::llm_provider_api_key("google", "google-key", None),
+        ),
+        (
+            "ANTHROPIC".to_owned(),
+            ManagedSecretValue::llm_provider_api_key("anthropic", "anthropic-key", None),
+        ),
+    ]);
+
+    assert_eq!(
+        build_secret_env_vars(&secrets, &HashMap::new()).unwrap(),
+        HashMap::from([(
+            OsString::from("ANTHROPIC_API_KEY"),
+            OsString::from("anthropic-key")
+        )])
+    );
+}
+
+#[test]
+#[serial_test::serial]
+fn raw_value_only_writes_under_secret_name() {
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("MY_SECRET") };
+    let secrets = HashMap::from([(
+        "MY_SECRET".to_string(),
+        ManagedSecretValue::raw_value("s3cret"),
+    )]);
+    let env_vars = build_secret_env_vars(&secrets, &HashMap::new()).unwrap();
+    assert_eq!(
+        env_vars.get(&OsString::from("MY_SECRET")),
+        Some(&OsString::from("s3cret"))
+    );
+    assert_eq!(env_vars.len(), 1);
+}
+
+#[test]
+#[serial_test::serial]
+fn anthropic_api_key_writes_anthropic_env_var() {
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("ANTHROPIC_API_KEY") };
+    let secrets = HashMap::from([(
+        "my-custom-name".to_string(),
+        ManagedSecretValue::anthropic_api_key("sk-ant-test-key"),
+    )]);
+    let env_vars = build_secret_env_vars(&secrets, &HashMap::new()).unwrap();
+    assert_eq!(
+        env_vars.get(&OsString::from("ANTHROPIC_API_KEY")),
+        Some(&OsString::from("sk-ant-test-key"))
+    );
+}
+
+#[test]
+#[serial_test::serial]
+fn typed_secret_overrides_raw_value_with_same_env_name() {
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("ANTHROPIC_API_KEY") };
+    let typed_key = "sk-ant-typed-key-abcdef";
+    let raw_key = "sk-ant-raw-key-ghijkl";
+    let secrets = HashMap::from([
+        (
+            "my-auth".to_string(),
+            ManagedSecretValue::anthropic_api_key(typed_key),
+        ),
+        (
+            "ANTHROPIC_API_KEY".to_string(),
+            ManagedSecretValue::raw_value(raw_key),
+        ),
+    ]);
+    // Run multiple times to defeat HashMap iteration order flakiness.
+    for _ in 0..20 {
+        let env_vars = build_secret_env_vars(&secrets, &HashMap::new()).unwrap();
+        assert_eq!(
+            env_vars.get(&OsString::from("ANTHROPIC_API_KEY")),
+            Some(&OsString::from(typed_key)),
+            "Typed secret must always override RawValue with the same env name"
+        );
+    }
+}
+
+#[test]
+#[serial_test::serial]
+fn bedrock_api_key_writes_all_bedrock_env_vars() {
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("AWS_BEARER_TOKEN_BEDROCK") };
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("CLAUDE_CODE_USE_BEDROCK") };
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("AWS_REGION") };
+    let secrets = HashMap::from([
+        (
+            "bedrock-secret".to_string(),
+            ManagedSecretValue::anthropic_bedrock_api_key("token-123", "us-west-2"),
+        ),
+        (
+            "AWS_REGION".to_string(),
+            ManagedSecretValue::raw_value("eu-west-1"),
+        ),
+    ]);
+    let env_vars = build_secret_env_vars(&secrets, &HashMap::new()).unwrap();
+    assert_eq!(
+        env_vars.get(&OsString::from("AWS_BEARER_TOKEN_BEDROCK")),
+        Some(&OsString::from("token-123"))
+    );
+    assert_eq!(
+        env_vars.get(&OsString::from("CLAUDE_CODE_USE_BEDROCK")),
+        Some(&OsString::from("1"))
+    );
+    assert_eq!(
+        env_vars.get(&OsString::from("AWS_REGION")),
+        Some(&OsString::from("us-west-2")),
+        "Typed Bedrock secret should win over RawValue for AWS_REGION"
+    );
+}
+
+#[test]
+#[serial_test::serial]
+fn bedrock_access_key_writes_all_aws_env_vars() {
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("AWS_ACCESS_KEY_ID") };
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("AWS_SECRET_ACCESS_KEY") };
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("AWS_SESSION_TOKEN") };
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("CLAUDE_CODE_USE_BEDROCK") };
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("AWS_REGION") };
+    let secrets = HashMap::from([(
+        "bedrock-access".to_string(),
+        ManagedSecretValue::anthropic_bedrock_access_key(
+            "AKID",
+            "secret-key",
+            Some("session-tok".to_string()),
+            "ap-southeast-1",
+        ),
+    )]);
+    let env_vars = build_secret_env_vars(&secrets, &HashMap::new()).unwrap();
+    assert_eq!(
+        env_vars.get(&OsString::from("AWS_ACCESS_KEY_ID")),
+        Some(&OsString::from("AKID"))
+    );
+    assert_eq!(
+        env_vars.get(&OsString::from("AWS_SECRET_ACCESS_KEY")),
+        Some(&OsString::from("secret-key"))
+    );
+    assert_eq!(
+        env_vars.get(&OsString::from("AWS_SESSION_TOKEN")),
+        Some(&OsString::from("session-tok"))
+    );
+    assert_eq!(
+        env_vars.get(&OsString::from("CLAUDE_CODE_USE_BEDROCK")),
+        Some(&OsString::from("1"))
+    );
+    assert_eq!(
+        env_vars.get(&OsString::from("AWS_REGION")),
+        Some(&OsString::from("ap-southeast-1"))
+    );
+}
+
+#[test]
+#[serial_test::serial]
+fn raw_value_skipped_when_process_env_already_set() {
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var("WORKER_TOKEN", "injected-value") };
+    let secrets = HashMap::from([(
+        "WORKER_TOKEN".to_string(),
+        ManagedSecretValue::raw_value("managed-value"),
+    )]);
+    let env_vars = build_secret_env_vars(&secrets, &HashMap::new()).unwrap();
+    // The worker-injected env var wins; env_vars should NOT contain it
+    // because the child inherits the process env directly.
+    assert!(!env_vars.contains_key(&OsString::from("WORKER_TOKEN")));
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("WORKER_TOKEN") };
+}
+
+#[test]
+#[serial_test::serial]
+fn worker_injected_env_wins_over_typed_secret() {
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var("ANTHROPIC_API_KEY", "worker-key") };
+    let secrets = HashMap::from([(
+        "my-auth".to_string(),
+        ManagedSecretValue::anthropic_api_key("managed-key"),
+    )]);
+    let env_vars = build_secret_env_vars(&secrets, &HashMap::new()).unwrap();
+    // The typed secret should be skipped entirely; the child inherits
+    // ANTHROPIC_API_KEY from the process env.
+    assert!(!env_vars.contains_key(&OsString::from("ANTHROPIC_API_KEY")));
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("ANTHROPIC_API_KEY") };
+}
+
+#[test]
+#[serial_test::serial]
+fn worker_injected_env_skips_entire_bedrock_secret() {
+    // Only AWS_REGION is worker-injected; the entire Bedrock secret should
+    // be atomically skipped — no partial insertion.
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var("AWS_REGION", "us-east-1") };
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("AWS_BEARER_TOKEN_BEDROCK") };
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("CLAUDE_CODE_USE_BEDROCK") };
+    let secrets = HashMap::from([(
+        "bedrock-secret".to_string(),
+        ManagedSecretValue::anthropic_bedrock_api_key("token-456", "eu-central-1"),
+    )]);
+    let env_vars = build_secret_env_vars(&secrets, &HashMap::new()).unwrap();
+    assert!(
+        !env_vars.contains_key(&OsString::from("AWS_BEARER_TOKEN_BEDROCK")),
+        "Entire Bedrock secret must be skipped when any field is worker-injected"
+    );
+    assert!(!env_vars.contains_key(&OsString::from("CLAUDE_CODE_USE_BEDROCK")));
+    assert!(!env_vars.contains_key(&OsString::from("AWS_REGION")));
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("AWS_REGION") };
+}
+
+#[test]
+#[serial_test::serial]
+fn docker_registry_secret_never_injected_as_env_var() {
+    let secrets = HashMap::from([(
+        "my-registry".to_string(),
+        ManagedSecretValue::docker_registry("us-docker.pkg.dev", "_json_key", "s3cret-pass"),
+    )]);
+    let env_vars = build_secret_env_vars(&secrets, &HashMap::new()).unwrap();
+    assert!(
+        env_vars.is_empty(),
+        "a registry credential authenticates an image pull, not the agent process, and must \
+         never appear in the terminal session's environment: {env_vars:?}"
+    );
+    assert!(!env_vars.contains_key(&OsString::from("my-registry")));
+    for value in env_vars.values() {
+        assert_ne!(value, &OsString::from("us-docker.pkg.dev"));
+        assert_ne!(value, &OsString::from("_json_key"));
+        assert_ne!(value, &OsString::from("s3cret-pass"));
+    }
+}
+
+// ── Skill-loading integration test ───────────────────────────────────────────
+
+/// Verifies that `load_environment_skills` loads every skill from an env repo
+/// while `load_global_skills` loads only the explicitly requested subset from a
+/// global-only repo.
+///
+/// The test writes real SKILL.md files on disk, seeds `RepoMetadataModel` with a
+/// minimal file-tree for the env repo so the indexing wait resolves immediately,
+/// and drives both loading methods through a live `AgentDriver` model via a
+/// `ModelSpawner`.
+#[test]
+fn split_loading_env_loads_all_global_loads_subset() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        // Create real skill files on disk.
+        let temp = TempDir::new().unwrap();
+        let working_dir = dunce::canonicalize(temp.path()).unwrap();
+
+        // Environment repo: three skills. All should be loaded.
+        let env_repo = working_dir.join("env-repo");
+        write_skill_file(&env_repo, "build");
+        write_skill_file(&env_repo, "test-skill");
+        write_skill_file(&env_repo, "deploy");
+
+        // Global-only repo: three skills; only "linter" is explicitly requested.
+        let global_repo = working_dir.join("global-repo");
+        write_skill_file(&global_repo, "linter");
+        write_skill_file(&global_repo, "formatter");
+        write_skill_file(&global_repo, "docs");
+
+        // Trigger a real filesystem scan of the env repo so `repository_indexed`
+        // resolves immediately once indexing completes.
+        let env_repo_std = StandardizedPath::from_local_canonicalized(&env_repo).unwrap();
+        let repo_handle = DirectoryWatcher::handle(&app).update(&mut app, |watcher, ctx| {
+            watcher.add_directory(env_repo_std.clone(), ctx).unwrap()
+        });
+        let (indexed_tx, indexed_rx) = futures::channel::oneshot::channel::<()>();
+        let tx_cell = std::rc::Rc::new(std::cell::RefCell::new(Some(indexed_tx)));
+        let env_repo_for_event = env_repo_std.clone();
+        app.update(|ctx| {
+            let tx_cell = tx_cell.clone();
+            ctx.subscribe_to_model(
+                &RepoMetadataModel::handle(ctx),
+                move |_, event: &RepoMetadataEvent, _ctx| {
+                    if let RepoMetadataEvent::RepositoryUpdated {
+                        id: RepositoryIdentifier::Local(path),
+                    } = event
+                        && *path == env_repo_for_event
+                        && let Some(tx) = tx_cell.borrow_mut().take()
+                    {
+                        let _ = tx.send(());
+                    }
+                },
+            );
+        });
+        RepoMetadataModel::handle(&app).update(&mut app, |model: &mut RepoMetadataModel, ctx| {
+            model.index_directory(repo_handle, ctx).unwrap();
+        });
+        indexed_rx.await.expect("env repo should be indexed");
+
+        // Construct a minimal AgentDriver backed by a stub terminal view.
+        let terminal_view = add_window_with_terminal(&mut app, None);
+        let driver_handle = app.add_model(|ctx| {
+            let terminal_driver =
+                super::terminal::TerminalDriver::create_from_existing_view(terminal_view, ctx);
+            AgentDriver::new_for_test(working_dir.clone(), terminal_driver, ctx)
+        });
+
+        // Run both loading methods through the driver's ModelSpawner.
+        let (done_tx, done_rx) = futures::channel::oneshot::channel::<()>();
+        let env_repos = vec![SourceRepo::new(
+            CodeForge::GitHub,
+            "org".to_string(),
+            "env-repo".to_string(),
+        )];
+        let global_repos = vec![GithubRepo::new(
+            "org".to_string(),
+            "global-repo".to_string(),
+        )];
+        let global_specs: Vec<SkillSpec> = ["org/global-repo:linter".to_string()]
+            .iter()
+            .map(|s| s.parse().unwrap())
+            .collect();
+        driver_handle.update(&mut app, |_, ctx| {
+            let spawner = ctx.spawner();
+            ctx.spawn(
+                async move {
+                    super::agent_setup::load_environment_skills(&spawner, env_repos).await;
+                    super::agent_setup::load_global_skills(&spawner, global_specs, global_repos)
+                        .await;
+                    let _ = done_tx.send(());
+                },
+                |_, _, _| {},
+            );
+        });
+        done_rx.await.expect("loading task should complete");
+
+        // Verify SkillManager contains the right skills.
+        // is_cloud_environment=true (set by both loaders), so get_skills_for_working_directory
+        // with cwd=None returns all registered skills.
+        let skill_names = SkillManager::handle(&app).read(&app, |manager: &SkillManager, ctx| {
+            manager
+                .get_skills_for_working_directory(None, ctx)
+                .into_iter()
+                .map(|s| s.name.clone())
+                .collect::<Vec<_>>()
+        });
+
+        assert!(
+            skill_names.contains(&"build".to_string()),
+            "env skill 'build' should be loaded; got: {skill_names:?}"
+        );
+        assert!(
+            skill_names.contains(&"test-skill".to_string()),
+            "env skill 'test-skill' should be loaded; got: {skill_names:?}"
+        );
+        assert!(
+            skill_names.contains(&"deploy".to_string()),
+            "env skill 'deploy' should be loaded; got: {skill_names:?}"
+        );
+        assert!(
+            skill_names.contains(&"linter".to_string()),
+            "requested global skill 'linter' should be loaded; got: {skill_names:?}"
+        );
+        assert!(
+            !skill_names.contains(&"formatter".to_string()),
+            "unrequested global skill 'formatter' should NOT be loaded; got: {skill_names:?}"
+        );
+        assert!(
+            !skill_names.contains(&"docs".to_string()),
+            "unrequested global skill 'docs' should NOT be loaded; got: {skill_names:?}"
+        );
+    });
+}
+
+/// Verifies that when a repo is in both the environment list and the global skill
+/// specs, all skills from that repo are loaded (environment wins), the targeted
+/// global skill is present, and no skill is registered more than once.
+#[test]
+fn overlap_repo_in_env_and_global_loads_all_skills_without_duplicates() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        let temp = TempDir::new().unwrap();
+        let working_dir = dunce::canonicalize(temp.path()).unwrap();
+
+        // A single repo with three skills, appearing in both the environment
+        // and a global spec that targets only one of them.
+        let shared_repo = working_dir.join("shared-repo");
+        write_skill_file(&shared_repo, "deploy");
+        write_skill_file(&shared_repo, "lint");
+        write_skill_file(&shared_repo, "test-cmd");
+
+        // Index the repo so `load_environment_skills` can scan it.
+        let shared_repo_std = StandardizedPath::from_local_canonicalized(&shared_repo).unwrap();
+        let repo_handle = DirectoryWatcher::handle(&app).update(&mut app, |watcher, ctx| {
+            watcher.add_directory(shared_repo_std.clone(), ctx).unwrap()
+        });
+        let (indexed_tx, indexed_rx) = futures::channel::oneshot::channel::<()>();
+        let tx_cell = std::rc::Rc::new(std::cell::RefCell::new(Some(indexed_tx)));
+        let shared_repo_for_event = shared_repo_std.clone();
+        app.update(|ctx| {
+            let tx_cell = tx_cell.clone();
+            ctx.subscribe_to_model(
+                &RepoMetadataModel::handle(ctx),
+                move |_, event: &RepoMetadataEvent, _ctx| {
+                    if let RepoMetadataEvent::RepositoryUpdated {
+                        id: RepositoryIdentifier::Local(path),
+                    } = event
+                        && *path == shared_repo_for_event
+                        && let Some(tx) = tx_cell.borrow_mut().take()
+                    {
+                        let _ = tx.send(());
+                    }
+                },
+            );
+        });
+        RepoMetadataModel::handle(&app).update(&mut app, |model: &mut RepoMetadataModel, ctx| {
+            model.index_directory(repo_handle, ctx).unwrap();
+        });
+        indexed_rx.await.expect("shared repo should be indexed");
+
+        let terminal_view = add_window_with_terminal(&mut app, None);
+        let driver_handle = app.add_model(|ctx| {
+            let terminal_driver =
+                super::terminal::TerminalDriver::create_from_existing_view(terminal_view, ctx);
+            AgentDriver::new_for_test(working_dir.clone(), terminal_driver, ctx)
+        });
+
+        // The same repo is listed in both env repos and global repos.
+        // The global spec targets only "deploy".
+        let (done_tx, done_rx) = futures::channel::oneshot::channel::<()>();
+        let env_repos = vec![SourceRepo::new(
+            CodeForge::GitHub,
+            "org".to_string(),
+            "shared-repo".to_string(),
+        )];
+        let global_repos = vec![GithubRepo::new(
+            "org".to_string(),
+            "shared-repo".to_string(),
+        )];
+        let global_specs: Vec<SkillSpec> = ["org/shared-repo:deploy".to_string()]
+            .iter()
+            .map(|s| s.parse().unwrap())
+            .collect();
+        driver_handle.update(&mut app, |_, ctx| {
+            let spawner = ctx.spawner();
+            ctx.spawn(
+                async move {
+                    super::agent_setup::load_environment_skills(&spawner, env_repos).await;
+                    super::agent_setup::load_global_skills(&spawner, global_specs, global_repos)
+                        .await;
+                    let _ = done_tx.send(());
+                },
+                |_, _, _| {},
+            );
+        });
+        done_rx.await.expect("loading task should complete");
+
+        let skill_names = SkillManager::handle(&app).read(&app, |manager: &SkillManager, ctx| {
+            manager
+                .get_skills_for_working_directory(None, ctx)
+                .into_iter()
+                .map(|s| s.name.clone())
+                .collect::<Vec<_>>()
+        });
+
+        // All three skills from the repo are present (env loading wins).
+        assert!(
+            skill_names.contains(&"deploy".to_string()),
+            "'deploy' should be loaded; got: {skill_names:?}"
+        );
+        assert!(
+            skill_names.contains(&"lint".to_string()),
+            "'lint' should be loaded; got: {skill_names:?}"
+        );
+        assert!(
+            skill_names.contains(&"test-cmd".to_string()),
+            "'test-cmd' should be loaded; got: {skill_names:?}"
+        );
+
+        // No skill is duplicated.
+        let deploy_count = skill_names.iter().filter(|n| *n == "deploy").count();
+        assert_eq!(
+            deploy_count, 1,
+            "'deploy' should appear exactly once; got: {skill_names:?}"
+        );
+    });
+}
+
+/// Write a minimal SKILL.md at `{repo}/.agents/skills/{name}/SKILL.md`.
+/// The name is derived from the parent directory name, so no frontmatter is required.
+fn write_skill_file(repo: &Path, name: &str) {
+    let skill_dir = repo.join(".agents").join("skills").join(name);
+    fs::create_dir_all(&skill_dir).unwrap();
+    fs::write(skill_dir.join("SKILL.md"), format!("Skill: {name}.")).unwrap();
+}
+
+/// Write a minimal SKILL.md at `{skills_dir}/{name}/SKILL.md`.
+/// This is the flat layout expected by `WARP_SKILL_DIRS` (no `.agents/skills` wrapper).
+fn write_flat_skill(skills_dir: &Path, name: &str) {
+    let skill_dir = skills_dir.join(name);
+    fs::create_dir_all(&skill_dir).unwrap();
+    fs::write(
+        skill_dir.join("SKILL.md"),
+        format!("---\nname: {name}\ndescription: Skill {name}.\n---\n\n# {name}\n"),
+    )
+    .unwrap();
+}
+
+/// Verifies that `load_skills_dirs` reads skills from the `WARP_SKILL_DIRS` environment
+/// variable and registers them in the personal (home) bucket so they are always in scope,
+/// regardless of the current working directory.
+#[test]
+#[serial_test::serial]
+fn warp_skill_dirs_env_loads_skills_as_home_tier() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        let temp = TempDir::new().unwrap();
+        let working_dir = dunce::canonicalize(temp.path()).unwrap();
+
+        // Create two separate flat skills directories (no .agents/skills prefix).
+        let skills_dir_a = working_dir.join("extra-skills-a");
+        let skills_dir_b = working_dir.join("extra-skills-b");
+        write_flat_skill(&skills_dir_a, "env-skill-a1");
+        write_flat_skill(&skills_dir_a, "env-skill-a2");
+        write_flat_skill(&skills_dir_b, "env-skill-b1");
+
+        // Point WARP_SKILL_DIRS at both directories.
+        let skills_dirs_value = format!("{},{}", skills_dir_a.display(), skills_dir_b.display());
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var("WARP_SKILL_DIRS", &skills_dirs_value) };
+
+        let terminal_view = add_window_with_terminal(&mut app, None);
+        let driver_handle = app.add_model(|ctx| {
+            let terminal_driver =
+                super::terminal::TerminalDriver::create_from_existing_view(terminal_view, ctx);
+            AgentDriver::new_for_test(working_dir.clone(), terminal_driver, ctx)
+        });
+
+        let (done_tx, done_rx) = futures::channel::oneshot::channel::<()>();
+        driver_handle.update(&mut app, |_, ctx| {
+            let spawner = ctx.spawner();
+            ctx.spawn(
+                async move {
+                    super::agent_setup::load_skills_dirs(&spawner).await;
+                    let _ = done_tx.send(());
+                },
+                |_, _, _| {},
+            );
+        });
+        done_rx.await.expect("loading task should complete");
+
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var("WARP_SKILL_DIRS") };
+
+        // Skills from WARP_SKILL_DIRS are home-tier, so they appear for any working directory.
+        // Use None cwd — home skills are included regardless of is_cloud_environment.
+        let skill_names = SkillManager::handle(&app).read(&app, |manager: &SkillManager, ctx| {
+            manager
+                .get_skills_for_working_directory(None, ctx)
+                .into_iter()
+                .map(|s| s.name.clone())
+                .collect::<Vec<_>>()
+        });
+
+        assert!(
+            skill_names.contains(&"env-skill-a1".to_string()),
+            "'env-skill-a1' from WARP_SKILL_DIRS should be loaded; got: {skill_names:?}"
+        );
+        assert!(
+            skill_names.contains(&"env-skill-a2".to_string()),
+            "'env-skill-a2' from WARP_SKILL_DIRS should be loaded; got: {skill_names:?}"
+        );
+        assert!(
+            skill_names.contains(&"env-skill-b1".to_string()),
+            "'env-skill-b1' from WARP_SKILL_DIRS should be loaded; got: {skill_names:?}"
+        );
+
+        // Verify the skills have Home scope (personal tier).
+        let scope_check = SkillManager::handle(&app).read(&app, |manager: &SkillManager, ctx| {
+            use ai::skills::SkillScope;
+            manager
+                .get_skills_for_working_directory(None, ctx)
+                .into_iter()
+                .filter(|s| s.name.starts_with("env-skill-"))
+                .all(|s| s.scope == SkillScope::Home)
+        });
+        assert!(
+            scope_check,
+            "all WARP_SKILL_DIRS skills must have SkillScope::Home"
+        );
+    });
+}
+
+/// Verifies that relative `WARP_SKILL_DIRS` entries are resolved against the driver's
+/// working directory rather than the process's current working directory (which
+/// `prepare_environment` may have changed).
+#[test]
+#[serial_test::serial]
+fn warp_skill_dirs_env_relative_entries_resolve_against_working_dir() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        let temp = TempDir::new().unwrap();
+        let working_dir = dunce::canonicalize(temp.path()).unwrap();
+
+        // Create a flat skills directory inside the working dir and reference it by
+        // relative path only. No `rel-skills` directory exists under the process cwd,
+        // so this only loads if resolution is anchored at the driver's working dir.
+        write_flat_skill(&working_dir.join("rel-skills"), "env-skill-rel");
+
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var("WARP_SKILL_DIRS", "rel-skills") };
+
+        let terminal_view = add_window_with_terminal(&mut app, None);
+        let driver_handle = app.add_model(|ctx| {
+            let terminal_driver =
+                super::terminal::TerminalDriver::create_from_existing_view(terminal_view, ctx);
+            AgentDriver::new_for_test(working_dir.clone(), terminal_driver, ctx)
+        });
+
+        let (done_tx, done_rx) = futures::channel::oneshot::channel::<()>();
+        driver_handle.update(&mut app, |_, ctx| {
+            let spawner = ctx.spawner();
+            ctx.spawn(
+                async move {
+                    super::agent_setup::load_skills_dirs(&spawner).await;
+                    let _ = done_tx.send(());
+                },
+                |_, _, _| {},
+            );
+        });
+        done_rx.await.expect("loading task should complete");
+
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var("WARP_SKILL_DIRS") };
+
+        let skill_names = SkillManager::handle(&app).read(&app, |manager: &SkillManager, ctx| {
+            manager
+                .get_skills_for_working_directory(None, ctx)
+                .into_iter()
+                .map(|s| s.name.clone())
+                .collect::<Vec<_>>()
+        });
+
+        assert!(
+            skill_names.contains(&"env-skill-rel".to_string()),
+            "'env-skill-rel' should load via a relative WARP_SKILL_DIRS entry resolved against the driver's working dir; got: {skill_names:?}"
+        );
+    });
+}
+
+#[test]
+#[serial_test::serial]
+fn skill_dirs_first_name_wins_hides_later_duplicates() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        let temp = TempDir::new().unwrap();
+        let working_dir = dunce::canonicalize(temp.path()).unwrap();
+        for (folder, description) in [("agent-skills", "Agent copy."), ("generated", "Ref copy.")] {
+            let skill_dir = working_dir.join(folder).join("shared");
+            fs::create_dir_all(&skill_dir).unwrap();
+            fs::write(
+                skill_dir.join("SKILL.md"),
+                format!("---\nname: shared\ndescription: {description}\n---\nBody\n"),
+            )
+            .unwrap();
+        }
+        write_flat_skill(&working_dir.join("generated"), "ref-only");
+
+        let terminal_view = add_window_with_terminal(&mut app, None);
+        let driver_handle = app.add_model(|ctx| {
+            let terminal_driver =
+                super::terminal::TerminalDriver::create_from_existing_view(terminal_view, ctx);
+            let mut driver = AgentDriver::new_for_test(working_dir.clone(), terminal_driver, ctx);
+            driver.skill_dirs = vec![PathBuf::from("agent-skills"), working_dir.join("generated")];
+            driver.skill_dirs_first_name_wins = true;
+            driver
+        });
+
+        let (done_tx, done_rx) = futures::channel::oneshot::channel::<()>();
+        driver_handle.update(&mut app, |_, ctx| {
+            let spawner = ctx.spawner();
+            ctx.spawn(
+                async move {
+                    super::agent_setup::load_skills_dirs(&spawner).await;
+                    let _ = done_tx.send(());
+                },
+                |_, _, _| {},
+            );
+        });
+        done_rx.await.expect("loading task should complete");
+
+        let skills = SkillManager::handle(&app).read(&app, |manager: &SkillManager, ctx| {
+            manager
+                .get_skills_for_working_directory(None, ctx)
+                .into_iter()
+                .filter(|skill| skill.name == "shared" || skill.name == "ref-only")
+                .map(|skill| (skill.name, skill.description))
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(skills.len(), 2, "{skills:?}");
+        assert!(skills.contains(&("shared".to_owned(), "Agent copy.".to_owned())));
+        assert!(skills.iter().any(|(name, _)| name == "ref-only"));
+    });
+}
+
+// ── QUALITY-1801: buffered child event vs. ambient-run teardown ─────────────
+
+/// Creates a conversation on `terminal_id` and attaches an in-flight mock response
+/// stream to it (mirroring an in-progress parent turn), registered through
+/// `ai_controller`. Returns the conversation and stream so the caller can drive the
+/// stream to completion.
+fn conversation_with_in_progress_mock_stream(
+    app: &mut App,
+    terminal_id: warpui::EntityId,
+    ai_controller: &warpui::ModelHandle<crate::ai::blocklist::BlocklistAIController>,
+) -> (
+    crate::ai::agent::conversation::AIConversationId,
+    warpui::ModelHandle<ResponseStream>,
+) {
+    let stream_id = ResponseStreamId::new_for_test();
+    let conversation_id = BlocklistAIHistoryModel::handle(app).update(app, |history, ctx| {
+        let conversation_id = history.start_new_conversation(terminal_id, false, false, false, ctx);
+        let task_id = history
+            .conversation(&conversation_id)
+            .unwrap()
+            .get_root_task_id()
+            .clone();
+        history
+            .update_conversation_for_new_request_input_for_test(
+                RequestInput {
+                    conversation_id,
+                    input_messages: Vec::from([(task_id, vec![])]),
+                    working_directory: None,
+                    model_id: LLMId::from("test-model"),
+                    coding_model_id: LLMId::from("test-coding-model"),
+                    cli_agent_model_id: LLMId::from("test-cli-agent-model"),
+                    computer_use_model_id: LLMId::from("test-computer-use-model"),
+                    shared_session_response_initiator: None,
+                    request_start_ts: Local::now(),
+                    supported_tools_override: None,
+                },
+                stream_id.clone(),
+                terminal_id,
+                ctx,
+            )
+            .unwrap();
+        conversation_id
+    });
+    let stream = app.add_model(|_| ResponseStream::new_for_test(stream_id.clone()));
+    ai_controller.update(app, |controller, ctx| {
+        controller.register_mock_stream_for_test(stream_id, conversation_id, stream.clone(), ctx);
+    });
+    (conversation_id, stream)
+}
+
+/// Drives `stream` through a successful `Init` + `Finished(Done)` completion via the
+/// real controller subscription, matching a parent turn finishing normally.
+fn complete_mock_stream_successfully(app: &mut App, stream: &warpui::ModelHandle<ResponseStream>) {
+    stream.update(app, |stream, ctx| {
+        stream.emit_response_event_for_test(
+            warp_multi_agent_api::ResponseEvent {
+                r#type: Some(response_event::Type::Init(response_event::StreamInit {
+                    request_id: "test-request".to_string(),
+                    conversation_id: "test-server-conversation".to_string(),
+                    run_id: String::new(),
+                })),
+            },
+            ctx,
+        );
+        stream.emit_response_event_for_test(
+            warp_multi_agent_api::ResponseEvent {
+                r#type: Some(response_event::Type::Finished(
+                    response_event::StreamFinished {
+                        reason: Some(response_event::stream_finished::Reason::Done(
+                            response_event::stream_finished::Done {},
+                        )),
+                        conversation_usage_metadata: None,
+                        token_usage: vec![],
+                        should_refresh_model_config: false,
+                        #[allow(deprecated)]
+                        request_cost: None,
+                        request_charges: None,
+                    },
+                )),
+            },
+            ctx,
+        );
+    });
+}
+
+/// Enqueues a single buffered child message for `conversation_id`, as if a child
+/// agent's report had just arrived over the orchestration SSE stream.
+fn enqueue_buffered_child_message(
+    app: &mut App,
+    conversation_id: crate::ai::agent::conversation::AIConversationId,
+) {
+    OrchestrationEventService::handle(app).update(app, |service, ctx| {
+        service.enqueue_event_batch(
+            conversation_id,
+            vec![PendingEvent {
+                event_id: "child-message-1".to_string(),
+                source_agent_id: "child".to_string(),
+                attempt_count: 0,
+                detail: PendingEventDetail::Message {
+                    message_id: "message-1".to_string(),
+                    addresses: vec!["parent".to_string()],
+                    subject: "subject".to_string(),
+                    message_body: "child finished".to_string(),
+                },
+            }],
+            ctx,
+        );
+    });
+}
+
+/// Regression for staging run `01a14135-7aca-754d-8abd-6544bd9f336c`: a parent driven over ACP
+/// (`ConversationDriver::ExternalHarness`) holds its native setup barrier for the run's whole
+/// lifetime, so `has_pending_native_injections` stays true. Its turn settling must still end
+/// the run, and the child message buffered behind that barrier must never become a native MAA
+/// request -- neither when the status settles nor when run teardown unbinds the conversation
+/// and releases the barrier.
+#[test]
+fn external_harness_run_exits_on_success_without_injecting_buffered_child_messages() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal_view = add_window_with_terminal(&mut app, None);
+        let ai_controller = terminal_view.read(&app, |view, _| view.ai_controller().clone());
+        let temp = TempDir::new().unwrap();
+        let driver = app.add_model(|ctx| {
+            let terminal_driver =
+                super::terminal::TerminalDriver::create_from_existing_view(terminal_view, ctx);
+            let mut driver =
+                AgentDriver::new_for_test(temp.path().to_path_buf(), terminal_driver, ctx);
+            driver.idle_on_complete = None;
+            driver
+        });
+        let (exit_tx, mut exit_rx) = oneshot::channel();
+        driver.update(&mut app, |driver, ctx| {
+            driver.subscribe_to_native_conversation_status_events(
+                IdleTimeoutSender::new(exit_tx),
+                ctx,
+            );
+        });
+
+        let (conversation_id, stream_id) = ai_controller.update(&mut app, |controller, ctx| {
+            let id = controller.bind_native_prompt_conversation(None, ctx);
+            let turn = controller
+                .begin_external_harness_turn(id, Some("run-1".into()), ctx)
+                .unwrap();
+            (id, turn.stream_id)
+        });
+        enqueue_buffered_child_message(&mut app, conversation_id);
+        QueuedQueryModel::handle(&app).read(&app, |queue, _| {
+            assert!(
+                queue.has_pending_native_injections(conversation_id),
+                "precondition: the harness never releases the native setup barrier"
+            );
+        });
+        assert_eq!(exit_rx.try_recv().unwrap(), None);
+
+        ai_controller.update(&mut app, |controller, ctx| {
+            controller.apply_external_harness_event(
+                &stream_id,
+                warp_multi_agent_api::ResponseEvent {
+                    r#type: Some(response_event::Type::Finished(
+                        response_event::StreamFinished {
+                            reason: Some(response_event::stream_finished::Reason::Done(
+                                response_event::stream_finished::Done {},
+                            )),
+                            ..Default::default()
+                        },
+                    )),
+                },
+                ctx,
+            );
+        });
+        assert_eq!(
+            exit_rx.try_recv().unwrap(),
+            Some(()),
+            "the settled turn must end the run even though the barrier is still held"
+        );
+        let settled_exchanges = BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+            let conversation = history.conversation(&conversation_id).unwrap();
+            assert_eq!(conversation.status(), &ConversationStatus::Success);
+            conversation.exchange_count()
+        });
+
+        // Run teardown unbinds the conversation, which releases the barrier that held the event.
+        driver.update(&mut app, |driver, ctx| {
+            driver.unregister_streamer_consumer(ctx)
+        });
+
+        ai_controller.read(&app, |controller, ctx| {
+            assert!(
+                !controller.has_active_stream_for_conversation(conversation_id, ctx),
+                "no native request may be opened for the buffered child message"
+            );
+        });
+        BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+            let conversation = history.conversation(&conversation_id).unwrap();
+            assert_eq!(conversation.status(), &ConversationStatus::Success);
+            assert_eq!(conversation.exchange_count(), settled_exchanges);
+        });
+        OrchestrationEventService::handle(&app).read(&app, |service, _| {
+            assert!(
+                !service.has_pending_events(conversation_id),
+                "the buffered event is dropped at unbind rather than left to inject later"
+            );
+        });
+    });
+}
+
+/// Builds a driver wired up (via the real `execute_run`) to observe the given
+/// terminal's history but that never submits any query itself, so the caller can
+/// drive the conversation manually. `idle_on_complete` controls whether the driver
+/// commits to an immediate exit on `Success` (`None`) or defers it (`Some`).
+fn driver_wired_for_terminal(
+    app: &mut App,
+    terminal_view: warpui::ViewHandle<crate::terminal::TerminalView>,
+    idle_on_complete: Option<Duration>,
+) -> warpui::ModelHandle<AgentDriver> {
+    let temp = TempDir::new().unwrap();
+    let driver_handle = app.add_model(|ctx| {
+        let terminal_driver =
+            super::terminal::TerminalDriver::create_from_existing_view(terminal_view, ctx);
+        let mut driver = AgentDriver::new_for_test(temp.path().to_path_buf(), terminal_driver, ctx);
+        // No initial query is submitted; the conversation is driven manually.
+        driver.skip_initial_turn = true;
+        driver.idle_on_complete = idle_on_complete;
+        driver
+    });
+    // Installs the real history-model subscription under test (including
+    // `drop_pending_events_for_exiting_conversation`), without submitting a query.
+    let _run_exit_rx = driver_handle.update(app, |driver, ctx| {
+        driver.execute_run(AgentRunPrompt::Local(String::new()), ctx)
+    });
+    driver_handle
+}
+
+#[test]
+fn native_startup_queue_prevents_exit_until_pending_rows_are_removed() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let (terminal_id, controller) = terminal.read(&app, |terminal, _| {
+            (terminal.id(), terminal.ai_controller().clone())
+        });
+        let (id, stream) =
+            conversation_with_in_progress_mock_stream(&mut app, terminal_id, &controller);
+        controller.update(&mut app, |controller, ctx| {
+            controller.bind_native_prompt_conversation(Some(id), ctx);
+        });
+        // The driver's own skip_initial_turn dispatch drains an (empty, at this point) startup
+        // queue for `id` here, so it doesn't disturb the mock stream created above.
+        let _driver = driver_wired_for_terminal(&mut app, terminal, None);
+
+        // A row queued for this conversation after setup has finished keeps the driver from
+        // exiting even once the (unrelated, pre-existing) stream finishes successfully.
+        let queued_id = QueuedQueryModel::handle(&app).update(&mut app, |queue, ctx| {
+            queue.append(
+                id,
+                QueuedQuery::new_shared_session_prompt(
+                    "followup".into(),
+                    ParticipantId::new(),
+                    vec![],
+                    None,
+                ),
+                ctx,
+            )
+        });
+        complete_mock_stream_successfully(&mut app, &stream);
+        OrchestrationEventService::handle(&app).read(&app, |service, _| {
+            assert!(!service.is_conversation_exiting(id));
+        });
+        QueuedQueryModel::handle(&app).update(&mut app, |queue, ctx| {
+            assert!(queue.remove_by_id(id, queued_id, ctx).is_some());
+        });
+        OrchestrationEventService::handle(&app).read(&app, |service, _| {
+            assert!(service.is_conversation_exiting(id));
+        });
+    });
+}
+
+#[test]
+fn restored_local_child_driver_status_isolation() {
+    use crate::ai::agent::conversation::AIConversation;
+
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let controller = terminal.read(&app, |view, _| view.ai_controller().clone());
+        let (parent_id, stream) =
+            conversation_with_in_progress_mock_stream(&mut app, terminal.id(), &controller);
+        let temp = TempDir::new().unwrap();
+        let driver = app.add_model(|ctx| {
+            let terminal_driver =
+                super::terminal::TerminalDriver::create_from_existing_view(terminal.clone(), ctx);
+            let mut driver =
+                AgentDriver::new_for_test(temp.path().to_path_buf(), terminal_driver, ctx);
+            driver.run_conversation_id = Some(parent_id);
+            driver.skip_initial_turn = true;
+            driver.idle_on_complete = None;
+            driver
+        });
+        let mut completion = driver.update(&mut app, |driver, ctx| {
+            driver.execute_run(AgentRunPrompt::Local(String::new()), ctx)
+        });
+        let child_id = AIConversationId::new();
+        BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
+            history.restore_conversations(
+                warpui::EntityId::new(),
+                vec![AIConversation::new_local_child_for_restoration(child_id)],
+                ctx,
+            );
+            history
+                .conversation_mut(&child_id)
+                .unwrap()
+                .update_status_with_error(
+                    ConversationStatus::Error,
+                    Some(RenderableAIError::other("child setup failed", false)),
+                    terminal.id(),
+                    ctx,
+                );
+        });
+
+        OrchestrationEventService::handle(&app).read(&app, |service, _| {
+            assert!(
+                !service.is_conversation_exiting(parent_id),
+                "child status committed the parent exit"
+            );
+        });
+        assert!(completion.try_recv().unwrap().is_none());
+        complete_mock_stream_successfully(&mut app, &stream);
+        assert_eventually!(
+            OrchestrationEventService::handle(&app).read(&app, |service, _| service
+                .is_conversation_exiting(parent_id)),
+            "bound parent status did not commit exit"
+        );
+    });
+}
+#[test]
+fn prepared_native_followup_starts_before_the_last_queued_row_allows_exit() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let (terminal_id, controller) = terminal.read(&app, |terminal, _| {
+            (terminal.id(), terminal.ai_controller().clone())
+        });
+        let (id, stream) =
+            conversation_with_in_progress_mock_stream(&mut app, terminal_id, &controller);
+        controller.update(&mut app, |controller, ctx| {
+            controller.bind_native_prompt_conversation(Some(id), ctx);
+        });
+        let temp = TempDir::new().unwrap();
+        let driver = app.add_model(|ctx| {
+            let terminal_driver =
+                super::terminal::TerminalDriver::create_from_existing_view(terminal, ctx);
+            let mut driver =
+                AgentDriver::new_for_test(temp.path().to_path_buf(), terminal_driver, ctx);
+            driver.skip_initial_turn = true;
+            driver.idle_on_complete = None;
+            driver.run_conversation_id = Some(id);
+            driver
+        });
+        let _run_exit_rx = driver.update(&mut app, |driver, ctx| {
+            driver.execute_run(AgentRunPrompt::Local(String::new()), ctx)
+        });
+        let query_id = QueuedQueryModel::handle(&app).update(&mut app, |queue, ctx| {
+            queue.append(
+                id,
+                QueuedQuery::new_shared_session_prompt(
+                    "file followup".into(),
+                    ParticipantId::new(),
+                    vec![AgentAttachment::FileReference {
+                        attachment_id: "attachment-id".into(),
+                        file_name: "event-payload.json".into(),
+                    }],
+                    None,
+                ),
+                ctx,
+            )
+        });
+
+        complete_mock_stream_successfully(&mut app, &stream);
+        stream.update(&mut app, |stream, ctx| {
+            stream.emit_after_stream_finished_for_test(ctx);
+        });
+        BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+            assert_eq!(
+                history.conversation(&id).unwrap().status(),
+                &ConversationStatus::Success
+            );
+        });
+        OrchestrationEventService::handle(&app).read(&app, |service, _| {
+            assert!(!service.is_conversation_exiting(id));
+        });
+
+        QueuedQueryModel::handle(&app).update(&mut app, |queue, ctx| {
+            queue.complete_preparation(
+                id,
+                query_id,
+                HashMap::from([(
+                    "event-payload.json".into(),
+                    AIAgentAttachment::FilePathReference {
+                        file_id: "attachment-id".into(),
+                        file_name: "event-payload.json".into(),
+                        file_path: "/workspace/.warp/attachments/attachment-id_event-payload.json"
+                            .into(),
+                    },
+                )]),
+                ctx,
+            );
+        });
+
+        OrchestrationEventService::handle(&app).read(&app, |service, _| {
+            assert!(!service.is_conversation_exiting(id));
+        });
+        BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+            let conversation = history.conversation(&id).unwrap();
+            assert_eq!(conversation.status(), &ConversationStatus::InProgress);
+            assert_eq!(conversation.exchange_count(), 2);
+            assert!(conversation.root_task_exchanges().any(|exchange| {
+                exchange.input.iter().any(
+                    |input| matches!(input, AIAgentInput::UserQuery { query, .. } if query == "file followup"),
+                )
+            }));
+        });
+        controller.read(&app, |controller, ctx| {
+            assert!(controller.has_active_stream_for_conversation(id, ctx));
+        });
+        QueuedQueryModel::handle(&app).read(&app, |queue, _| {
+            assert!(!queue.has_queue(id));
+        });
+    });
+}
+
+#[test]
+fn native_startup_queue_prevents_exit_until_a_local_row_is_removed() {
+    // Regression test: exit-deferral must not be specific to shared-session-injected rows --
+    // a plain local row (e.g. queued via `/queue` against this same conversation) has to hold
+    // the run open exactly the same way, since `dispatch_queued_warp_agent_prompt` dispatches
+    // either kind identically.
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let (terminal_id, controller) = terminal.read(&app, |terminal, _| {
+            (terminal.id(), terminal.ai_controller().clone())
+        });
+        let (id, stream) =
+            conversation_with_in_progress_mock_stream(&mut app, terminal_id, &controller);
+        controller.update(&mut app, |controller, ctx| {
+            controller.bind_native_prompt_conversation(Some(id), ctx);
+        });
+        let _driver = driver_wired_for_terminal(&mut app, terminal, None);
+
+        let queued_id = QueuedQueryModel::handle(&app).update(&mut app, |queue, ctx| {
+            queue.append(
+                id,
+                QueuedQuery::new(
+                    "local followup".into(),
+                    QueuedQueryOrigin::QueueSlashCommand,
+                ),
+                ctx,
+            )
+        });
+        complete_mock_stream_successfully(&mut app, &stream);
+        OrchestrationEventService::handle(&app).read(&app, |service, _| {
+            assert!(!service.is_conversation_exiting(id));
+        });
+        QueuedQueryModel::handle(&app).update(&mut app, |queue, ctx| {
+            assert!(queue.remove_by_id(id, queued_id, ctx).is_some());
+        });
+        OrchestrationEventService::handle(&app).read(&app, |service, _| {
+            assert!(service.is_conversation_exiting(id));
+        });
+    });
+}
+
+#[test]
+fn native_promptless_setup_dispatches_only_the_head_queued_prompt() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let controller = terminal.read(&app, |terminal, _| terminal.ai_controller().clone());
+        let id = controller.update(&mut app, |controller, ctx| {
+            let id = controller.bind_native_prompt_conversation(None, ctx);
+            controller.execute_warp_agent_prompt_from_shared_session_injection(
+                "first".into(),
+                None,
+                vec![],
+                ParticipantId::new(),
+                None,
+                ctx,
+            );
+            controller.execute_warp_agent_prompt_from_shared_session_injection(
+                "second".into(),
+                None,
+                vec![],
+                ParticipantId::new(),
+                None,
+                ctx,
+            );
+            id
+        });
+        let _driver = driver_wired_for_terminal(&mut app, terminal, None);
+        // Only the head ("first") is sent as soon as setup finishes; "second" stays queued for
+        // the next natural request boundary (a tool-result follow-up) or the conversation going
+        // idle, rather than being dispatched right away and interrupting "first"'s barely-started
+        // stream before it produces any output.
+        BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+            let conversation = history.conversation(&id).unwrap();
+            assert_eq!(conversation.exchange_count(), 1);
+            assert_eq!(conversation.status(), &ConversationStatus::InProgress);
+        });
+        QueuedQueryModel::handle(&app).read(&app, |queue, _| {
+            assert_eq!(
+                queue
+                    .queue(id)
+                    .iter()
+                    .map(QueuedQuery::text)
+                    .collect::<Vec<_>>(),
+                vec!["second"],
+            );
+        });
+    });
+}
+
+/// QUALITY-1801 regression: a child agent's message, queued in
+/// `OrchestrationEventService` while the parent's own turn is still streaming, must
+/// not start a new MAA request once the parent's ambient run has committed to an
+/// immediate terminal exit (no `--idle-on-complete` window). This drives the real
+/// `AgentDriver` history-model subscription installed by `execute_run` (not just the
+/// `OrchestrationEventService` helper directly), so a regression that drops or
+/// mis-scopes that wiring is caught here.
+#[test]
+fn ambient_driver_immediate_exit_blocks_buffered_child_event_from_restarting_maa() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal_view = add_window_with_terminal(&mut app, None);
+        let (terminal_id, ai_controller) = terminal_view.update(&mut app, |view, _| {
+            (view.id(), view.ai_controller().clone())
+        });
+
+        // No idle window: `Success` commits the run to an immediate exit.
+        let _driver = driver_wired_for_terminal(&mut app, terminal_view, None);
+
+        let (conversation_id, stream) =
+            conversation_with_in_progress_mock_stream(&mut app, terminal_id, &ai_controller);
+
+        // A child agent's message arrives while the parent's own turn is still
+        // streaming: it is queued, not injected (the pre-existing active-stream guard).
+        enqueue_buffered_child_message(&mut app, conversation_id);
+        ai_controller.read(&app, |controller, ctx| {
+            assert!(
+                controller.has_active_stream_for_conversation(conversation_id, ctx),
+                "the parent's own stream must still be active while its event is buffered"
+            );
+        });
+
+        // The parent's own turn finishes successfully.
+        complete_mock_stream_successfully(&mut app, &stream);
+        BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+            assert_eq!(
+                history.conversation(&conversation_id).map(|c| c.status()),
+                Some(&ConversationStatus::Success)
+            );
+        });
+        // With no idle window, the driver committed to an immediate exit the instant
+        // it observed `Success` above, marking the conversation exiting before the
+        // controller's post-stream-cleanup re-check below runs.
+        OrchestrationEventService::handle(&app).read(&app, |service, _| {
+            assert!(
+                service.is_conversation_exiting(conversation_id),
+                "the driver should have marked the conversation exiting on immediate Success"
+            );
+        });
+
+        // The stream's natural completion propagates `AfterStreamFinished`, which is
+        // where the controller re-checks pending orchestration events. Since
+        // `conversation_ready_for_pending_events` already sees the conversation as
+        // exiting, this returns synchronously without going through the async
+        // dormant-Claude-wake eligibility check below.
+        stream.update(&mut app, |stream, ctx| {
+            stream.emit_after_stream_finished_for_test(ctx);
+        });
+
+        // The buffered child event must not have started a new request: the run
+        // already committed to exiting when the driver observed `Success` above.
+        BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+            assert_eq!(
+                history.conversation(&conversation_id).map(|c| c.status()),
+                Some(&ConversationStatus::Success),
+                "conversation must stay terminal, not flip back to InProgress"
+            );
+        });
+        ai_controller.read(&app, |controller, ctx| {
+            assert!(
+                !controller.has_active_stream_for_conversation(conversation_id, ctx),
+                "no follow-up request should have started"
+            );
+        });
+        // The flag that blocks injection (checked above via `is_conversation_exiting`) is set
+        // synchronously by `on_commit`, but the full model-side cleanup that drops queued
+        // events lives in `execute_run`'s forwarder, which only runs once the async round trip
+        // back from `run_exit`'s internal signal completes — so this is polled rather than
+        // checked immediately.
+        assert_eventually!(
+            400 => OrchestrationEventService::handle(&app).read(&app, |service, _| {
+                !service.has_pending_events(conversation_id)
+            }),
+            "timed out after 2s waiting for: the buffered event to be dropped by the forwarder's \
+             model-side cleanup"
+        );
+    });
+}
+
+/// Counterpart to the immediate-exit test above: when the driver has an
+/// `--idle-on-complete` window (so it does *not* commit to an immediate exit on
+/// `Success`), the buffered child event must still be injected as a normal
+/// follow-up once the parent's stream completes — this is the `wait_for_events` /
+/// follow-up-turn path the fix must not break.
+#[test]
+fn ambient_driver_with_idle_window_still_injects_buffered_child_event() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal_view = add_window_with_terminal(&mut app, None);
+        let (terminal_id, ai_controller) = terminal_view.update(&mut app, |view, _| {
+            (view.id(), view.ai_controller().clone())
+        });
+
+        // A generous idle window: `Success` must not commit the run to an immediate
+        // exit, since it is deliberately staying alive for a follow-up.
+        let _driver =
+            driver_wired_for_terminal(&mut app, terminal_view, Some(Duration::from_secs(300)));
+
+        let (conversation_id, stream) =
+            conversation_with_in_progress_mock_stream(&mut app, terminal_id, &ai_controller);
+
+        enqueue_buffered_child_message(&mut app, conversation_id);
+        complete_mock_stream_successfully(&mut app, &stream);
+
+        OrchestrationEventService::handle(&app).read(&app, |service, _| {
+            assert!(
+                !service.is_conversation_exiting(conversation_id),
+                "an idle window means the driver must not have committed to exiting"
+            );
+        });
+
+        stream.update(&mut app, |stream, ctx| {
+            stream.emit_after_stream_finished_for_test(ctx);
+        });
+        // The re-check first goes through an async dormant-Claude-wake eligibility
+        // check (`maybe_prepare_local_claude_wake`) that resolves `Ok(None)` for a
+        // non-child conversation like this one and falls back to direct injection.
+        // Poll for that scheduled work to land instead of guessing a fixed sleep
+        // duration a loaded test runner could exceed.
+        assert_eventually!(
+            400 => BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+                matches!(
+                    history.conversation(&conversation_id).map(|c| c.status()),
+                    Some(ConversationStatus::InProgress)
+                )
+            }),
+            "timed out after 2s waiting for: the buffered event to be injected as an InProgress \
+             follow-up"
+        );
+
+        // The buffered event should have been injected as a real follow-up: the
+        // conversation is back `InProgress` and the queue has been drained.
+        BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+            assert_eq!(
+                history.conversation(&conversation_id).map(|c| c.status()),
+                Some(&ConversationStatus::InProgress),
+                "the buffered event should have started a follow-up request"
+            );
+        });
+        OrchestrationEventService::handle(&app).read(&app, |service, _| {
+            assert!(!service.has_pending_events(conversation_id));
+        });
+    });
+}
+
+// Lets a test substitute the `IdleWait` used by the next `execute_run` call on this thread, so
+// a deferred idle window's deadline can be reached deterministically instead of via a real
+// `thread::sleep`. `execute_run` runs synchronously on the same thread as the test that calls
+// it, so this thread-local is read exactly once, synchronously, at construction time. Exposed
+// to `driver.rs` as `pub(super)`, since `execute_run` (defined there) is the sole reader.
+thread_local! {
+    static TEST_IDLE_WAIT: std::cell::RefCell<Option<Arc<dyn super::IdleWait>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+pub(super) fn test_idle_wait_override() -> Option<Arc<dyn super::IdleWait>> {
+    TEST_IDLE_WAIT.with(|cell| cell.borrow().clone())
+}
+
+pub(super) fn set_test_idle_wait_override(wait: Option<Arc<dyn super::IdleWait>>) {
+    TEST_IDLE_WAIT.with(|cell| *cell.borrow_mut() = wait);
+}
+
+// A second, independent gate consulted from inside `execute_run`'s `on_commit` closure,
+// immediately after it commits exiting state and before returning (i.e. strictly before
+// `end_run_now`/`end_run_after` send the completion value). Lets a test pause deterministically
+// in the window where the commit has already happened but the completion signal — and
+// everything downstream of it, including the async forwarder that runs model-side cleanup — has
+// provably not yet been observed by anything.
+thread_local! {
+    static TEST_POST_COMMIT_GATE: std::cell::RefCell<Option<Arc<dyn super::IdleWait>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+// Read synchronously at `execute_run` construction time (main thread) and captured by value
+// into the `on_commit` closure, rather than re-read via this thread-local at commit time: a
+// deferred window's commit runs on a background `thread::spawn`, which does not see a
+// same-named thread-local set by the test on the main thread.
+pub(super) fn test_post_commit_gate() -> Option<Arc<dyn super::IdleWait>> {
+    TEST_POST_COMMIT_GATE.with(|cell| cell.borrow().clone())
+}
+
+pub(super) fn set_test_post_commit_gate(gate: Option<Arc<dyn super::IdleWait>>) {
+    TEST_POST_COMMIT_GATE.with(|cell| *cell.borrow_mut() = gate);
+}
+
+impl<T: Send + 'static> super::IdleTimeoutSender<T> {
+    /// Overrides the wait mechanism `end_run_after` uses, so a test can control exactly when a
+    /// deferred deadline is considered reached instead of depending on a real `thread::sleep`.
+    pub(super) fn with_wait(mut self, wait: Arc<dyn super::IdleWait>) -> Self {
+        self.wait = wait;
+        self
+    }
+}
+
+/// Test-only [`super::IdleWait`] that blocks until the test releases it, so a deferred idle
+/// window's deadline can be reached at a moment of the test's choosing instead of depending on
+/// a real, wall-clock-dependent `thread::sleep`. Needed both to make the elapsed-window test
+/// below deterministic (a fixed short duration can fire, or fail to have fired yet, before an
+/// assertion runs on a loaded test runner) and to construct the specific interleaving it
+/// exercises: releasing the timer while a child event's async injection eligibility check is
+/// already in flight.
+struct ManualIdleWait {
+    release_rx: std::sync::Mutex<std::sync::mpsc::Receiver<()>>,
+}
+
+impl super::IdleWait for ManualIdleWait {
+    fn wait(&self, _duration: Duration) {
+        let _ = self.release_rx.lock().unwrap().recv();
+    }
+}
+
+fn manual_idle_wait() -> (Arc<ManualIdleWait>, std::sync::mpsc::Sender<()>) {
+    let (tx, rx) = std::sync::mpsc::channel();
+    (
+        Arc::new(ManualIdleWait {
+            release_rx: std::sync::Mutex::new(rx),
+        }),
+        tx,
+    )
+}
+
+/// QUALITY-1801 regression, second gap: an `--idle-on-complete` window that elapses on its
+/// own (no follow-up query arrives before the deadline) must also mark the conversation
+/// exiting — and that commitment must be visible even to a child event whose async injection
+/// eligibility check was already in flight when the window elapsed, not only to one that
+/// arrives after everything has settled.
+///
+/// This exercises the exact race a plain async-forwarder-only design cannot close: the
+/// deferred timer fires on a background thread and only marks exiting once its completion
+/// signal reaches the model thread through further async plumbing (`ctx.spawn`'s
+/// background-executor round trip). An eligibility check that is already mid-flight when the
+/// timer fires can find the guard not yet set. `IdleTimeoutSender`'s `on_commit` hook closes
+/// this by committing the exiting state synchronously, on the timer's own thread, before it
+/// ever touches the completion channel — so the check re-validates against an
+/// already-committed state by the time it actually runs.
+///
+/// Uses `ManualIdleWait` (via `set_test_idle_wait_override`) instead of a real
+/// `thread::sleep`-based duration, so exactly when the deadline is considered reached is
+/// under the test's control rather than tied to wall-clock timing.
+#[test]
+fn ambient_driver_elapsed_idle_window_blocks_buffered_child_event_from_restarting_maa() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal_view = add_window_with_terminal(&mut app, None);
+        let (terminal_id, ai_controller) = terminal_view.update(&mut app, |view, _| {
+            (view.id(), view.ai_controller().clone())
+        });
+
+        let (elapse_wait, elapse_release_tx) = manual_idle_wait();
+        let (post_commit_wait, post_commit_release_tx) = manual_idle_wait();
+        set_test_idle_wait_override(Some(elapse_wait));
+        set_test_post_commit_gate(Some(post_commit_wait));
+        let _driver =
+            driver_wired_for_terminal(&mut app, terminal_view, Some(Duration::from_secs(300)));
+        set_test_idle_wait_override(None);
+        set_test_post_commit_gate(None);
+
+        let (conversation_id, stream) =
+            conversation_with_in_progress_mock_stream(&mut app, terminal_id, &ai_controller);
+
+        complete_mock_stream_successfully(&mut app, &stream);
+        stream.update(&mut app, |stream, ctx| {
+            stream.emit_after_stream_finished_for_test(ctx);
+        });
+
+        // The deferred window's background timer is blocked on the manual wait, so nothing
+        // has committed to exiting yet — deterministically, not because the test happened to
+        // check quickly enough.
+        OrchestrationEventService::handle(&app).read(&app, |service, _| {
+            assert!(
+                !service.is_conversation_exiting(conversation_id),
+                "the timer is blocked on the manual wait, so nothing has committed yet"
+            );
+        });
+
+        // A child agent's message arrives while the window is still (deterministically)
+        // open: a legitimate follow-up eligibility check starts, which goes through an async
+        // dormant-Claude-wake step before it actually injects.
+        enqueue_buffered_child_message(&mut app, conversation_id);
+
+        // Release the timer now, while that async eligibility check may still be in flight.
+        // The background thread commits exiting and then blocks again on the second
+        // (post-commit) gate, strictly *before* sending the completion value — so at this
+        // point the commit has provably landed, but the async forwarder that performs
+        // model-side cleanup has provably not run (the value it awaits hasn't been sent).
+        elapse_release_tx
+            .send(())
+            .expect("background timer thread should still be waiting on the manual release");
+
+        assert_eventually!(
+            400 => OrchestrationEventService::handle(&app).read(&app, |service, _| {
+                service.is_conversation_exiting(conversation_id)
+            }),
+            "timed out after 2s waiting for: the conversation to be marked exiting once the idle \
+             window elapses"
+        );
+
+        // Deterministically inside the interleaving window now: exiting is committed, and
+        // the forwarder cannot have run yet. Give the in-flight eligibility check
+        // opportunity to resolve and (incorrectly) inject, continuously asserting the guard
+        // holds throughout rather than only at the end.
+        let settle_deadline = instant::Instant::now() + Duration::from_millis(300);
+        while instant::Instant::now() < settle_deadline {
+            BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+                assert_eq!(
+                    history.conversation(&conversation_id).map(|c| c.status()),
+                    Some(&ConversationStatus::Success),
+                    "conversation must stay terminal, not flip back to InProgress"
+                );
+            });
+            Timer::after(Duration::from_millis(5)).await;
+        }
+
+        // Release the post-commit gate so the run can finish tearing down normally.
+        post_commit_release_tx
+            .send(())
+            .expect("background timer thread should still be waiting at the post-commit gate");
+
+        ai_controller.read(&app, |controller, ctx| {
+            assert!(
+                !controller.has_active_stream_for_conversation(conversation_id, ctx),
+                "no follow-up request should have started"
+            );
+        });
+    });
+}
+
+/// QUALITY-1801 regression, direct proof of the interleaving window: once
+/// [`OrchestrationEventService::exit_commit_handle`]'s `commit` has run — exactly what
+/// `IdleTimeoutSender`'s `on_commit` hook does, synchronously, on the timer's own thread,
+/// before it ever touches the completion channel — the guard must block injection
+/// immediately, even before any model-side cleanup
+/// (`drop_pending_events_for_exiting_conversation`) has had a chance to run. This isolates,
+/// deterministically and without any timer at all, the property the async-forwarder-only
+/// design could not guarantee: a check that runs in the gap between the timer deciding to
+/// fire and the model callback actually running must still see the commitment.
+#[test]
+fn exit_commit_handle_blocks_injection_before_model_side_cleanup_runs() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal_view = add_window_with_terminal(&mut app, None);
+        let (terminal_id, ai_controller) = terminal_view.update(&mut app, |view, _| {
+            (view.id(), view.ai_controller().clone())
+        });
+
+        let (conversation_id, stream) =
+            conversation_with_in_progress_mock_stream(&mut app, terminal_id, &ai_controller);
+        complete_mock_stream_successfully(&mut app, &stream);
+        stream.update(&mut app, |stream, ctx| {
+            stream.emit_after_stream_finished_for_test(ctx);
+        });
+
+        // Commit directly via the handle, exactly as `on_commit` does on a background timer
+        // thread — with no accompanying model-side cleanup call, simulating the moment right
+        // after the timer fires but before the async forwarder callback has run.
+        let commit_handle = OrchestrationEventService::handle(&app)
+            .read(&app, |service, _| service.exit_commit_handle());
+        commit_handle.commit(conversation_id);
+
+        // The guard must already block, even though nothing has cleaned up pending events
+        // for this conversation (`drop_pending_events_for_exiting_conversation` never ran).
+        enqueue_buffered_child_message(&mut app, conversation_id);
+
+        BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+            assert_eq!(
+                history.conversation(&conversation_id).map(|c| c.status()),
+                Some(&ConversationStatus::Success),
+                "a directly-committed exit must block injection even without model-side cleanup"
+            );
+        });
+        ai_controller.read(&app, |controller, ctx| {
+            assert!(
+                !controller.has_active_stream_for_conversation(conversation_id, ctx),
+                "no follow-up request should have started"
+            );
+        });
+    });
+}
+
+/// Like `driver_wired_for_terminal`, but simulates a *resumed* conversation: the caller
+/// already knows `resumed_conversation_id` before `execute_run` is called, mirroring
+/// `AgentDriver::new` setting `run_conversation_id` up front for a restored conversation.
+/// Such a run never observes `ConversationServerTokenAssigned` (it already has a server
+/// token), so it takes a different path than a fresh run to learning its own conversation
+/// id.
+fn driver_wired_for_resumed_conversation(
+    app: &mut App,
+    terminal_view: warpui::ViewHandle<crate::terminal::TerminalView>,
+    idle_on_complete: Option<Duration>,
+    resumed_conversation_id: crate::ai::agent::conversation::AIConversationId,
+) -> warpui::ModelHandle<AgentDriver> {
+    let temp = TempDir::new().unwrap();
+    let driver_handle = app.add_model(|ctx| {
+        let terminal_driver =
+            super::terminal::TerminalDriver::create_from_existing_view(terminal_view, ctx);
+        let mut driver = AgentDriver::new_for_test(temp.path().to_path_buf(), terminal_driver, ctx);
+        driver.skip_initial_turn = true;
+        driver.idle_on_complete = idle_on_complete;
+        driver.run_conversation_id = Some(resumed_conversation_id);
+        driver
+    });
+    let _run_exit_rx = driver_handle.update(app, |driver, ctx| {
+        driver.execute_run(AgentRunPrompt::Local(String::new()), ctx)
+    });
+    driver_handle
+}
+
+/// QUALITY-1801 regression: a *resumed* conversation's deferred `--idle-on-complete`
+/// window must also commit exiting once it elapses. `execute_run` seeds the thread-safe
+/// commit's tracked conversation id from `self.run_conversation_id` precisely because a
+/// resumed run already has it at construction time and never takes the
+/// `ConversationServerTokenAssigned` branch that a fresh run relies on to learn it.
+#[test]
+fn ambient_driver_resumed_conversation_elapsed_idle_window_commits_exiting() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal_view = add_window_with_terminal(&mut app, None);
+        let (terminal_id, ai_controller) = terminal_view.update(&mut app, |view, _| {
+            (view.id(), view.ai_controller().clone())
+        });
+
+        // The conversation exists (and its id is known) *before* the driver is
+        // constructed, mirroring a resume: the id comes from restoration, not from a
+        // `ConversationServerTokenAssigned` event observed during this run.
+        let (conversation_id, stream) =
+            conversation_with_in_progress_mock_stream(&mut app, terminal_id, &ai_controller);
+
+        // Two gates, as in the interleaving test above: `elapse_wait` controls when the
+        // deferred deadline is reached, and `post_commit_wait` pauses `on_commit` strictly
+        // *before* the completion value is sent. `on_commit` is the only thing that can set
+        // the exiting flag — the forwarder only drops pending events — so a broken
+        // (never-populated) thread-safe seed would leave the flag unset forever; these gates
+        // just keep the check deterministic rather than racing the background timer.
+        let (elapse_wait, elapse_release_tx) = manual_idle_wait();
+        let (post_commit_wait, post_commit_release_tx) = manual_idle_wait();
+        set_test_idle_wait_override(Some(elapse_wait));
+        set_test_post_commit_gate(Some(post_commit_wait));
+        let _driver = driver_wired_for_resumed_conversation(
+            &mut app,
+            terminal_view,
+            Some(Duration::from_secs(300)),
+            conversation_id,
+        );
+        set_test_idle_wait_override(None);
+        set_test_post_commit_gate(None);
+
+        complete_mock_stream_successfully(&mut app, &stream);
+        stream.update(&mut app, |stream, ctx| {
+            stream.emit_after_stream_finished_for_test(ctx);
+        });
+
+        OrchestrationEventService::handle(&app).read(&app, |service, _| {
+            assert!(
+                !service.is_conversation_exiting(conversation_id),
+                "the timer is blocked on the manual wait, so nothing has committed yet"
+            );
+        });
+
+        elapse_release_tx
+            .send(())
+            .expect("background timer thread should still be waiting on the manual release");
+
+        // The background thread runs `on_commit` (which must populate the thread-safe
+        // commit using the seed from `self.run_conversation_id`) and then blocks on the
+        // post-commit gate, strictly before sending the completion value. The async
+        // forwarder therefore cannot have run yet, so this check is a direct, uncontaminated
+        // proof of `on_commit`'s own write, not of the forwarder's fallback.
+        assert_eventually!(
+            400 => OrchestrationEventService::handle(&app).read(&app, |service, _| {
+                service.is_conversation_exiting(conversation_id)
+            }),
+            "timed out after 2s waiting for: the resumed conversation to be marked exiting once \
+             its idle window elapses, via on_commit's seeded conversation id (not the async \
+             forwarder)"
+        );
+
+        // Release the post-commit gate so the run can finish tearing down normally.
+        post_commit_release_tx
+            .send(())
+            .expect("background timer thread should still be waiting at the post-commit gate");
+    });
+}
+
+#[test]
+fn deferred_repository_semantic_acp_consumes_server_resolved_text_once() {
+    if std::env::var_os("WARP_TEST_DEFERRED_ACP_PROMPT").is_none() {
+        let home = TempDir::new().unwrap();
+        let output = ProcessCommand::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "ai::agent_sdk::driver::tests::deferred_repository_semantic_acp_consumes_server_resolved_text_once",
+                "--nocapture",
+            ])
+            .env("WARP_TEST_DEFERRED_ACP_PROMPT", "1")
+            .env("HOME", home.path())
+            .env("USERPROFILE", home.path())
+            .env("CODEX_HOME", home.path().join(".codex"))
+            .env("WARP_ISOLATION_PLATFORM", "docker")
+            .env("WARP_WORKLOAD_TOKEN", "test-workload-token")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+        return;
+    }
+    let mut server = ChannelState::mock_server();
+    let prompt = "Factory deferred repository inventory at task creation:\n- GITHUB \"acme\"/\"repo\"\n\nimplement";
+    let resolved = server
+        .mock("POST", "/api/v1/harness-support/resolve-prompt")
+        .match_body(Matcher::Json(json!({})))
+        .with_status(200)
+        .with_body(json!({"prompt": prompt}).to_string())
+        .expect(1)
+        .create();
+    App::test((), |mut app| async move {
+        initialize_workspace_test_app(&mut app);
+        let root = TempDir::new().unwrap();
+        let mut options = crate::ai::agent_sdk::tests::agent_driver_options();
+        options.working_dir = root.path().to_path_buf();
+        options.selected_harness = Harness::Codex;
+        options.harness_transport = HarnessTransport::Acp;
+        let driver = app.update(|ctx| AgentDriver::create(options, ctx).unwrap());
+        let foreground = driver.update(&mut app, |_, ctx| ctx.spawner());
+        let HarnessKind::ThirdParty(harness) =
+            harness_kind(Harness::Codex, HarnessTransport::Acp).unwrap()
+        else {
+            panic!("expected an ACP harness");
+        };
+        let runner = AgentDriver::prepare_harness(
+            &AgentRunPrompt::ServerSide {
+                skill: None,
+                attachments_dir: None,
+            },
+            &[],
+            harness.as_ref(),
+            &foreground,
+        )
+        .await
+        .unwrap();
+        assert_eq!(runner.prompt_text_for_test(), Some(prompt));
+    });
+    resolved.assert();
+}
+
+#[test]
+fn deferred_repository_semantic_skipped_server_startup_has_no_inventory_only_turn() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let root = TempDir::new().unwrap();
+        let driver = app.add_model(|ctx| {
+            let terminal_driver =
+                super::terminal::TerminalDriver::create_from_existing_view(terminal.clone(), ctx);
+            let mut driver =
+                AgentDriver::new_for_test(root.path().to_path_buf(), terminal_driver, ctx);
+            driver.skip_initial_turn = true;
+            driver
+        });
+        let completion = driver.update(&mut app, |driver, ctx| {
+            driver.execute_run(
+                AgentRunPrompt::ServerSide {
+                    skill: None,
+                    attachments_dir: None,
+                },
+                ctx,
+            )
+        });
+        assert!(matches!(
+            completion.await.unwrap(),
+            SDKConversationOutputStatus::Success
+        ));
+        terminal.read(&app, |terminal, ctx| {
+            assert!(
+                terminal
+                    .ai_controller()
+                    .as_ref(ctx)
+                    .native_prompt_conversation_id()
+                    .is_none()
+            );
+        });
+    });
+}
+
+#[test]
+fn deferred_repository_semantic_skill_publication_without_initial_inventory() {
+    if std::env::var_os("WARP_TEST_DEFERRED_SKILL_PUBLICATION").is_none() {
+        let home = TempDir::new().unwrap();
+        let output = ProcessCommand::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "ai::agent_sdk::driver::tests::deferred_repository_semantic_skill_publication_without_initial_inventory",
+                "--nocapture",
+            ])
+            .env("WARP_TEST_DEFERRED_SKILL_PUBLICATION", "1")
+            .env("HOME", home.path())
+            .env("USERPROFILE", home.path())
+            .env("CLAUDE_CONFIG_DIR", home.path().join(".claude"))
+            .env("CODEX_HOME", home.path().join(".codex"))
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+        return;
+    }
+    let _factory_mcp = warp_core::features::FeatureFlag::FactoryMcp.override_enabled(false);
+    for transport in [HarnessTransport::Pty, HarnessTransport::Acp] {
+        for use_factory_repositories in [true, false] {
+            for (harness, skill_parent) in [
+                (Harness::Claude, ".claude"),
+                (Harness::Codex, ".agents"),
+                (Harness::Gemini, ".gemini"),
+            ] {
+                App::test((), |mut app| async move {
+                    let _capability = warp_core::features::FeatureFlag::FactoryDeferredRepositories
+                        .override_enabled(!use_factory_repositories);
+                    let should_activate = use_factory_repositories;
+                    initialize_workspace_test_app(&mut app);
+                    let root = TempDir::new().unwrap();
+                    let skill_parent = root.path().join(skill_parent);
+                    fs::write(&skill_parent, "existing file").unwrap();
+                    let mut options = crate::ai::agent_sdk::tests::agent_driver_options();
+                    options.use_factory_repositories = use_factory_repositories;
+                    options.working_dir = root.path().to_path_buf();
+                    options.selected_harness = harness;
+                    options.harness_transport = transport;
+                    options.workspace = super::environment::WorkspaceConfiguration::from_resolved(
+                        Vec::new(),
+                        Vec::new(),
+                        Vec::new(),
+                    )
+                    .unwrap();
+                    options.workspace.factory_skill_dirs = Some(Vec::new());
+                    if !should_activate {
+                        options.secrets.insert(
+                            "WARP_FACTORY_DEFERRED_REPOSITORIES_SKILL".into(),
+                            ManagedSecretValue::raw_value("1"),
+                        );
+                    }
+                    let driver = app.update(|ctx| AgentDriver::create(options, ctx).unwrap());
+                    let foreground = driver.update(&mut app, |driver, ctx| {
+                        let Some(super::WorkspaceState::Pending(workspace)) =
+                            driver.workspace.take()
+                        else {
+                            panic!("expected a workspace awaiting setup");
+                        };
+                        assert!(workspace.source_repos.is_empty());
+                        assert_eq!(driver.factory_repository_contract, should_activate);
+                        assert_eq!(
+                            driver.resolved_env_vars.contains_key(std::ffi::OsStr::new(
+                                "WARP_FACTORY_DEFERRED_REPOSITORIES_SKILL",
+                            )),
+                            !should_activate,
+                        );
+                        let launch_env = driver
+                            .terminal_driver
+                            .as_ref(ctx)
+                            .launch_env_vars_for_test
+                            .as_ref()
+                            .unwrap();
+                        for name in ["OZ_WORKSPACE_ROOT", "WARP_WORKSPACE_ROOT"] {
+                            assert_eq!(
+                                launch_env.get(std::ffi::OsStr::new(name)),
+                                Some(&root.path().as_os_str().to_os_string())
+                            );
+                        }
+                        ctx.spawner()
+                    });
+                    let HarnessKind::ThirdParty(harness) =
+                        harness_kind(harness, transport).unwrap()
+                    else {
+                        panic!("expected a third-party harness");
+                    };
+                    let result = AgentDriver::prepare_harness(
+                        &AgentRunPrompt::Local("do the task".into()),
+                        &[],
+                        harness.as_ref(),
+                        &foreground,
+                    )
+                    .await;
+                    if should_activate {
+                        let Err(AgentDriverError::HarnessConfigSetupFailed { error, .. }) = result
+                        else {
+                            panic!("expected skill publication to fail");
+                        };
+                        assert!(format!("{error:#}").contains("skill"), "{error:#}");
+                    } else {
+                        assert!(result.is_ok(), "{:?}", result.err());
+                    }
+                    assert_eq!(fs::read_to_string(skill_parent).unwrap(), "existing file");
+                });
+            }
+        }
+    }
+}
+
+#[test]
+fn deferred_repository_runtime_exports_absolute_root_before_terminal_creation() {
+    App::test((), |mut app| async move {
+        initialize_workspace_test_app(&mut app);
+        let temporary = TempDir::new().unwrap();
+        let root = temporary.path().join("workspace with 'quotes'");
+        fs::create_dir(&root).unwrap();
+        let mut options = crate::ai::agent_sdk::tests::agent_driver_options();
+        options.working_dir = root.clone();
+        options.secrets.insert(
+            "OZ_WORKSPACE_ROOT".into(),
+            ManagedSecretValue::raw_value("relative/stale"),
+        );
+        options.secrets.insert(
+            "WARP_WORKSPACE_ROOT".into(),
+            ManagedSecretValue::raw_value("/other/root"),
+        );
+        let driver = app.update(|ctx| AgentDriver::create(options, ctx).unwrap());
+        driver.update(&mut app, |driver, ctx| {
+            for name in ["OZ_WORKSPACE_ROOT", "WARP_WORKSPACE_ROOT"] {
+                assert_eq!(
+                    driver.resolved_env_vars.get(std::ffi::OsStr::new(name)),
+                    Some(&root.as_os_str().to_os_string())
+                );
+                assert_eq!(
+                    driver
+                        .terminal_driver
+                        .as_ref(ctx)
+                        .launch_env_vars_for_test
+                        .as_ref()
+                        .and_then(|env| env.get(std::ffi::OsStr::new(name))),
+                    Some(&root.as_os_str().to_os_string())
+                );
+            }
+            driver.harness_working_dir = root.join("eager-repository");
+            assert_eq!(
+                driver
+                    .resolved_env_vars
+                    .get(std::ffi::OsStr::new("OZ_WORKSPACE_ROOT")),
+                Some(&root.as_os_str().to_os_string())
+            );
+        });
+    });
+}
+
+#[test]
+fn deferred_repository_runtime_exports_root_when_unset() {
+    App::test((), |mut app| async move {
+        initialize_workspace_test_app(&mut app);
+        let root = TempDir::new().unwrap();
+        let mut options = crate::ai::agent_sdk::tests::agent_driver_options();
+        options.working_dir = root.path().to_path_buf();
+        let driver = app.update(|ctx| AgentDriver::create(options, ctx).unwrap());
+        driver.read(&app, |driver, _| {
+            for name in ["OZ_WORKSPACE_ROOT", "WARP_WORKSPACE_ROOT"] {
+                assert_eq!(
+                    driver.resolved_env_vars.get(std::ffi::OsStr::new(name)),
+                    Some(&root.path().as_os_str().to_os_string())
+                );
+            }
+        });
+    });
+}
+
+#[test]
+fn deferred_execution_policy_reaches_every_launch_and_legacy_clears_inheritance() {
+    use super::environment_preparation::{FILE_ENV, MODE_ENV};
+    for (harness, transport) in [
+        (Harness::Oz, HarnessTransport::Pty),
+        (Harness::Claude, HarnessTransport::Pty),
+        (Harness::Claude, HarnessTransport::Acp),
+        (Harness::Codex, HarnessTransport::Pty),
+        (Harness::Codex, HarnessTransport::Acp),
+        (Harness::Gemini, HarnessTransport::Pty),
+        (Harness::Gemini, HarnessTransport::Acp),
+    ] {
+        for capability in [None, Some(false), Some(true)] {
+            App::test((), |mut app| async move {
+                initialize_workspace_test_app(&mut app);
+                let root = TempDir::new().unwrap();
+                let mut options = crate::ai::agent_sdk::tests::agent_driver_options();
+                options.working_dir = root.path().to_owned();
+                options.selected_harness = harness;
+                options.harness_transport = transport;
+                let task_id = "00000000-0000-0000-0000-000000000001";
+                options.task_id = Some(task_id.parse().unwrap());
+                for name in [
+                    FILE_ENV,
+                    MODE_ENV,
+                    "OZ_RUN_ID",
+                    "WARP_RUN_ID",
+                    "WARP_EXECUTION_ID",
+                ] {
+                    options
+                        .secrets
+                        .insert(name.into(), ManagedSecretValue::raw_value("stale"));
+                }
+                if let Some(capability) = capability {
+                    options
+                        .workspace
+                        .bind_execution(
+                            task_id.into(),
+                            "42".into(),
+                            root.path().to_owned(),
+                            capability,
+                        )
+                        .unwrap();
+                }
+                let driver = app.update(|ctx| AgentDriver::create(options, ctx).unwrap());
+                driver.read(&app, |driver, ctx| {
+                    let launch = driver
+                        .terminal_driver
+                        .as_ref(ctx)
+                        .launch_env_vars_for_test
+                        .as_ref()
+                        .unwrap();
+                    for name in [
+                        FILE_ENV,
+                        MODE_ENV,
+                        "OZ_RUN_ID",
+                        "WARP_RUN_ID",
+                        "WARP_EXECUTION_ID",
+                        "OZ_WORKSPACE_ROOT",
+                        "WARP_WORKSPACE_ROOT",
+                    ] {
+                        assert_eq!(
+                            launch.get(std::ffi::OsStr::new(name)),
+                            driver.resolved_env_vars.get(std::ffi::OsStr::new(name))
+                        );
+                    }
+                    let value = |name: &str| launch.get(std::ffi::OsStr::new(name)).unwrap();
+                    assert_eq!(value("OZ_RUN_ID"), task_id);
+                    assert_eq!(value("WARP_RUN_ID"), task_id);
+                    if let Some(capability) = capability {
+                        assert_eq!(value(MODE_ENV), "execution");
+                        assert_eq!(value("WARP_EXECUTION_ID"), "42");
+                        let policy: serde_json::Value =
+                            serde_json::from_slice(&fs::read(value(FILE_ENV)).unwrap()).unwrap();
+                        assert_eq!(policy["supports_deferred_repositories"], capability);
+                        assert_eq!(policy["task_id"], task_id);
+                        assert_eq!(policy["execution_id"], "42");
+                        assert_eq!(policy["working_dir"], root.path().to_str().unwrap());
+                        assert_eq!(policy["eager"], json!([]));
+                        assert_eq!(policy["deferred"], json!([]));
+                    } else {
+                        assert_eq!(value(MODE_ENV), "legacy");
+                        assert!(value(FILE_ENV).is_empty());
+                        assert!(value("WARP_EXECUTION_ID").is_empty());
+                    }
+                });
+            });
+        }
+    }
+}
+#[test]
+fn deferred_repository_runtime_rejects_relative_root() {
+    App::test((), |mut app| async move {
+        initialize_workspace_test_app(&mut app);
+        let mut options = crate::ai::agent_sdk::tests::agent_driver_options();
+        options.working_dir = "relative-workspace".into();
+        app.update(|ctx| {
+            let error = AgentDriver::create(options, ctx).expect_err("invalid root");
+            assert!(matches!(
+                error,
+                AgentDriverError::ConfigBuildFailed(source)
+                    if source.to_string().contains("workspace root must be absolute")
+            ));
+        });
+    });
+}
+#[test]
+#[serial_test::serial]
+fn openai_api_key_exports_only_api_key_not_base_url() {
+    // The OpenAI typed secret should only export OPENAI_API_KEY as an env var.
+    // base_url is piped through the structured secret to the harness instead.
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("OPENAI_API_KEY") };
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("OPENAI_BASE_URL") };
+    let secrets = HashMap::from([(
+        "openai-key".to_string(),
+        ManagedSecretValue::openai_api_key(
+            "sk-test-key",
+            Some("https://us.api.openai.com/v1".to_string()),
+        ),
+    )]);
+    let env_vars = build_secret_env_vars(&secrets, &HashMap::new()).unwrap();
+    assert_eq!(
+        env_vars.get(&OsString::from("OPENAI_API_KEY")),
+        Some(&OsString::from("sk-test-key")),
+        "OPENAI_API_KEY should be exported from the typed secret"
+    );
+    assert!(
+        !env_vars.contains_key(&OsString::from("OPENAI_BASE_URL")),
+        "OPENAI_BASE_URL should NOT be exported as an env var"
+    );
+}
+
+#[test]
+fn plugin_failure_reason_appends_cli_log_when_present() {
+    let error = PluginInstallError {
+        message: "'claude plugin marketplace add x' failed".to_owned(),
+        log: "$ claude plugin marketplace add x\nno distributions installed\n".to_owned(),
+    };
+
+    assert_eq!(
+        AgentDriver::plugin_failure_reason("Install failed", &error),
+        "Install failed: 'claude plugin marketplace add x' failed\n\
+         $ claude plugin marketplace add x\nno distributions installed"
+    );
+}
+
+#[test]
+fn plugin_failure_reason_omits_empty_cli_log() {
+    let error = PluginInstallError {
+        message: "No plugin manager available".to_owned(),
+        log: "  \n".to_owned(),
+    };
+
+    assert_eq!(
+        AgentDriver::plugin_failure_reason("Install failed", &error),
+        "Install failed: No plugin manager available"
+    );
+}

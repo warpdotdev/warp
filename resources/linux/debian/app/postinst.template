@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+
+# Create a symlink from /usr/bin to our binary under /opt.
+rm -f /usr/bin/warp-terminal@@CHANNEL_SUFFIX@@
+ln -s @@OPTDIR@@/@@BINARY_NAME@@ /usr/bin/warp-terminal@@CHANNEL_SUFFIX@@
+
+# Make sure the system incorporates the newly-installed desktop file.
+if hash update-desktop-database 2>/dev/null; then
+	update-desktop-database
+fi

@@ -1,0 +1,4 @@
+display_name: "TOML"
+indent_unit:
+  space: 2
+comment_prefix: "#"

@@ -1,0 +1,229 @@
+###############################################################################
+# Package Spec
+###############################################################################
+
+Summary:     The orchestration platform for cloud agents.
+Name:        oz@@CHANNEL_SUFFIX@@
+Version:     @@VERSION@@
+Release:     @@RELEASE@@
+Vendor:      Denver Technologies, Inc.
+Url:         https://warp.dev
+Packager:    Warp Linux Maintainers <linux-maintainers@warp.dev>
+License:     https://warp.dev/terms-of-service
+Obsoletes:   warp-cli@@CHANNEL_SUFFIX@@ < %{version}
+Obsoletes:   oz = v0.2026.02.09.06.06.stable_00
+Obsoletes:   oz = v0.2026.02.09.06.06.stable_02
+Obsoletes:   oz = v0.2026.02.10.11.37.stable_00
+Obsoletes:   oz = v0.2026.02.10.11.37.stable_01
+Obsoletes:   oz = v0.2026.02.11.08.23.stable_00
+
+
+# The prefix specifies where the majority of the application files are,
+# allowing the package to be relocatable.
+prefix:      /opt
+
+# We're not including debug info, so don't register the build ID with the
+# machine's registry of build IDs.
+%define _build_id_links none
+
+###############################################################################
+# Description
+###############################################################################
+
+%description
+The Oz CLI is a tool for running, managing, and orchestrating coding agents at scale.
+Use the CLI to:
+* Launch and inspect cloud agents
+* Schedule cloud agents to run in the future
+* Manage the environments that cloud agents run in
+* Upload secrets to Oz's secure storage
+
+###############################################################################
+# Build rule - how does the package get built?
+###############################################################################
+%build
+
+# Nothing to do here - the application should have already been built before we
+# attempt to package it.
+
+###############################################################################
+# Install rule - where should the files live, post-install?
+###############################################################################
+%install
+
+# Populate the buildroot directory with the package contents, in the
+# appropriate locations.
+mkdir -p %{buildroot}
+OPT_DIR="%{prefix}/warpdotdev/%{name}" @@WORKSPACEROOT@@/script/linux/bundle_install %{buildroot}
+
+# Set up a symlink from the system's bin dir to our installed executable.
+mkdir -p %{buildroot}%{_bindir}
+ln -s %{prefix}/warpdotdev/%{name}/@@BINARY_NAME@@ %{buildroot}%{_bindir}/@@BINARY_NAME@@
+
+###############################################################################
+# Files listing - what files will end up in the package?
+###############################################################################
+%files
+
+# Most things go into this directory.
+%{prefix}/warpdotdev/%{name}
+
+# We also install a symlink in the system bin directory.
+%{_bindir}/@@BINARY_NAME@@
+
+###############################################################################
+# Post-install rule - what do we need to do on the user's machine to complete
+#                     installation?
+###############################################################################
+%post
+
+# Install the signing key to the standard location for RPM GPG keys.
+mkdir -p /etc/pki/rpm-gpg
+install -m 644 /dev/stdin /etc/pki/rpm-gpg/RPM-GPG-KEY-@@REPO_NAME@@ << 'WARP_SIGNING_KEY_EOF'
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+
+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
+Qh6Vm3FbRCkKqx2FzF6lCwA=
+-----END PGP PUBLIC KEY BLOCK-----
+WARP_SIGNING_KEY_EOF
+
+# Helper function to set up a yum repo.
+install_yum() {
+	REPO_DIR="/etc/yum.repos.d"
+	REPO_FILE="$REPO_DIR/@@REPO_NAME@@.repo"
+	if [ -f "$REPO_FILE" ]; then
+		# Migrate existing repo file to use local key instead of URL.
+		sed -i 's|^gpgkey=https://releases.warp.dev/linux/keys/warp.asc$|gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-@@REPO_NAME@@|' "$REPO_FILE"
+		return
+	fi
+
+	if [ -d "$REPO_DIR" ]; then
+		cat >"$REPO_FILE" <<EOF
+[@@REPO_NAME@@]
+name=@@REPO_NAME@@
+baseurl=https://releases.warp.dev/linux/rpm/@@RELEASE_CHANNEL@@
+enabled=1
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-@@REPO_NAME@@
+EOF
+	fi
+}
+
+# Helper function to set up a zypper repo.
+install_zypp() {
+	REPO_DIR="/etc/zypp/repos.d"
+	REPO_FILE="$REPO_DIR/@@REPO_NAME@@.repo"
+	if [ -f "$REPO_FILE" ]; then
+		# Migrate existing repo file to use local key instead of URL.
+		sed -i 's|^gpgkey=https://releases.warp.dev/linux/keys/warp.asc$|gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-@@REPO_NAME@@|' "$REPO_FILE"
+		return
+	fi
+
+	if [ -d "$REPO_DIR" ]; then
+		cat >"$REPO_FILE" <<EOF
+[@@REPO_NAME@@]
+name=@@REPO_NAME@@
+type=rpm-md
+baseurl=https://releases.warp.dev/linux/rpm/@@RELEASE_CHANNEL@@
+enabled=1
+autorefresh=1
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-@@REPO_NAME@@
+keeppackages=0
+EOF
+	fi
+}
+
+# Determine which package manager is being used.
+PACKAGE_MANAGER=""
+if [ -f "/etc/os-release" ]; then
+	DISTRO_ID=$(. "/etc/os-release"; echo "$ID")
+	case $DISTRO_ID in
+		"fedora"|"rhel"|"centos"|"amzn"|"mageia"|"openmandriva"|"rocky")
+			PACKAGE_MANAGER="yum"
+			;;
+		"suse"|"sles"|"sled"|"opensuse"|"opensuse-leap"|"opensuse-tumbleweed")
+			PACKAGE_MANAGER="zypp"
+			;;
+	esac
+fi
+
+# Make sure the package manager is configured with our repository.
+case $PACKAGE_MANAGER in
+	"yum")
+		install_yum
+	;;
+	"zypp")
+		install_zypp
+	;;
+esac
+
+# Ensure an error executing one of the repo install functions doesn't cause us
+# to return a non-zero error code, cancelling the installation.  We'd rather
+# lose the ability to auto-update than fail to install the app.
+exit 0

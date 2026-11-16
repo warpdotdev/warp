@@ -1,0 +1,236 @@
+#!/usr/bin/env bash
+#
+# This script configures a complete musl C and C++ toolchain for a Rust target.
+# Source this script so it can update the caller's environment.
+
+configure_musl_toolchain() {
+  local target="${1:-$(uname -m)-unknown-linux-musl}"
+  local musl_cross_tag="20250929"
+  local musl_cross_sha256
+
+  case "$target" in
+    aarch64-unknown-linux-musl)
+      musl_cross_sha256="28a1d26f14f8ddc3aed31f20705fe696777400eb5952d90470a7e6e2dd1175bb"
+      ;;
+    x86_64-unknown-linux-musl)
+      musl_cross_sha256="6534870abd7dc327fd2e14cc53972d0552b21f47db5769505534f788537e3544"
+      ;;
+    *)
+      echo "Error: unsupported musl target '$target'." >&2
+      return 1
+      ;;
+  esac
+
+  local compiler_prefix
+  local musl_cc=""
+  local musl_cxx=""
+  local musl_strip=""
+  for compiler_prefix in "$target" "${target/unknown-/}"; do
+    if command -v "$compiler_prefix-gcc" &>/dev/null \
+      && command -v "$compiler_prefix-g++" &>/dev/null \
+      && command -v "$compiler_prefix-strip" &>/dev/null; then
+      musl_cc="$(command -v "$compiler_prefix-gcc")"
+      musl_cxx="$(command -v "$compiler_prefix-g++")"
+      musl_strip="$(command -v "$compiler_prefix-strip")"
+      break
+    fi
+  done
+
+  if [[ -z "$musl_cc" && "$target" == "$(uname -m)-unknown-linux-musl" ]] \
+    && command -v musl-gcc &>/dev/null \
+    && command -v musl-g++ &>/dev/null \
+    && command -v strip &>/dev/null; then
+    musl_cc="$(command -v musl-gcc)"
+    musl_cxx="$(command -v musl-g++)"
+    musl_strip="$(command -v strip)"
+  fi
+
+  local default_musl_cross_root
+  if [[ -z "${WARP_MUSL_CROSS_ROOT:-}" && "${GITHUB_ACTIONS:-}" == "true" && -n "${RUNNER_TEMP:-}" ]]; then
+    default_musl_cross_root="$RUNNER_TEMP/warp-musl-cross"
+  elif [[ -n "${HOME:-}" ]]; then
+    default_musl_cross_root="${XDG_CACHE_HOME:-$HOME/.cache}/warp-musl-cross"
+  else
+    default_musl_cross_root="${TMPDIR:-/tmp}/warp-musl-cross-${UID:-$(id -u)}"
+  fi
+
+  local musl_cross_root="${WARP_MUSL_CROSS_ROOT:-$default_musl_cross_root}"
+  local install_root="$musl_cross_root/$musl_cross_tag"
+  local toolchain_dir="$install_root/$target"
+  local toolchain_bin="$toolchain_dir/bin"
+  local verified_marker="$toolchain_dir/.warp-musl-cross-verified"
+  local verified_marker_contents="$musl_cross_tag $target $musl_cross_sha256"
+
+  ensure_private_cache_dir() {
+    local dir="$1"
+
+    if [[ -L "$dir" ]]; then
+      echo "Error: musl toolchain cache directory '$dir' must not be a symlink." >&2
+      return 1
+    fi
+    if [[ -e "$dir" && ! -d "$dir" ]]; then
+      echo "Error: musl toolchain cache path '$dir' exists but is not a directory." >&2
+      return 1
+    fi
+
+    mkdir -p "$dir" || return 1
+    chmod 700 "$dir" || return 1
+    if [[ ! -O "$dir" ]]; then
+      echo "Error: musl toolchain cache directory '$dir' must be owned by the current user." >&2
+      return 1
+    fi
+
+    local mode
+    if mode="$(stat -c '%a' "$dir" 2>/dev/null)"; then
+      :
+    elif mode="$(stat -f '%Lp' "$dir" 2>/dev/null)"; then
+      :
+    else
+      echo "Error: could not determine permissions for musl toolchain cache directory '$dir'." >&2
+      return 1
+    fi
+    if (( (8#$mode & 0022) != 0 )); then
+      echo "Error: musl toolchain cache directory '$dir' must not be writable by group or others." >&2
+      return 1
+    fi
+  }
+
+  cached_toolchain_is_verified() {
+    [[ -r "$verified_marker" ]] && [[ "$(cat "$verified_marker")" == "$verified_marker_contents" ]]
+  }
+
+  if [[ -z "$musl_cc" ]]; then
+    ensure_private_cache_dir "$musl_cross_root" || return 1
+    ensure_private_cache_dir "$install_root" || return 1
+  fi
+
+  if [[ -z "$musl_cc" && -L "$toolchain_dir" ]]; then
+    echo "Error: cached musl toolchain path '$toolchain_dir' must not be a symlink." >&2
+    return 1
+  fi
+
+  if [[ -z "$musl_cc" ]]; then
+    if [[ -d "$toolchain_dir" ]] && ! cached_toolchain_is_verified; then
+      echo "Ignoring unverified cached musl toolchain at '$toolchain_dir'." >&2
+    fi
+
+    if cached_toolchain_is_verified \
+      && [[ -x "$toolchain_bin/$target-gcc" ]] \
+      && [[ -x "$toolchain_bin/$target-g++" ]] \
+      && [[ -x "$toolchain_bin/$target-strip" ]]; then
+      case ":$PATH:" in
+        *":$toolchain_bin:"*) ;;
+        *) export PATH="$toolchain_bin:$PATH" ;;
+      esac
+      musl_cc="$(command -v "$target-gcc")"
+      musl_cxx="$(command -v "$target-g++")"
+      musl_strip="$(command -v "$target-strip")"
+    fi
+  fi
+
+  if [[ -z "$musl_cc" ]]; then
+    if [[ "$(uname -s)" != "Linux" ]]; then
+      echo "Error: no complete C and C++ toolchain for '$target' was found on PATH." >&2
+      echo "Automatic musl-cross installation is only supported on Linux." >&2
+      return 1
+    fi
+    if [[ "$(uname -m)" != "x86_64" ]]; then
+      echo "Error: automatic musl-cross installation is only supported on x86_64 hosts." >&2
+      return 1
+    fi
+
+    local required_command
+    for required_command in curl sha256sum tar; do
+      if ! command -v "$required_command" &>/dev/null; then
+        echo "Error: '$required_command' is required to install the musl toolchain." >&2
+        return 1
+      fi
+    done
+
+    local archive_name="$target.tar.xz"
+    local archive_url="https://github.com/cross-tools/musl-cross/releases/download/$musl_cross_tag/$archive_name"
+    if ! (
+      download_dir=""
+      cleanup_download() {
+        if [[ -n "$download_dir" && -d "$download_dir" ]]; then
+          chmod -R u+w "$download_dir" 2>/dev/null || true
+          rm -rf "$download_dir"
+        fi
+      }
+      trap cleanup_download EXIT
+
+      ensure_private_cache_dir "$musl_cross_root" || exit 1
+      ensure_private_cache_dir "$install_root" || exit 1
+      download_dir="$(mktemp -d "$musl_cross_root/.download-$target.XXXXXX")" || exit 1
+
+      echo "Downloading the $target C and C++ toolchain to $toolchain_dir"
+      curl -fsSL --retry 3 "$archive_url" -o "$download_dir/$archive_name" || exit 1
+      printf '%s  %s\n' "$musl_cross_sha256" "$download_dir/$archive_name" | sha256sum -c - || exit 1
+      tar -xf "$download_dir/$archive_name" -C "$download_dir" || exit 1
+      if [[ ! -x "$download_dir/$target/bin/$target-gcc" \
+        || ! -x "$download_dir/$target/bin/$target-g++" \
+        || ! -x "$download_dir/$target/bin/$target-strip" ]]; then
+        echo "Error: the downloaded archive does not contain the expected C, C++, and strip tools." >&2
+        exit 1
+      fi
+
+      chmod -R u+w,go-w "$download_dir/$target" || exit 1
+      printf '%s\n' "$verified_marker_contents" > "$download_dir/$target/.warp-musl-cross-verified" || exit 1
+      if [[ -x "$toolchain_bin/$target-gcc" \
+        && -x "$toolchain_bin/$target-g++" \
+        && -x "$toolchain_bin/$target-strip" \
+        && -r "$verified_marker" \
+        && "$(cat "$verified_marker")" == "$verified_marker_contents" ]]; then
+        exit 0
+      fi
+      if [[ -e "$toolchain_dir" ]]; then
+        chmod -R u+w "$toolchain_dir" || exit 1
+        rm -rf "$toolchain_dir" || exit 1
+      fi
+      mv "$download_dir/$target" "$toolchain_dir" || exit 1
+    ); then
+      return 1
+    fi
+
+    case ":$PATH:" in
+      *":$toolchain_bin:"*) ;;
+      *) export PATH="$toolchain_bin:$PATH" ;;
+    esac
+    musl_cc="$(command -v "$target-gcc")"
+    musl_cxx="$(command -v "$target-g++")"
+    musl_strip="$(command -v "$target-strip")"
+  fi
+
+  local tool
+  for tool in "$musl_cc" "$musl_cxx" "$musl_strip"; do
+    if ! "$tool" --version &>/dev/null; then
+      echo "Error: musl tool '$tool' cannot execute on this host." >&2
+      return 1
+    fi
+  done
+
+  local target_env="${target//-/_}"
+  local cargo_target_env
+  cargo_target_env="$(printf '%s' "$target" | tr '[:lower:]-' '[:upper:]_')"
+
+  export "CC_$target_env=$musl_cc"
+  export "CXX_$target_env=$musl_cxx"
+  export "CARGO_TARGET_${cargo_target_env}_LINKER=$musl_cc"
+  export WARP_MUSL_TARGET="$target"
+  export WARP_MUSL_CC="$musl_cc"
+  export WARP_MUSL_CXX="$musl_cxx"
+  export WARP_MUSL_STRIP="$musl_strip"
+
+  echo "Configured the $target toolchain with $musl_cc, $musl_cxx, and $musl_strip"
+}
+
+if [[ -n "${BASH_VERSION:-}" && "${BASH_SOURCE[0]}" == "$0" ]]; then
+  echo "Error: source this script so it can configure the caller's environment." >&2
+  exit 1
+fi
+if [[ -n "${ZSH_VERSION:-}" && "${ZSH_EVAL_CONTEXT:-}" != *:file ]]; then
+  echo "Error: source this script so it can configure the caller's environment." >&2
+  exit 1
+fi
+
+configure_musl_toolchain "$@"

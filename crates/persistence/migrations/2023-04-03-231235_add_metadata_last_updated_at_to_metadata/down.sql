@@ -1,0 +1,1 @@
+ALTER TABLE object_metadata DROP metadata_last_updated_ts;

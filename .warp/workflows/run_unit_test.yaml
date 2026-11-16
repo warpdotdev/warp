@@ -1,0 +1,10 @@
+---
+name: "Run unit test"
+command: "cargo test --package warp --lib -- {{module_and_test}} --exact --nocapture"
+description: "Run a specific unit test. This is much faster than running cargo test when this is all you need."
+arguments:
+  - name: module_and_test
+    description: The specific `tests` module and the name of the test, separated by `::`
+    default_value: terminal::model::blocks::tests::test_separator
+author: Zheng Tao
+shells: []

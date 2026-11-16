@@ -1,0 +1,168 @@
+#!/bin/bash
+#
+# macOS-specific implementation of `./script/run`. Runs a local version of
+# Warp as a real 'app' instead of a bare executable, so macOS can treat it
+# like a real signed app (custom URL schemes, user notifications, etc.).
+#
+# This script is invoked by `./script/run`, which handles cross-platform
+# setup (install_channel_config, binary name detection, feature-to-env-var
+# mapping). The following env vars are expected to be set by the caller:
+#   WARP_BIN_NAME  — "warp" (internal local build) or "warp-oss"
+#   WARP_CHANNEL   — "local" or "oss"
+#   FEATURES       — comma-separated cargo features (already normalized)
+# Must be called from the root directory of the warp repo.
+
+set -e
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")"/../.. && pwd)"
+cd "${REPO_ROOT}"
+
+: "${WARP_BIN_NAME:?WARP_BIN_NAME must be set (invoke via ./script/run)}"
+: "${WARP_CHANNEL:?WARP_CHANNEL must be set (invoke via ./script/run)}"
+: "${FEATURES:?FEATURES must be set (invoke via ./script/run)}"
+
+# Resolve Cargo's actual target directory rather than assuming ./target. This
+# honors a shared CARGO_TARGET_DIR / build.target-dir (e.g. set in
+# ~/.cargo/config.toml), which is where `cargo bundle` writes the .app bundle.
+TARGET_DIR="$(cargo metadata --no-deps --format-version 1 | jq -r .target_directory)"
+if [ -z "$TARGET_DIR" ] || [ "$TARGET_DIR" = "null" ]; then
+    TARGET_DIR="${REPO_ROOT}/target"
+fi
+
+if [ "$WARP_CHANNEL" = "local" ]; then
+    WARP_APP_PATH="${TARGET_DIR}/debug/bundle/osx/WarpLocal.app"
+    WARP_SCHEME_NAME="warplocal"
+else
+    WARP_APP_PATH="${TARGET_DIR}/debug/bundle/osx/WarpOss.app"
+    WARP_SCHEME_NAME="warposs"
+fi
+DONT_OPEN=false
+# Launches the binary with "open", meaning the Warp process is
+# launched by the MacOS application launcher instead of a shell session.
+# Note that since Warp isn't launched as a child process, using ctrl+c
+# won't kill the app (but will kill the tail process displaying output).
+# tl;dr better simulates running Warp Dev/Stable
+OPEN_WITH_LAUNCHD=false
+
+# Arguments to pass directly Warp (specified after --)
+# This is not supported when opening with launchd, as passing CLI arguments to
+# an application doesn't make sense.
+WARP_ARGS=()
+
+# Export this variable so it can be referenced by app/build.rs later when
+# running `cargo bundle`.
+export FRAMEWORK_OVERRIDE="dev"
+
+PARAMS=""
+while (( "$#" )); do
+  case "$1" in
+    --)
+      shift
+      WARP_ARGS=("$@")
+      break
+      ;;
+    --dont-open)
+      DONT_OPEN=true
+      shift
+      ;;
+    --release)
+      echo "Detected release build, pointing at release bundle under ${TARGET_DIR}/release/bundle"
+      if [ "$WARP_CHANNEL" = "local" ]; then
+          WARP_APP_PATH="${TARGET_DIR}/release/bundle/osx/WarpLocal.app"
+      else
+          WARP_APP_PATH="${TARGET_DIR}/release/bundle/osx/WarpOss.app"
+      fi
+      PARAMS="$PARAMS $1"
+      shift
+      ;;
+    --profile)
+      PROFILE="$2"
+      shift 2
+      if [ "$WARP_CHANNEL" = "local" ]; then
+          WARP_APP_PATH="${TARGET_DIR}/${PROFILE}/bundle/osx/WarpLocal.app"
+      else
+          WARP_APP_PATH="${TARGET_DIR}/${PROFILE}/bundle/osx/WarpOss.app"
+      fi
+      PARAMS="$PARAMS --profile $PROFILE"
+      ;;
+    --open_with_launchd)
+      OPEN_WITH_LAUNCHD=true
+      shift
+      ;;
+    --generate-schema)
+      GENERATE_SCHEMA=true
+      shift
+      ;;
+    *) # preserve positional arguments
+      PARAMS="$PARAMS $1"
+      shift
+      ;;
+  esac
+done
+
+rm -rf "$WARP_APP_PATH"
+
+pushd app > /dev/null
+echo "Bundling app (bin: $WARP_BIN_NAME)..."
+cargo bundle --bin "$WARP_BIN_NAME" --features "$FEATURES" $PARAMS
+echo "Successfully bundled..."
+popd > /dev/null
+
+if [[ ",$FEATURES," =~ ",cocoa_sentry," ]]; then
+  echo "Copying Sentry framework into app bundle..."
+  SENTRY_FRAMEWORK="app/frameworks/dev/Sentry-Dynamic-WithARM64e.xcframework/macos-arm64_arm64e_x86_64/Sentry.framework"
+  mkdir -p "$WARP_APP_PATH/Contents/Frameworks"
+  cp -a "$SENTRY_FRAMEWORK" "$WARP_APP_PATH/Contents/Frameworks/"
+fi
+"${REPO_ROOT}/script/macos/add_framework_rpath" "$WARP_APP_PATH/Contents/MacOS/$WARP_BIN_NAME"
+
+export WARP_SCHEME_NAME
+export WARP_PLIST_PATH="$WARP_APP_PATH/Contents/Info.plist"
+./script/update_plist
+
+echo "Preparing bundled resources..."
+if [ "${GENERATE_SCHEMA:-false}" != "true" ]; then
+  export SKIP_SETTINGS_SCHEMA=1
+else
+  export SETTINGS_SCHEMA_EXECUTABLE="$WARP_APP_PATH/Contents/MacOS/$WARP_BIN_NAME"
+fi
+NO_LICENSES=1 "${REPO_ROOT}/script/prepare_bundled_resources" "$WARP_APP_PATH/Contents/Resources" "$WARP_CHANNEL"
+
+"${REPO_ROOT}/script/compile_icon" "$WARP_CHANNEL" "$WARP_APP_PATH"
+
+if [[ ",$FEATURES," =~ ",heap_usage_tracking," ]]; then
+  echo "Bundling pprof..."
+  HELPERS_DIR="$WARP_APP_PATH/Contents/Helpers"
+  "${REPO_ROOT}/script/prepare_bundled_pprof" "$HELPERS_DIR"
+fi
+
+if [[ ",$FEATURES," =~ ",warp_control_cli," ]]; then
+  WARPCTRL_SCRIPT_PATH="$WARP_APP_PATH/Contents/Resources/bin/warpctrl-$WARP_CHANNEL"
+  echo "Creating warpctrl wrapper script at $WARPCTRL_SCRIPT_PATH..."
+  "${REPO_ROOT}/script/macos/create_warpctrl_wrapper" \
+    "$WARPCTRL_SCRIPT_PATH" \
+    "../../MacOS/$WARP_BIN_NAME"
+fi
+
+echo "Codesigning app..."
+SIGNING_CERT="$(security find-identity -p codesigning -v | grep "Apple Development" | awk '{print $2}' | head -1)"
+codesign --force --deep --options runtime --sign "${SIGNING_CERT:--}" "$WARP_APP_PATH" --entitlements script/Debug-Entitlements.plist
+
+if [ "$DONT_OPEN" = false ] ; then
+    if  [ "$OPEN_WITH_LAUNCHD" = true ]; then
+        echo "Launching with MacOS application launcher"
+        PATH="" /usr/bin/open "$WARP_APP_PATH"
+        if [ "$WARP_CHANNEL" = "local" ]; then
+            LOG_FILE=~/Library/Logs/warp_local.log
+        elif [ "$WARP_CHANNEL" = "oss" ]; then
+            LOG_FILE=~/Library/Logs/warp-oss.log
+        else
+            echo "Warning: unrecognized WARP_CHANNEL '$WARP_CHANNEL', defaulting to OSS log path" >&2
+            LOG_FILE=~/Library/Logs/warp-oss.log
+        fi
+        tail -F "$LOG_FILE"
+    else
+        echo "Opening app at $WARP_APP_PATH/Contents/MacOS/$WARP_BIN_NAME"
+        "$WARP_APP_PATH/Contents/MacOS/$WARP_BIN_NAME" "${WARP_ARGS[@]}"
+    fi
+fi

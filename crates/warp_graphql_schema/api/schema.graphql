@@ -1,0 +1,5436 @@
+schema {
+  query: RootQuery
+  mutation: RootMutation
+  subscription: RootSubscription
+}
+
+enum GitHubCredentialMode {
+  LEGACY
+  RESTRICTED_INSTALLATION
+}
+
+enum TaskGitCredentialProvider {
+  GITHUB
+  GITLAB
+  AZURE_DEVOPS
+  CODE_STORAGE
+}
+
+"""
+Directs the executor to defer this fragment when the `if` argument is true or undefined.
+"""
+directive @defer(
+  """Deferred when true or undefined."""
+  if: Boolean = true
+
+  """Unique name"""
+  label: String
+) on FRAGMENT_SPREAD | INLINE_FRAGMENT
+
+directive @extends on INTERFACE | OBJECT
+
+directive @external on FIELD_DEFINITION
+
+directive @goField(forceResolver: Boolean, name: String, omittable: Boolean) on FIELD_DEFINITION | INPUT_FIELD_DEFINITION
+
+directive @isDogfood on FIELD_DEFINITION
+
+directive @key on INTERFACE | OBJECT
+
+"""
+Indicates exactly one field must be supplied and this field must not be `null`.
+"""
+directive @oneOf on INPUT_OBJECT
+
+directive @provides on FIELD_DEFINITION
+
+directive @requires on FIELD_DEFINITION
+
+"""
+AIConversation represents an AI agent conversation that can be shared via Warp Drive.
+"""
+type AIConversation {
+  """
+  The ID of the ambient agent task associated with this conversation, if any.
+  """
+  ambientAgentTaskId: ID
+
+  """Artifacts (plans, PRs) created during this conversation."""
+  artifacts: [AIConversationArtifact!]!
+  conversationId: ID!
+
+  """Public profile for the user who originally created the conversation, when available."""
+  creator: PublicUserProfile
+
+  """Base64-encoded proto binary of the final task list."""
+  finalTaskList: String!
+
+  """Describes the format of the conversation transcript data."""
+  format: AIConversationFormat!
+
+  """The harness that produced this conversation."""
+  harness: AgentHarness!
+  metadata: ObjectMetadata!
+  permissions: ObjectPermissions!
+  title: String!
+  usage: ConversationUsage!
+
+  """The working directory where the conversation was started."""
+  workingDirectory: String
+}
+
+union AIConversationArtifact = FileArtifact | PlanArtifact | PullRequestArtifact | ScreenshotArtifact
+
+type AIConversationFormat {
+  """
+  Format of the TUI serialized block, or null if no serialized block is available.
+  """
+  blockSnapshot: SerializedBlockFormat
+
+  """True if there's a Warp MAA task list available for this format."""
+  hasTaskList: Boolean!
+}
+
+type AICreditAvailability {
+  available: Boolean!
+  creditSource: AICreditAvailabilitySource
+  denialReason: AICreditAvailabilityDenialReason!
+}
+
+enum AICreditAvailabilityDenialReason {
+  DELINQUENT
+  ENTERPRISE_PER_UNASSIGNED_USER_SPEND_LIMIT_HIT
+  ENTERPRISE_PER_USER_SPEND_LIMIT_HIT
+  ENTERPRISE_TEAM_SPEND_LIMIT_HIT
+  ENTERPRISE_WORKSPACE_SPEND_LIMIT_HIT
+  NONE
+  OUT_OF_CREDITS
+}
+
+enum AICreditAvailabilitySource {
+  AMBIENT_BONUS_GRANT
+  BASE_LIMIT
+  BONUS_GRANT
+  OVERAGE
+  PAYG
+}
+
+enum AICreditsUsageAndCostSubjectType {
+  SERVICE_ACCOUNT
+  TEAM
+  USER
+}
+
+enum AICreditsUsageAndCostType {
+  """
+  Sentinel value used on synthetic UsageEntry rows that aggregate across
+  multiple cost types. Real usage rows never carry this value.
+  """
+  AGGREGATE
+  AMBIENT_BONUS_GRANT
+  BASE_LIMIT
+  BONUS_GRANT
+  PAYG
+}
+
+enum AICreditsUsageBucket {
+  """
+  Sentinel value used on synthetic UsageEntry rows that aggregate across
+  multiple usage buckets. Real usage rows never carry this value.
+  """
+  AGGREGATE
+  AI
+  COMPUTE
+  PLATFORM
+  SUGGESTED_CODE_DIFFS
+  VOICE
+}
+
+enum AICreditsUsageSource {
+  """
+  Sentinel value used on synthetic UsageEntry rows that aggregate across
+  multiple usage sources. Real usage rows never carry this value.
+  """
+  AGGREGATE
+  CLOUD
+  LOCAL
+}
+
+type APIKeyAgentInfo {
+  name: String!
+  uid: ID!
+}
+
+type APIKeyProperties {
+  agentInfo: APIKeyAgentInfo
+  createdAt: Time!
+  expiresAt: Time
+  keySuffix: String!
+  lastUsedAt: Time
+  name: String!
+  ownerType: OwnerType!
+  uid: ID!
+}
+
+type APIKeyPropertiesOutput implements Response {
+  apiKeys: [APIKeyProperties!]!
+  responseContext: ResponseContext!
+}
+
+union APIKeyPropertiesResult = APIKeyPropertiesOutput | UserFacingError
+
+enum AccessLevel {
+  Editor
+  Full
+  Viewer
+}
+
+"""
+Error type for when a user tries to do an action that requires a paid subscription but
+their subscription is delinquent due to payment issues.
+"""
+type AccountDelinquencyError implements UserFacingErrorInterface {
+  message: String!
+}
+
+"""Acquisition channel question response input"""
+input AcquisitionChannelQuestionResponseInput {
+  answer: AcquisitionChannelSurveyResponse!
+  details: String
+}
+
+"""Acquisition channel options for onboarding survey responses"""
+enum AcquisitionChannelSurveyResponse {
+  FRIEND
+  INTERNET
+  IN_THE_WILD
+  TEAMMATE
+}
+
+"""
+More recent actions are returned with their exact timestamps. Older actions
+are bundled together to save space at the cost of being less time specific.
+"""
+union ActionRecord = BundledActions | SingleAction
+
+enum ActionType {
+  EXECUTED
+}
+
+input AddInviteLinkDomainRestrictionInput {
+  domain: String!
+  teamUid: ID!
+}
+
+type AddInviteLinkDomainRestrictionOutput implements Response {
+  responseContext: ResponseContext!
+  success: Boolean!
+}
+
+union AddInviteLinkDomainRestrictionResult = AddInviteLinkDomainRestrictionOutput | UserFacingError
+
+input AddObjectGuestsInput {
+  accessLevel: AccessLevel!
+  objectUid: ID!
+  userEmails: [String!]!
+}
+
+type AddObjectGuestsOutput implements Response {
+  objectPermissions: ObjectPermissions!
+  responseContext: ResponseContext!
+  userProfiles: [PublicUserProfile!]
+}
+
+union AddObjectGuestsResult = AddObjectGuestsOutput | UserFacingError
+
+enum AddonCreditAutoReloadStatus {
+  FAILED
+  SUCCEEDED
+}
+
+type AddonCreditsOption {
+  credits: Int!
+  priceUsdCents: Int!
+
+  """
+  The usage, in cents, that the pack buys when add-on packs are sold in dollars.
+  Null while packs are sold in credits.
+  """
+  usageCents: Int
+}
+
+type AddonCreditsSettings {
+  autoReloadEnabled: Boolean!
+  maxMonthlySpendCents: Int
+
+  """
+  The credit count the selected auto-reload pack is listed under in the add-on options.
+  """
+  selectedAutoReloadCreditDenomination: Int
+
+  """
+  The list price of the selected auto-reload pack, which is the usage it buys for a team
+  billed in dollars.
+  """
+  selectedAutoReloadUsageCents: Int
+}
+
+input AddonCreditsSettingsInput {
+  autoReloadEnabled: Boolean
+  maxMonthlySpendCents: Int
+
+  """Selects the auto-reload pack by the credit count it is listed under."""
+  selectedAutoReloadCreditDenomination: Int
+
+  """
+  Selects the auto-reload pack by its list price. Takes precedence over the credit
+  denomination, which must name the same pack when both are given.
+  """
+  selectedAutoReloadUsageCents: Int
+}
+
+enum AdminEnablementSetting {
+  DISABLE
+  ENABLE
+  RESPECT_USER_SETTING
+}
+
+"""The harness that produced an agent conversation."""
+enum AgentHarness {
+  CLAUDE_CODE
+  CODEX
+  GEMINI
+  OZ
+  PI
+}
+
+"""Controls whether a team can configure settings for agent harnesses."""
+type AgentHarnessesPolicy {
+  toggleable: Boolean!
+}
+
+"""Controls how many agent identities (service accounts) a team can have."""
+type AgentIdentitiesPolicy {
+  isUnlimited: Boolean!
+  maxServiceAccounts: Int!
+}
+
+"""An ambient agent task with its current state and status."""
+type AgentTask {
+  """When the task was created."""
+  createdAt: Time!
+
+  """The unique identifier for the task."""
+  id: ID!
+
+  """The shared session ID associated with this task, if any."""
+  sharedSessionId: ID
+
+  """
+  When the task transitioned to IN_PROGRESS state. Null if the task has not started yet.
+  """
+  startedAt: Time
+
+  """The current state of the task."""
+  state: AgentTaskState!
+
+  """Optional status message about the task."""
+  statusMessage: AgentTaskStatusMessage
+
+  """The title of the task."""
+  title: String!
+
+  """When the task was last updated."""
+  updatedAt: Time!
+}
+
+"""
+State of an ambient agent task.
+
+Some internal states are not exposed to the client.
+"""
+enum AgentTaskState {
+  """The agent could not proceed because the task was blocked or unclear"""
+  BLOCKED
+
+  """The task was cancelled by the user"""
+  CANCELLED
+
+  """A worker has claimed this task"""
+  CLAIMED
+
+  """The task failed due to an internal Warp/system error"""
+  ERROR
+
+  """
+  The task could not be completed due to task/input issues (for example invalid requirements, missing permissions, or missing resources)
+  """
+  FAILED
+
+  """An agent is working on this task"""
+  IN_PROGRESS
+
+  """The agent successfully completed this task"""
+  SUCCEEDED
+}
+
+"""Status message for an agent task."""
+type AgentTaskStatusMessage {
+  """Structured platform error information, when the status represents an error."""
+  error: PlatformErrorInfo
+  """
+  Machine-readable error code from the platform error catalog.
+  Only present when the status message represents an error.
+  Deprecated in favor of error.
+  """
+  errorCode: PlatformErrorCode @deprecated(reason: "Use error instead")
+
+  """The status message text."""
+  message: String!
+
+  """
+  Whether the client may retry the operation. Only present on terminal tasks.
+  When true, the error was transient — the system retried automatically but
+  exhausted its attempts, and submitting a new task may succeed. When false,
+  retrying without addressing the underlying cause (e.g. insufficient credits,
+  invalid configuration) will not succeed.
+  """
+  retryable: Boolean @deprecated(reason: "Use error.retryable instead")
+}
+
+input AgentTaskStatusMessageInput {
+  """Structured platform error information supplied by the client."""
+  error: PlatformErrorInput
+  """
+  Machine-readable error code from the platform error catalog.
+  Only set when the status message represents an error.
+  Deprecated in favor of error.
+  """
+  errorCode: PlatformErrorCode @deprecated(reason: "Use error instead")
+
+  """The status message text."""
+  message: String!
+
+}
+
+enum AgentVisibility {
+  PERSONAL
+  TEAM
+}
+
+type AiAutonomyPolicy {
+  enabled: Boolean!
+  toggleable: Boolean!
+}
+
+type AiAutonomySettings {
+  applyCodeDiffsSetting: AiAutonomyValue
+  computerUseSetting: ComputerUseAutonomyValue
+  createPlansSetting: AiAutonomyValue
+  executeCommandsAllowlist: [String!]
+  executeCommandsDenylist: [String!]
+  executeCommandsSetting: AiAutonomyValue
+  readFilesAllowlist: [String!]
+  readFilesSetting: AiAutonomyValue
+  writeToPtySetting: WriteToPtyAutonomyValue
+}
+
+input AiAutonomySettingsInput {
+  applyCodeDiffsSetting: AiAutonomyValue
+  computerUseSetting: ComputerUseAutonomyValue
+  createPlansSetting: AiAutonomyValue
+  executeCommandsAllowlist: [String!]
+  executeCommandsDenylist: [String!]
+  executeCommandsSetting: AiAutonomyValue
+  readFilesAllowlist: [String!]
+  readFilesSetting: AiAutonomyValue
+  writeToPtySetting: WriteToPtyAutonomyValue
+}
+
+enum AiAutonomyValue {
+  AGENT_DECIDES
+  ALWAYS_ALLOW
+  ALWAYS_ASK
+  RESPECT_USER_SETTING
+}
+
+type AiInRemoteSessionsPolicy {
+  toggleable: Boolean!
+}
+
+type AiOverages {
+  currentMonthlyRequestCostCents: Int!
+  currentMonthlyRequestsUsed: Int!
+  currentPeriodEnd: Time!
+  currentPeriodStart: Time! @deprecated(reason: "Use currentPeriodEnd instead")
+}
+
+type AiPermissionsPolicy {
+  aiInRemoteSessionsPolicy: AiInRemoteSessionsPolicy
+}
+
+type AiPermissionsSettings {
+  allowAiInRemoteSessions: Boolean!
+  remoteSessionRegexList: [String!]!
+}
+
+input AiPermissionsSettingsInput {
+  allowAiInRemoteSessions: Boolean
+  remoteSessionRegexList: [String!]
+}
+
+type AmbientAgentSettings {
+  defaultHostSlug: String
+  enableWarpAttribution: AdminEnablementSetting!
+  instanceShape: InstanceShape
+  localAgentTracking: AgentVisibility!
+  warpHostedAgentsEnabled: Boolean!
+}
+
+input AmbientAgentSettingsInput {
+  defaultHostSlug: String
+  enableWarpAttribution: AdminEnablementSetting
+  instanceShape: InstanceShapeInput
+  localAgentTracking: AgentVisibility
+  warpHostedAgentsEnabled: Boolean
+}
+
+type AmbientAgentsPolicy {
+  allowedLocalAgentTrackingOptions: [AgentVisibility!]!
+  enabled: Boolean!
+  instanceShape: InstanceShape
+  maxConcurrentAgents: Int!
+  maxInstanceRuntimeSeconds: Int!
+  selfHostedEnabled: Boolean!
+  toggleable: Boolean!
+}
+
+type AmbientTaskUpdated {
+  taskId: ID!
+  taskUpdatedTs: Time!
+}
+
+enum AnonymousUserExpirationType {
+  EXPIRATION_14_DAYS
+  NO_EXPIRATION
+}
+
+type AnonymousUserInfo {
+  anonymousUserType: AnonymousUserType!
+  expiresAt: Time
+  isExpired: Boolean!
+  linkedAt: Time
+  personalObjectLimits: AnonymousUserPersonalObjectLimits
+}
+
+type AnonymousUserPersonalObjectLimits {
+  envVarLimit: Int!
+  notebookLimit: Int!
+  workflowLimit: Int!
+}
+
+enum AnonymousUserType {
+  NATIVE_CLIENT_ANONYMOUS_USER
+  NATIVE_CLIENT_ANONYMOUS_USER_FEATURE_GATED
+  WEB_CLIENT_ANONYMOUS_USER
+}
+
+type AnyoneWithLinkSharingPolicy {
+  toggleable: Boolean!
+}
+
+"""Statistics for file diff operations."""
+type ApplyFileDiffStats {
+  count: Int!
+  filesChanged: Int!
+  linesAdded: Int!
+  linesRemoved: Int!
+}
+
+type AvailableHarnesses {
+  harnesses: [HarnessInfo!]!
+}
+
+type AvailableLlms {
+  choices: [LlmInfo!]!
+  defaultId: String!
+  preferredCodexModelId: String
+}
+
+type AwsProviderConfig {
+  roleArn: String!
+}
+
+type BillingCycleUsageHistory {
+  currentPeriodEnd: Time!
+  currentPeriodStart: Time!
+  summaries: [BillingCycleUsageSummary!]!
+}
+
+type BillingCycleUsageSummary {
+  entries: [UsageEntry!]!
+  periodEnd: Time!
+  periodStart: Time!
+}
+
+type BillingMetadata {
+  aiOverages: AiOverages
+  customerType: CustomerType!
+  delinquencyStatus: DelinquencyStatus!
+  serviceAgreements: [ServiceAgreement!]!
+  tier: Tier!
+}
+
+type Block {
+  command: String
+  embedDisplaySetting: DisplaySetting!
+  output: String
+  showPrompt: Boolean!
+  stylizedCommand: String
+  stylizedOutput: String
+  stylizedPrompt: String
+  stylizedPromptAndCommand: String
+  timeStartedTerm: Time
+  title: String
+
+  """
+  Note that uid is equivalent to the id field in v1.
+  This currently corresponds to either block_id or hash_id in the database.
+  """
+  uid: ID!
+}
+
+input BlockInput {
+  command: String
+  embedDisplaySetting: DisplaySetting! = COMMAND_AND_OUTPUT
+  output: String
+  showPrompt: Boolean! = false
+  stylizedCommand: String
+  stylizedOutput: String
+  stylizedPrompt: String
+  stylizedPromptAndCommand: String
+  timeStartedTerm: Time
+  title: String
+}
+
+"""Represents a single bonus grant."""
+type BonusGrant {
+  costCents: Int!
+  createdAt: Time!
+  expiration: Time
+  grantType: BonusGrantType!
+  reason: String!
+  requestCreditsGranted: Int!
+  requestCreditsRemaining: Int!
+  scope: BonusGrantScope!
+  usageCentsGranted: Float
+  usageCentsRemaining: Float
+  userFacingMessage: String
+}
+
+"""The credit pool a bonus grant belongs to."""
+enum BonusGrantScope {
+  USER
+  TEAM
+  WORKSPACE
+}
+
+type BonusGrantSpendingInfo {
+  currentMonthCreditsPurchased: Int!
+  currentMonthPeriodEnd: Time!
+  currentMonthSpendCents: Int!
+}
+
+"""The type of bonus grant."""
+enum BonusGrantType {
+  AMBIENT_ONLY
+  ANY
+}
+
+type BonusGrantsInfo {
+  grants: [BonusGrant!]!
+  spendingInfo: BonusGrantSpendingInfo
+}
+
+"""
+Error type for when a user tries to purchase add-on credits but exceeds their monthly spending limit.
+"""
+type BudgetExceededError implements UserFacingErrorInterface {
+  message: String!
+}
+
+input BulkCreateGenericStringObjectsInput {
+  objects: [GenericStringObjectInput!]!
+  owner: Owner!
+}
+
+type BulkCreateGenericStringObjectsOutput {
+  objects: [CreateGenericStringObjectOutput!]!
+}
+
+input BulkCreateObjectsInput {
+  genericStringObjects: BulkCreateGenericStringObjectsInput
+}
+
+type BulkCreateObjectsOutput implements Response {
+  genericStringObjects: BulkCreateGenericStringObjectsOutput
+  responseContext: ResponseContext!
+}
+
+union BulkCreateObjectsResult = BulkCreateObjectsOutput | UserFacingError
+
+"""
+A return type for MULTIPLE actions, all of the same type. This includes
+a count of the actions and the time period (in UTC) they span.
+"""
+type BundledActions {
+  actionType: ActionType!
+  count: Int!
+  latestProcessedAtTimestamp: Time!
+  latestTimestamp: Time!
+  oldestTimestamp: Time!
+}
+"""
+A configured first-party provider credential. Presence in the list means a key is
+configured for that provider.
+"""
+type ByoFirstPartyKey {
+  credentialUid: ID!
+  provider: LlmProvider!
+}
+
+type ByoApiKeyPolicy {
+  enabled: Boolean!
+}
+type ByoEndpointMetadata {
+  "Credential handle for this endpoint."
+  credentialUid: ID!
+  enabled: Boolean!
+  models: [ByoEndpointModelMetadata!]!
+  name: String!
+  uid: ID!
+}
+
+type ByoEndpointModelMetadata {
+  alias: String
+  configKey: String!
+  displayName: String!
+  enabled: Boolean!
+  slug: String!
+}
+
+type ByoEndpointPolicy {
+  enabled: Boolean!
+}
+
+"""Token count for a specific usage category."""
+type CategoryTokenBreakdown {
+  category: String!
+  tokens: Int!
+}
+
+enum ChargeUnit {
+  CREDITS
+  CENTS
+}
+
+type ChatGPTConnection {
+  connectedAt: Time!
+  email: String
+
+  """
+  Whether the server currently holds delegated ChatGPT credentials that can be
+  attached to OpenAI requests on the user's behalf.
+  """
+  tokenSharingActive: Boolean!
+}
+
+input ClientContext {
+  version: String
+}
+
+type CloudConversationStoragePolicy {
+  defaultSetting: AdminEnablementSetting!
+  isUnlimited: Boolean!
+  limit: Int!
+  toggleable: Boolean!
+}
+
+type CloudConversationStorageSettings {
+  setting: AdminEnablementSetting!
+}
+
+input CloudConversationStorageSettingsInput {
+  setting: AdminEnablementSetting
+}
+
+type CloudEnvironment {
+  config: CloudEnvironmentConfig!
+  creator: PublicUserProfile
+  lastEditor: PublicUserProfile
+
+  """The most recently created task for this environment, if any."""
+  lastTaskCreated: AgentTask
+  lastTaskRunTimestamp: Time
+  lastUpdated: Time!
+  scope: Space!
+
+  """
+  True when the most recent task for this environment failed during setup
+  (i.e., it was created but never started running).
+  """
+  setupFailed: Boolean!
+  uid: ID!
+}
+
+type CloudEnvironmentConfig {
+  description: String
+  dockerImage: String!
+  githubRepos: [GitHubRepo!]!
+  name: String!
+  providers: ProvidersConfig
+  secrets: [SecretRefOutput!]
+  setupCommands: [String!]
+}
+
+enum CloudEnvironmentSortBy {
+  """Sort by most recently updated first"""
+  LAST_UPDATED
+
+  """Sort alphabetically by environment name"""
+  NAME
+}
+
+union CloudObject = AIConversation | Folder | GenericStringObject | Notebook | Workflow
+
+"""
+Used to represent the entrypoint that a user came from when performing an action.
+"""
+enum CloudObjectEventEntrypoint {
+  Blocklist
+
+  """DriveIndex is equivalent to the v1 entrypoint "ManagementUI"."""
+  DriveIndex
+  ImportModal
+  Onboarding
+  ResourceCenter
+  TeamSettings
+  UniversalSearch
+  Unknown
+  UpgradePage
+}
+
+input CloudObjectInput {
+  uid: ID!
+}
+
+type CloudObjectOutput implements Response {
+  actionHistories: [ObjectActionHistory!]
+  object: CloudObjectWithDescendants!
+  responseContext: ResponseContext!
+}
+
+union CloudObjectResult = CloudObjectOutput | UserFacingError
+
+union CloudObjectWithDescendants = AIConversation | FolderWithDescendants | GenericStringObject | Notebook | Workflow
+
+type CodebaseContextConfigOutput implements Response {
+  embeddingCadence: Int!
+  embeddingConfig: EmbeddingConfig!
+  responseContext: ResponseContext!
+}
+
+union CodebaseContextConfigResult = CodebaseContextConfigOutput | UserFacingError
+
+type CodebaseContextPolicy {
+  defaultEnabledValue: Boolean!
+  embeddingGenerationBatchSize: Int!
+  isUnlimitedIndices: Boolean!
+  maxFilesPerRepo: Int!
+  maxIndices: Int!
+  toggleable: Boolean!
+}
+
+type CodebaseContextSettings {
+  enabled: Boolean!
+  setting: AdminEnablementSetting!
+}
+
+input CodebaseContextSettingsInput {
+  enabled: AdminEnablementSetting
+}
+
+enum ComputerUseAutonomyValue {
+  ALWAYS_ALLOW
+  ALWAYS_ASK
+  NEVER
+  RESPECT_USER_SETTING
+}
+
+input ConfirmFileArtifactUploadInput {
+  artifactUid: ID!
+  checksum: String!
+}
+
+type ConfirmFileArtifactUploadOutput implements Response {
+  artifact: FileArtifact!
+  responseContext: ResponseContext!
+}
+
+union ConfirmFileArtifactUploadResult = ConfirmFileArtifactUploadOutput | UserFacingError
+
+"""
+A Warp Drive entity that can contain other objects. Today, all objects are either
+inside a folder or at the root of a drive.
+"""
+union Container = FolderContainer | Space
+
+"""
+Marker for the client to provide a CRC32C checksum of the upload content.
+
+The checksum should be serialized as a base64-encoded big-endian 4-byte value.
+"""
+type ContentCRC32CFieldValue {
+  _: Boolean
+}
+
+"""Marker for the client to provide the upload content."""
+type ContentDataFieldValue {
+  _: Boolean
+}
+
+scalar ContentHash
+
+"""The kind of a context-window segment."""
+enum ContextWindowSegmentType {
+  UNKNOWN
+  SYSTEM_PROMPT
+  TOOL_DEFINITIONS
+  CONVERSATION_HISTORY
+  LATEST_INPUT
+  IMAGES
+  OTHER
+}
+
+"""A single portion of the context window, described by its kind and token count."""
+type ContextWindowSegment {
+  """The kind of context window segment this entry represents."""
+  segmentType: ContextWindowSegmentType!
+
+  """The estimated number of tokens this segment occupies."""
+  tokenCount: Int!
+}
+
+"""Represents usage data for a single multi-agent conversation."""
+type ConversationUsage {
+  conversationId: String!
+  lastUpdated: Time!
+  title: String!
+  usageMetadata: ConversationUsageMetadata!
+}
+
+"""Metadata about resource usage within a conversation."""
+type ConversationUsageMetadata {
+  """Token usage using a user's API key, keyed by model."""
+  byokTokenUsage: [TokenUsage!]!
+
+  """
+  A breakdown of the context window usage into segments, each carrying a
+  kind and token count. Segment token counts add up to the token total
+  represented by contextWindowUsage. The client derives per-segment
+  percentages.
+  """
+  contextWindowSegments: [ContextWindowSegment!]!
+  contextWindowUsage: Float!
+
+  """The total number of inference credits spent so far in the conversation"""
+  creditsSpent: Float!
+
+  """The total number of platform credits spent so far in the conversation."""
+  platformCreditsSpent: Float!
+  """The cumulative provider cost in US cents, when available."""
+  totalProviderCostInCents: Float
+
+  """
+  The cumulative inference cost billed to the customer so far in the
+  conversation, in US cents (fractional cents allowed), at the customer's own
+  price: usage drawn from a grant or metered at what was paid for it, and
+  included usage at the plan's allowance rate. Null when the server cannot
+  establish a complete historical baseline, or when pricing transparency is
+  disabled server-side.
+  """
+  totalBilledCostInCents: Float
+
+  """
+  Aggregate platform cost (in US cents) charged so far in the conversation,
+  summed across every usage category and model. Null when pricing
+  transparency is disabled server-side.
+  """
+  totalPlatformCostInCents: Float
+  summarized: Boolean!
+
+  """
+  Deprecated: Use warpTokenUsage and byokTokenUsage instead.
+  This field combines both Warp API key and user API key usage.
+  """
+  tokenUsage: [ModelTokenUsage!]! @deprecated(reason: "Use warpTokenUsage and byokTokenUsage instead")
+  toolUsageMetadata: ToolUsageMetadata!
+
+  """Token usage using the Warp API key, keyed by model."""
+  warpTokenUsage: [TokenUsage!]!
+}
+
+"""Worker type for agent tasks."""
+input CreateAgentTaskInput {
+  """
+  Optional JSON-serialized agent config snapshot to store on the task.
+  
+  This should be a JSON object matching the AmbientAgentConfig schema used by ambient agents
+  (e.g. {"model_id":"...","environment_id":"..."}).
+  
+  If provided, the server will persist it to ai_tasks.agent_config_snapshot at creation time.
+  """
+  agentConfigSnapshot: String
+
+  """Optional environment UID to run the task in."""
+  environmentUid: ID
+
+  """Optional JSON-serialized string-to-string run metadata."""
+  metadata: String
+
+  """Optional run ID of the parent that spawned this local task."""
+  parentRunId: ID
+
+  """The prompt for the agent task."""
+  prompt: String!
+}
+
+type CreateAgentTaskOutput implements Response {
+  responseContext: ResponseContext!
+
+  """The ID of the created task."""
+  taskId: ID!
+}
+
+union CreateAgentTaskResult = CreateAgentTaskOutput | UserFacingError
+
+input CreateAnonymousUserInput {
+  anonymousUserType: AnonymousUserType!
+  expirationType: AnonymousUserExpirationType!
+  referralCode: String
+}
+
+type CreateAnonymousUserOutput implements Response {
+  anonymousUserType: AnonymousUserType!
+  expiresAt: Time
+  firebaseUid: String!
+  idToken: String!
+  isInviteValid: Boolean!
+  responseContext: ResponseContext!
+}
+
+union CreateAnonymousUserResult = CreateAnonymousUserOutput | UserFacingError
+
+input CreateFileArtifactUploadTargetInput {
+  conversationId: ID
+  description: String
+  filepath: String!
+  mimeType: String
+  runId: ID
+  sizeBytes: Int
+  title: String
+}
+
+type CreateFileArtifactUploadTargetOutput implements Response {
+  artifact: FileArtifact!
+  responseContext: ResponseContext!
+  uploadTarget: CreateUploadTarget!
+}
+
+union CreateFileArtifactUploadTargetResult = CreateFileArtifactUploadTargetOutput | UserFacingError
+
+input CreateFolderInput {
+  initialFolderId: ID
+  name: String!
+  owner: Owner!
+}
+
+type CreateFolderOutput implements Response {
+  folder: Folder!
+  responseContext: ResponseContext!
+}
+
+union CreateFolderResult = CreateFolderOutput | UserFacingError
+
+input CreateGenericStringObjectInput {
+  genericStringObject: GenericStringObjectInput!
+  owner: Owner!
+}
+
+type CreateGenericStringObjectOutput implements Response {
+  clientId: ID!
+  genericStringObject: GenericStringObject!
+  responseContext: ResponseContext!
+  revisionTs: Time!
+}
+
+union CreateGenericStringObjectResult = CreateGenericStringObjectOutput | UserFacingError
+
+input CreateManagedSecretInput {
+  """
+  Optional override of the provider's default API URL. Only valid for
+  LLM_PROVIDER_API_KEY secrets.
+  """
+  baseUrl: String
+  description: String
+  encryptedValue: String!
+  name: String!
+  owner: Owner!
+  type: ManagedSecretType!
+}
+
+type CreateManagedSecretOutput implements Response {
+  managedSecret: ManagedSecret!
+  responseContext: ResponseContext!
+}
+
+union CreateManagedSecretResult = CreateManagedSecretOutput | UserFacingError
+
+input CreateManagedMcpClientConfigInput {
+  uid: ID!
+}
+
+type CreateManagedMcpClientConfigOutput implements Response {
+  transportKind: ManagedMcpTransportKind!
+  mcpConfigJson: String!
+  proxyUrl: String
+  proxyToken: String
+  authorizationHeaderName: String
+  authorizationHeaderValue: String
+  expiresAt: Time
+  responseContext: ResponseContext!
+}
+
+union CreateManagedMcpClientConfigResult = CreateManagedMcpClientConfigOutput | UserFacingError
+
+input CreateNotebookInput {
+  aiDocumentId: String
+  conversationId: String
+  data: String
+  entrypoint: CloudObjectEventEntrypoint!
+  initialFolderId: ID
+  owner: Owner!
+  title: String
+}
+
+type CreateNotebookOutput implements Response {
+  notebook: Notebook!
+  responseContext: ResponseContext!
+  revisionTs: Time!
+}
+
+union CreateNotebookResult = CreateNotebookOutput | UserFacingError
+
+input CreateSimpleIntegrationInput {
+  agentUid: ID
+  config: SimpleIntegrationConfig!
+  enabled: Boolean!
+  integrationType: String!
+  isUpdate: Boolean! = false
+}
+
+type CreateSimpleIntegrationOutput implements Response {
+  authUrl: String
+  message: String!
+  responseContext: ResponseContext!
+  success: Boolean!
+  txId: ID
+}
+
+union CreateSimpleIntegrationResult = CreateSimpleIntegrationOutput | UserFacingError
+
+input CreateTeamInput {
+  discoverable: Boolean! = false
+  entrypoint: CloudObjectEventEntrypoint!
+  name: String!
+}
+
+type CreateTeamOutput implements Response {
+  responseContext: ResponseContext!
+  workspace: Workspace!
+}
+
+union CreateTeamResult = CreateTeamOutput | UserFacingError
+
+type CreateUploadTarget {
+  fields: [UploadField!]!
+  headers: [CreateUploadTargetHeader!]!
+  method: String!
+  url: String!
+}
+
+type CreateUploadTargetHeader {
+  name: String!
+  value: String!
+}
+
+input CreateWorkflowInput {
+  data: String!
+  entrypoint: CloudObjectEventEntrypoint!
+  initialFolderId: ID
+  owner: Owner!
+}
+
+type CreateWorkflowOutput implements Response {
+  responseContext: ResponseContext!
+  revisionTs: Time!
+  workflow: Workflow!
+}
+
+union CreateWorkflowResult = CreateWorkflowOutput | UserFacingError
+
+type CustomLlmPolicy {
+  toggleable: Boolean!
+}
+
+enum CustomerType {
+  BUILD
+  BUILD_MAX
+  BUSINESS
+  ENTERPRISE
+  FREE
+  LEGACY
+  LIGHTSPEED
+  PROSUMER
+  PRO_TRIAL
+  SCALE
+  SELF_SERVE
+  TEAM_TRIAL
+  TURBO
+}
+
+input DeleteConversationInput {
+  conversationId: ID!
+}
+
+type DeleteConversationOutput implements Response {
+  """The UID of the conversation object that was marked for deletion."""
+  deletedUid: ID!
+  responseContext: ResponseContext!
+  success: Boolean!
+}
+
+union DeleteConversationResult = DeleteConversationOutput | UserFacingError
+
+input DeleteInviteLinkDomainRestrictionInput {
+  teamUid: ID!
+  uid: ID!
+}
+
+type DeleteInviteLinkDomainRestrictionOutput implements Response {
+  responseContext: ResponseContext!
+  success: Boolean!
+}
+
+union DeleteInviteLinkDomainRestrictionResult = DeleteInviteLinkDomainRestrictionOutput | UserFacingError
+
+input DeleteManagedSecretInput {
+  name: String!
+  owner: Owner!
+}
+
+type DeleteManagedSecretOutput implements Response {
+  responseContext: ResponseContext!
+}
+
+union DeleteManagedSecretResult = DeleteManagedSecretOutput | UserFacingError
+
+input DeleteObjectInput {
+  uid: ID!
+}
+
+type DeleteObjectOutput implements Response {
+  """
+  An array of UIDs of all objects marked for deletion as part of this action.
+  """
+  deletedUids: [ID!]!
+  responseContext: ResponseContext!
+  success: Boolean!
+}
+
+union DeleteObjectResult = DeleteObjectOutput | UserFacingError
+
+input DeleteTeamInviteInput {
+  email: String!
+  teamUid: ID!
+}
+
+type DeleteTeamInviteOutput implements Response {
+  responseContext: ResponseContext!
+  success: Boolean!
+}
+
+union DeleteTeamInviteResult = DeleteTeamInviteOutput | UserFacingError
+
+type DeletedObjectUids {
+  folderUids: [ID!]
+  genericStringObjectUids: [ID!]
+  notebookUids: [ID!]
+  workflowUids: [ID!]
+}
+
+enum DelinquencyStatus {
+  NO_DELINQUENCY
+  PAST_DUE
+  TEAM_LIMIT_EXCEEDED
+  UNPAID
+}
+
+type DirectApiUsOnlyInferencePolicy {
+  default: Boolean!
+}
+
+"""
+disconnectChatGPT unlinks the calling user's ChatGPT account and discards any
+delegated credentials held for it. Succeeds even when nothing is linked.
+"""
+type DisconnectChatGPTOutput implements Response {
+  responseContext: ResponseContext!
+}
+
+union DisconnectChatGPTResult = DisconnectChatGPTOutput | UserFacingError
+
+"""
+startChatGPTLink begins linking a ChatGPT account to the calling user's Warp
+account, regardless of the ChatGPT account's email. The returned URL must be
+opened in a browser; it is bound to the caller by a short-lived, single-use
+ticket. The browser flow ends at continueUrl with `chatgpt_linked=1` on
+success or `chatgpt_error=<code>` on failure.
+"""
+type StartChatGPTLinkOutput implements Response {
+  authorizationUrl: String!
+  responseContext: ResponseContext!
+}
+
+union StartChatGPTLinkResult = StartChatGPTLinkOutput | UserFacingError
+
+type DirectLinkSharingPolicy {
+  toggleable: Boolean!
+}
+
+enum DisableReason {
+  ADMIN_DISABLED
+  OUT_OF_REQUESTS
+  PROVIDER_OUTAGE
+  REQUIRES_UPGRADE
+}
+
+type DiscoverableTeamData {
+  name: String!
+  numMembers: Int!
+  teamAcceptingInvites: Boolean!
+  teamUid: ID!
+}
+
+type DiscoverableWorkspaceData {
+  memberCount: Int!
+  name: String!
+  openTeams: [DiscoverableTeamData!]!
+  workspaceUid: ID!
+}
+
+enum DisplaySetting {
+  COMMAND
+  COMMAND_AND_OUTPUT
+  OUTPUT
+}
+
+type DomainCapturePolicy {
+  toggleable: Boolean!
+}
+
+type DomainCaptureSettings {
+  enabled: Boolean!
+}
+
+input DomainCaptureSettingsInput {
+  enabled: Boolean
+}
+
+type EmailInvite {
+  email: String!
+  expired: Boolean!
+  teamUid: ID
+}
+
+enum EmbeddingConfig {
+  """
+  Corresponds to the OpenAI text-embedding-3-small model with 256 dimensions.
+  """
+  OPENAI_TEXT_SMALL_3_256
+
+  """Corresponds to the Voyage voyage-3.5 model with 512 dimensions."""
+  VOYAGE_3_5_512
+
+  """Corresponds to the Voyage voyage-3.5-lite model with 512 dimensions."""
+  VOYAGE_3_5_LITE_512
+
+  """Corresponds to the Voyage voyage-4 model with 512 dimensions."""
+  VOYAGE_4_512
+
+  """Corresponds to the Voyage voyage-code-3 model with 512 dimensions."""
+  VOYAGE_CODE_3_512
+}
+
+"""This mutation is equivalent to deleteAllObjectsInASpace in v1."""
+input EmptyTrashInput {
+  owner: Owner!
+}
+
+type EmptyTrashOutput implements Response {
+  """
+  An array of UIDs of all objects marked for deletion as part of this action.
+  """
+  deletedUids: [ID!]!
+  responseContext: ResponseContext!
+  success: Boolean!
+}
+
+union EmptyTrashResult = EmptyTrashOutput | UserFacingError
+
+type EnterpriseAnalyticsDataCollectionSettings {
+  enabled: Boolean!
+}
+
+input EnterpriseAnalyticsDataCollectionSettingsInput {
+  enabled: Boolean
+}
+
+type EnterpriseAnalyticsPolicy {
+  default: Boolean!
+  enabled: Boolean!
+  toggleable: Boolean!
+}
+
+type EnterpriseBillingSettings {
+  maxMonthlyCloudAgentsSpendCents: Int
+  maxMonthlyLocalAgentsSpendCents: Int
+  maxMonthlyPerUserTotalSpendCents: Int
+  maxMonthlyTotalSpendCents: Int
+}
+
+input EnterpriseBillingSettingsInput {
+  maxMonthlyCloudAgentsSpendCents: Int
+  maxMonthlyLocalAgentsSpendCents: Int
+  maxMonthlyPerUserTotalSpendCents: Int
+  maxMonthlyTotalSpendCents: Int
+}
+
+type EnterpriseCreditsAutoReloadPolicy {
+  autoReloadCostCents: Int!
+  autoReloadCreditDenomination: Int!
+  enabled: Boolean!
+}
+
+type EnterprisePayAsYouGoPolicy {
+  enabled: Boolean!
+  paygCostPerThousandCreditsCents: Int!
+}
+
+type EnterpriseSecretRedactionPolicy {
+  toggleable: Boolean!
+}
+
+type EnterpriseSpendingLimitsPolicy {
+  enabled: Boolean!
+}
+
+type EnterpriseUsageThresholdsPolicy {
+  cloudSpendingLimitThresholdPercentages: [Int!]
+  enabled: Boolean!
+  localSpendingLimitThresholdPercentages: [Int!]
+  totalCreditDepletionThresholdPercentages: [Int!]
+  totalSpendingLimitThresholdPercentages: [Int!]
+}
+
+"""The set of experiments that could be enabled server-side."""
+enum Experiment {
+  AGENT_MODE_ANALYTICS_CONTROL
+  AGENT_MODE_ANALYTICS_EXPERIMENT
+  AGENT_MODE_EARLY_ACCESS_EXPERIMENT
+  AGENT_MODE_HIGHER_LIMIT_EXPERIMENT
+  AGENT_MODE_LOWER_LIMIT_EXPERIMENT
+  AGENT_MODE_UNLIMITED_REQUESTS_CONTROL
+  AGENT_MODE_UNLIMITED_REQUESTS_EXPERIMENT
+  AGENT_ONBOARDING_CONTROL
+  AGENT_ONBOARDING_SKIPPABLE
+  AGENT_ONBOARDING_UNSKIPPABLE
+  AMBIENT_AGENTS_CONTROL
+  AMBIENT_AGENTS_EXPERIMENT
+  BUILD_PLAN_AUTO_RELOAD_BANNER_TOGGLE
+  BUILD_PLAN_AUTO_RELOAD_CONTROL
+  BUILD_PLAN_AUTO_RELOAD_POST_PURCHASE_MODAL
+  CLOUD_PREFERENCES_CONTROL
+  CLOUD_PREFERENCES_GRADUAL_ROLLOUT_EXPERIMENT
+  CODEBASE_CONTEXT_CONTROL
+  CODEBASE_CONTEXT_EXPERIMENT
+  DISABLE_AGENT_MODE_EXPERIMENT
+  ENV_VARS_EARLY_ACCESS_EXPERIMENT
+  FREE_TIER_TO_BUILD_CONVERSION_CONTROL
+  FREE_TIER_TO_BUILD_CONVERSION_DRIP_COUPON
+  FREE_TIER_TO_BUILD_CONVERSION_IMMEDIATE_COUPON
+  FREE_TIER_TO_BUILD_CONVERSION_INTERSTITIAL_EMAIL
+  FREE_TIER_TO_BUILD_CONVERSION_INTERSTITIAL_ONLY
+  FREE_USER_INITIAL_CREDITS_CONTROL
+  FREE_USER_INITIAL_CREDITS_FIVE_HUNDRED
+  FREE_USER_INITIAL_CREDITS_THREE_HUNDRED
+  FREE_USER_NO_AI_CONTROL
+  FREE_USER_NO_AI_EXPERIMENT
+  LINUX_LAUNCH_EXPERIMENT
+  MACOS_RUNNERS_CONTROL
+  MACOS_RUNNERS_EXPERIMENT
+  MULTI_AGENT_CONTROL
+  MULTI_AGENT_EXPERIMENT
+  MULTI_ARM_REVERSE_AI_TRIAL_CONTROL
+  MULTI_ARM_REVERSE_AI_TRIAL_FIVE_HUNDRED_REQUESTS
+  MULTI_ARM_REVERSE_AI_TRIAL_ONE_THOUSAND_FIVE_HUNDRED_REQUESTS
+  MULTI_ARM_REVERSE_AI_TRIAL_ONE_THOUSAND_REQUESTS
+  ONBOARDING_CHOOSE_HOW_TO_START_CONTROL
+  ONBOARDING_CHOOSE_HOW_TO_START_EXPERIMENT
+  OVERLIMIT_AGENT_MODE_CONTROL
+  OVERLIMIT_AGENT_MODE_GRADUAL_ROLLOUT_EXPERIMENT
+  OZ_MULTI_HARNESS_CONTROL
+  OZ_MULTI_HARNESS_EXPERIMENT
+  PROMPT_SUGGESTIONS_VIA_MAA_CONTROL
+  PROMPT_SUGGESTIONS_VIA_MAA_EXPERIMENT
+  PROMPT_SUGGESTIONS_VIA_MAA_OOB
+  REVERSE_PRO_TRIAL_CONTROL
+  REVERSE_PRO_TRIAL_EXPERIMENT
+  REVERSE_PRO_TRIAL_ONE_WEEK_CONTROL
+  REVERSE_PRO_TRIAL_ONE_WEEK_EXPERIMENT
+  REVERSE_TRIAL_CONTROL
+  REVERSE_TRIAL_EXPERIMENT
+  SESSION_SHARING_CONTROL
+  SESSION_SHARING_EXPERIMENT
+  SPLIT_CREDIT_COST_CONTROL
+  SPLIT_CREDIT_COST_EXPERIMENT
+  SSH_REMOTE_SERVER_CONTROL
+  SSH_REMOTE_SERVER_EXPERIMENT
+  SUGGESTED_CODE_DIFFS_CONTROL
+  SUGGESTED_CODE_DIFFS_EXPERIMENT
+  TMUX_SSH_WARPIFICATION_CONTROL
+  TMUX_SSH_WARPIFICATION_EXPERIMENT
+  UPGRADE_TO_PRO_MODAL_CONTROL
+  UPGRADE_TO_PRO_MODAL_EXPERIMENT_NO_PROMO
+  UPGRADE_TO_PRO_MODAL_EXPERIMENT_WITH_PROMO
+  USAGE_BASED_PRICING_CONTROL
+  USAGE_BASED_PRICING_EXPERIMENT
+  WINDOWS_LAUNCH_CONTROL
+  WINDOWS_LAUNCH_EXPERIMENT
+}
+
+input ExpireApiKeyInput {
+  keyUID: ID!
+}
+
+type ExpireApiKeyOutput implements Response {
+  responseContext: ResponseContext!
+  success: Boolean!
+}
+
+union ExpireApiKeyResult = ExpireApiKeyOutput | UserFacingError
+
+type FeatureModelChoice {
+  agentMode: AvailableLlms!
+  cliAgent: AvailableLlms!
+  coding: AvailableLlms!
+  computerUseAgent: AvailableLlms!
+  planning: AvailableLlms!
+}
+
+type FileArtifact {
+  artifactUid: ID!
+  description: String
+  filepath: String!
+  mimeType: String!
+  sizeBytes: Int
+}
+
+"""
+A user's own Firebase profile. This includes information that should not be exposed to other users - see
+PublicUserProfile for a public-facing equivalent.
+"""
+type FirebaseProfile {
+  displayName: String
+  email: String
+  needsSsoLink: Boolean!
+  photoUrl: String
+  uid: String!
+}
+
+type Folder {
+  isWarpPack: Boolean!
+  metadata: ObjectMetadata!
+  name: String!
+  permissions: ObjectPermissions!
+}
+
+type FolderContainer {
+  folderUid: ID!
+}
+
+type FolderWithDescendants {
+  descendants: [CloudObject!]!
+  folder: Folder!
+}
+
+input Fragment {
+  """The actual content of the file."""
+  content: String!
+
+  """The SHA-256 hash of the file content."""
+  contentHash: ContentHash!
+}
+
+type FragmentLocation {
+  byteEnd: Int!
+  byteStart: Int!
+  filePath: String!
+}
+
+input FragmentLocationInput {
+  byteEnd: Int!
+  byteStart: Int!
+  filePath: String!
+}
+
+input FreeAvailableModelsInput {
+  """The download referral source, if any (e.g. \"codex\")."""
+  referrer: String
+}
+
+type FreeAvailableModelsOutput implements Response {
+  featureModelChoice: FeatureModelChoice!
+  responseContext: ResponseContext!
+}
+
+union FreeAvailableModelsResult = FreeAvailableModelsOutput | UserFacingError
+
+type GcpProviderConfig {
+  projectNumber: String!
+  serviceAccountEmail: String
+  workloadIdentityFederationPoolId: String!
+  workloadIdentityFederationProviderId: String!
+}
+
+input GenerateApiKeyInput {
+  """
+  Optional agent UID to use as the authenticated principal for this key.
+  The team is resolved from the agent automatically. The caller must be a member of that team.
+  The agent must be available on the team's current plan.
+  """
+  agentUid: ID
+  expiresAt: Time
+  name: String!
+  teamId: ID
+}
+
+type GenerateApiKeyOutput implements Response {
+  apiKey: APIKeyProperties!
+
+  """
+  The raw API key - this is only returned once and should be saved by the client
+  """
+  rawApiKey: String!
+  responseContext: ResponseContext!
+}
+
+union GenerateApiKeyResult = GenerateApiKeyOutput | UserFacingError
+
+type GenerateCodeEmbeddingResult {
+  """The hash of the code fragment that was embedded."""
+  hash: ContentHash!
+
+  """Whether the embedding was successfully generated."""
+  success: Boolean!
+}
+
+type GenerateCodeEmbeddingsError {
+  error: String!
+}
+
+input GenerateCodeEmbeddingsInput {
+  embeddingConfig: EmbeddingConfig!
+  fragments: [Fragment!]!
+  repoMetadata: RepoMetadata!
+  rootHash: NodeHash!
+}
+
+type GenerateCodeEmbeddingsOutput implements Response {
+  embeddingConfig: EmbeddingConfig!
+  embeddingResults: [GenerateCodeEmbeddingResult!]!
+  responseContext: ResponseContext!
+}
+
+union GenerateCodeEmbeddingsResult = GenerateCodeEmbeddingsError | GenerateCodeEmbeddingsOutput | UserFacingError
+
+type GenerateCommandsFailure {
+  type: GenerateCommandsFailureType!
+}
+
+enum GenerateCommandsFailureType {
+  AI_PROVIDER_ERROR
+  BAD_PROMPT
+  OTHER
+  RATE_LIMITED
+}
+
+"""This API is used for command search requests."""
+input GenerateCommandsInput {
+  """
+  In v1, GenerateCommandsInput had the optional field contextJson.
+  That information will now be included in requestContext.
+  """
+  prompt: String!
+}
+
+type GenerateCommandsOutput implements Response {
+  responseContext: ResponseContext!
+  status: GenerateCommandsStatus!
+}
+
+union GenerateCommandsResult = GenerateCommandsOutput | UserFacingError
+
+union GenerateCommandsStatus = GenerateCommandsFailure | GenerateCommandsSuccess
+
+type GenerateCommandsSuccess {
+  commands: [GeneratedCommand!]!
+}
+
+type GenerateDialogueFailure {
+  requestLimitInfo: RequestLimitInfo!
+}
+
+input GenerateDialogueInput {
+  prompt: String!
+
+  """
+  In v1, GenerateDialogueInput had the optional field contextJson.
+  That information will now be included in requestContext.
+  """
+  transcript: [TranscriptPart!]!
+}
+
+type GenerateDialogueOutput implements Response {
+  responseContext: ResponseContext!
+  status: GenerateDialogueStatus!
+}
+
+union GenerateDialogueResult = GenerateDialogueOutput | UserFacingError
+
+union GenerateDialogueStatus = GenerateDialogueFailure | GenerateDialogueSuccess
+
+type GenerateDialogueSuccess {
+  answer: String!
+  requestLimitInfo: RequestLimitInfo!
+  transcriptSummarized: Boolean!
+  truncated: Boolean!
+}
+
+type GenerateMetadataForCommandFailure {
+  type: GenerateMetadataForCommandFailureType!
+}
+
+enum GenerateMetadataForCommandFailureType {
+  AI_PROVIDER_ERROR
+  BAD_COMMAND
+  OTHER
+  RATE_LIMITED
+}
+
+"""This API is used for templatizing commands."""
+input GenerateMetadataForCommandInput {
+  command: String!
+}
+
+type GenerateMetadataForCommandOutput implements Response {
+  responseContext: ResponseContext!
+  status: GenerateMetadataForCommandStatus!
+}
+
+union GenerateMetadataForCommandResult = GenerateMetadataForCommandOutput | UserFacingError
+
+union GenerateMetadataForCommandStatus = GenerateMetadataForCommandFailure | GenerateMetadataForCommandSuccess
+
+type GenerateMetadataForCommandSuccess {
+  description: String!
+  parameterizedCommand: String!
+  parameters: [GeneratedMetadataForCommand!]!
+  title: String!
+}
+
+type GenerateUniqueUpgradePromoCodeOutput implements Response {
+  promoCode: String
+  responseContext: ResponseContext!
+  showInterstitial: Boolean!
+}
+
+union GenerateUniqueUpgradePromoCodeResult = GenerateUniqueUpgradePromoCodeOutput | UserFacingError
+
+type GeneratedCommand {
+  command: String!
+  description: String!
+  parameters: [GeneratedCommandParameter!]!
+}
+
+type GeneratedCommandParameter {
+  description: String!
+  id: String!
+}
+
+type GeneratedMetadataForCommand {
+  description: String!
+  name: String!
+  value: String!
+}
+
+type GenericStringObject {
+  format: GenericStringObjectFormat!
+  metadata: ObjectMetadata!
+  permissions: ObjectPermissions!
+  serializedModel: String!
+}
+
+enum GenericStringObjectFormat {
+  JsonAIExecutionProfile
+  JsonAIFact
+  JsonCloudEnvironment
+  JsonEnvVarCollection
+  JsonMCPServer
+  JsonPreference
+  JsonScheduledAmbientAgent
+  JsonTemplatableMCPServer
+  JsonWorkflowEnum
+}
+
+input GenericStringObjectInput {
+  clientId: ID!
+  entrypoint: CloudObjectEventEntrypoint!
+  format: GenericStringObjectFormat!
+  initialFolderId: ID
+  serializedModel: String!
+  uniquenessKey: GenericStringObjectUniqueKey
+}
+
+input GenericStringObjectUniqueKey {
+  key: String!
+  uniquePer: UniquePer!
+}
+
+"""
+Error type for when a user tries to create a generic string object with a unique key
+but that object already exists.
+"""
+type GenericStringObjectUniqueKeyConflict implements UserFacingErrorInterface {
+  message: String!
+}
+
+union GenericStringObjectUpdate = GenericStringObjectUpdateRejected | ObjectUpdateSuccess
+
+type GenericStringObjectUpdateRejected {
+  conflictingGenericStringObject: GenericStringObject!
+  revisionTs: Time!
+}
+
+type GetCloudEnvironmentsOutput implements Response {
+  cloudEnvironments: [CloudEnvironment!]!
+  responseContext: ResponseContext!
+}
+
+union GetCloudEnvironmentsResult = GetCloudEnvironmentsOutput | UserFacingError
+
+input GetIntegrationsUsingEnvironmentInput {
+  environmentId: String!
+}
+
+type GetIntegrationsUsingEnvironmentOutput implements Response {
+  providerNames: [String!]!
+  responseContext: ResponseContext!
+}
+
+union GetIntegrationsUsingEnvironmentResult = GetIntegrationsUsingEnvironmentOutput | UserFacingError
+
+input GetOAuthConnectTxStatusInput {
+  txId: ID!
+}
+
+type GetOAuthConnectTxStatusOutput implements Response {
+  responseContext: ResponseContext!
+  status: OAuthConnectTxStatus!
+}
+
+union GetOAuthConnectTxStatusResult = GetOAuthConnectTxStatusOutput | UserFacingError
+
+type GetRelevantFragmentsError {
+  error: String!
+}
+
+input GetRelevantFragmentsInput {
+  embeddingConfig: EmbeddingConfig!
+  query: String!
+  repoMetadata: RepoMetadata!
+  rootHash: NodeHash!
+}
+
+type GetRelevantFragmentsOutput implements Response {
+  candidateHashes: [ContentHash!]!
+  responseContext: ResponseContext!
+}
+
+union GetRelevantFragmentsResult = GetRelevantFragmentsError | GetRelevantFragmentsOutput | UserFacingError
+
+type GitHubRepo {
+  owner: String!
+  repo: String!
+}
+
+enum GithubAccountType {
+  ORGANIZATION
+  UNKNOWN
+  USER
+}
+
+"""User needs to authenticate with GitHub"""
+type GithubAuthRequiredOutput implements Response {
+  appInstallLink: String!
+  authUrl: String!
+  responseContext: ResponseContext!
+  txId: ID!
+}
+
+"""User is connected to GitHub and we have their info"""
+type GithubConnectedOutput implements Response {
+  appInstallLink: String!
+  installedRepos: [RepoResult!]!
+  responseContext: ResponseContext!
+  username: String
+}
+
+type GithubInstallation {
+  accountLogin: String!
+  accountType: GithubAccountType
+  associatedTeamUids: [String!]!
+  id: ID!
+  repositorySelection: String
+}
+
+"""
+GithubReposLanguageStat represents detected language usage for a set of repos.
+"""
+type GithubReposLanguageStat {
+  bytes: Int!
+  language: String!
+  percentage: Float!
+}
+
+"""
+Error type for when a user provides GitHub repositories that do not exist or are not accessible.
+
+This is intended to be reusable across APIs that accept GitHub repo inputs.
+"""
+type GithubRepositoryNotFoundError implements UserFacingErrorInterface {
+  message: String!
+  repositories: [GitHubRepo!]!
+}
+
+union GuestSubject = PendingUserGuest | TeamGuest | UserGuest
+
+input HarnessAuthSecretsInput {
+  claudeAuthSecretName: String
+  codexAuthSecretName: String
+}
+
+type HarnessAuthSecretsOutput implements Response {
+  managedSecrets: [ManagedSecret!]!
+  responseContext: ResponseContext!
+}
+
+union HarnessAuthSecretsResult = HarnessAuthSecretsOutput | UserFacingError
+
+type HarnessConfig {
+  enabled: Boolean!
+}
+
+input HarnessConfigInput {
+  enabled: Boolean
+}
+
+"""A harness available to the requesting user."""
+type HarnessInfo {
+  """
+  Models the user can pick for this harness. Empty for harnesses without a
+  configured catalog.
+  """
+  availableModels: [HarnessModel!]!
+  displayName: String!
+  enabled: Boolean!
+  harness: AgentHarness!
+  piVersion: String
+  piProviders: [PiProviderInfo!]
+}
+
+input HarnessInput {
+  type: String!
+}
+
+"""A single model available for a third-party harness."""
+type HarnessModel {
+  displayName: String!
+  id: ID!
+  reasoningLevel: String
+}
+
+"""
+Per-harness enablement settings for a team. Defaults to enabled for all harnesses.
+Only configurable on enterprise plans.
+"""
+type HarnessSettings {
+  harnessConfigs: [HarnessSettingsEntry!]!
+  optOutOfNewHarnesses: Boolean!
+}
+
+type HarnessSettingsEntry {
+  displayName: String!
+  harness: AgentHarness!
+  settings: HarnessConfig!
+}
+
+input HarnessSettingsEntryInput {
+  harness: AgentHarness!
+  settings: HarnessConfigInput!
+}
+
+input HarnessSettingsInput {
+  harnessConfigs: [HarnessSettingsEntryInput!]
+  optOutOfNewHarnesses: Boolean
+}
+
+"""
+The transport the agent process drives a run's third-party harness over.
+"""
+enum HarnessTransport {
+  """The harness is driven over the Agent Client Protocol."""
+  ACP
+
+  """The harness is driven through a terminal."""
+  PTY
+}
+
+"""
+Why the harness is driven over a PTY although the run was dispatched over ACP, when no ACP
+adapter was found on PATH either.
+"""
+enum HarnessTransportFallbackReason {
+  """No coding CLI sidecar was mounted."""
+  NO_SIDECAR
+
+  """A sidecar was mounted but carries no ACP adapter."""
+  SIDECAR_WITHOUT_ADAPTER
+}
+
+enum HostEnablementSetting {
+  ENFORCE
+  RESPECT_USER_SETTING
+}
+
+"""ImageTag represents a Docker image tag with repository information."""
+type ImageTag {
+  """Full image name with tag (e.g., "warpdotdev/dev-ubuntu:latest")"""
+  image: String!
+
+  """Languages label from the image (e.g., ["go", "golang"])"""
+  languages: [String!]!
+
+  """Repository name (e.g., "dev-ubuntu")"""
+  repository: String!
+
+  """Tag name (e.g., "latest", "24.04")"""
+  tag: String!
+}
+
+type InstanceShape {
+  memoryGb: Int!
+  vcpus: Int!
+}
+
+input InstanceShapeInput {
+  memoryGb: Int!
+  vcpus: Int!
+}
+
+"""Error type for when the client cannot access task attachments."""
+type InvalidAttachmentError implements UserFacingErrorInterface {
+  message: String!
+}
+
+"""Generic error type for invalid input validation failures."""
+type InvalidInputError implements UserFacingErrorInterface {
+  message: String!
+}
+
+"""
+Error type for when the client provides an invalid managed secret value.
+"""
+type InvalidSecretError implements UserFacingErrorInterface {
+  message: String!
+}
+
+"""Returned when the provided user code is no longer valid."""
+type InvalidUserCodeError implements UserFacingErrorInterface {
+  message: String!
+}
+
+type InviteLinkDomainRestriction {
+  domain: String!
+  uid: ID!
+}
+
+"""Input for the issueTaskIdentityToken mutation."""
+input IssueTaskIdentityTokenInput {
+  """The intended audience for the token (e.g. a cloud provider URL)."""
+  audience: String!
+
+  """
+  The requested token duration in seconds. The server may cap this to a maximum value.
+  """
+  requestedDurationSeconds: Int!
+
+  """
+  Controls how the OIDC subject claim is formatted. Each element names a claim
+  to include.
+  """
+  subjectTemplate: [String!]
+}
+
+type IssueTaskIdentityTokenOutput implements Response {
+  """When the token expires."""
+  expiresAt: Time!
+
+  """The OIDC issuer that signed the token."""
+  issuer: String!
+  responseContext: ResponseContext!
+
+  """The signed OIDC JWT."""
+  token: String!
+}
+
+union IssueTaskIdentityTokenResult = IssueTaskIdentityTokenOutput | UserFacingError
+input JoinTeamInWorkspaceInput {
+  teamUid: ID!
+}
+
+type JoinTeamInWorkspaceOutput implements Response {
+  responseContext: ResponseContext!
+  success: Boolean!
+}
+
+union JoinTeamInWorkspaceResult = JoinTeamInWorkspaceOutput | UserFacingError
+
+input JoinTeamWithTeamDiscoveryInput {
+  entrypoint: TeamDiscoveryEntrypoint!
+  teamUid: ID!
+}
+
+type JoinTeamWithTeamDiscoveryOutput implements Response {
+  responseContext: ResponseContext!
+  success: Boolean!
+}
+
+union JoinTeamWithTeamDiscoveryResult = JoinTeamWithTeamDiscoveryOutput | UserFacingError
+
+input JoinWorkspaceFromDiscoveryInput {
+  teamUid: ID
+  workspaceUid: ID!
+}
+
+type JoinWorkspaceFromDiscoveryOutput implements Response {
+  responseContext: ResponseContext!
+  success: Boolean!
+}
+
+union JoinWorkspaceFromDiscoveryResult = JoinWorkspaceFromDiscoveryOutput | UserFacingError
+
+input LeaveObjectInput {
+  objectUid: ID!
+}
+
+type LeaveObjectOutput {
+  objectUid: ID!
+  responseContext: ResponseContext!
+}
+
+union LeaveObjectResult = LeaveObjectOutput | UserFacingError
+
+type LinkSharing {
+  accessLevel: AccessLevel!
+  source: Container
+}
+
+type LinkSharingSettings {
+  anyoneWithLinkSharingEnabled: Boolean!
+  directLinkSharingEnabled: Boolean!
+}
+
+input LinkSharingSettingsInput {
+  anyoneWithLinkSharingEnabled: Boolean
+  directLinkSharingEnabled: Boolean
+}
+
+input ListAIConversationsInput {
+  """
+  If specified, fetch only these conversation IDs.
+  If empty or null, fetches all conversations for the user.
+  """
+  conversationIds: [ID!]
+}
+
+type ListAIConversationsOutput implements Response {
+  conversations: [AIConversation!]!
+  responseContext: ResponseContext!
+}
+
+union ListAIConversationsResult = ListAIConversationsOutput | UserFacingError
+
+input ListHarnessAuthSecretsInput {
+  """
+  Harness whose auth-credential secrets should be returned. Harnesses that
+  don't use auth secrets (e.g. OZ) always return an empty result.
+  """
+  harness: AgentHarness!
+}
+
+type ListWarpDevImagesOutput implements Response {
+  """List of available Warp dev base images from Docker Hub"""
+  images: [ImageTag!]!
+  responseContext: ResponseContext!
+}
+
+union ListWarpDevImagesResult = ListWarpDevImagesOutput | UserFacingError
+
+type ListedHarnessAuthSecretsConfig {
+  claudeAuthSecretName: String
+  codexAuthSecretName: String
+  piAuthSecretName: String
+}
+
+type ListedHarnessConfig {
+  type: String!
+}
+
+type ListedSimpleIntegrationConfig {
+  basePrompt: String!
+  computerUseEnabled: Boolean!
+  environmentUid: String!
+  harness: ListedHarnessConfig
+  harnessAuthSecrets: ListedHarnessAuthSecretsConfig
+  mcpServersJson: String!
+  modelId: String!
+  secrets: [SecretRefOutput!]
+  workerHost: String
+}
+
+type LlmContextWindow {
+  """
+  Default context window size used when the client
+  does not send an explicit base_model_context_window_limit. For non-configurable
+  models this equals max.
+  """
+  default: Uint!
+
+  """
+  When true, the client can pick a context window size in the range [min, max].
+  """
+  isConfigurable: Boolean!
+
+  """
+  Maximum context window size. The upper bound for any user override
+  and the effective ceiling the server enforces on the request.
+  """
+  max: Uint!
+
+  """
+  Minimum context window size the user may select. For non-configurable
+  models this equals max.
+  """
+  min: Uint!
+}
+
+type LlmHostSettings {
+  enabled: Boolean!
+  enablementSetting: HostEnablementSetting
+
+  """
+  Full resource name of the GCP workload identity provider that Gemini Enterprise
+  clients exchange Warp OIDC JWTs against (used as both the JWT audience and the
+  STS exchange audience).
+  """
+  gcpAudience: String
+
+  """
+  Email of the GCP service account that Gemini Enterprise clients impersonate after
+  the STS exchange. Empty means the federated token is used directly.
+  """
+  gcpSaEmail: String
+
+  """
+  IAM role ARN that Oz Cloud Agents assume via the OIDC trust flow to obtain credentials for AWS Bedrock requests.
+  """
+  oidcAssumeRoleArn: String
+  optOutOfNewModels: Boolean!
+  region: String
+}
+
+type LlmHostSettingsEntry {
+  host: LlmModelHost!
+  settings: LlmHostSettings!
+}
+
+"""Equivalent to UpdateOrganizationSettings in v1."""
+input LlmHostSettingsInput {
+  enabled: Boolean
+  enablementSetting: HostEnablementSetting
+  oidcAssumeRoleArn: String
+  optOutOfNewModels: Boolean
+  region: String
+}
+
+input LlmHostSettingsInputEntry {
+  host: LlmModelHost!
+  settings: LlmHostSettingsInput!
+}
+
+type LlmInfo {
+  baseModelName: String!
+
+  """The model's context window configuration. Always non-null."""
+  contextWindow: LlmContextWindow!
+  description: String
+  disableReason: DisableReason
+  displayName: String!
+  hostConfigs: [RoutingHostConfig!]!
+  id: String!
+  onboardingInfo: LlmOnboardingInfo
+  pricing: LlmPricing!
+  provider: LlmProvider!
+  reasoningLevel: String
+  spec: LlmSpec
+  usageMetadata: LlmUsageMetadata!
+  visionSupported: Boolean!
+}
+
+"""
+LLM model hosting provider type.
+Add self-hosted and other cloud providers here as needed.
+"""
+enum LlmModelHost {
+  AWS_BEDROCK
+  CUSTOM_ENDPOINT
+  DIRECT_API
+  GEMINI_ENTERPRISE
+}
+
+type LlmModelHostSettings {
+  defaultHostModelRef: String
+  enabled: Boolean!
+  hostModelRef: String
+}
+
+type LlmModelHostSettingsEntry {
+  host: LlmModelHost!
+  settings: LlmModelHostSettings!
+}
+
+input LlmModelHostSettingsInput {
+  enabled: Boolean
+  hostModelRef: String
+}
+
+input LlmModelHostSettingsInputEntry {
+  host: LlmModelHost!
+  settings: LlmModelHostSettingsInput!
+}
+
+type LlmModelSettings {
+  hostSettings: [LlmModelHostSettingsEntry!]!
+}
+
+type LlmModelSettingsEntry {
+  modelId: String!
+  settings: LlmModelSettings!
+}
+
+input LlmModelSettingsInput {
+  hostSettings: [LlmModelHostSettingsInputEntry!]
+}
+
+input LlmModelSettingsInputEntry {
+  modelId: String!
+  settings: LlmModelSettingsInput!
+}
+
+type LlmOnboardingInfo {
+  description: String!
+  title: String!
+}
+
+type LlmPricing {
+  discountPercentage: Float
+}
+
+enum LlmProvider {
+  ANTHROPIC
+  GOOGLE
+  OPENAI
+  UNKNOWN
+  XAI
+}
+
+type LlmSettings {
+  enabled: Boolean!
+  hostConfigs: [LlmHostSettingsEntry!]!
+  modelConfigs: [LlmModelSettingsEntry!]!
+}
+
+input LlmSettingsInput {
+  apiKey: String
+  baseUrl: String
+  deploymentName: String
+  enabled: Boolean
+  hostOverrides: [LlmHostSettingsInputEntry!]
+  modelOverrides: [LlmModelSettingsInputEntry!]
+}
+
+type LlmSpec {
+  cost: Float!
+  quality: Float!
+  speed: Float!
+}
+
+"""How an LLM provider API key's endpoint is reached."""
+enum LlmEndpointKind {
+  """The provider's own API, at its default URL or a baseUrl override of it."""
+  NATIVE
+}
+
+type LlmUsageMetadata {
+  creditMultiplier: Float
+  requestMultiplier: Int! @deprecated(reason: "Use creditMultiplier instead")
+}
+
+"""A template for the MCP Gallery."""
+type MCPGalleryTemplate {
+  description: String!
+  galleryItemId: String!
+  instructionsInMarkdown: String
+  jsonTemplate: MCPJsonTemplate!
+  template: String!
+  title: String!
+  version: Int!
+}
+
+"""A JSON template with variables for an MCP server configuration."""
+type MCPJsonTemplate {
+  json: String!
+  variables: [MCPTemplateVariable!]!
+}
+
+"""A variable in an MCP JSON template."""
+type MCPTemplateVariable {
+  allowedValues: [String!]
+  key: String!
+}
+
+type PiProviderInfo {
+  id: String!
+  name: String!
+  apiKeySupported: Boolean!
+  unsupportedReason: String
+}
+
+type ManagedSecret {
+  """
+  For LLM_PROVIDER_API_KEY secrets, an optional override of the provider's default API
+  URL (for example, a proxy or regional endpoint). Not secret.
+  """
+  baseUrl: String
+  createdAt: Time!
+
+  """
+  An optional description of the secret (for example, instructions on how to rotate it).
+  """
+  description: String
+
+  """For LLM_PROVIDER_API_KEY secrets, how the key's endpoint is reached."""
+  endpointKind: LlmEndpointKind
+
+  """The name of this secret. Secret names are unique for a given owner."""
+  name: String!
+
+  """The user or team who owns this secret."""
+  owner: Space!
+
+  """
+  For LLM_PROVIDER_API_KEY secrets, the model provider the key authenticates against.
+  """
+  providerId: String
+
+  """The kind of secret value."""
+  type: ManagedSecretType!
+  updatedAt: Time!
+}
+
+"""A managed secret value representing an Anthropic API key."""
+type ManagedSecretAnthropicApiKeyValue {
+  apiKey: String!
+}
+
+"""
+A managed secret value representing Anthropic Bedrock access key credentials.
+"""
+type ManagedSecretAnthropicBedrockAccessKeyValue {
+  awsAccessKeyId: String!
+  awsRegion: String!
+  awsSecretAccessKey: String!
+
+  """
+  Optional AWS session token. Only required when using temporary credentials
+  (e.g. STS-issued credentials). Persistent IAM access keys do not need one.
+  """
+  awsSessionToken: String
+}
+
+"""A managed secret value representing an Anthropic Bedrock API key."""
+type ManagedSecretAnthropicBedrockApiKeyValue {
+  awsBearerTokenBedrock: String!
+  awsRegion: String!
+}
+
+"""ManagedSecretConfig contains configuration for managed secrets."""
+type ManagedSecretConfig {
+  """
+  Public key for uploading managed secrets.
+  
+  This is the base64 representation of a keyset serialized with tink's binary format.
+  """
+  publicKey: String
+}
+type ManagedByokByoePolicy {
+  enabled: Boolean!
+}
+
+"""
+A managed secret value representing a container registry credential. The password is
+never exposed here - only the host and username are readable back.
+"""
+type ManagedSecretDockerRegistryValue {
+  registryHost: String!
+  username: String!
+}
+
+"""
+A managed secret value representing an AWS ECR credential backed by an IAM role. Neither
+field is secret - Warp assumes the role fresh at dispatch time rather than storing a
+password - so both are readable back in full.
+"""
+type ManagedSecretAwsEcrCredentialValue {
+  registryHost: String!
+  roleArn: String!
+}
+
+"""A managed secret value representing an OpenAI API key."""
+type ManagedSecretOpenAiApiKeyValue {
+  apiKey: String!
+
+  """
+  Optional base URL for the OpenAI API. When set, the harness uses this
+  instead of the provider default (e.g. for regional endpoints).
+  """
+  baseUrl: String
+}
+
+"""
+A managed secret value representing an API key for a model provider. The encrypted
+value carries only providerId and apiKey; baseUrl is read from the secret's metadata
+when the value is delivered to a run.
+"""
+type ManagedSecretLlmProviderApiKeyValue {
+  providerId: String!
+  apiKey: String!
+  baseUrl: String
+}
+
+"""A raw, unencrypted managed secret value."""
+type ManagedSecretRawValue {
+  value: String!
+}
+
+enum ManagedMcpTransportKind {
+  URL
+  COMMAND
+}
+
+"""Type of Warp-managed secret values."""
+enum ManagedSecretType {
+  ANTHROPIC_API_KEY
+  ANTHROPIC_BEDROCK_ACCESS_KEY
+  ANTHROPIC_BEDROCK_API_KEY
+  AWS_ECR_CREDENTIAL
+  DOCKER_REGISTRY
+  DOTENVX
+  OPENAI_API_KEY
+  LLM_PROVIDER_API_KEY
+  RAW_VALUE
+}
+
+union ManagedSecretValue = ManagedSecretAnthropicApiKeyValue | ManagedSecretAnthropicBedrockAccessKeyValue | ManagedSecretAnthropicBedrockApiKeyValue | ManagedSecretAwsEcrCredentialValue | ManagedSecretDockerRegistryValue | ManagedSecretOpenAiApiKeyValue | ManagedSecretLlmProviderApiKeyValue | ManagedSecretRawValue
+
+input ManagedSecretsInput {
+  """Pagination cursor, currently unused."""
+  cursor: String
+}
+
+type ManagedSecretsOutput implements Response {
+  managedSecrets: [ManagedSecret!]!
+  responseContext: ResponseContext!
+}
+
+union ManagedSecretsResult = ManagedSecretsOutput | UserFacingError
+
+type MemberSpendLimit {
+  maxMonthlySpendCents: Int!
+  principalType: PrincipalType!
+  principalUid: String!
+}
+
+enum MembershipRole {
+  ADMIN
+  OWNER
+  USER
+}
+
+input MerkleTreeNode {
+  children: [NodeHash!]!
+  hash: NodeHash!
+}
+
+"""
+Error type for when a user tries to mint a custom token for a non-anonymous user.
+"""
+type MintCustomTokenForNonAnonymousUserError implements UserFacingErrorInterface {
+  message: String!
+}
+
+type MintCustomTokenOutput implements Response {
+  customToken: String!
+  responseContext: ResponseContext!
+}
+
+union MintCustomTokenResult = MintCustomTokenOutput | UserFacingError
+
+"""
+Token usage by model within a conversation.
+Deprecated: Use TokenUsage instead.
+"""
+type ModelTokenUsage {
+  modelId: String!
+  totalTokens: Int!
+}
+
+input MoveObjectInput {
+  newFolderUid: ID
+  newOwner: Owner!
+  objectType: ObjectType!
+  uid: ID!
+}
+
+type MoveObjectOutput implements Response {
+  metadata: ObjectMetadata!
+  responseContext: ResponseContext!
+  success: Boolean!
+}
+
+union MoveObjectResult = MoveObjectOutput | UserFacingError
+
+type MultiAdminPolicy {
+  enabled: Boolean!
+}
+
+type NativeWorkspacesPolicy {
+  enabled: Boolean!
+}
+
+scalar NodeHash
+
+type Notebook {
+  aiDocumentId: String
+  data: String!
+  metadata: ObjectMetadata!
+  permissions: ObjectPermissions!
+  title: String!
+}
+
+union NotebookUpdate = NotebookUpdateRejected | ObjectUpdateSuccess
+
+type NotebookUpdateRejected {
+  conflictingNotebook: Notebook!
+  revisionTs: Time!
+}
+
+"""Poll the status of an OAuth connect transaction."""
+enum OAuthConnectTxStatus {
+  COMPLETED
+  EXPIRED
+  FAILED
+  IN_PROGRESS
+  PENDING
+}
+
+input OSContext {
+  category: String
+  linuxKernelVersion: String
+  name: String
+  version: String
+}
+
+"""
+The uid of the object, the history of actions on it, and the timestamp of the
+latest action so the client can check if the response is more or less recent than
+the action history it currently stores for this object.
+"""
+type ObjectActionHistory {
+  actions: [ActionRecord!]
+  latestProcessedAtTimestamp: Time
+  latestTimestamp: Time
+  objectType: ObjectType!
+  uid: ID!
+}
+
+type ObjectActionOccurred {
+  history: ObjectActionHistory!
+}
+
+type ObjectContentUpdated {
+  lastEditor: PublicUserProfile
+  object: CloudObject!
+}
+
+type ObjectDeleted {
+  objectUid: ID!
+}
+
+type ObjectGuest {
+  accessLevel: AccessLevel!
+  source: Container
+  subject: GuestSubject!
+}
+
+type ObjectMetadata {
+  creatorUid: ID
+  currentEditorUid: ID
+  isWelcomeObject: Boolean!
+  lastEditorUid: ID
+  metadataLastUpdatedTs: Time!
+
+  """The object's immediate parent."""
+  parent: Container!
+  revisionTs: Time!
+  trashedTs: Time
+  uid: ID!
+}
+
+type ObjectMetadataUpdated {
+  metadata: ObjectMetadata!
+}
+
+type ObjectPermissions {
+  """
+  Access settings for link-based sharing. If not set, link sharing is disabled, and recipients
+  must be added directly.
+  """
+  anyoneLinkSharing: LinkSharing
+
+  """Guests that this object has been directly shared with"""
+  guests: [ObjectGuest!]!
+  lastUpdatedTs: Time!
+  space: Space!
+}
+
+type ObjectPermissionsUpdated {
+  objectUid: ID!
+  permissions: ObjectPermissions!
+  userProfiles: [PublicUserProfile!]
+}
+
+enum ObjectType {
+  AIConversation
+  Folder
+  GenericStringObject
+  Notebook
+  Workflow
+}
+
+type ObjectUpdateSuccess {
+  lastEditorUid: ID!
+  revisionTs: Time!
+}
+
+input OnboardingSurveyResponse {
+  answer: String!
+  questionIdentifier: String!
+}
+
+"""Onboarding survey status enum matching the database enum values"""
+enum OnboardingSurveyStatus {
+  COMPLETED
+  SHOWN
+  SKIPPED
+}
+
+type OveragesPricing {
+  pricePerRequestUsdCents: Int!
+}
+
+input Owner {
+  type: OwnerType!
+
+  """
+  This field is optional because we only need it when OwnerType is Team.
+  For Users, we infer the desired UID based on the logged-in user.
+  """
+  uid: ID
+}
+
+enum OwnerType {
+  Team
+  User
+}
+
+"""
+Error type for when a user tries to purchase add-on credits but payment method is declined.
+"""
+type PaymentMethodDeclinedError implements UserFacingErrorInterface {
+  message: String!
+}
+
+type PendingUserGuest {
+  email: String
+}
+
+"""
+Error type for when a user tries to create a personal object but has hit their billing limit
+"""
+type PersonalObjectsLimitExceeded implements UserFacingErrorInterface {
+  limit: Int!
+  message: String!
+  objectType: ObjectType!
+}
+
+type PlanArtifact {
+  documentUid: ID!
+  notebookUid: ID
+  title: String
+}
+
+type PlanPricing {
+  codebaseContextFileLimit: Int!
+  codebaseLimit: Int!
+  maxTeamSize: Int
+  monthlyPlanPricePerMonthUsdCents: Int!
+  plan: StripeSubscriptionPlan!
+  requestLimit: Int
+  yearlyPlanPricePerMonthUsdCents: Int!
+}
+
+"""
+Machine-readable error code from the platform error catalog.
+Used in task status messages to identify the class of error.
+See platformerrors package for the canonical definitions.
+"""
+enum PlatformErrorCode {
+  """MAA server explicitly reported a terminal response stream failure."""
+  AGENT_STREAM_FAILURE
+
+  """
+  MAA response stream terminally failed because of a transport or EOF error.
+  """
+  AGENT_STREAM_NETWORK_ERROR
+  """Request lacks valid authentication credentials (e.g. invalid API key)."""
+  AUTHENTICATION_REQUIRED
+
+  """Spending budget limit has been reached."""
+  BUDGET_EXCEEDED
+
+  """Task prompt or environment violated the platform's content policy."""
+  CONTENT_POLICY_VIOLATION
+
+  """
+  Client-side environment setup failed (clone, setup command, MCP, etc.).
+  """
+  ENVIRONMENT_SETUP_FAILED
+
+  """
+  User hasn't authorized a required external service (e.g. GitHub, Linear).
+  """
+  EXTERNAL_AUTHENTICATION_REQUIRED
+
+  """Required feature is not enabled for the user's plan."""
+  FEATURE_NOT_AVAILABLE
+
+  """Team has no remaining add-on credits."""
+  INSUFFICIENT_CREDITS
+
+  """Integration is disabled and must be enabled."""
+  INTEGRATION_DISABLED
+
+  """Integration setup is incomplete."""
+  INTEGRATION_NOT_CONFIGURED
+
+  """Catch-all for unexpected server-side errors. Retryable."""
+  INTERNAL_ERROR
+
+  """Request is malformed or contains invalid parameters."""
+  INVALID_REQUEST
+
+  """Principal lacks permission for the requested operation."""
+  NOT_AUTHORIZED
+
+  """The operation is not supported for the current resource state."""
+  OPERATION_NOT_SUPPORTED
+
+  """Referenced resource does not exist."""
+  RESOURCE_NOT_FOUND
+
+  """
+  Transient infrastructure failure (capacity, sandbox creation, etc.). Retryable.
+  """
+  RESOURCE_UNAVAILABLE
+}
+
+enum PoolingType {
+  USER
+}
+
+input PopulateMerkleTreeCacheInput {
+  embeddingConfig: EmbeddingConfig!
+  repoMetadata: RepoMetadata
+  rootHash: NodeHash!
+}
+
+type PopulateMerkleTreeCacheOutput implements Response {
+  responseContext: ResponseContext!
+  success: Boolean!
+}
+
+union PopulateMerkleTreeCacheResult = PopulateMerkleTreeCacheOutput | UserFacingError
+
+input PrewarmedSandboxConfigInput {
+  githubCredentialContractVersion: Int
+  sandboxId: ID!
+}
+
+union PrewarmedSandboxConfigResult = PrewarmedSandboxConfiguration | UserFacingError
+
+type PrewarmedSandboxConfiguration {
+  environmentVariables: [PrewarmedSandboxVariable!]!
+  expiresAt: Time!
+  fingerprint: String!
+  gitCredentials: [TaskGitCredential!]!
+  githubCredentialMode: GitHubCredentialMode!
+  managedSecrets: [TaskSecretEntry!]!
+  sandboxId: ID!
+  spec: PrewarmedSandboxSpec!
+}
+
+type PrewarmedSandboxSpec {
+  computerUseEnabled: Boolean!
+  deferredRepositories: [SourceRepo!]!
+  factorySkillDirs: [String!]!
+  harness: String!
+  mcpServersJson: String!
+  providers: CloudProviderClientConfigs
+  repositories: [ExecutionRepository!]!
+  setupCommands: [String!]!
+  skills: [String!]!
+}
+
+type PrewarmedSandboxVariable {
+  name: String!
+  value: String!
+}
+
+type PricingInfo {
+  addonCreditsOptions: [AddonCreditsOption!]!
+  overages: OveragesPricing!
+  plans: [PlanPricing!]!
+  promotionMessage: String
+}
+
+type PricingInfoOutput implements Response {
+  pricingInfo: PricingInfo!
+  responseContext: ResponseContext!
+}
+
+union PricingInfoResult = PricingInfoOutput | UserFacingError
+
+"""Type of principal making the authenticated request."""
+enum PrincipalType {
+  SERVICE_ACCOUNT
+  USER
+}
+
+input ProvideNegativeFeedbackResponseForAiConversationInput {
+  conversationId: ID!
+  requestIds: [ID!]!
+}
+
+type ProvidersConfig {
+  aws: AwsProviderConfig
+  gcp: GcpProviderConfig
+}
+
+"""
+PublicUserProfile holds public information about a user that can be shown to other users.
+"""
+type PublicUserProfile {
+  displayName: String
+  email: String
+  photoUrl: String
+  uid: String!
+}
+
+type PullRequestArtifact {
+  branch: String!
+  url: String!
+}
+
+type PurchaseAddOnCreditsPolicy {
+  enabled: Boolean!
+  premiumEnabled: Boolean!
+  pricePremiumBps: Int!
+}
+
+"""
+The purchase could not be charged synchronously because the customer has no
+saved payment method. The user must complete the purchase in the browser at
+`checkoutUrl`; credits are granted via webhook after checkout completes.
+"""
+type PurchaseAddonCreditsCheckoutOutput implements Response {
+  checkoutUrl: String!
+  responseContext: ResponseContext!
+}
+
+input PurchaseAddonCreditsInput {
+  credits: Int!
+  teamUid: ID
+}
+
+"""The purchase was charged synchronously and credits were granted."""
+type PurchaseAddonCreditsOutput implements Response {
+  responseContext: ResponseContext!
+  success: Boolean!
+}
+
+union PurchaseAddonCreditsResult = PurchaseAddonCreditsCheckoutOutput | PurchaseAddonCreditsOutput | UserFacingError
+
+"""
+The request contains a UTC timestamp of when the action occurred. The JSON data
+is an optional field representing any other data we might want to know about the
+action (e.g., what was the exit code of a workflow execution?)
+"""
+input RecordObjectActionInput {
+  action: ActionType!
+  jsonData: String
+  timestamp: Time!
+  uid: ID!
+}
+
+"""
+A successfully recorded action returns the full action history for that object.
+"""
+type RecordObjectActionOutput implements Response {
+  history: ObjectActionHistory!
+  responseContext: ResponseContext!
+}
+
+union RecordObjectActionResult = RecordObjectActionOutput | UserFacingError
+
+"""
+referrals.graphqls defines types and queries related to our referrals process.
+Note that we use the term "referrals" here and in our code, but the relevant db table is called "invites".
+"""
+type ReferralInfo {
+  isReferred: Boolean!
+  numberClaimed: Int!
+  referralCode: String!
+}
+
+input RemoveObjectGuestInput {
+  email: String
+  objectUid: ID!
+  teamUid: ID
+}
+
+type RemoveObjectGuestOutput implements Response {
+  objectPermissions: ObjectPermissions!
+  responseContext: ResponseContext!
+}
+
+union RemoveObjectGuestResult = RemoveObjectGuestOutput | UserFacingError
+
+input RemoveObjectLinkPermissionsInput {
+  uid: ID!
+}
+
+type RemoveObjectLinkPermissionsOutput implements Response {
+  responseContext: ResponseContext!
+  success: Boolean!
+}
+
+union RemoveObjectLinkPermissionsResult = RemoveObjectLinkPermissionsOutput | UserFacingError
+
+input RemoveUserFromTeamInput {
+  entrypoint: CloudObjectEventEntrypoint!
+  teamUid: ID!
+  userUid: ID!
+}
+
+type RemoveUserFromTeamOutput implements Response {
+  responseContext: ResponseContext!
+  success: Boolean!
+}
+
+union RemoveUserFromTeamResult = RemoveUserFromTeamOutput | UserFacingError
+input RemoveUserFromWorkspaceInput {
+  entrypoint: CloudObjectEventEntrypoint!
+  userUid: ID!
+  workspaceUid: ID!
+}
+
+type RemoveUserFromWorkspaceOutput implements Response {
+  responseContext: ResponseContext!
+  success: Boolean!
+}
+
+union RemoveUserFromWorkspaceResult = RemoveUserFromWorkspaceOutput | UserFacingError
+
+input RenameTeamInput {
+  newName: String!
+  teamUid: ID!
+}
+
+type RenameTeamOutput implements Response {
+  responseContext: ResponseContext!
+  success: Boolean!
+}
+
+union RenameTeamResult = RenameTeamOutput | UserFacingError
+
+input RepoInput {
+  owner: String!
+  repo: String!
+}
+
+input RepoMetadata {
+  """Local path to the repository."""
+  path: String
+}
+
+type RepoResult {
+  isPublic: Boolean!
+  owner: String!
+  repo: String!
+  status: UserRepoAuthStatus!
+}
+
+input ReportHarnessTransportInput {
+  """Why the harness fell back to a PTY. Omitted when no fallback happened."""
+  fallbackReason: HarnessTransportFallbackReason
+
+  """The transport the harness is driven over."""
+  transport: HarnessTransport!
+}
+
+type ReportHarnessTransportOutput implements Response {
+  responseContext: ResponseContext!
+}
+
+union ReportHarnessTransportResult = ReportHarnessTransportOutput | UserFacingError
+
+input RequestContext {
+  clientContext: ClientContext!
+  osContext: OSContext!
+}
+
+type RequestLimitInfo {
+  acceptedAutosuggestionsLimit: Int! @deprecated(reason: "No longer tracked. Always returns 0.")
+  acceptedAutosuggestionsSinceLastRefresh: Int! @deprecated(reason: "No longer tracked. Always returns 0.")
+  embeddingGenerationBatchSize: Int!
+
+  """
+  The dollar value of requestLimit, in cents. Null for a subject billed in credits
+  rather than dollars, and when usage is unlimited.
+  """
+  includedUsageCents: Float
+  isUnlimited: Boolean!
+  isUnlimitedAutosuggestions: Boolean!
+  isUnlimitedCodebaseIndices: Boolean!
+  isUnlimitedSuggestedCodeDiffs: Boolean!
+  isUnlimitedVoice: Boolean!
+  maxCodebaseIndices: Int!
+  maxFilesPerRepo: Int!
+  nextRefreshTime: Time!
+  requestLimit: Int!
+  requestLimitPooling: PoolingType! @deprecated(reason: "Only user pooling is available")
+  requestLimitRefreshDuration: RequestLimitRefreshDuration!
+  requestsUsedSinceLastRefresh: Int!
+  suggestedCodeDiffsLimit: Int!
+  suggestedCodeDiffsSurfacedSinceLastRefresh: Int!
+
+  """
+  The dollar value of requestsUsedSinceLastRefresh, in cents. Null for a subject billed
+  in credits rather than dollars, and when usage is unlimited.
+  """
+  usageCentsUsedSinceLastRefresh: Float
+  voiceRequestLimit: Int!
+  voiceRequestsUsedSinceLastRefresh: Int!
+  voiceTokenLimit: Int!
+  voiceTokensUsedSinceLastRefresh: Int! @deprecated(reason: "No longer tracked. Always returns 0.")
+}
+
+enum RequestLimitRefreshDuration {
+  EVERY_TWO_WEEKS
+  MONTHLY
+  WEEKLY
+}
+
+type RequestsRefundedOutput implements Response {
+  requestsRefunded: Int!
+  responseContext: ResponseContext!
+}
+
+union RequestsRefundedResult = RequestsRefundedOutput | UserFacingError
+
+type RerankFragment {
+  content: String!
+  contentHash: ContentHash!
+  location: FragmentLocation!
+}
+
+input RerankFragmentInput {
+  content: String!
+  contentHash: ContentHash!
+  location: FragmentLocationInput!
+}
+
+type RerankFragmentsError {
+  error: String!
+}
+
+input RerankFragmentsInput {
+  fragments: [RerankFragmentInput!]!
+  query: String!
+}
+
+type RerankFragmentsOutput implements Response {
+  rankedFragments: [RerankFragment!]!
+  responseContext: ResponseContext!
+}
+
+union RerankFragmentsResult = RerankFragmentsError | RerankFragmentsOutput | UserFacingError
+
+input ResetInviteLinksInput {
+  teamUid: ID!
+}
+
+type ResetInviteLinksOutput implements Response {
+  responseContext: ResponseContext!
+  success: Boolean!
+}
+
+union ResetInviteLinksResult = ResetInviteLinksOutput | UserFacingError
+type TuiOnboardingMarkersOutput implements Response {
+  firstZeroStateShown: Boolean!
+  firstCreditGateShown: Boolean!
+  responseContext: ResponseContext!
+}
+
+union TuiOnboardingMarkersResult = TuiOnboardingMarkersOutput | UserFacingError
+
+interface Response {
+  responseContext: ResponseContext!
+}
+
+type ResponseContext {
+  serverVersion: String
+}
+
+"""Role question response input"""
+input RoleQuestionResponseInput {
+  answer: RoleSurveyResponse!
+}
+
+"""Role options for onboarding survey responses"""
+enum RoleSurveyResponse {
+  BACKEND_ENGINEER
+  BUSINESS_ANALYST
+  DATA
+  DEVOPS_SRE
+  ENGINEERING_MANAGER
+  FRONTEND_ENGINEER
+  FULLSTACK_ENGINEER
+  MARKETER
+  MOBILE_ENGINEER
+  OTHER
+  PRODUCT_DESIGNER
+  PRODUCT_MANAGER
+  SALES_BUSINESS_DEV
+  STUDENT
+}
+
+type RunnerInstanceShape {
+  vcpus: Int!
+  memoryGb: Int!
+}
+
+"""Target operating system for a runner sandbox."""
+enum RunnerOS {
+  LINUX
+  MACOS
+  WINDOWS
+}
+
+"""Target CPU architecture for a runner sandbox."""
+enum RunnerArch {
+  X86_64
+  AARCH64
+}
+
+"""macOS version to use for a sandbox."""
+enum RunnerMacOSVersion {
+  MACOS_14
+  MACOS_15
+  MACOS_26
+  MACOS_27
+}
+
+"""macOS-specific configuration for a cloud agent sandbox."""
+type MacOSConfig {
+  version: RunnerMacOSVersion
+}
+
+"""Linux-specific configuration for a cloud agent sandbox."""
+type LinuxConfig {
+  dockerImage: String!
+}
+
+type RunnerConfig {
+  name: String!
+  description: String
+  setupCommands: [String!]
+  instanceShape: RunnerInstanceShape
+  os: RunnerOS!
+  arch: RunnerArch!
+  mac: MacOSConfig
+  linux: LinuxConfig
+}
+
+type Runner {
+  uid: ID!
+  config: RunnerConfig!
+  lastUpdated: Time!
+  scope: Space!
+  creator: PublicUserProfile
+  lastEditor: PublicUserProfile
+}
+
+enum RunnerSortBy {
+  NAME
+  LAST_UPDATED
+}
+
+type GetRunnersOutput implements Response {
+  runners: [Runner!]!
+  responseContext: ResponseContext!
+}
+
+union GetRunnersResult = GetRunnersOutput | UserFacingError
+
+input RunnerInstanceShapeInput {
+  vcpus: Int!
+  memoryGb: Int!
+}
+
+"""macOS-specific runner configuration."""
+input MacOSConfigInput {
+  version: RunnerMacOSVersion
+}
+
+"""Linux-specific runner configuration."""
+input LinuxConfigInput {
+  dockerImage: String!
+}
+
+input RunnerInput {
+  name: String!
+  description: String
+  setupCommands: [String!]
+  instanceShape: RunnerInstanceShapeInput
+  os: RunnerOS
+  arch: RunnerArch
+  mac: MacOSConfigInput
+  linux: LinuxConfigInput
+}
+
+input UpsertRunnerInput {
+  uid: ID
+  owner: Owner
+  runner: RunnerInput!
+}
+
+type UpsertRunnerOutput implements Response {
+  runner: Runner!
+  isUpdate: Boolean!
+  responseContext: ResponseContext!
+}
+
+union UpsertRunnerResult = UpsertRunnerOutput | UserFacingError
+
+input DeleteRunnerInput {
+  uid: ID!
+}
+
+type DeleteRunnerOutput implements Response {
+  success: Boolean!
+  deletedUid: ID!
+  responseContext: ResponseContext!
+}
+
+union DeleteRunnerResult = DeleteRunnerOutput | UserFacingError
+
+type RootMutation {
+  addInviteLinkDomainRestriction(input: AddInviteLinkDomainRestrictionInput!, requestContext: RequestContext!): AddInviteLinkDomainRestrictionResult!
+  addObjectGuests(input: AddObjectGuestsInput!, requestContext: RequestContext!): AddObjectGuestsResult!
+  bulkCreateObjects(input: BulkCreateObjectsInput!, requestContext: RequestContext!): BulkCreateObjectsResult!
+  confirmFileArtifactUpload(input: ConfirmFileArtifactUploadInput!, requestContext: RequestContext!): ConfirmFileArtifactUploadResult!
+
+  """
+  Creates a new agent task with the given parameters.
+  Used by local CLI runs to create tasks before execution.
+  """
+  createAgentTask(input: CreateAgentTaskInput!, requestContext: RequestContext!): CreateAgentTaskResult!
+  createAnonymousUser(input: CreateAnonymousUserInput!, requestContext: RequestContext!): CreateAnonymousUserResult!
+  createFileArtifactUploadTarget(input: CreateFileArtifactUploadTargetInput!, requestContext: RequestContext!): CreateFileArtifactUploadTargetResult!
+  createFolder(input: CreateFolderInput!, requestContext: RequestContext!): CreateFolderResult!
+  createGenericStringObject(input: CreateGenericStringObjectInput!, requestContext: RequestContext!): CreateGenericStringObjectResult!
+  createManagedMcpClientConfig(input: CreateManagedMcpClientConfigInput!, requestContext: RequestContext!): CreateManagedMcpClientConfigResult!
+  createManagedSecret(input: CreateManagedSecretInput!, requestContext: RequestContext!): CreateManagedSecretResult!
+  createNotebook(input: CreateNotebookInput!, requestContext: RequestContext!): CreateNotebookResult!
+  createSimpleIntegration(input: CreateSimpleIntegrationInput!, requestContext: RequestContext!): CreateSimpleIntegrationResult!
+  createTeam(input: CreateTeamInput!, requestContext: RequestContext!): CreateTeamResult!
+  createWorkflow(input: CreateWorkflowInput!, requestContext: RequestContext!): CreateWorkflowResult!
+  deleteConversation(input: DeleteConversationInput!, requestContext: RequestContext!): DeleteConversationResult!
+  deleteRunner(input: DeleteRunnerInput!, requestContext: RequestContext!): DeleteRunnerResult!
+  deleteInviteLinkDomainRestriction(input: DeleteInviteLinkDomainRestrictionInput!, requestContext: RequestContext!): DeleteInviteLinkDomainRestrictionResult!
+  deleteManagedSecret(input: DeleteManagedSecretInput!, requestContext: RequestContext!): DeleteManagedSecretResult!
+  deleteObject(input: DeleteObjectInput!, requestContext: RequestContext!): DeleteObjectResult!
+  deleteTeamInvite(input: DeleteTeamInviteInput!, requestContext: RequestContext!): DeleteTeamInviteResult!
+  disconnectChatGPT(requestContext: RequestContext!): DisconnectChatGPTResult!
+  emptyTrash(input: EmptyTrashInput!, requestContext: RequestContext!): EmptyTrashResult!
+  expireApiKey(input: ExpireApiKeyInput!, requestContext: RequestContext!): ExpireApiKeyResult!
+  generateApiKey(input: GenerateApiKeyInput!, requestContext: RequestContext!): GenerateApiKeyResult!
+
+  """Generates source code embeddings for the given set of code fragments."""
+  generateCodeEmbeddings(input: GenerateCodeEmbeddingsInput!, requestContext: RequestContext!): GenerateCodeEmbeddingsResult!
+  generateCommands(input: GenerateCommandsInput!, requestContext: RequestContext!): GenerateCommandsResult!
+  generateDialogue(input: GenerateDialogueInput!, requestContext: RequestContext!): GenerateDialogueResult!
+  generateMetadataForCommand(input: GenerateMetadataForCommandInput!, requestContext: RequestContext!): GenerateMetadataForCommandResult!
+  generateUniqueUpgradePromoCode(requestContext: RequestContext!): GenerateUniqueUpgradePromoCodeResult!
+  giveUpNotebookEditAccess(input: UpdateNotebookEditAccessInput!, requestContext: RequestContext!): UpdateNotebookEditAccessResult!
+  grabNotebookEditAccess(input: UpdateNotebookEditAccessInput!, requestContext: RequestContext!): UpdateNotebookEditAccessResult!
+  issueTaskIdentityToken(input: IssueTaskIdentityTokenInput!, requestContext: RequestContext!): IssueTaskIdentityTokenResult!
+  joinTeamInWorkspace(input: JoinTeamInWorkspaceInput!, requestContext: RequestContext!): JoinTeamInWorkspaceResult!
+  joinTeamWithTeamDiscovery(input: JoinTeamWithTeamDiscoveryInput!, requestContext: RequestContext!): JoinTeamWithTeamDiscoveryResult!
+  joinWorkspaceFromDiscovery(input: JoinWorkspaceFromDiscoveryInput!, requestContext: RequestContext!): JoinWorkspaceFromDiscoveryResult!
+
+  """The API for leaving an object as a direct guest or link-shared."""
+  leaveObject(input: LeaveObjectInput!, requestContext: RequestContext!): LeaveObjectResult!
+  mintCustomToken(requestContext: RequestContext!): MintCustomTokenResult!
+  moveObject(input: MoveObjectInput!, requestContext: RequestContext!): MoveObjectResult!
+  populateMerkleTreeCache(input: PopulateMerkleTreeCacheInput!, requestContext: RequestContext!): PopulateMerkleTreeCacheResult!
+  prewarmedSandboxConfig(input: PrewarmedSandboxConfigInput!, requestContext: RequestContext!): PrewarmedSandboxConfigResult!
+  provideNegativeFeedbackResponseForAiConversation(input: ProvideNegativeFeedbackResponseForAiConversationInput!, requestContext: RequestContext!): RequestsRefundedResult!
+  purchaseAddonCredits(input: PurchaseAddonCreditsInput!, requestContext: RequestContext!): PurchaseAddonCreditsResult!
+
+  """
+  The generic API for recording an action (EXECUTED, OPENED, etc.) on some object.
+  """
+  recordObjectAction(input: RecordObjectActionInput!, requestContext: RequestContext!): RecordObjectActionResult!
+  removeObjectGuest(input: RemoveObjectGuestInput!, requestContext: RequestContext!): RemoveObjectGuestResult!
+  removeObjectLinkPermissions(input: RemoveObjectLinkPermissionsInput!, requestContext: RequestContext!): RemoveObjectLinkPermissionsResult!
+
+  """
+  `removeUserFromTeam` is the only mutation that should be used to remove a user from a team
+  in v2. Usage of the `leaveTeam` mutation in v1 will eventually be removed.
+  """
+  removeUserFromTeam(input: RemoveUserFromTeamInput!, requestContext: RequestContext!): RemoveUserFromTeamResult!
+  removeUserFromWorkspace(input: RemoveUserFromWorkspaceInput!, requestContext: RequestContext!): RemoveUserFromWorkspaceResult!
+  renameTeam(input: RenameTeamInput!, requestContext: RequestContext!): RenameTeamResult!
+
+  """
+  Reports the transport the agent process drives the run's third-party harness over.
+  The agent sends it at harness start, after deciding whether it can honour the ACP
+  transport the run was dispatched with or must fall back to a terminal, so the platform
+  delivers follow-ups the way the harness can receive them. It retries transient failures;
+  a report that matches the recorded transport is a no-op.
+  
+  This may only be called from within a cloud agent execution environment, with the
+  current execution's credentials.
+  """
+  reportHarnessTransport(input: ReportHarnessTransportInput!, requestContext: RequestContext!): ReportHarnessTransportResult!
+  resetInviteLinks(input: ResetInviteLinksInput!, requestContext: RequestContext!): ResetInviteLinksResult!
+  sendOnboardingSurveyResponses(input: SendOnboardingSurveyResponsesInput!, requestContext: RequestContext!): SendOnboardingSurveyResponsesResult!
+  sendReferralInviteEmails(input: SendReferralInviteEmailsInput!, requestContext: RequestContext!): SendReferralInviteEmailsResult!
+  sendTeamInviteEmail(input: SendTeamInviteEmailInput!, requestContext: RequestContext!): SendTeamInviteEmailResult!
+  setIsInviteLinkEnabled(input: SetIsInviteLinkEnabledInput!, requestContext: RequestContext!): SetIsInviteLinkEnabledResult!
+  setObjectLinkPermissions(input: SetObjectLinkPermissionsInput!, requestContext: RequestContext!): SetObjectLinkPermissionsResult!
+  setTeamDiscoverability(input: SetTeamDiscoverabilityInput!, requestContext: RequestContext!): SetTeamDiscoverabilityResult!
+  setTeamMemberRole(input: SetTeamMemberRoleInput!, requestContext: RequestContext!): SetTeamMemberRoleResult!
+  setUserIsOnboarded(requestContext: RequestContext!): SetUserIsOnboardedResult!
+  shareBlock(input: ShareBlockInput!, requestContext: RequestContext!): ShareBlockResult!
+  startChatGPTLink(requestContext: RequestContext!, continueUrl: String!): StartChatGPTLinkResult!
+  stripeBillingPortal(input: StripeBillingPortalInput!, requestContext: RequestContext!): StripeBillingPortalResult!
+  transferGenericStringObjectOwner(input: TransferGenericStringObjectOwnerInput!, requestContext: RequestContext!): TransferGenericStringObjectOwnerResult!
+  transferNotebookOwner(input: TransferNotebookOwnerInput!, requestContext: RequestContext!): TransferNotebookOwnerResult!
+  transferTeamOwnership(input: TransferTeamOwnershipInput!, requestContext: RequestContext!): TransferTeamOwnershipResult! @deprecated(reason: "Use setTeamMemberRole instead")
+  transferWorkflowOwner(input: TransferWorkflowOwnerInput!, requestContext: RequestContext!): TransferWorkflowOwnerResult!
+  trashObject(input: TrashObjectInput!, requestContext: RequestContext!): TrashObjectResult!
+  unshareBlock(input: UnshareBlockInput!, requestContext: RequestContext!): UnshareBlockResult!
+  untrashObject(input: UntrashObjectInput!, requestContext: RequestContext!): UntrashObjectResult!
+
+  """This is how the client updates the server with its progress on a task."""
+  updateAgentTask(input: UpdateAgentTaskInput!, requestContext: RequestContext!): UpdateAgentTaskResult!
+  updateFolder(input: UpdateFolderInput!, requestContext: RequestContext!): UpdateFolderResult!
+  updateGenericStringObject(input: UpdateGenericStringObjectInput!, requestContext: RequestContext!): UpdateGenericStringObjectResult!
+  updateManagedSecret(input: UpdateManagedSecretInput!, requestContext: RequestContext!): UpdateManagedSecretResult!
+  updateMerkleTree(input: UpdateMerkleTreeInput!, requestContext: RequestContext!): UpdateMerkleTreeResult!
+  updateNotebook(input: UpdateNotebookInput!, requestContext: RequestContext!): UpdateNotebookResult!
+  updateObjectGuests(input: UpdateObjectGuestsInput!, requestContext: RequestContext!): UpdateObjectGuestsResult!
+  updateOnboardingSurveyStatus(input: UpdateOnboardingSurveyStatusInput!, requestContext: RequestContext!): UpdateOnboardingSurveyStatusResult!
+  updateUserSettings(input: UpdateUserSettingsInput!, requestContext: RequestContext!): UpdateUserSettingsResult!
+  updateWorkflow(input: UpdateWorkflowInput!, requestContext: RequestContext!): UpdateWorkflowResult!
+
+  """This is the public API for updating workspace settings."""
+  updateWorkspaceSettings(input: UpdateWorkspaceSettingsInput!, requestContext: RequestContext!): UpdateWorkspaceSettingsResult!
+  upsertRunner(input: UpsertRunnerInput!, requestContext: RequestContext!): UpsertRunnerResult!
+}
+
+type RootQuery {
+  apiKeys(requestContext: RequestContext!): APIKeyPropertiesResult!
+  cloudObject(input: CloudObjectInput!, requestContext: RequestContext!): CloudObjectResult!
+  codebaseContextConfig(requestContext: RequestContext!): CodebaseContextConfigResult!
+
+  """
+  Returns the model choices available on the free tier without requiring
+  authentication. Used during pre-login onboarding.
+  """
+  freeAvailableModels(input: FreeAvailableModelsInput!, requestContext: RequestContext!): FreeAvailableModelsResult!
+
+  """
+  Get cloud environments accessible to the principal.
+  Defaults to LAST_UPDATED sorting if not specified.
+  """
+  getCloudEnvironments(requestContext: RequestContext!, sortBy: CloudEnvironmentSortBy): GetCloudEnvironmentsResult!
+  getIntegrationsUsingEnvironment(input: GetIntegrationsUsingEnvironmentInput!, requestContext: RequestContext!): GetIntegrationsUsingEnvironmentResult!
+  getOAuthConnectTxStatus(input: GetOAuthConnectTxStatusInput!, requestContext: RequestContext!): GetOAuthConnectTxStatusResult!
+  getRelevantFragments(input: GetRelevantFragmentsInput!, requestContext: RequestContext!): GetRelevantFragmentsResult!
+
+  """
+  Get runners accessible to the principal.
+  Defaults to LAST_UPDATED sorting if not specified.
+  """
+  getRunners(requestContext: RequestContext!, sortBy: RunnerSortBy): GetRunnersResult!
+
+  """
+  Retrieve managed secrets that serve as authentication credentials for the given harness,
+  scoped to the caller's personal drive and team drives.
+  """
+  harnessAuthSecrets(input: ListHarnessAuthSecretsInput!, requestContext: RequestContext!): HarnessAuthSecretsResult!
+  listAIConversations(input: ListAIConversationsInput!, requestContext: RequestContext!): ListAIConversationsResult!
+
+  """
+  List available Warp development base images from Docker Hub.
+  Returns all images with the 'dev-' prefix from the warpdotdev organization.
+  """
+  listWarpDevImages: ListWarpDevImagesResult!
+  managedSecrets(input: ManagedSecretsInput!, requestContext: RequestContext!): ManagedSecretsResult!
+  pricingInfo(requestContext: RequestContext!): PricingInfoResult!
+  rerankFragments(input: RerankFragmentsInput!, requestContext: RequestContext!): RerankFragmentsResult!
+
+  """Retrieve execution history for a scheduled agent."""
+  scheduledAgentHistory(input: ScheduledAgentHistoryInput!, requestContext: RequestContext!): ScheduledAgentHistoryResult!
+
+  """
+  Authorizes a REMOTE-2661 debug agent prompt against a retained environment-setup-failure
+  session. Requires a workload token scoped to the run, so only the sandbox itself (not an
+  arbitrary caller) can invoke it.
+  """
+  setupFailureDebugAuthorization(input: SetupFailureDebugAuthorizationInput!, requestContext: RequestContext!): SetupFailureDebugAuthorizationResult!
+  simpleIntegrations(input: SimpleIntegrationsInput!, requestContext: RequestContext!): SimpleIntegrationsResult!
+  suggestCloudEnvironmentImage(input: SuggestCloudEnvironmentImageInput!, requestContext: RequestContext!): SuggestCloudEnvironmentImageResult!
+
+  """
+  Syncs the client merkle tree with the server merkle tree, returning the nodes that have changed.
+  """
+  syncMerkleTree(input: SyncMerkleTreeInput!, requestContext: RequestContext!): SyncMerkleTreeResult!
+
+  """
+  Fetch attachments for a task.
+  Requires the caller to have ViewAction permission on the task.
+  
+  Note: This query returns a Task object to allow future extension.
+  In the future, this may be merged with taskSecrets into a single task query.
+  """
+  task(input: TaskInput!, requestContext: RequestContext!): TaskResult!
+  taskGitCredentials(input: TaskGitCredentialsInput!, requestContext: RequestContext!): TaskGitCredentialsResult!
+  taskSecrets(input: TaskSecretsInput!, requestContext: RequestContext!): TaskSecretsResult!
+  tuiOnboardingMarkers(requestContext: RequestContext!): TuiOnboardingMarkersResult!
+  updatedCloudObjects(input: UpdatedCloudObjectsInput!, requestContext: RequestContext!): UpdatedCloudObjectsResult!
+  user(requestContext: RequestContext!): UserResult!
+  userGithubInfo(requestContext: RequestContext!): UserGithubInfoResult!
+  userRepoAuthStatus(input: UserRepoAuthStatusInput!, requestContext: RequestContext!): UserRepoAuthStatusResult!
+}
+
+type RootSubscription {
+  """Equivalent to GetCloudObjectUpdates in v1."""
+  warpDriveUpdates: WarpDriveUpdate!
+}
+
+type RoutingHostConfig {
+  enabled: Boolean!
+  modelRoutingHost: LlmModelHost!
+}
+
+type SandboxedAgentSettings {
+  executeCommandsDenylist: [String!]
+}
+
+input SandboxedAgentSettingsInput {
+  executeCommandsDenylist: [String!]
+}
+
+"""Scheduled agent execution history information."""
+type ScheduledAgentHistory {
+  """The last time the scheduled task ran. Null if it has never run."""
+  lastRan: Time
+
+  """The next time the scheduled task will run. Null if not scheduled."""
+  nextRun: Time
+}
+
+input ScheduledAgentHistoryInput {
+  scheduleId: ID!
+}
+
+type ScheduledAgentHistoryOutput implements Response {
+  history: ScheduledAgentHistory!
+  responseContext: ResponseContext!
+}
+
+union ScheduledAgentHistoryResult = ScheduledAgentHistoryOutput | UserFacingError
+
+type ScreenshotArtifact {
+  artifactUid: ID!
+  description: String
+  mimeType: String!
+}
+
+"""
+Error type for when a plan change would put the team over the target tier's seat cap.
+"""
+type SeatCapExceededError implements UserFacingErrorInterface {
+  message: String!
+}
+
+type SecretRedactionRegex {
+  name: String
+  pattern: String!
+}
+
+input SecretRedactionRegexInput {
+  name: String
+  pattern: String!
+}
+
+type SecretRedactionSettings {
+  enabled: Boolean!
+  regexList: [String!]! @deprecated(reason: "Use regexes field instead")
+  regexes: [SecretRedactionRegex!]!
+}
+
+input SecretRedactionSettingsInput {
+  enabled: Boolean
+  regexes: [SecretRedactionRegexInput!]
+}
+
+input SecretRefInput {
+  """The managed secret name to include."""
+  name: String!
+}
+
+type SecretRefOutput {
+  name: String!
+}
+
+input SendOnboardingSurveyResponsesInput {
+  responses: [OnboardingSurveyResponse!]!
+}
+
+type SendOnboardingSurveyResponsesOutput implements Response {
+  responseContext: ResponseContext!
+  success: Boolean!
+}
+
+union SendOnboardingSurveyResponsesResult = SendOnboardingSurveyResponsesOutput | UserFacingError
+
+"""sendReferralInviteEmails is equivalent to sendInvite in v1."""
+input SendReferralInviteEmailsInput {
+  emails: [String!]!
+}
+
+type SendReferralInviteEmailsOutput implements Response {
+  responseContext: ResponseContext!
+  successfulEmails: [String!]!
+}
+
+union SendReferralInviteEmailsResult = SendReferralInviteEmailsOutput | UserFacingError
+
+input SendTeamInviteEmailInput {
+  email: String!
+  teamUid: ID!
+}
+
+type SendTeamInviteEmailOutput implements Response {
+  responseContext: ResponseContext!
+  success: Boolean!
+}
+
+union SendTeamInviteEmailResult = SendTeamInviteEmailOutput | UserFacingError
+
+enum SerializedBlockFormat {
+  JSON_V1
+}
+
+type ServiceAgreement {
+  addonCreditAutoReloadStatus: AddonCreditAutoReloadStatus
+  currentPeriodEnd: Time!
+  status: ServiceAgreementStatus!
+  stripeSubscriptionId: String
+  sunsettedToBuildTs: Time
+  type: ServiceAgreementType!
+}
+
+enum ServiceAgreementStatus {
+  ACTIVE
+  CANCELED
+  PAST_DUE
+  UNPAID
+}
+
+enum ServiceAgreementType {
+  BUSINESS
+  ENTERPRISE
+  LEGACY
+  LIGHTSPEED
+  PROSUMER
+  PRO_TRIAL @deprecated(reason: "PRO_TRIAL is no longer active")
+  SELF_SERVE
+  TEAM_TRIAL @deprecated(reason: "TEAM_TRIAL is no longer active")
+  TURBO
+}
+
+type SessionSharingPolicy {
+  enabled: Boolean!
+  isUnlimited: Boolean!
+  limit: Int!
+  maxConcurrentViewers: Int!
+  maxSessionBytesSize: Int!
+}
+
+input SetIsInviteLinkEnabledInput {
+  newValue: Boolean!
+  teamUid: ID!
+}
+
+type SetIsInviteLinkEnabledOutput implements Response {
+  responseContext: ResponseContext!
+  success: Boolean!
+}
+
+union SetIsInviteLinkEnabledResult = SetIsInviteLinkEnabledOutput | UserFacingError
+
+input SetObjectLinkPermissionsInput {
+  accessLevel: AccessLevel!
+  uid: ID!
+}
+
+type SetObjectLinkPermissionsOutput implements Response {
+  responseContext: ResponseContext!
+  success: Boolean!
+}
+
+union SetObjectLinkPermissionsResult = SetObjectLinkPermissionsOutput | UserFacingError
+
+input SetTeamDiscoverabilityInput {
+  discoverable: Boolean!
+  teamUid: ID!
+}
+
+type SetTeamDiscoverabilityOutput implements Response {
+  responseContext: ResponseContext!
+  success: Boolean!
+}
+
+union SetTeamDiscoverabilityResult = SetTeamDiscoverabilityOutput | UserFacingError
+
+input SetTeamMemberRoleInput {
+  role: MembershipRole!
+  teamUid: ID!
+  userUid: ID!
+}
+
+type SetTeamMemberRoleOutput implements Response {
+  responseContext: ResponseContext!
+  success: Boolean!
+}
+
+union SetTeamMemberRoleResult = SetTeamMemberRoleOutput | UserFacingError
+
+"""
+Authorizes a REMOTE-2661 debug agent prompt against a retained environment-setup-failure
+session. Called by the sharer (the retained agent process) with its own workload token to
+verify a no-token prompt's originating participant before honoring it, since the sharer's
+local task-eligibility view cannot authenticate who is actually asking.
+"""
+input SetupFailureDebugAuthorizationInput {
+  participantFirebaseUid: String!
+  taskId: ID!
+  workloadToken: String!
+}
+
+type SetupFailureDebugAuthorizationOutput implements Response {
+  authorized: Boolean!
+  responseContext: ResponseContext!
+}
+
+union SetupFailureDebugAuthorizationResult = SetupFailureDebugAuthorizationOutput | UserFacingError
+
+type SetUserIsOnboardedOutput implements Response {
+  responseContext: ResponseContext!
+}
+
+union SetUserIsOnboardedResult = SetUserIsOnboardedOutput | UserFacingError
+
+input ShareBlockInput {
+  block: BlockInput!
+}
+
+type ShareBlockOutput implements Response {
+  responseContext: ResponseContext!
+  urlEnding: String!
+}
+
+union ShareBlockResult = ShareBlockOutput | UserFacingError
+
+type SharedNotebooksPolicy {
+  isUnlimited: Boolean!
+  limit: Int!
+}
+
+"""
+Error type for when a user tries to create a shared object but has hit their billing limit
+"""
+type SharedObjectsLimitExceeded implements UserFacingErrorInterface {
+  limit: Int!
+  message: String!
+  objectType: ObjectType!
+}
+
+type SharedWorkflowsPolicy {
+  isUnlimited: Boolean!
+  limit: Int!
+}
+
+type SimpleIntegration {
+  agentUid: ID
+  connectionLink: String!
+  connectionStatus: SimpleIntegrationConnectionStatus!
+  createdAt: Time
+  description: String!
+  integrationConfig: ListedSimpleIntegrationConfig
+  providerSlug: String!
+  updatedAt: Time
+}
+
+input SimpleIntegrationConfig {
+  basePrompt: String
+  computerUseEnabled: Boolean
+  environmentUid: String
+  harness: HarnessInput
+  harnessAuthSecrets: HarnessAuthSecretsInput
+  mcpServersJson: String
+  modelId: String
+  removeMcpServerNames: [String!]
+  secrets: [SecretRefInput!]
+  workerHost: String
+}
+
+enum SimpleIntegrationConnectionStatus {
+  ACTIVE
+  CONNECTION_ERROR
+  INTEGRATION_NOT_CONFIGURED
+  NOT_CONNECTED
+  NOT_ENABLED
+}
+
+input SimpleIntegrationsInput {
+  providers: [String!]!
+}
+
+type SimpleIntegrationsOutput implements Response {
+  integrations: [SimpleIntegration!]!
+  message: String
+  responseContext: ResponseContext!
+}
+
+union SimpleIntegrationsResult = SimpleIntegrationsOutput | UserFacingError
+
+"""A return type for a SINGLE action and when it occurred."""
+type SingleAction {
+  actionType: ActionType!
+  processedAtTimestamp: Time!
+  timestamp: Time!
+}
+
+type SingleSignOnPolicy {
+  toggleable: Boolean!
+}
+
+type Space {
+  type: SpaceType!
+  uid: ID!
+}
+
+enum SpaceType {
+  Team
+  User
+}
+
+"""A literal string value."""
+type StaticUploadFieldValue {
+  value: String!
+}
+
+input StripeBillingPortalInput {
+  teamUid: ID!
+}
+
+type StripeBillingPortalOutput implements Response {
+  responseContext: ResponseContext!
+  url: String!
+}
+
+union StripeBillingPortalResult = StripeBillingPortalOutput | UserFacingError
+
+enum StripeSubscriptionPlan {
+  BUILD
+  BUILD_BUSINESS
+  BUILD_MAX
+  BUSINESS
+  LIGHTSPEED
+  PRO
+  TEAM
+  TURBO
+}
+
+type SuggestCloudEnvironmentImageAuthRequiredOutput implements Response {
+  authUrl: String!
+  responseContext: ResponseContext!
+  txId: ID!
+}
+
+input SuggestCloudEnvironmentImageInput {
+  repos: [RepoInput!]!
+}
+
+type SuggestCloudEnvironmentImageOutput implements Response {
+  detectedLanguages: [GithubReposLanguageStat!]!
+  image: String!
+  needsCustomImage: Boolean!
+  reason: String!
+  responseContext: ResponseContext!
+}
+
+union SuggestCloudEnvironmentImageResult = SuggestCloudEnvironmentImageAuthRequiredOutput | SuggestCloudEnvironmentImageOutput | UserFacingError
+
+"""Structured survey responses input with type-safe fields per question"""
+input SurveyResponsesInput {
+  ACQUISITION_CHANNEL: AcquisitionChannelQuestionResponseInput
+  ROLE: RoleQuestionResponseInput
+  USAGE_PLAN: UsagePlanQuestionResponseInput
+}
+
+type SyncMerkleTreeError {
+  error: String!
+}
+
+input SyncMerkleTreeInput {
+  embeddingConfig: EmbeddingConfig!
+  hashedNodes: [NodeHash!]!
+}
+
+type SyncMerkleTreeOutput implements Response {
+  changedNodes: [NodeHash!]!
+  responseContext: ResponseContext!
+}
+
+union SyncMerkleTreeResult = SyncMerkleTreeError | SyncMerkleTreeOutput | UserFacingError
+
+"""
+Error type for when a user violates terms of service, typically flagged by fraud detection.
+"""
+type TOSViolationError implements UserFacingErrorInterface {
+  message: String!
+}
+
+"""
+Task object containing attachments.
+In the future, this can be extended with more fields (secrets, etc.) and 
+merged with other task queries into a single unified query.
+"""
+type Task {
+  """List of attachments (images/files) associated with this task."""
+  attachments: [TaskAttachment!]!
+  """
+  Configuration for the active cloud execution. Requires the execution's workload token.
+  """
+  executionConfig(executionId: ID!, supportsDeferredRepositories: Boolean = false): ExecutionConfiguration!
+
+  """The ID of the task."""
+  taskId: ID!
+}
+
+"""A task attachment (file or image) with presigned download URL."""
+type TaskAttachment {
+  """Presigned URL for downloading the attachment (valid for 15 minutes)."""
+  downloadUrl: String!
+
+  """
+  Unique identifier for this file (UUID from GCS).
+  Can be used to distinguish files with duplicate names.
+  """
+  fileId: ID!
+
+  """Original filename of the attachment."""
+  filename: String!
+
+  """MIME type of the attachment."""
+  mimeType: String!
+}
+
+"""A set of git credentials for a single hosting provider."""
+type TaskGitCredential {
+  expiresAt: Time
+  repositoryScope: String
+  """
+  The email address associated with the token, if available.
+  Null for service-account (installation) tokens.
+  """
+  email: String
+
+  """The git hosting provider (e.g. "github.com")."""
+  host: String!
+
+  """The OAuth or installation access token."""
+  token: String!
+
+  """
+  The GitHub username associated with the token, if available.
+  Null for service-account (installation) tokens.
+  """
+  username: String
+}
+
+"""Input for the taskGitCredentials query."""
+input TaskGitCredentialsInput {
+  githubCredentialContractVersion: Int
+  """
+  Refresh only these providers. Omitted or null refreshes all providers.
+  Requires acceptsPartialRefresh and a nonempty list.
+  """
+  providers: [TaskGitCredentialProvider!]
+  """
+  Whether the caller can handle a response in which one forge's credential is
+  fresh and another's failed. A caller that opts in must merge the fresh
+  credentials over its existing stores rather than rebuilding them from the
+  response, since a host absent from `credentials` may simply not have been
+  refreshed this cycle. Absent or false preserves the all-or-nothing
+  behavior, so a caller that rebuilds its stores wholesale never sees a
+  partial list.
+  """
+  acceptsPartialRefresh: Boolean
+  useFactoryRepositories: Boolean
+
+  """The ID of the task."""
+  taskId: ID!
+
+  """A short-lived token authorizing credential retrieval for the workload."""
+  workloadToken: String!
+}
+
+type TaskGitCredentialsOutput implements Response {
+  githubCredentialMode: GitHubCredentialMode!
+  """The credentials that were freshly issued this cycle, one per host."""
+  credentials: [TaskGitCredential!]!
+
+  """
+  Hosts whose credential could not be issued this cycle because of a
+  transient failure. A host listed here is distinct from one that is simply
+  absent from `credentials`: for a requested provider, absence means no
+  credential is available, while listed here means issuance failed.
+  Providers not requested must be left unchanged.
+
+  Only populated when the request set `acceptsPartialRefresh`; otherwise a
+  failure on any forge fails the whole request. An explicit providers list
+  preserves these failures even when no selected provider succeeds.
+  """
+  failedHosts: [String!]!
+  responseContext: ResponseContext!
+}
+
+union TaskGitCredentialsResult = TaskGitCredentialsOutput | UserFacingError
+
+"""Input for task-related queries."""
+input TaskInput {
+  """The ID of the task."""
+  taskId: ID!
+}
+
+type TaskOutput implements Response {
+  responseContext: ResponseContext!
+  task: Task!
+}
+
+union TaskResult = TaskOutput | UserFacingError
+
+type TaskSecretEntry {
+  name: String!
+  value: ManagedSecretValue!
+}
+
+"""Input for the taskSecrets query."""
+input TaskSecretsInput {
+  """The ID of the task."""
+  taskId: ID!
+
+  """A short-lived token authorizing secret retrieval for the workload."""
+  workloadToken: String!
+}
+
+type TaskSecretsOutput implements Response {
+  responseContext: ResponseContext!
+  secrets: [TaskSecretEntry!]!
+}
+
+union TaskSecretsResult = TaskSecretsOutput | UserFacingError
+
+"""
+The Team type is a sub-organizational unit within a workspace. Teams are used to
+group drive objects and users together.
+"""
+type Team {
+  """
+  adminUid is equivalent to creatorFirebaseUid in the v1 Team type.
+  creatorId in v1 Team type is deprecated and should not be used. Use adminUid instead.
+  """
+  adminUid: String! @deprecated(reason: "Use members.role to determine admin status")
+  """The team's brand color as a hex string (e.g. "#7c3aed"), if set."""
+  color: String
+
+  """
+  The email domain associated with the team, if one has been set by Warp staff.
+  Required for features that key off the team's domain (e.g. domain capture, SSO).
+  """
+  domain: String
+  featureModelChoice: FeatureModelChoice!
+
+  """
+  inviteLink is the server-owned invite-by-link URL for this team. It is null
+  only when invite links are disabled for this team (`is_invite_link_enabled`
+  is false). A caller who lacks visibility into the team does not get null:
+  the query raises a NotAuthorized error instead.
+  """
+  inviteLink: String
+  managedSecrets: ManagedSecretConfig
+  memberSpendLimits: [MemberSpendLimit!]
+  members: [TeamMember!]!
+  name: String!
+  """
+  The effective settings that apply to the team, combining the workspace layer
+  with the team's own configuration. Workspace-governable groups carry an
+  indicator for whether their value is enforced by the workspace layer.
+  """
+  settings: TeamSettings!
+  uid: ID!
+
+  """
+  Team visibility governs which workspace members can discover and join a team.
+  It is a new axis, orthogonal to workspace-level discoverability (is_discoverable).
+  Existing teams default to OPEN.
+  """
+  visibility: TeamVisibility!
+}
+
+enum TeamVisibility {
+  HIDDEN
+  OPEN
+  PRIVATE
+}
+
+"""
+The effective settings that apply to a team, combining the workspace layer with
+the team's own configuration. This is a curated client-side subset of the server
+`TeamSettings` type — it only defines the fields the Rust client selects.
+"""
+type TeamSettings {
+  ugcCollection: UgcCollectionSettingInfo!
+  cloudConversationStorage: AdminEnablementSettingInfo!
+  codebaseContext: AdminEnablementSettingInfo!
+  aiPermissions: AiPermissionsSettingsInfo!
+  secretRedaction: SecretRedactionSettingsInfo!
+  aiAutonomy: AiAutonomySettingsInfo!
+  linkSharing: LinkSharingSettingsInfo!
+  sandboxedAgent: SandboxedAgentSettingsInfo!
+  llmSettings: LlmSettings!
+  telemetrySettings: TelemetrySettings!
+  usageBasedPricingSettings: UsageBasedPricingSettings!
+  addonCreditsSettings: AddonCreditsSettings!
+  ambientAgentSettings: AmbientAgentSettings
+  teamByo: TeamByoSettings
+}
+
+type UgcCollectionSettingInfo {
+  value: UgcCollectionEnablementSetting!
+  isEnforcedByWorkspace: Boolean!
+}
+
+type AdminEnablementSettingInfo {
+  value: AdminEnablementSetting!
+  isEnforcedByWorkspace: Boolean!
+}
+
+type BooleanSettingInfo {
+  value: Boolean!
+  isEnforcedByWorkspace: Boolean!
+}
+
+type AiAutonomySettingInfo {
+  value: AiAutonomyValue!
+  isEnforcedByWorkspace: Boolean!
+}
+
+type WriteToPtySettingInfo {
+  value: WriteToPtyAutonomyValue!
+  isEnforcedByWorkspace: Boolean!
+}
+
+type ComputerUseSettingInfo {
+  value: ComputerUseAutonomyValue!
+  isEnforcedByWorkspace: Boolean!
+}
+
+type StringListSettingInfo {
+  values: [String!]!
+  workspaceEntries: [String!]!
+  teamEntries: [String!]!
+}
+
+type SecretRedactionRegexListInfo {
+  values: [SecretRedactionRegex!]!
+  workspaceEntries: [SecretRedactionRegex!]!
+  teamEntries: [SecretRedactionRegex!]!
+}
+
+type AiPermissionsSettingsInfo {
+  allowAiInRemoteSessions: BooleanSettingInfo!
+  remoteSessionRegexList: StringListSettingInfo!
+}
+
+type SecretRedactionSettingsInfo {
+  enabled: BooleanSettingInfo!
+  regexes: SecretRedactionRegexListInfo!
+}
+
+type AiAutonomySettingsInfo {
+  applyCodeDiffs: AiAutonomySettingInfo!
+  readFiles: AiAutonomySettingInfo!
+  createPlans: AiAutonomySettingInfo!
+  executeCommands: AiAutonomySettingInfo!
+  writeToPty: WriteToPtySettingInfo!
+  computerUse: ComputerUseSettingInfo!
+  readFilesAllowlist: StringListSettingInfo!
+  executeCommandsAllowlist: StringListSettingInfo!
+  executeCommandsDenylist: StringListSettingInfo!
+}
+
+type LinkSharingSettingsInfo {
+  anyoneWithLinkSharingEnabled: BooleanSettingInfo!
+  directLinkSharingEnabled: BooleanSettingInfo!
+}
+
+type SandboxedAgentSettingsInfo {
+  executeCommandsDenylist: StringListSettingInfo!
+}
+
+enum TeamDiscoveryEntrypoint {
+  TeamSettings
+  WebSignup
+}
+
+type TeamGuest {
+  uid: ID!
+}
+
+"""
+Helper user structure that limits the visibility of user fields so that certain endpoints
+cannot query for certain fields, etc.
+"""
+type TeamMember {
+  displayName: String
+  email: String!
+
+  """
+  Whether the member's Warp account has been disabled. A disabled member keeps
+  their team membership but cannot sign in or use Warp.
+  """
+  isDisabled: Boolean!
+  photoUrl: String
+  role: MembershipRole!
+  uid: ID!
+}
+
+type TeamMembershipsChanged {
+  teamMembershipsLastUpdatedTs: Time!
+}
+
+type TeamSizePolicy {
+  isUnlimited: Boolean!
+  limit: Int!
+}
+type TeamByoSettings {
+  allowUserEndpoints: Boolean!
+  allowUserKeys: Boolean!
+  endpoints: [ByoEndpointMetadata!]!
+  endpointsEnabled: Boolean!
+  firstPartyEnabled: Boolean!
+  firstPartyKeys: [ByoFirstPartyKey!]!
+}
+
+type TelemetryDataCollectionPolicy {
+  default: Boolean!
+  toggleable: Boolean!
+}
+
+type TelemetrySettings {
+  forceEnabled: Boolean!
+}
+
+input TelemetrySettingsInput {
+  enabled: AdminEnablementSetting
+}
+
+type Tier {
+  agentHarnessesPolicy: AgentHarnessesPolicy
+  agentIdentitiesPolicy: AgentIdentitiesPolicy
+  aiAutonomyPolicy: AiAutonomyPolicy
+  aiPermissionsPolicy: AiPermissionsPolicy
+  ambientAgentsPolicy: AmbientAgentsPolicy
+  anyoneWithLinkSharingPolicy: AnyoneWithLinkSharingPolicy
+  byoApiKeyPolicy: ByoApiKeyPolicy
+  byoEndpointPolicy: ByoEndpointPolicy
+  chargeUnit: ChargeUnit!
+  cloudConversationStoragePolicy: CloudConversationStoragePolicy
+  codebaseContextPolicy: CodebaseContextPolicy
+  customLlmPolicy: CustomLlmPolicy
+  description: String!
+  directApiUsOnlyInferencePolicy: DirectApiUsOnlyInferencePolicy
+  directLinkSharingPolicy: DirectLinkSharingPolicy
+  domainCapturePolicy: DomainCapturePolicy
+  enterpriseAnalyticsPolicy: EnterpriseAnalyticsPolicy
+  enterpriseCreditsAutoReloadPolicy: EnterpriseCreditsAutoReloadPolicy
+  enterprisePayAsYouGoPolicy: EnterprisePayAsYouGoPolicy
+  enterpriseSecretRedactionPolicy: EnterpriseSecretRedactionPolicy
+  enterpriseSpendingLimitsPolicy: EnterpriseSpendingLimitsPolicy
+  enterpriseUsageThresholdsPolicy: EnterpriseUsageThresholdsPolicy
+  managedByokByoePolicy: ManagedByokByoePolicy
+  multiAdminPolicy: MultiAdminPolicy
+  name: String!
+  nativeWorkspacesPolicy: NativeWorkspacesPolicy
+  pricing: TierPricing
+  purchaseAddOnCreditsPolicy: PurchaseAddOnCreditsPolicy
+  sessionSharingPolicy: SessionSharingPolicy
+  sharedNotebooksPolicy: SharedNotebooksPolicy
+  sharedWorkflowsPolicy: SharedWorkflowsPolicy
+  singleSignOnPolicy: SingleSignOnPolicy
+  teamSizePolicy: TeamSizePolicy
+  telemetryDataCollectionPolicy: TelemetryDataCollectionPolicy
+  ugcDataCollectionPolicy: UgcDataCollectionPolicy
+  usageBasedPricingPolicy: UsageBasedPricingPolicy
+  usageVisibilityPolicy: UsageVisibilityPolicy
+  warpAiPolicy: WarpAiPolicy
+  warpBasicPolicy: WarpBasicPolicy
+}
+
+type TierPricing {
+  autoReloadCostCents: Int
+  autoReloadCreditDenomination: Int
+  enablePayAsYouGo: Boolean
+  monthlyPlanPricePerMonthCents: Int
+  paygCostPerThousandCreditsCents: Int
+  yearlyPlanPricePerMonthCents: Int
+}
+
+"""
+scalar Time is a built-in piece of gqlgen.
+A GQL field with this type will get converted to time.Time on the Go side
+and an RFC3339 formatted string on the client side.
+"""
+scalar Time
+
+"""Token usage by model within a conversation."""
+type TokenUsage {
+  modelId: String!
+
+  """
+  Breakdown of total tokens by usage category (e.g. primary_agent, cli, compaction).
+  """
+  tokenUsageByCategory: [CategoryTokenBreakdown!]!
+  totalTokens: Int!
+}
+
+"""Basic count of tool invocations."""
+type ToolCallStats {
+  count: Int!
+}
+
+"""Tool usage statistics for a conversation."""
+type ToolUsageMetadata {
+  applyFileDiffStats: ApplyFileDiffStats!
+  callMcpToolStats: ToolCallStats!
+  fileGlobStats: ToolCallStats!
+  grepStats: ToolCallStats!
+  readFilesStats: ToolCallStats!
+  readMcpResourceStats: ToolCallStats!
+  readShellCommandOutputStats: ToolCallStats!
+  runCommandStats: ToolCallStats!
+  runCommandsExecuted: Int!
+  searchCodebaseStats: ToolCallStats!
+  suggestCreatePlanStats: ToolCallStats!
+  suggestPlanStats: ToolCallStats!
+  useComputerStats: ToolCallStats!
+  writeToLongRunningShellCommandStats: ToolCallStats!
+}
+
+"""This API is used for AI dialogue requests."""
+input TranscriptPart {
+  assistant: String!
+  user: String!
+}
+
+input TransferGenericStringObjectOwnerInput {
+  owner: Owner!
+  uid: ID!
+}
+
+type TransferGenericStringObjectOwnerOutput implements Response {
+  metadata: ObjectMetadata!
+  responseContext: ResponseContext!
+  success: Boolean!
+}
+
+union TransferGenericStringObjectOwnerResult = TransferGenericStringObjectOwnerOutput | UserFacingError
+
+input TransferNotebookOwnerInput {
+  owner: Owner!
+  uid: ID!
+}
+
+type TransferNotebookOwnerOutput implements Response {
+  metadata: ObjectMetadata!
+  responseContext: ResponseContext!
+  success: Boolean!
+}
+
+union TransferNotebookOwnerResult = TransferNotebookOwnerOutput | UserFacingError
+
+input TransferTeamOwnershipInput {
+  newOwnerEmail: String!
+}
+
+type TransferTeamOwnershipOutput implements Response {
+  responseContext: ResponseContext!
+  success: Boolean!
+}
+
+union TransferTeamOwnershipResult = TransferTeamOwnershipOutput | UserFacingError
+
+input TransferWorkflowOwnerInput {
+  owner: Owner!
+  uid: ID!
+}
+
+type TransferWorkflowOwnerOutput implements Response {
+  metadata: ObjectMetadata!
+  responseContext: ResponseContext!
+  success: Boolean!
+}
+
+union TransferWorkflowOwnerResult = TransferWorkflowOwnerOutput | UserFacingError
+
+input TrashObjectInput {
+  uid: ID!
+}
+
+type TrashObjectOutput implements Response {
+  metadata: ObjectMetadata!
+  responseContext: ResponseContext!
+  success: Boolean!
+}
+
+union TrashObjectResult = TrashObjectOutput | UserFacingError
+
+enum UgcCollectionEnablementSetting {
+  DISABLE
+  ENABLE
+  RESPECT_USER_SETTING
+}
+
+type UgcCollectionSettings {
+  setting: UgcCollectionEnablementSetting!
+}
+
+input UgcCollectionSettingsInput {
+  setting: UgcCollectionEnablementSetting
+}
+
+type UgcDataCollectionPolicy {
+  default: Boolean! @deprecated(reason: "Use defaultSetting instead")
+  defaultSetting: UgcCollectionEnablementSetting!
+  toggleable: Boolean!
+}
+
+"""
+scalar Uint is an unsigned integer. Maps to uint/uint32/uint64 on the Go
+side and a non-negative number on the client side.
+"""
+scalar Uint
+
+enum UniquePer {
+  User
+}
+
+input UnshareBlockInput {
+  blockUid: String!
+}
+
+type UnshareBlockOutput implements Response {
+  responseContext: ResponseContext!
+  success: Boolean!
+}
+
+union UnshareBlockResult = UnshareBlockOutput | UserFacingError
+
+input UntrashObjectInput {
+  uid: ID!
+}
+
+type UntrashObjectOutput implements Response {
+  metadata: ObjectMetadata!
+  responseContext: ResponseContext!
+  success: Boolean!
+}
+
+union UntrashObjectResult = UntrashObjectOutput | UserFacingError
+
+input UpdateAgentTaskInput {
+  """
+  If set, the task is associated with this AI conversation UUID for follow-up messages.
+  """
+  conversationId: ID
+
+  """
+  True while a REMOTE-2661 debug turn is actively pinning the post-failure debug window's idle
+  timer; false once the turn ends and the timer re-arms. Display-only, and deliberately separate
+  from statusMessage and sessionDebugUntil for the same reason: a pin/unpin update must not
+  overwrite the failure text or move the deadline.
+  """
+  debugAgentActive: Boolean
+
+  """
+  When a failed run's shared session stops being held open for debugging.
+  
+  The agent process owns that window and reports this on arm and on each refresh, so the
+  value tracks a sliding deadline. It is deliberately separate from statusMessage: a refresh
+  carries only a new deadline and must not overwrite the failure text the run reported.
+  
+  Display-only. Nothing is scheduled off it; the agent process remains the sole authority on
+  when the window actually ends.
+  """
+  sessionDebugUntil: Time
+
+  """If set, the task is associated with this shared session."""
+  sessionId: ID
+
+  """
+  Optional status message about the task (e.g., progress update, error message, completion summary).
+  """
+  statusMessage: AgentTaskStatusMessageInput
+
+  """ID of the task to update."""
+  taskId: ID!
+
+  """If set, the task is changed into this state."""
+  taskState: AgentTaskState
+}
+
+type UpdateAgentTaskOutput implements Response {
+  responseContext: ResponseContext!
+}
+
+union UpdateAgentTaskResult = UpdateAgentTaskOutput | UserFacingError
+
+input UpdateFolderInput {
+  name: String!
+  uid: ID!
+}
+
+type UpdateFolderOutput implements Response {
+  responseContext: ResponseContext!
+  update: ObjectUpdateSuccess!
+}
+
+union UpdateFolderResult = UpdateFolderOutput | UserFacingError
+
+input UpdateGenericStringObjectInput {
+  """
+  The incoming revision for the update. If unset the update is always accepted. 
+  NOTE: later releases may reject an update if a revision is unset.
+  """
+  revisionTs: Time
+  serializedModel: String!
+  uid: ID!
+}
+
+type UpdateGenericStringObjectOutput implements Response {
+  responseContext: ResponseContext!
+  update: GenericStringObjectUpdate!
+}
+
+union UpdateGenericStringObjectResult = UpdateGenericStringObjectOutput | UserFacingError
+
+input UpdateManagedSecretInput {
+  """
+  New base URL for an LLM_PROVIDER_API_KEY secret. If omitted, the base URL is not
+  changed. If set to null, the provider's default API URL is used.
+  """
+  baseUrl: String
+  description: String
+  encryptedValue: String
+  name: String!
+  owner: Owner!
+}
+
+type UpdateManagedSecretOutput implements Response {
+  managedSecret: ManagedSecret!
+  responseContext: ResponseContext!
+}
+
+union UpdateManagedSecretResult = UpdateManagedSecretOutput | UserFacingError
+
+type UpdateMerkleTreeError {
+  error: String!
+}
+
+input UpdateMerkleTreeInput {
+  embeddingConfig: EmbeddingConfig!
+  nodes: [MerkleTreeNode!]!
+}
+
+type UpdateMerkleTreeNodeResult {
+  """The hash of the intermediate Merkle tree node that was inserted."""
+  hash: NodeHash!
+
+  """
+  Whether the node was successfully inserted. Insertion may fail if a node's children do not
+  exist.
+  """
+  success: Boolean!
+}
+
+type UpdateMerkleTreeOutput implements Response {
+  responseContext: ResponseContext!
+  results: [UpdateMerkleTreeNodeResult!]!
+}
+
+union UpdateMerkleTreeResult = UpdateMerkleTreeError | UpdateMerkleTreeOutput | UserFacingError
+
+input UpdateNotebookEditAccessInput {
+  uid: ID!
+}
+
+type UpdateNotebookEditAccessOutput implements Response {
+  accepted: Boolean!
+  metadata: ObjectMetadata!
+  responseContext: ResponseContext!
+}
+
+union UpdateNotebookEditAccessResult = UpdateNotebookEditAccessOutput | UserFacingError
+
+input UpdateNotebookInput {
+  data: String
+
+  """
+  The incoming revision for the update.If unset the update is always accepted.
+  NOTE: later releases may reject an update if a revision is unset.
+  """
+  revisionTs: Time
+  title: String
+  uid: ID!
+}
+
+type UpdateNotebookOutput implements Response {
+  responseContext: ResponseContext!
+  update: NotebookUpdate!
+}
+
+union UpdateNotebookResult = UpdateNotebookOutput | UserFacingError
+
+input UpdateObjectGuestsInput {
+  accessLevel: AccessLevel!
+  emails: [String!]
+  objectUid: ID!
+}
+
+type UpdateObjectGuestsOutput implements Response {
+  objectPermissions: ObjectPermissions!
+  responseContext: ResponseContext!
+}
+
+union UpdateObjectGuestsResult = UpdateObjectGuestsOutput | UserFacingError
+
+"""Input for updating onboarding survey status"""
+input UpdateOnboardingSurveyStatusInput {
+  responses: SurveyResponsesInput
+  status: OnboardingSurveyStatus!
+}
+
+"""
+Output for updating onboarding survey status - returns the updated status
+"""
+type UpdateOnboardingSurveyStatusOutput implements Response {
+  responseContext: ResponseContext!
+  status: OnboardingSurveyStatus!
+}
+
+"""Union result for updating onboarding survey status"""
+union UpdateOnboardingSurveyStatusResult = UpdateOnboardingSurveyStatusOutput | UserFacingError
+
+input UpdateUserSettingsInput {
+  cloudConversationStorageEnabled: Boolean
+  crashReportingEnabled: Boolean
+  telemetryEnabled: Boolean
+}
+
+type UpdateUserSettingsOutput implements Response {
+  responseContext: ResponseContext!
+}
+
+union UpdateUserSettingsResult = UpdateUserSettingsOutput | UserFacingError
+
+input UpdateWorkflowInput {
+  data: String!
+
+  """
+  The incoming revision for the update.If unset the update is always accepted.
+  NOTE: later releases may reject an update if a revision is unset.
+  """
+  revisionTs: Time
+  uid: ID!
+}
+
+type UpdateWorkflowOutput implements Response {
+  responseContext: ResponseContext!
+  update: WorkflowUpdate!
+}
+
+union UpdateWorkflowResult = UpdateWorkflowOutput | UserFacingError
+
+input UpdateWorkspaceSettingsInput {
+  setAddonCreditsSettings: AddonCreditsSettingsInput
+  setAiAutonomySettings: AiAutonomySettingsInput
+  setAiPermissionsSettings: AiPermissionsSettingsInput
+  setAmbientAgentSettings: AmbientAgentSettingsInput
+  setCloudConversationStorageSettings: CloudConversationStorageSettingsInput
+  setCodebaseContextSettings: CodebaseContextSettingsInput
+  setDomainCaptureSettings: DomainCaptureSettingsInput
+  setEnterpriseAnalyticsDataCollectionSettings: EnterpriseAnalyticsDataCollectionSettingsInput
+  setEnterpriseBillingSettings: EnterpriseBillingSettingsInput
+  setHarnessSettings: HarnessSettingsInput
+  setLinkSharingSettings: LinkSharingSettingsInput
+  setLlmSettings: LlmSettingsInput
+  setSandboxedAgentSettings: SandboxedAgentSettingsInput
+  setSecretRedactionSettings: SecretRedactionSettingsInput
+  setTelemetrySettings: TelemetrySettingsInput
+  setUgcCollectionSettings: UgcCollectionSettingsInput
+  setUsageBasedPricingSettings: UsageBasedPricingSettingsInput
+  workspaceUid: String!
+}
+
+type UpdateWorkspaceSettingsOutput implements Response {
+  responseContext: ResponseContext!
+  workspaceSettings: WorkspaceSettings!
+}
+
+union UpdateWorkspaceSettingsResult = UpdateWorkspaceSettingsOutput | UserFacingError
+
+input UpdatedCloudObjectsInput {
+  folders: [UpdatedObjectInput!]
+  forceRefresh: Boolean!
+  genericStringObjects: [UpdatedObjectInput!]
+  notebooks: [UpdatedObjectInput!]
+  workflows: [UpdatedObjectInput!]
+}
+
+type UpdatedCloudObjectsOutput implements Response {
+  actionHistories: [ObjectActionHistory!]
+  deletedObjectUids: DeletedObjectUids!
+  folders: [Folder!]
+  genericStringObjects: [GenericStringObject!]
+  mcpGallery: [MCPGalleryTemplate!]
+  notebooks: [Notebook!]
+  responseContext: ResponseContext!
+  userProfiles: [PublicUserProfile!]
+  workflows: [Workflow!]
+}
+
+union UpdatedCloudObjectsResult = UpdatedCloudObjectsOutput | UserFacingError
+
+input UpdatedObjectInput {
+  """
+  The latest ts for an action on this object. This refers to any action at all.
+  If this timestamp is out-of-date, at least one action has occurred that
+  the client doesn't know about.
+  """
+  actionsTs: Time
+
+  """
+  The latest metadata ts the client currently has for this object.
+  This is only nullable to remain backwards-compatible with clients
+  that don't pass the metadata ts.
+  """
+  metadataTs: Time
+
+  """
+  The latest permissions ts the client currently has for this object.
+  This is only nullable to remain backwards-compatible with clients
+  that don't pass the permissions ts.
+  """
+  permissionsTs: Time
+
+  """The latest revision the client currently has for this object."""
+  revisionTs: Time!
+  uid: ID!
+}
+
+"""
+A single name/value pair for a multipart form field in a presigned POST upload.
+"""
+type UploadField {
+  name: String!
+  value: UploadFieldValue!
+}
+
+"""The value of a multipart form field in a presigned POST upload target."""
+union UploadFieldValue = ContentCRC32CFieldValue | ContentDataFieldValue | StaticUploadFieldValue
+
+type UsageBasedPricingPolicy {
+  toggleable: Boolean!
+}
+
+type UsageBasedPricingSettings {
+  enabled: Boolean!
+  maxMonthlySpendCents: Int
+}
+
+input UsageBasedPricingSettingsInput {
+  enabled: Boolean
+  maxMonthlySpendCents: Int
+}
+
+type UsageEntry {
+  attributedTeamUid: String
+  costCents: Int! @deprecated(reason: "Use costCentsExact instead to avoid integer rounding")
+  costCentsExact: Float!
+  costType: AICreditsUsageAndCostType!
+  creditsUsed: Int! @deprecated(reason: "Use creditsUsedExact instead to avoid integer rounding")
+  creditsUsedExact: Float!
+  subjectDisplayName: String
+  subjectType: AICreditsUsageAndCostSubjectType!
+  subjectUid: String
+  usageBucket: AICreditsUsageBucket!
+  usageSource: AICreditsUsageSource!
+}
+
+"""Usage plan question response input"""
+input UsagePlanQuestionResponseInput {
+  answer: UsagePlanSurveyResponse!
+  details: String
+}
+
+"""Usage plan options for onboarding survey responses"""
+enum UsagePlanSurveyResponse {
+  AI_CODE_PRODUCTION
+  AI_PERSONAL_PROJECTS
+  EXPLORING_TOOL
+  OTHER
+  REPLACE_TERMINAL
+}
+
+"""
+Granularity at which a user can see AI usage across their team. Non-admins
+always collapse to OWN_ONLY regardless of tier.
+"""
+enum UsageVisibilityGranularity {
+  FULL_BREAKDOWN
+  OWN_ONLY
+  PER_USER_TOTALS
+  TEAM_AGGREGATE
+}
+
+type UsageVisibilityPolicy {
+  adminGranularity: UsageVisibilityGranularity!
+  maxPriorCycles: Int!
+}
+
+"""
+The User type is the primary way of interacting with our graph.
+Nearly all data is scoped to the currently logged-in user.
+"""
+type User {
+  aiCreditAvailability: AICreditAvailability!
+  anonymousUserInfo: AnonymousUserInfo
+  availableHarnesses: AvailableHarnesses!
+  billingMetadata: BillingMetadata
+  blocks: [Block!]!
+  bonusGrants: [BonusGrant!]!
+
+  """
+  The ChatGPT account linked to this user, or null when none is linked.
+  """
+  chatgptConnection: ChatGPTConnection
+  completedOzWebappFtue: Boolean!
+
+  """
+  Returns a history of user's conversation usage data over the past N days
+  (defaulting to 30 days).
+  Results can be paginated by providing a limit.
+  If lastUpdatedEndTimestamp is provided, only conversations with lastUpdated
+  earlier than this timestamp are returned. This enables cursor-based pagination.
+  """
+  conversationUsage(days: Int, lastUpdatedEndTimestamp: Time, limit: Int): [ConversationUsage!]!
+  discoverableTeams: [DiscoverableTeamData!]!
+  discoverableWorkspaces: [DiscoverableWorkspaceData!]!
+
+  """
+  We differentiate between `null` and `[]` here:
+  - `null` means the server can't provide the latest experiment state.
+    The client should use whatever experiment state is last successfully queried.
+  - `[]` means that the user is not part of any server-side enabled experiments.
+  """
+  experiments: [Experiment!]
+  githubInstallations: UserGithubInstallationsOutput!
+
+  """
+  Global skills that are always available to the calling principal.
+  The client will fetch and install these, so they're available in every conversation
+  on every device.
+  
+  This is currently only supported for agents, not individual users.
+  """
+  globalSkills: [String!]!
+  isOnWorkDomain: Boolean!
+  isOnboarded: Boolean!
+  llms: FeatureModelChoice!
+  managedSecrets: ManagedSecretConfig
+  onboardingSurveyStatus: OnboardingSurveyStatus
+  profile: FirebaseProfile!
+  referrals: ReferralInfo!
+  requestLimitInfo: RequestLimitInfo!
+
+  """
+  User settings may return null if the user has no settings in the DB. The client uses
+  this to differentiate between "you don't have settings" and "your settings are their default values".
+  """
+  settings: UserSettings
+  workspaces: [Workspace!]!
+}
+
+"""
+NOTE: We use this `UserFacingError` wrapper to maintain backwards compatibility with the
+client when introducing new error types. This means that the return type of mutations
+should be a union with the `UserFacingError` wrapper, instead of unioning directly with
+`UserFacingErrorInterface` or any specific error that implements it.
+
+This is because of a known bug with the rust graphql-client library we use on the client
+side that prevents us from querying union types with interfaces directly:
+https://github.com/graphql-rust/graphql-client/issues/454
+This would mean that if we unioned directly with a specific implementation of
+`UserFacingErrorInterface`, we would not be able to add new error types to the union
+without breaking the client. We union with `UserFacingError` instead, which will remain
+known type that the client can query even if new types of errors that implement
+`UserFacingErrorInterface` are returned back by the server.
+"""
+type UserFacingError implements Response {
+  error: UserFacingErrorInterface!
+  responseContext: ResponseContext!
+}
+
+"""
+A structured platform error. Internal causes are only exposed through info.debug in dogfood.
+"""
+type PlatformError implements UserFacingErrorInterface {
+  detail: String
+  info: PlatformErrorInfo!
+  message: String!
+}
+
+"""
+Machine-readable platform error information shared by server- and client-sourced errors.
+Debug information is only exposed in dogfood environments.
+"""
+type PlatformErrorInfo {
+  code: PlatformErrorCode!
+  debug: String
+  detail: String
+  errorMessage: String!
+  httpStatus: Int!
+  isUserError: Boolean!
+  metadata: [PlatformErrorMetadata!]!
+  metricsCategory: String!
+  retryable: Boolean!
+  traceId: String
+  userFacingMessages: [PlatformErrorMessage!]!
+}
+
+input PlatformErrorInput {
+  code: PlatformErrorCode!
+  debug: String
+  detail: String
+  errorMessage: String
+  httpStatus: Int
+  isUserError: Boolean
+  metadata: [PlatformErrorMetadataInput!]!
+  metricsCategory: String
+  retryable: Boolean!
+  traceId: String
+  userFacingMessages: [PlatformErrorMessageInput!]
+}
+
+type PlatformErrorMessage {
+  format: PlatformErrorMessageFormat!
+  message: String!
+}
+
+enum PlatformErrorMessageFormat {
+  MARKDOWN
+  PLAIN_TEXT
+  SLACK_MRKDWN
+}
+
+input PlatformErrorMessageInput {
+  format: PlatformErrorMessageFormat!
+  message: String!
+}
+
+type PlatformErrorMetadata {
+  key: String!
+  value: String!
+}
+
+input PlatformErrorMetadataInput {
+  key: String!
+  value: String!
+}
+
+"""
+`UserFacingErrorInterface` is what all the expected error types that are returned in
+mutations should implement. This gives us a baseline default schema that clients can
+fallback to so that we’re backwards compatible when introducing new user-error types.
+
+When adding new error types, you should implement this interface and union your success
+type with the wrapper `UserFacingError` type (and NOT with `UserFacingErrorInterface`).
+
+For example:
+```
+type MyMutationSuccess { ... }
+type MyCustomError implements UserFacingErrorInterface {
+  message: String!
+  customField: String!
+}
+union MyMutationResult = MyMutationSuccess | UserFacingError
+```
+
+Since any mutation can return any error that implements `UserFacingErrorInterface`,
+when defining new error types you should try to make them re-usable across different APIs
+rather than mutation specific. See `SharedObjectsLimitExceeded` for an example.
+"""
+interface UserFacingErrorInterface {
+  message: String!
+}
+
+union UserGithubInfoResult = GithubAuthRequiredOutput | GithubConnectedOutput | UserFacingError
+
+type UserGithubInstallationsOutput implements Response {
+  installations: [GithubInstallation!]!
+  responseContext: ResponseContext!
+}
+
+type UserGuest {
+  firebaseUid: ID!
+}
+
+type UserOutput implements Response {
+  apiKeyOwnerType: OwnerType
+  principalType: PrincipalType!
+  responseContext: ResponseContext!
+  user: User!
+}
+
+enum UserRepoAuthStatus {
+  NO_INSTALLATION_OR_ACCESS_FOR_REPO
+  SUCCESS
+  USER_NOT_CONNECTED_TO_GITHUB
+}
+
+input UserRepoAuthStatusInput {
+  repos: [RepoInput!]!
+}
+
+type UserRepoAuthStatusOutput implements Response {
+  authUrl: String
+  responseContext: ResponseContext!
+  statuses: [RepoResult!]!
+  txId: ID
+}
+
+union UserRepoAuthStatusResult = UserFacingError | UserRepoAuthStatusOutput
+
+union UserResult = UserFacingError | UserOutput
+
+"""
+UserSettings is a top-level subfield of user that contains user-specific settings.
+Workspace specific settings like telemetry enablement override these user settings.
+
+UserSettings types and mutations are the v2 equivalent of the v1 user_settings.graphqls file.
+"""
+type UserSettings {
+  isCloudConversationStorageEnabled: Boolean!
+  isCrashReportingEnabled: Boolean!
+  isTelemetryEnabled: Boolean!
+}
+
+type WarpAiPolicy {
+  acceptedAutosuggestionsLimit: Int!
+  disablePremiumModels: Boolean!
+  isCodeSuggestionsToggleable: Boolean!
+  isGitOperationsAiEnabled: Boolean!
+  isNextCommandEnabled: Boolean!
+  isPromptSuggestionsToggleable: Boolean!
+  isUnlimited: Boolean!
+  isUnlimitedAutosuggestions: Boolean!
+  isUnlimitedSuggestedCodeDiffs: Boolean!
+  isUnlimitedVoice: Boolean!
+  isVoiceEnabled: Boolean!
+  isWarpDriveObjectIndexingEnabled: Boolean!
+  limit: Int!
+  passiveSuggestionsSpendLimitCents: Float!
+  requestPoolingType: PoolingType!
+  suggestedCodeDiffsLimit: Int!
+  tokenLimit: Int!
+  voiceRequestLimit: Int!
+  voiceTokenLimit: Int!
+}
+
+type WarpBasicPolicy {
+  enabled: Boolean!
+}
+
+union WarpDriveUpdate = AmbientTaskUpdated | ObjectActionOccurred | ObjectContentUpdated | ObjectDeleted | ObjectMetadataUpdated | ObjectPermissionsUpdated | TeamMembershipsChanged
+
+type Workflow {
+  data: String!
+  metadata: ObjectMetadata!
+  permissions: ObjectPermissions!
+}
+
+union WorkflowUpdate = ObjectUpdateSuccess | WorkflowUpdateRejected
+
+type WorkflowUpdateRejected {
+  conflictingWorkflow: Workflow!
+  revisionTs: Time!
+}
+
+"""
+The Workspace type is our top-level type that contains all of our collaborative objects
+and features.
+
+Currently this is a no-op (a user effectively has a single workspace), but in the future
+we will support multiple workspaces per user, each with their own teams.
+
+TODO(skambashi): REV-549 - migrate billing information from team to workspace
+"""
+type Workspace {
+  adminUid: String! @deprecated(reason: "Use members.role to determine admin status")
+
+  """
+  availableLlms returns the LLMs available to the user.
+  By default, this returns only the models that the user can actively select in the warp-internal client.
+  When includeAllConfigurableLlms is true, this returns all models that can be configured in organization settings,
+  which is useful for displaying names in the admin UI (e.g., admin model settings page).
+  """
+  availableLlms(includeAllConfigurableLlms: Boolean = false): AvailableLlms!
+  billingCycleUsageHistory: BillingCycleUsageHistory
+
+  """
+  billingMetadata is the equivalent of the v1 billingMetadata field in the Team type.
+  """
+  billingMetadata: BillingMetadata!
+
+  """Deprecated: Use bonusGrantsInfo instead."""
+  bonusGrants: [BonusGrant!]! @deprecated(reason: "Use bonusGrantsInfo.grants instead")
+  bonusGrantsInfo(includeExhausted: Boolean = false, includeExpired: Boolean = false): BonusGrantsInfo!
+  featureModelChoice: FeatureModelChoice!
+
+  """
+  hasBillingHistory is the equivalent of the v1 hasBillingHistory field in the Team type.
+  """
+  hasBillingHistory: Boolean!
+  includedUsageInfo: WorkspaceIncludedUsageInfo
+  inviteLinkDomainRestrictions: [InviteLinkDomainRestriction!]!
+  isEligibleForDiscovery: Boolean!
+  memberSpendLimits: [MemberSpendLimit!]
+  members: [WorkspaceMember!]!
+  name: String!
+  openTeams: [DiscoverableTeamData!]!
+  pendingEmailInvites: [EmailInvite!]!
+
+  """
+  settings is the equivalent of the v1 organizationSettings field in the Team type with
+  additional fields v1 fields (team.isDiscoverable, team.isInviteLinkEnabled).
+  """
+  settings: WorkspaceSettings!
+  stripeCustomerId: ID
+  teams: [Team!]!
+  totalRequestsUsedSinceLastRefresh: Int!
+  uid: ID!
+}
+
+"""
+A plan's shared workspace allowance for the current monthly AI cycle.
+"""
+type WorkspaceIncludedUsageInfo {
+  includedUsageCredits: Float!
+  usageCreditsUsedSinceLastRefresh: Float!
+  includedUsageCents: Float!
+  usageCentsUsedSinceLastRefresh: Float!
+  nextRefreshTime: Time!
+}
+
+type WorkspaceMember {
+  email: String!
+
+  """
+  Whether the member's Warp account has been disabled. A disabled member keeps
+  their workspace membership but cannot sign in or use Warp.
+  """
+  isDisabled: Boolean!
+  role: MembershipRole!
+  uid: ID!
+  usageInfo: WorkspaceMemberUsageInfo!
+}
+
+type WorkspaceMemberUsageInfo {
+  """
+  The dollar value of requestLimit, in cents. Null for a workspace billed in credits
+  rather than dollars, and when usage is unlimited.
+  """
+  includedUsageCents: Float
+  isRequestLimitProrated: Boolean!
+  isUnlimited: Boolean!
+  requestLimit: Int!
+  requestsUsedSinceLastRefresh: Int!
+
+  """
+  The dollar value of requestsUsedSinceLastRefresh, in cents. Null for a workspace billed
+  in credits rather than dollars, and when usage is unlimited.
+  """
+  usageCentsUsedSinceLastRefresh: Float
+}
+
+type WorkspaceSettings {
+  addonCreditsSettings: AddonCreditsSettings!
+  aiAutonomySettings: AiAutonomySettings!
+  aiPermissionsSettings: AiPermissionsSettings!
+  ambientAgentSettings: AmbientAgentSettings
+  cloudConversationStorageSettings: CloudConversationStorageSettings!
+  codebaseContextSettings: CodebaseContextSettings!
+  domainCaptureSettings: DomainCaptureSettings!
+  enterpriseAnalyticsDataCollectionSettings: EnterpriseAnalyticsDataCollectionSettings!
+  enterpriseBillingSettings: EnterpriseBillingSettings
+  harnessSettings: HarnessSettings
+  isDiscoverable: Boolean!
+  isInviteLinkEnabled: Boolean!
+  linkSharingSettings: LinkSharingSettings!
+  llmSettings: LlmSettings!
+  sandboxedAgentSettings: SandboxedAgentSettings
+  secretRedactionSettings: SecretRedactionSettings!
+  teamByo: TeamByoSettings
+  telemetrySettings: TelemetrySettings!
+  ugcCollectionSettings: UgcCollectionSettings!
+  usageBasedPricingSettings: UsageBasedPricingSettings!
+}
+
+enum WriteToPtyAutonomyValue {
+  ALWAYS_ALLOW
+  ALWAYS_ASK
+  ASK_ON_FIRST_WRITE
+  RESPECT_USER_SETTING
+}
+
+
+type ExecutionSkillSpec {
+  spec: String!
+}
+
+enum ExecutionRepositoryRefType {
+  COMMIT_SHA
+  BRANCH
+}
+
+type ExecutionRepositoryRef {
+  type: ExecutionRepositoryRefType!
+  value: String!
+}
+
+
+type ExecutionRepository {
+  forge: CodeForge!
+  owner: String!
+  name: String!
+  ref: ExecutionRepositoryRef
+  cloneFrom: SourceRepo
+  preserveOrigin: Boolean!
+  expectedSha: String
+}
+
+
+enum SessionSharingSubjectType {
+  TEAM
+  USER_EMAIL
+  PUBLIC
+}
+
+enum SessionSharingAccessLevel {
+  VIEW
+  EDIT
+}
+
+type SessionSharingAclSpec {
+  subjectType: SessionSharingSubjectType!
+  email: String
+  access: SessionSharingAccessLevel!
+}
+
+type GCPCloudProviderClientConfig {
+  projectNumber: String!
+  poolId: String!
+  providerId: String!
+  serviceAccountEmail: String
+}
+
+type AWSCloudProviderClientConfig {
+  roleArn: String!
+}
+
+type CloudProviderClientConfigs {
+  gcp: GCPCloudProviderClientConfig
+  aws: AWSCloudProviderClientConfig
+}
+
+type AWSBedrockInferenceClientConfig {
+  roleArn: String!
+  region: String
+}
+
+type InferenceProviderClientConfigs {
+  awsBedrock: AWSBedrockInferenceClientConfig
+}
+
+type ExecutionConfiguration {
+  taskId: ID!
+  executionId: ID!
+  conversationId: ID
+  parentRunId: ID
+  """The owning team's UID, or null for a personal task."""
+  teamId: ID
+  harness: AgentHarness!
+  modelId: String
+  reasoningLevel: String
+  profileId: ID
+  mcpServersJson: String!
+  skills: [ExecutionSkillSpec!]!
+  factorySkillDirs: [String!]!
+  computerUseEnabled: Boolean!
+  computerUseModelId: String
+  inferenceProviders: InferenceProviderClientConfigs
+  repositories: [ExecutionRepository!]!
+  deferredRepositories: [ExecutionRepository!]!
+  setupCommands: [String!]!
+  providers: CloudProviderClientConfigs
+  sessionSharingAcls: [SessionSharingAclSpec!]!
+  skipInitialTurn: Boolean!
+  idleOnCompleteSeconds: Int
+  idleOnFailSeconds: Int
+  snapshotDisabled: Boolean!
+}
+
+enum CodeForge {
+  GITHUB
+  GITLAB
+  AZURE_DEVOPS
+}
+
+type SourceRepo {
+  codeForge: CodeForge!
+  owner: String!
+  repo: String!
+}

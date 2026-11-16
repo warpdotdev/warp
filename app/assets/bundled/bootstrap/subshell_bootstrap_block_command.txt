@@ -1,0 +1,1 @@
+[1;32mSuccess![0m This subshell spawned by [1;34m%[0m has been Warpified.

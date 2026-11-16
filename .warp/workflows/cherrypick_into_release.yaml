@@ -1,0 +1,20 @@
+name: "Cherrypick commit into a latest release branch"
+command: |-
+  git fetch; 
+  BRANCH_NAME=$(git branch -r | grep -o '{{release}}_release/v0.20.*{{release}}' | sort | tail -n 1); 
+  git checkout $BRANCH_NAME; 
+  git pull; 
+  COMMIT_HASH={{commit_hash}}; 
+  CP_BRANCH="cherrypick/${BRANCH_NAME}_${COMMIT_HASH:0:7}"; 
+  git checkout -b $CP_BRANCH; 
+  git pull; 
+  git cherry-pick {{commit_hash}} && git push --set-upstream origin $CP_BRANCH --no-verify;
+  echo -e "\n\nCreate PR using this URL: https://github.com/warpdotdev/warp-internal/compare/${BRANCH_NAME}...${CP_BRANCH}?quick_pull=1&template=cherrypick.md"
+description: "Sets up a cherrypick of a commit (specified by hash) into the given release branch by creating a new local branch off of the release branch, performing the cherry-pick, and pushing the new branch to GitHub."
+arguments:
+  - name: commit_hash
+    description: Commit hash for the commit to cherrypick
+  - name: release
+    description: "Name of the release channel to cherrypick into, possible values: [dev, preview, stable]"
+author: Warp Team
+shells: []

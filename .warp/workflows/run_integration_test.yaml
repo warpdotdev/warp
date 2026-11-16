@@ -1,0 +1,10 @@
+---
+name: "Run an integration test"
+command: "WARPUI_USE_REAL_DISPLAY_IN_INTEGRATION_TESTS=1 cargo test --package integration --test integration -- {{test}}"
+description: "Run a specific integration test."
+arguments:
+  - name: test
+    description: The name of the integration test to run.
+    default_value: test_simple_example
+author: Warp Team
+shells: []

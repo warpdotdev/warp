@@ -1,0 +1,13 @@
+# Starlark configuration for Warp
+# Starlark is used by Bazel and has Python-like syntax
+display_name: "Bazel (Starlark)"
+indent_unit:
+  space: 4
+comment_prefix: "#"
+brackets:
+  - start: "{"
+    end: "}"
+  - start: "("
+    end: ")"
+  - start: "["
+    end: "]"

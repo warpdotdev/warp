@@ -1,0 +1,1 @@
+In remote subshells, Warp runs commands in the background to power completions, syntax highlighting, and other features.

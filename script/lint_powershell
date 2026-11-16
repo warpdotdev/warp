@@ -1,0 +1,36 @@
+#!/usr/bin/env -S pwsh -NoProfile
+
+param(
+    [switch]$ci,
+    [switch]$fix
+)
+
+$rulesFile = './.PSScriptAnalyzerSettings.psd1'
+$sources = @(
+    './app/assets/bundled/bootstrap/',
+    './script/windows/'
+)
+
+$totalProblemCount = 0
+
+foreach ($source in $sources) {
+    Write-Output "Inspecting scripts in '$source'"
+    $scriptAnalyzerParams = @{
+        Settings = $rulesFile
+        Path = $source
+        ReportSummary = $true
+        Recurse = $true
+        Fix = $fix
+    }
+    $results = Invoke-ScriptAnalyzer @scriptAnalyzerParams
+    Write-Output $results
+    $errorsAndWarnings = $results | Where-Object { $_.Severity -ge [Microsoft.Windows.PowerShell.ScriptAnalyzer.Generic.DiagnosticSeverity]::Warning }
+    $problemCount = ($errorsAndWarnings | Measure-Object).Count
+    $totalProblemCount += $problemCount
+}
+
+# Inspect every source before failing, so a problem in an earlier source never hides
+# problems in a later one.
+if ($totalProblemCount -gt 0 -and $ci) {
+    throw "Lint failed with $totalProblemCount problems"
+}

@@ -1,0 +1,33 @@
+#!/bin/bash
+
+set -e
+cd "$(dirname "$0")/.."
+
+CI_MODE=false
+while (( "$#" )); do
+  case "$1" in
+    -ci|--ci)
+      CI_MODE=true
+      shift
+      ;;
+    *)
+      echo "Unknown argument: $1" >&2
+      exit 2
+      ;;
+  esac
+done
+
+if ! command -v shellcheck >/dev/null 2>&1; then
+  echo "No ShellCheck installation detected."
+  if [[ "$CI_MODE" == true || "${GITHUB_ACTIONS:-}" == true ]]; then
+    echo "Aborting because ShellCheck is required in CI." >&2
+    exit 1
+  fi
+  echo "Skipping ShellCheck."
+  exit 0
+fi
+
+shellcheck \
+  --shell=bash \
+  --severity=warning \
+  app/assets/bundled/bootstrap/bash_body.sh

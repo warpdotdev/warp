@@ -1,0 +1,12 @@
+[package]
+authors = ["Warp Team <dev@warp.dev>"]
+name = "natural_language_detection"
+version = "0.1.0"
+edition = "2024"
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+rust-stemmers = "^1.0"
+lazy_static.workspace = true
+regex.workspace = true

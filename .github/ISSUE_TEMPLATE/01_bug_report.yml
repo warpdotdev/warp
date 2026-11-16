@@ -1,0 +1,136 @@
+name: Bug Report
+description: "Found a bug? Please search through our open issues and docs, to make sure it isn't already submitted. If you have an SSH related issue, please use the SSH Template below"
+labels: ["bug"]
+body:
+  - type: checkboxes
+    attributes:
+      label: "Pre-submit Checks"
+      options:
+        - label: "I have [searched Warp bugs](https://github.com/warpdotdev/warp/issues?q=is%3Aissue+label%3ABUG) and there are no duplicates"
+          required: true
+        - label: "I have [searched Warp known issues page](https://docs.warp.dev/help/known-issues) and my issue is not there"
+          required: true
+        - label: "I have an issue with AI and have included the debugging ID (Optional, but helps expedite the AI quality fix). [Debugging ID instructions](https://docs.warp.dev/agents/getting-started/faqs/#gathering-ai-debugging-id)"
+          required: false
+        - label: "I have technical issue and have included the logs (optional, but helps expedite the bug fix). [Log instructions](https://docs.warp.dev/support-and-community/troubleshooting-and-support/sending-us-feedback#gathering-warp-logs)"
+          required: false
+  - type: textarea
+    id: "describe-the-bug"
+    attributes:
+      label: "Describe the bug"
+      description: "A clear and concise description of what the bug is."
+      placeholder: Tell us what you see.
+    validations:
+      required: true
+  - type: textarea
+    id: "to-reproduce"
+    attributes:
+      label: "To reproduce"
+      description: "Bug reports with clear reproduction will get prioritized higher and addressed more quickly."
+      placeholder: "Steps to reproduce: 1. Go to '...' 2. Click on '...' 3. Scroll down to '...' 4. See error '...'"
+    validations:
+      required: true
+  - type: textarea
+    id: "expected-behavior"
+    attributes:
+      label: "Expected behavior"
+      description: "A clear and concise description of what you expected to happen."
+      placeholder: Tell us what you expect to see.
+    validations:
+      required: false
+  - type: textarea
+    id: "screenshots-logs"
+    attributes:
+      label: "Screenshots, videos, and logs"
+      description: "If applicable, add screenshots/videos/logs to help us understand your problem. While optional, these help expedite the time in which your bug is addressed."
+    validations:
+      required: false
+  - type: dropdown
+    id: "os"
+    attributes:
+      label: "Operating system (OS)"
+      multiple: false
+      options:
+        - "Select an OS"
+        - macOS
+        - Linux
+        - Windows
+    validations:
+      required: true
+  - type: input
+    id: "os-version"
+    attributes:
+      label: "Operating system and version"
+      description: "For example: Debian 11.2"
+    validations:
+      required: true
+  - type: input
+    id: "local-shell-version"
+    attributes:
+      label: "Shell Version"
+      description: "For example, `bash 4.0` e.g. Run `bash --version` or `zsh --version`"
+    validations:
+      required: false
+  - type: input
+    id: "warp-version"
+    attributes:
+      label: "Current Warp version"
+      description: "Open the Settings Dialog (CMD-,) using the Command Palette or by clicking the three dots > Settings > Account. Once you're on the Account page click the copy icon that's to the right of the version number. `v0.2047.04.07.47.47.stable_47`"
+    validations:
+      required: false
+  - type: dropdown
+    id: "regression"
+    attributes:
+      label: "Regression"
+      description: "Is this a regression (used to work in a previous Warp version)?"
+      multiple: false
+      options:
+        - "No, this bug or issue has existed throughout my experience using Warp"
+        - "Yes, this bug started recently or with an X Warp version"
+    validations:
+      required: true
+  - type: input
+    id: "warp-version-regression-date"
+    attributes:
+      label: "Recent working Warp date"
+      description: "Most recent date that Warp worked as expected"
+    validations:
+      required: false
+  - type: textarea
+    id: "additional-context"
+    attributes:
+      label: "Additional context"
+      description: "Add any other context about the problem here. If using Warp on Linux, tell us if you're using X11 or Wayland. If the issue is graphical, run Warp with the following command `RUST_LOG=wgpu_core=info,wgpu_hal=info MESA_DEBUG=1 EGL_LOG_LEVEL=debug warp-terminal` attach logs and tell us the result of `eglinfo`."
+    validations:
+      required: false
+  - type: dropdown
+    id: "blocker"
+    attributes:
+      label: "Does this block you from using Warp daily?"
+      description: "All feedback will be reviewed, even if you select 'No'."
+      multiple: false
+      options:
+        - "No"
+        - "Yes, this issue prevents me from using Warp daily."
+    validations:
+      required: true
+  - type: dropdown
+    id: "terminals"
+    attributes:
+      label: "Is this an issue only in Warp?"
+      description: "Verifying this issue doesn't happen in other terminals helps us to prioritize the fix"
+      multiple: false
+      options:
+        - "Yes, I confirmed that this only happens in Warp, not other terminals."
+        - "No, this issue happens in Warp and other terminals."
+    validations:
+      required: true
+  - type: dropdown
+    id: "linear-label-bug"
+    attributes:
+      label: "Warp Internal (ignore): linear-label:b9d78064-c89e-4973-b153-5178a31ee54e"
+      multiple: false
+      options:
+        - Ignore
+    validations:
+      required: false

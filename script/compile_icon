@@ -1,0 +1,64 @@
+#!/bin/bash
+#
+# Compile a .icon bundle using actool and update the app's Info.plist
+# to support macOS Sequoia's icon tinting feature.
+#
+# Usage: compile_icon <channel> <app_bundle_path>
+#   channel: The release channel (e.g., stable)
+#   app_bundle_path: Path to the .app bundle (e.g., Warp.app)
+
+set -e
+
+if [ "$#" -ne 2 ]; then
+    echo "Usage: compile_icon <channel> <app_bundle_path>"
+    exit 1
+fi
+
+CHANNEL="$1"
+APP_BUNDLE_PATH="$2"
+
+# Determine the repository root directory
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+ICON_BUNDLE_PATH="$REPO_ROOT/app/channels/$CHANNEL/icon/AppIcon.icon"
+
+# Only compile if the .icon bundle exists for this channel.
+if [[ ! -d "$ICON_BUNDLE_PATH" ]]; then
+    if [[ "$CHANNEL" = "oss" ]]; then
+        echo "Warning: no .icon bundle found for $CHANNEL channel at $ICON_BUNDLE_PATH; skipping adaptive icon compilation." >&2
+        exit 0
+    fi
+    echo "Error: .icon bundle not found at $ICON_BUNDLE_PATH" >&2
+    exit 1
+fi
+
+echo "Compiling .icon bundle for $CHANNEL channel"
+
+BUNDLED_RESOURCES_DIR="$APP_BUNDLE_PATH/Contents/Resources"
+PARTIAL_INFO_PLIST="$(dirname "$APP_BUNDLE_PATH")/partial-icon-info.plist"
+
+# Compile the .icon bundle using actool
+xcrun actool \
+  --compile "$BUNDLED_RESOURCES_DIR" \
+  --platform macosx \
+  --minimum-deployment-target 10.14 \
+  --app-icon AppIcon \
+  --output-partial-info-plist "$PARTIAL_INFO_PLIST" \
+  "$ICON_BUNDLE_PATH"
+
+# Earlier XCode versions won't build the correct asset format for adaptive icons
+if [[ ! -f "$BUNDLED_RESOURCES_DIR/Assets.car" ]]; then
+    XCODE_VERSION=$(xcodebuild -version 2>/dev/null | head -1 || echo "unknown")
+    echo "Warning: actool did not produce Assets.car which is required for the latest App icon format." >&2
+    echo "(Note that XCode version <26 does not support .icon bundles. Your version: $XCODE_VERSION)." >&2
+fi
+
+# Update Info.plist to reference AppIcon instead of the old .icns
+plutil -replace CFBundleIconFile -string "AppIcon" "$APP_BUNDLE_PATH/Contents/Info.plist"
+plutil -insert CFBundleIconName -string "AppIcon" "$APP_BUNDLE_PATH/Contents/Info.plist" 2>/dev/null || \
+  plutil -replace CFBundleIconName -string "AppIcon" "$APP_BUNDLE_PATH/Contents/Info.plist"
+
+# Get the app name from the bundle
+APP_NAME=$(basename "$APP_BUNDLE_PATH" .app)
+
+echo "Icon compiled successfully."

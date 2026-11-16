@@ -1,0 +1,1453 @@
+use std::time::{Duration, SystemTime};
+
+#[cfg(not(target_family = "wasm"))]
+use warpui_core::App;
+
+use super::*;
+
+fn make_manager(keys: ApiKeys) -> ApiKeyManager {
+    make_manager_with_grok(keys, None)
+}
+#[test]
+fn aws_credentials_are_cleared_only_when_refresh_strategy_changes() {
+    warpui_core::App::test((), |mut app| async move {
+        let manager = app.add_singleton_model(|_| make_manager(ApiKeys::default()));
+        let strategy = AwsCredentialsRefreshStrategy::OidcManaged;
+        let credentials = AwsCredentials::new(
+            "access-key".into(),
+            "secret-key".into(),
+            Some("session-token".into()),
+            Some(SystemTime::now() + Duration::from_secs(3600)),
+        );
+
+        manager.update(&mut app, |manager, ctx| {
+            manager.set_aws_credentials_state(
+                AwsCredentialsState::Loaded {
+                    credentials: credentials.clone(),
+                    loaded_at: SystemTime::now(),
+                },
+                ctx,
+            );
+            manager.set_aws_credentials_refresh_strategy(strategy.clone(), ctx);
+            assert_eq!(
+                manager.aws_credentials_state(),
+                &AwsCredentialsState::Missing
+            );
+
+            manager.set_aws_credentials_state(
+                AwsCredentialsState::Loaded {
+                    credentials: credentials.clone(),
+                    loaded_at: SystemTime::now(),
+                },
+                ctx,
+            );
+            manager.set_aws_credentials_refresh_strategy(strategy.clone(), ctx);
+            assert!(matches!(
+                manager.aws_credentials_state(),
+                AwsCredentialsState::Loaded { .. }
+            ));
+
+            manager.set_aws_credentials_refresh_strategy(
+                AwsCredentialsRefreshStrategy::LocalChain,
+                ctx,
+            );
+        });
+
+        manager.read(&app, |manager, _| {
+            assert_eq!(
+                manager.aws_credentials_state(),
+                &AwsCredentialsState::Missing
+            );
+            assert_eq!(
+                manager.aws_credentials_refresh_strategy(),
+                AwsCredentialsRefreshStrategy::LocalChain
+            );
+        });
+    });
+}
+
+#[test]
+fn llm_provider_parses_supported_api_key_provider_names() {
+    assert_eq!(
+        LLMProvider::from_api_key_slug("anthropic"),
+        Ok(LLMProvider::Anthropic)
+    );
+    assert_eq!(
+        LLMProvider::from_api_key_slug("open-ai"),
+        Ok(LLMProvider::OpenAI)
+    );
+    assert_eq!(
+        LLMProvider::from_api_key_slug("google"),
+        Ok(LLMProvider::Google)
+    );
+    assert_eq!(LLMProvider::from_api_key_slug("grok"), Ok(LLMProvider::Xai));
+}
+
+#[test]
+fn persisted_provider_api_key_updates_request_state() {
+    warpui_core::App::test((), |mut app| async move {
+        app.update(|ctx| {
+            warpui_extras::secure_storage::register_noop("test", ctx);
+            warp_core::telemetry::testing::MockTelemetryContextProvider::register(ctx);
+        });
+        let manager = app.add_singleton_model(ApiKeyManager::new);
+
+        manager
+            .update(&mut app, |manager, ctx| {
+                manager.persist_provider_key(
+                    LLMProvider::Anthropic,
+                    Some("sk-ant-test".to_owned()),
+                    ctx,
+                )
+            })
+            .expect("no-op secure storage should accept the provider key");
+
+        manager.read(&app, |manager, _| {
+            let request_keys = manager
+                .api_keys_for_request(true, false, None)
+                .expect("persisted provider key should be available to requests");
+            assert_eq!(request_keys.anthropic, "sk-ant-test");
+        });
+    });
+}
+
+#[test]
+fn persisted_provider_api_key_can_be_cleared() {
+    warpui_core::App::test((), |mut app| async move {
+        app.update(|ctx| {
+            warpui_extras::secure_storage::register_noop("test", ctx);
+            warp_core::telemetry::testing::MockTelemetryContextProvider::register(ctx);
+        });
+        let manager = app.add_singleton_model(ApiKeyManager::new);
+
+        manager
+            .update(&mut app, |manager, ctx| {
+                manager.persist_provider_key(
+                    LLMProvider::Anthropic,
+                    Some("sk-ant-test".to_owned()),
+                    ctx,
+                )?;
+                manager.persist_provider_key(LLMProvider::Anthropic, None, ctx)
+            })
+            .expect("no-op secure storage should clear the provider key");
+
+        manager.read(&app, |manager, _| {
+            assert_eq!(manager.keys().anthropic, None);
+        });
+    });
+}
+#[test]
+fn llm_provider_rejects_unsupported_api_key_provider() {
+    assert_eq!(
+        LLMProvider::from_api_key_slug("openrouter"),
+        Err("provider must be one of: anthropic, openai, google, grok".to_owned())
+    );
+}
+
+#[test]
+fn custom_model_providers_preserves_configured_schema() {
+    let mut endpoint = endpoint_with_keys(
+        "Anthropic",
+        "https://custom.io",
+        "ep-key",
+        &[("claude", None, "uuid-1")],
+    );
+    endpoint.schema = CustomEndpointSchema::AnthropicMessages;
+    let mgr = make_manager(ApiKeys {
+        custom_endpoints: vec![endpoint],
+        ..Default::default()
+    });
+
+    let provider = &mgr
+        .custom_model_providers_for_request(true)
+        .expect("configured endpoint should be sent")
+        .providers[0];
+    assert_eq!(
+        provider.schema,
+        CustomEndpointSchema::AnthropicMessages as i32
+    );
+}
+
+fn make_manager_with_grok(keys: ApiKeys, grok_tokens: Option<GrokTokens>) -> ApiKeyManager {
+    let custom_endpoints = keys.custom_endpoints.clone();
+    ApiKeyManager {
+        keys,
+        custom_endpoints: CustomEndpointState {
+            definitions: None,
+            settings_valid: true,
+            keys: HashMap::new(),
+            resolved: custom_endpoints,
+        },
+        grok_tokens,
+        chatgpt_connection: ChatGPTConnectionStatus::Unknown,
+        chatgpt_oauth_pending: false,
+        #[cfg(not(target_family = "wasm"))]
+        grok_refresh_allowed: false,
+        #[cfg(not(target_family = "wasm"))]
+        grok_refresh_waiters: None,
+        #[cfg(not(target_family = "wasm"))]
+        geap_refresh_waiters: None,
+        #[cfg(not(target_family = "wasm"))]
+        geap_last_mint_failure: None,
+        aws_credentials_state: AwsCredentialsState::Missing,
+        aws_credentials_refresh_strategy: AwsCredentialsRefreshStrategy::default(),
+        geap_credentials_state: GeapCredentialsState::Missing,
+        secure_storage_write_version: 0,
+        grok_secure_storage_write_version: 0,
+    }
+}
+
+fn make_manager_with_geap(geap_credentials_state: GeapCredentialsState) -> ApiKeyManager {
+    let mut manager = make_manager(ApiKeys::default());
+    manager.geap_credentials_state = geap_credentials_state;
+    manager
+}
+
+fn grok_tokens(access_token: &str, expires_in: Option<u64>) -> GrokTokens {
+    GrokTokens {
+        access_token: access_token.into(),
+        refresh_token: Some("refresh".into()),
+        expires_at: expires_in.map(|secs| SystemTime::now() + Duration::from_secs(secs)),
+        connected_at: None,
+    }
+}
+
+fn geap_credentials(access_token: &str, expires_in: Option<u64>) -> GeapCredentials {
+    GeapCredentials::new(
+        access_token.into(),
+        expires_in.map(|secs| SystemTime::now() + Duration::from_secs(secs)),
+    )
+}
+
+fn geap_binding() -> GeapMintBinding {
+    GeapMintBinding {
+        user_uid: "user-1".into(),
+        audience:
+            "//iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/p/providers/q"
+                .into(),
+        federation: GeapFederation::ServiceAccount {
+            email: "sa@proj.iam.gserviceaccount.com".into(),
+        },
+    }
+}
+
+// The expected binding the request build site passes in is the same type as
+// the stored `minted_for`, so the attach check is a plain `==`.
+fn geap_gate() -> GeapMintBinding {
+    geap_binding()
+}
+
+fn geap_loaded(access_token: &str, expires_in: Option<u64>) -> GeapCredentialsState {
+    GeapCredentialsState::Loaded {
+        credentials: geap_credentials(access_token, expires_in),
+        loaded_at: SystemTime::now(),
+        minted_for: geap_binding(),
+    }
+}
+
+fn endpoint(
+    name: &str,
+    url: &str,
+    api_key: &str,
+    models: &[(&str, Option<&str>)],
+) -> CustomEndpoint {
+    endpoint_with_keys(
+        name,
+        url,
+        api_key,
+        &models
+            .iter()
+            .enumerate()
+            .map(|(i, (n, a))| (*n, *a, format!("cfg-{i}")))
+            .collect::<Vec<_>>()
+            .iter()
+            .map(|(n, a, k)| (*n, *a, k.as_str()))
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn endpoint_with_keys(
+    name: &str,
+    url: &str,
+    api_key: &str,
+    models: &[(&str, Option<&str>, &str)],
+) -> CustomEndpoint {
+    CustomEndpoint {
+        name: name.into(),
+        url: url.into(),
+        api_key: api_key.into(),
+        schema: CustomEndpointSchema::default(),
+        models: models
+            .iter()
+            .map(|(n, a, cfg)| CustomEndpointModel {
+                name: (*n).into(),
+                alias: a.map(|s| s.into()),
+                config_key: (*cfg).into(),
+            })
+            .collect(),
+    }
+}
+
+#[test]
+fn custom_endpoint_definitions_round_trip_without_secrets() {
+    let legacy = vec![endpoint_with_keys(
+        "OpenRouter",
+        "https://openrouter.ai/api/v1",
+        "secret",
+        &[("openai/gpt-5", Some("GPT-5"), "config-key")],
+    )];
+    let (definitions, keys) = CustomEndpointDefinitions::from_legacy(&legacy).unwrap();
+    let json = serde_json::to_string(&definitions).unwrap();
+    let decoded: CustomEndpointDefinitions = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(decoded, definitions);
+    assert!(!json.contains("secret"));
+    assert_eq!(keys.values().next().map(String::as_str), Some("secret"));
+}
+
+#[test]
+fn custom_endpoint_definitions_reject_duplicate_model_config_keys() {
+    let legacy = vec![
+        endpoint_with_keys(
+            "One",
+            "https://one.example.com",
+            "one",
+            &[("model-one", None, "duplicate")],
+        ),
+        endpoint_with_keys(
+            "Two",
+            "https://two.example.com",
+            "two",
+            &[("model-two", None, "duplicate")],
+        ),
+    ];
+
+    assert!(CustomEndpointDefinitions::from_legacy(&legacy).is_err());
+}
+
+#[test]
+fn custom_endpoint_url_requires_public_https() {
+    for valid in [
+        "https://api.example.com/v1",
+        "https://openrouter.ai/api/v1",
+        "https://8.8.8.8/v1",
+    ] {
+        assert_eq!(validate_custom_endpoint_url(valid), Ok(()));
+    }
+    for invalid in [
+        "http://api.example.com/v1",
+        "https://localhost:8080",
+        "https://127.0.0.1/v1",
+        "https://10.0.0.1/v1",
+        "https://[::1]/v1",
+        "not a url",
+    ] {
+        assert!(
+            validate_custom_endpoint_url(invalid).is_err(),
+            "{invalid} should be rejected"
+        );
+    }
+}
+
+#[test]
+fn legacy_endpoint_ids_are_deterministic_and_preserve_config_keys() {
+    let legacy = vec![endpoint_with_keys(
+        "Endpoint",
+        "https://api.example.com/v1",
+        "secret",
+        &[("model", None, "existing-config-key")],
+    )];
+    let (first, first_keys) = CustomEndpointDefinitions::from_legacy(&legacy).unwrap();
+    let (second, second_keys) = CustomEndpointDefinitions::from_legacy(&legacy).unwrap();
+
+    assert_eq!(first, second);
+    assert_eq!(first_keys, second_keys);
+    let (id, definition) = first.definitions().next().unwrap();
+    assert!(id.as_str().starts_with(LEGACY_ENDPOINT_PREFIX));
+    assert_eq!(definition.models[0].config_key, "existing-config-key");
+}
+
+#[test]
+fn endpoint_definitions_join_keys_fail_closed_and_recover() {
+    warpui_core::App::test((), |mut app| async move {
+        app.update(|ctx| {
+            warpui_extras::secure_storage::register_noop("test", ctx);
+        });
+        let manager = app.add_singleton_model(ApiKeyManager::new);
+        let legacy = vec![endpoint_with_keys(
+            "Endpoint",
+            "https://api.example.com/v1",
+            "secret",
+            &[("model", None, "config-key")],
+        )];
+        let (definitions, keys) = CustomEndpointDefinitions::from_legacy(&legacy).unwrap();
+        let endpoint_id = definitions.id_at(0).unwrap().clone();
+
+        manager
+            .update(&mut app, |manager, ctx| {
+                manager.set_custom_endpoint_definitions(definitions.clone(), ctx);
+                assert_eq!(manager.custom_endpoints()[0].api_key, "");
+                manager.persist_custom_endpoint_keys(keys, ctx)
+            })
+            .unwrap();
+        manager.read(&app, |manager, _| {
+            assert_eq!(manager.custom_endpoint_key(&endpoint_id), Some("secret"));
+            assert_eq!(manager.custom_endpoints()[0].api_key, "secret");
+            assert!(manager.custom_model_providers_for_request(true).is_some());
+        });
+
+        manager.update(&mut app, |manager, ctx| {
+            manager.invalidate_custom_endpoint_definitions(ctx);
+        });
+        manager.read(&app, |manager, _| {
+            assert!(!manager.custom_endpoint_settings_valid());
+            assert!(manager.custom_endpoints().is_empty());
+            assert!(manager.custom_model_providers_for_request(true).is_none());
+            assert_eq!(manager.custom_endpoint_key(&endpoint_id), Some("secret"));
+        });
+
+        manager.update(&mut app, |manager, ctx| {
+            manager.set_custom_endpoint_definitions(definitions, ctx);
+        });
+        manager.read(&app, |manager, _| {
+            assert!(manager.custom_endpoint_settings_valid());
+            assert_eq!(manager.custom_endpoints()[0].api_key, "secret");
+        });
+
+        manager
+            .update(&mut app, |manager, ctx| {
+                manager.persist_custom_endpoint_key(endpoint_id.clone(), None, ctx)
+            })
+            .unwrap();
+        manager.read(&app, |manager, _| {
+            assert_eq!(manager.custom_endpoint_key(&endpoint_id), None);
+            assert_eq!(manager.custom_endpoints()[0].api_key, "");
+            assert!(manager.custom_model_providers_for_request(true).is_none());
+        });
+    });
+}
+
+#[test]
+fn empty_active_definitions_disable_the_legacy_fallback() {
+    warpui_core::App::test((), |mut app| async move {
+        let manager = app.add_singleton_model(|_| {
+            make_manager(ApiKeys {
+                custom_endpoints: vec![endpoint_with_keys(
+                    "Legacy",
+                    "https://legacy.example.com",
+                    "secret",
+                    &[("model", None, "config-key")],
+                )],
+                ..Default::default()
+            })
+        });
+        manager.read(&app, |manager, _| {
+            assert!(manager.custom_model_providers_for_request(true).is_some());
+        });
+
+        manager.update(&mut app, |manager, ctx| {
+            manager.set_custom_endpoint_definitions(CustomEndpointDefinitions::default(), ctx);
+        });
+        manager.read(&app, |manager, _| {
+            assert!(manager.custom_endpoints().is_empty());
+            assert!(manager.custom_model_providers_for_request(true).is_none());
+        });
+    });
+}
+// ── serde round-trip ────────────────────────────────────────────
+
+#[test]
+fn serde_round_trip_empty() {
+    let keys = ApiKeys::default();
+    let json = serde_json::to_string(&keys).unwrap();
+    let deser: ApiKeys = serde_json::from_str(&json).unwrap();
+    assert_eq!(keys, deser);
+}
+
+#[test]
+fn serde_round_trip_with_provider_keys() {
+    let keys = ApiKeys {
+        openai: Some("sk-openai".into()),
+        anthropic: Some("sk-ant-abc".into()),
+        google: Some("AIzaSy123".into()),
+        open_router: Some("sk-or-xxx".into()),
+        custom_endpoints: vec![],
+    };
+    let json = serde_json::to_string(&keys).unwrap();
+    let deser: ApiKeys = serde_json::from_str(&json).unwrap();
+    assert_eq!(keys, deser);
+}
+
+#[test]
+fn serde_round_trip_with_custom_endpoints() {
+    let keys = ApiKeys {
+        openai: None,
+        anthropic: None,
+        google: None,
+        open_router: None,
+        custom_endpoints: vec![
+            endpoint("ep1", "https://a.io/v1", "key1", &[("gpt-4", Some("fast"))]),
+            endpoint(
+                "ep2",
+                "https://b.io/v1",
+                "key2",
+                &[("llama-70b", None), ("mixtral", Some("mix"))],
+            ),
+        ],
+    };
+    let json = serde_json::to_string(&keys).unwrap();
+    let deser: ApiKeys = serde_json::from_str(&json).unwrap();
+    assert_eq!(keys, deser);
+}
+
+#[test]
+fn serde_ignores_unknown_fields() {
+    let json = r#"{"openai":"sk-x","unknown_field":"value","custom_endpoints":[]}"#;
+    let keys: ApiKeys = serde_json::from_str(json).unwrap();
+    assert_eq!(keys.openai, Some("sk-x".into()));
+    assert!(keys.custom_endpoints.is_empty());
+}
+#[test]
+fn serde_legacy_endpoint_defaults_to_chat_completions() {
+    let endpoint: CustomEndpoint = serde_json::from_str(
+        r#"{"name":"legacy","url":"https://example.com","api_key":"key","models":[]}"#,
+    )
+    .unwrap();
+    assert_eq!(endpoint.schema, CustomEndpointSchema::OpenaiChatCompletions);
+}
+
+// ── has_any_key ─────────────────────────────────────────────────
+
+#[test]
+fn has_any_key_false_when_empty() {
+    assert!(!ApiKeys::default().has_any_key());
+}
+
+#[test]
+fn has_any_key_true_for_openai_only() {
+    let keys = ApiKeys {
+        openai: Some("sk-x".into()),
+        ..Default::default()
+    };
+    assert!(keys.has_any_key());
+}
+
+#[test]
+fn has_any_key_true_for_custom_endpoints_only() {
+    let keys = ApiKeys {
+        custom_endpoints: vec![endpoint("ep", "https://a.io", "key", &[("m", None)])],
+        ..Default::default()
+    };
+    assert!(keys.has_any_key());
+}
+
+#[test]
+fn has_any_key_false_for_endpoint_with_empty_api_key() {
+    let keys = ApiKeys {
+        custom_endpoints: vec![endpoint("ep", "https://a.io", "", &[("m", None)])],
+        ..Default::default()
+    };
+    assert!(!keys.has_any_key());
+}
+
+// ── provider_key_count ─────────────────────────────────────────
+
+#[test]
+fn provider_key_count_zero_when_empty() {
+    assert_eq!(ApiKeys::default().provider_key_count(), 0);
+}
+
+#[test]
+fn provider_key_count_counts_each_provider_key() {
+    let keys = ApiKeys {
+        openai: Some("sk-o".into()),
+        anthropic: Some("sk-a".into()),
+        google: Some("AIza".into()),
+        open_router: Some("sk-or".into()),
+        custom_endpoints: vec![],
+    };
+    assert_eq!(keys.provider_key_count(), 4);
+}
+
+#[test]
+fn provider_key_count_ignores_blank_keys_and_endpoints() {
+    let keys = ApiKeys {
+        openai: Some("sk-o".into()),
+        anthropic: Some("   ".into()),
+        google: None,
+        open_router: None,
+        custom_endpoints: vec![endpoint("ep", "https://a.io", "k", &[("m", None)])],
+    };
+    // Only the non-blank OpenAI key counts; the whitespace Anthropic key and the
+    // custom endpoint are excluded.
+    assert_eq!(keys.provider_key_count(), 1);
+}
+
+// ── custom_model_providers_for_request ──────────────────────────
+
+#[test]
+fn custom_model_providers_none_when_empty() {
+    let mgr = make_manager(ApiKeys::default());
+    assert!(mgr.custom_model_providers_for_request(true).is_none());
+}
+
+#[test]
+fn custom_model_providers_none_when_byo_disabled() {
+    let mgr = make_manager(ApiKeys {
+        custom_endpoints: vec![endpoint("ep", "https://a.io", "k", &[("m", None)])],
+        ..Default::default()
+    });
+    assert!(mgr.custom_model_providers_for_request(false).is_none());
+}
+
+#[test]
+fn custom_model_providers_populates_single_endpoint() {
+    let mgr = make_manager(ApiKeys {
+        custom_endpoints: vec![endpoint_with_keys(
+            "My EP",
+            "https://custom.io/v1",
+            "ep-key",
+            &[("big-model", Some("alias"), "uuid-1")],
+        )],
+        ..Default::default()
+    });
+    let result = mgr.custom_model_providers_for_request(true).unwrap();
+    assert_eq!(result.providers.len(), 1);
+    let p = &result.providers[0];
+    assert_eq!(p.base_url, "https://custom.io/v1");
+    assert_eq!(p.api_key, "ep-key");
+    assert_eq!(p.models.len(), 1);
+    assert_eq!(p.models[0].slug, "big-model");
+    assert_eq!(p.models[0].config_key, "uuid-1");
+    assert_eq!(p.schema, CustomEndpointSchema::OpenaiChatCompletions as i32);
+}
+
+#[test]
+fn multiple_endpoints_all_serialize() {
+    let mgr = make_manager(ApiKeys {
+        custom_endpoints: vec![
+            endpoint_with_keys(
+                "ep1",
+                "https://a.io",
+                "k1",
+                &[("gpt-4", Some("fast"), "uuid-a")],
+            ),
+            endpoint_with_keys(
+                "ep2",
+                "https://b.io",
+                "k2",
+                &[
+                    ("llama-70b", None, "uuid-b"),
+                    ("mixtral", Some("mix"), "uuid-c"),
+                ],
+            ),
+        ],
+        ..Default::default()
+    });
+    let result = mgr.custom_model_providers_for_request(true).unwrap();
+    assert_eq!(result.providers.len(), 2);
+    assert_eq!(result.providers[0].base_url, "https://a.io");
+    assert_eq!(result.providers[0].models[0].config_key, "uuid-a");
+    assert_eq!(result.providers[1].base_url, "https://b.io");
+    assert_eq!(result.providers[1].models.len(), 2);
+    assert_eq!(result.providers[1].models[0].slug, "llama-70b");
+    assert_eq!(result.providers[1].models[0].config_key, "uuid-b");
+    assert_eq!(result.providers[1].models[1].config_key, "uuid-c");
+}
+
+#[test]
+fn byok_disabled_returns_none_even_with_endpoints() {
+    let mgr = make_manager(ApiKeys {
+        custom_endpoints: vec![endpoint("ep", "https://a.io", "k", &[("m", None)])],
+        ..Default::default()
+    });
+    assert!(mgr.custom_model_providers_for_request(false).is_none());
+}
+
+#[test]
+fn empty_api_key_endpoints_are_skipped() {
+    let mgr = make_manager(ApiKeys {
+        custom_endpoints: vec![
+            endpoint_with_keys("empty", "https://a.io", "", &[("m", None, "uuid-x")]),
+            endpoint_with_keys("ok", "https://b.io", "k", &[("m", None, "uuid-y")]),
+        ],
+        ..Default::default()
+    });
+    let result = mgr.custom_model_providers_for_request(true).unwrap();
+    assert_eq!(result.providers.len(), 1);
+    assert_eq!(result.providers[0].base_url, "https://b.io");
+}
+
+#[test]
+fn endpoints_with_only_empty_models_are_skipped() {
+    let mgr = make_manager(ApiKeys {
+        custom_endpoints: vec![endpoint_with_keys(
+            "ep",
+            "https://a.io",
+            "k",
+            &[("", None, "uuid-z")],
+        )],
+        ..Default::default()
+    });
+    assert!(mgr.custom_model_providers_for_request(true).is_none());
+}
+
+// ── display_label fallback ─────────────────────────────────────
+
+#[test]
+fn display_label_uses_alias_when_present() {
+    let m = CustomEndpointModel {
+        name: "raw-name".into(),
+        alias: Some("My Alias".into()),
+        config_key: "k".into(),
+    };
+    assert_eq!(m.display_label(), "My Alias");
+}
+
+#[test]
+fn display_label_falls_back_to_name_when_alias_missing() {
+    let m = CustomEndpointModel {
+        name: "raw-name".into(),
+        alias: None,
+        config_key: "k".into(),
+    };
+    assert_eq!(m.display_label(), "raw-name");
+}
+
+#[test]
+fn display_label_falls_back_to_name_when_alias_is_whitespace() {
+    let m = CustomEndpointModel {
+        name: "raw-name".into(),
+        alias: Some("   ".into()),
+        config_key: "k".into(),
+    };
+    assert_eq!(m.display_label(), "raw-name");
+}
+
+// ── api_keys_for_request ────────────────────────────────────────
+
+#[test]
+fn api_keys_for_request_none_when_empty() {
+    let mgr = make_manager(ApiKeys::default());
+    assert!(mgr.api_keys_for_request(true, false, None).is_none());
+}
+
+#[test]
+fn api_keys_for_request_populates_provider_keys() {
+    let mgr = make_manager(ApiKeys {
+        openai: Some("sk-o".into()),
+        anthropic: Some("sk-a".into()),
+        ..Default::default()
+    });
+    let result = mgr.api_keys_for_request(true, false, None).unwrap();
+    assert_eq!(result.openai, "sk-o");
+    assert_eq!(result.anthropic, "sk-a");
+    assert!(result.google.is_empty());
+}
+
+#[test]
+fn api_keys_for_request_omits_keys_when_byo_disabled() {
+    let mgr = make_manager(ApiKeys {
+        openai: Some("sk-o".into()),
+        ..Default::default()
+    });
+    // With BYO disabled and no other credentials, returns None.
+    assert!(mgr.api_keys_for_request(false, false, None).is_none());
+}
+
+#[test]
+fn api_keys_for_request_none_for_custom_endpoints_only() {
+    let mgr = make_manager(ApiKeys {
+        custom_endpoints: vec![endpoint("ep", "https://a.io", "k", &[("m", None)])],
+        ..Default::default()
+    });
+    assert!(mgr.api_keys_for_request(true, false, None).is_none());
+}
+
+// ── grok oauth token ────────────────────────────────────────────
+
+#[test]
+fn grok_access_token_present_without_expiry() {
+    let t = GrokTokens {
+        access_token: "tok".into(),
+        ..Default::default()
+    };
+    assert_eq!(t.access_token_for_request(), Some("tok"));
+}
+
+#[test]
+fn grok_access_token_blank_is_none() {
+    let t = GrokTokens {
+        access_token: "   ".into(),
+        ..Default::default()
+    };
+    assert_eq!(t.access_token_for_request(), None);
+}
+
+#[test]
+fn grok_access_token_near_expiry_still_sent() {
+    // Expired tokens are still sent; the server is the authority on validity.
+    let t = grok_tokens("tok", Some(0));
+    assert_eq!(t.access_token_for_request(), Some("tok"));
+}
+
+#[test]
+fn grok_access_token_far_future_is_some() {
+    let t = grok_tokens("tok", Some(3600));
+    assert_eq!(t.access_token_for_request(), Some("tok"));
+}
+
+#[test]
+fn grok_needs_refresh_within_lead_time() {
+    assert!(grok_tokens("tok", Some(30)).needs_refresh(Duration::from_secs(300)));
+    assert!(!grok_tokens("tok", Some(3600)).needs_refresh(Duration::from_secs(300)));
+    // Expired tokens still need a refresh.
+    assert!(grok_tokens("tok", Some(0)).needs_refresh(Duration::from_secs(300)));
+    // Unknown expiry never reports as needing refresh.
+    assert!(!grok_tokens("tok", None).needs_refresh(Duration::from_secs(300)));
+}
+
+#[test]
+fn api_keys_for_request_includes_grok_token() {
+    let mgr = make_manager_with_grok(
+        ApiKeys::default(),
+        Some(grok_tokens("grok-abc", Some(3600))),
+    );
+    let result = mgr.api_keys_for_request(true, false, None).unwrap();
+    assert_eq!(result.grok_oauth_access_token, "grok-abc");
+    assert!(result.anthropic.is_empty());
+}
+
+#[test]
+fn api_keys_for_request_omits_grok_token_when_byo_disabled() {
+    // The Grok subscription is user-provided auth, so it follows the BYO
+    // policy gate: with BYO disabled and no other credentials, returns None.
+    let mgr = make_manager_with_grok(
+        ApiKeys::default(),
+        Some(grok_tokens("grok-abc", Some(3600))),
+    );
+    assert!(mgr.api_keys_for_request(false, false, None).is_none());
+}
+
+#[test]
+fn api_keys_for_request_includes_expired_grok_token() {
+    // Expired tokens are still sent in requests; the server rejects truly
+    // invalid ones and the background refresh replaces them.
+    let mgr = make_manager_with_grok(ApiKeys::default(), Some(grok_tokens("grok-abc", Some(0))));
+    let result = mgr.api_keys_for_request(true, false, None).unwrap();
+    assert_eq!(result.grok_oauth_access_token, "grok-abc");
+}
+
+#[test]
+fn has_grok_subscription_false_when_not_connected() {
+    let mgr = make_manager(ApiKeys::default());
+    assert!(!mgr.has_grok_subscription());
+}
+
+#[test]
+fn has_grok_subscription_true_when_connected() {
+    let mgr = make_manager_with_grok(
+        ApiKeys::default(),
+        Some(grok_tokens("grok-abc", Some(3600))),
+    );
+    assert!(mgr.has_grok_subscription());
+}
+
+#[test]
+fn has_grok_subscription_true_for_expired_token() {
+    // A connected subscription still counts even when its token is past expiry:
+    // the token is sent anyway and the server is the authority on validity.
+    let mgr = make_manager_with_grok(ApiKeys::default(), Some(grok_tokens("grok-abc", Some(0))));
+    assert!(mgr.has_grok_subscription());
+}
+
+#[test]
+fn has_grok_subscription_false_when_token_blank() {
+    // A blank token can't be sent, so it does not count as a usable credential.
+    let mgr = make_manager_with_grok(ApiKeys::default(), Some(grok_tokens("   ", None)));
+    assert!(!mgr.has_grok_subscription());
+}
+
+// ── ApiKeyManager::has_any_key ──────────────────
+
+#[test]
+fn manager_has_any_key_false_when_no_keys_and_no_grok() {
+    let mgr = make_manager(ApiKeys::default());
+    assert!(!mgr.has_any_key());
+}
+
+#[test]
+fn manager_has_any_key_true_for_pasted_key_without_grok() {
+    let mgr = make_manager(ApiKeys {
+        openai: Some("sk-x".into()),
+        ..Default::default()
+    });
+    assert!(mgr.has_any_key());
+}
+
+#[test]
+fn manager_has_any_key_true_for_connected_grok_without_pasted_key() {
+    // The crux: a connected Grok subscription counts even with no pasted keys,
+    // matching how it's sent as a BYO credential on requests.
+    let mgr = make_manager_with_grok(
+        ApiKeys::default(),
+        Some(grok_tokens("grok-abc", Some(3600))),
+    );
+    assert!(mgr.has_any_key());
+}
+
+#[test]
+fn manager_has_any_key_false_for_blank_grok_and_no_keys() {
+    let mgr = make_manager_with_grok(ApiKeys::default(), Some(grok_tokens("   ", None)));
+    assert!(!mgr.has_any_key());
+}
+
+// ── ChatGPT subscription ────────────────────────────────────────
+
+fn chatgpt_connection(token_sharing_active: bool) -> ChatGPTConnectionStatus {
+    ChatGPTConnectionStatus::Connected(ChatGPTConnection {
+        email: Some("user@example.com".into()),
+        connected_at: SystemTime::now(),
+        token_sharing_active,
+    })
+}
+
+fn make_manager_with_chatgpt(chatgpt_connection: ChatGPTConnectionStatus) -> ApiKeyManager {
+    let mut manager = make_manager(ApiKeys::default());
+    manager.chatgpt_connection = chatgpt_connection;
+    manager
+}
+
+#[test]
+fn has_chatgpt_subscription_false_when_status_unknown_or_not_connected() {
+    assert!(
+        !make_manager_with_chatgpt(ChatGPTConnectionStatus::Unknown).has_chatgpt_subscription()
+    );
+    assert!(
+        !make_manager_with_chatgpt(ChatGPTConnectionStatus::NotConnected)
+            .has_chatgpt_subscription()
+    );
+}
+
+#[test]
+fn has_chatgpt_subscription_true_when_token_sharing_active() {
+    let mgr = make_manager_with_chatgpt(chatgpt_connection(true));
+    assert!(mgr.has_chatgpt_subscription());
+    // The subscription is BYO inference, so it counts as a usable credential
+    // even with no pasted keys, matching the connected-Grok case.
+    assert!(mgr.has_any_key());
+}
+
+#[test]
+fn has_chatgpt_subscription_false_when_linked_without_token_sharing() {
+    // A linked account without delegated credentials can't fund requests, so
+    // it must not count as a usable credential.
+    let mgr = make_manager_with_chatgpt(chatgpt_connection(false));
+    assert!(!mgr.has_chatgpt_subscription());
+    assert!(!mgr.has_any_key());
+}
+
+// ── geap credentials ────────────────────────────────────────────
+
+#[test]
+fn geap_access_token_present_without_expiry() {
+    let credentials = GeapCredentials::new("tok".into(), None);
+    assert_eq!(credentials.access_token_for_request(), Some("tok"));
+}
+
+#[test]
+fn geap_access_token_blank_is_none() {
+    let credentials = GeapCredentials::new("   ".into(), None);
+    assert_eq!(credentials.access_token_for_request(), None);
+}
+
+#[test]
+fn geap_access_token_near_expiry_still_sent() {
+    // Expired tokens are still sent; Google is the authority on validity.
+    let credentials = geap_credentials("tok", Some(0));
+    assert_eq!(credentials.access_token_for_request(), Some("tok"));
+}
+
+#[test]
+fn geap_needs_refresh_lead_time_boundaries() {
+    // Within the 5-minute lead window.
+    assert!(geap_credentials("tok", Some(30)).needs_refresh());
+    // Comfortably fresh.
+    assert!(!geap_credentials("tok", Some(3600)).needs_refresh());
+    // Already expired -> still needs a refresh.
+    assert!(geap_credentials("tok", Some(0)).needs_refresh());
+    // Unknown expiry never reports as needing a refresh.
+    assert!(!geap_credentials("tok", None).needs_refresh());
+}
+
+#[test]
+fn api_keys_for_request_includes_geap_token_when_gate_and_binding_match() {
+    let mgr = make_manager_with_geap(geap_loaded("geap-abc", Some(3600)));
+    let result = mgr
+        .api_keys_for_request(false, false, Some(geap_gate()))
+        .unwrap();
+    let credentials = result.google_cloud_credentials.unwrap();
+    assert_eq!(credentials.access_token, "geap-abc");
+    // The GEAP token is independent of the BYO key gate.
+    assert!(result.anthropic.is_empty());
+}
+
+#[test]
+fn api_keys_for_request_includes_expired_geap_token() {
+    // Expired tokens are still attached — never silently dropped. Google
+    // rejects truly invalid ones, which surfaces a recoverable error instead
+    // of a silent fallback to another route.
+    let mgr = make_manager_with_geap(geap_loaded("geap-abc", Some(0)));
+    let result = mgr
+        .api_keys_for_request(false, false, Some(geap_gate()))
+        .unwrap();
+    assert_eq!(
+        result.google_cloud_credentials.unwrap().access_token,
+        "geap-abc"
+    );
+}
+
+#[test]
+fn api_keys_for_request_omits_geap_token_without_gate() {
+    // No gate (policy off at the call site) ⇒ no GEAP credentials, even when
+    // a token is loaded.
+    let mgr = make_manager_with_geap(geap_loaded("geap-abc", Some(3600)));
+    assert!(mgr.api_keys_for_request(false, false, None).is_none());
+}
+
+#[test]
+fn api_keys_for_request_omits_geap_token_on_binding_mismatch() {
+    let mgr = make_manager_with_geap(geap_loaded("geap-abc", Some(3600)));
+
+    // A different user (sign-out/account switch).
+    let mut gate = geap_gate();
+    gate.user_uid = "someone-else".into();
+    assert!(mgr.api_keys_for_request(false, false, Some(gate)).is_none());
+
+    // A different audience (admin changed the pool/provider).
+    let mut gate = geap_gate();
+    gate.audience = "//iam.googleapis.com/projects/2/locations/global/workloadIdentityPools/other/providers/other".into();
+    assert!(mgr.api_keys_for_request(false, false, Some(gate)).is_none());
+
+    // A different service account (admin changed impersonation target).
+    let mut gate = geap_gate();
+    gate.federation = GeapFederation::ServiceAccount {
+        email: "other@proj.iam.gserviceaccount.com".into(),
+    };
+    assert!(mgr.api_keys_for_request(false, false, Some(gate)).is_none());
+}
+
+#[test]
+fn api_keys_for_request_serves_previous_geap_token_while_refreshing() {
+    // A re-mint in flight keeps serving the previous token — tokens stay
+    // until replaced.
+    let mgr = make_manager_with_geap(GeapCredentialsState::Refreshing {
+        previous: Some((geap_credentials("geap-old", Some(10)), geap_binding())),
+    });
+    let result = mgr
+        .api_keys_for_request(false, false, Some(geap_gate()))
+        .unwrap();
+    assert_eq!(
+        result.google_cloud_credentials.unwrap().access_token,
+        "geap-old"
+    );
+}
+
+#[test]
+fn api_keys_for_request_omits_geap_token_during_first_mint() {
+    // The very first mint has nothing to serve yet.
+    let mgr = make_manager_with_geap(GeapCredentialsState::Refreshing { previous: None });
+    assert!(
+        mgr.api_keys_for_request(false, false, Some(geap_gate()))
+            .is_none()
+    );
+}
+
+#[test]
+fn api_keys_for_request_omits_geap_token_for_non_loaded_states() {
+    for state in [
+        GeapCredentialsState::Missing,
+        GeapCredentialsState::Disabled,
+        GeapCredentialsState::Unconfigured,
+        GeapCredentialsState::Failed {
+            error: LoadGeapCredentialsError::ExchangeToken {
+                status: None,
+                detail: "boom".into(),
+            },
+        },
+    ] {
+        let mgr = make_manager_with_geap(state);
+        assert!(
+            mgr.api_keys_for_request(false, false, Some(geap_gate()))
+                .is_none()
+        );
+    }
+}
+
+#[test]
+fn api_keys_for_request_omits_geap_token_when_previous_binding_mismatches() {
+    let mgr = make_manager_with_geap(GeapCredentialsState::Refreshing {
+        previous: Some((geap_credentials("geap-old", Some(10)), geap_binding())),
+    });
+    let mut gate = geap_gate();
+    gate.user_uid = "someone-else".into();
+    assert!(mgr.api_keys_for_request(false, false, Some(gate)).is_none());
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn geap_expired_refresh_eligibility_requires_expired_matching_binding() {
+    let binding = geap_gate();
+    let expired = make_manager_with_geap(geap_loaded("expired", Some(0)));
+    assert!(expired.geap_expired_refresh_eligibility(&binding));
+
+    let valid = make_manager_with_geap(geap_loaded("valid", Some(3600)));
+    assert!(!valid.geap_expired_refresh_eligibility(&binding));
+
+    let refreshing = make_manager_with_geap(GeapCredentialsState::Refreshing {
+        previous: Some((geap_credentials("expired", Some(0)), binding.clone())),
+    });
+    assert!(refreshing.geap_expired_refresh_eligibility(&binding));
+
+    let first_mint = make_manager_with_geap(GeapCredentialsState::Refreshing { previous: None });
+    assert!(!first_mint.geap_expired_refresh_eligibility(&binding));
+
+    let mut mismatched = binding.clone();
+    mismatched.user_uid = "different-user".into();
+    assert!(!expired.geap_expired_refresh_eligibility(&mismatched));
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn begin_expired_geap_refresh_is_single_flight() {
+    App::test((), |mut app| async move {
+        let manager = app.add_model(|_| make_manager_with_geap(geap_loaded("expired", Some(0))));
+        manager.update(&mut app, |manager, ctx| {
+            let binding = geap_gate();
+            let mut kickoff_count = 0;
+            // The kickoff stands in for the app-layer mint: committing to mint
+            // is what installs the waiter and opens the single-flight window.
+            let first = manager.begin_expired_geap_refresh(&binding, ctx, |manager, waiter, _| {
+                kickoff_count += 1;
+                manager.install_geap_refresh_waiter(Some(waiter));
+            });
+            let second = manager.begin_expired_geap_refresh(&binding, ctx, |manager, waiter, _| {
+                kickoff_count += 1;
+                manager.install_geap_refresh_waiter(Some(waiter));
+            });
+
+            assert!(first.is_some());
+            assert!(second.is_some());
+            // The second request attached to the in-flight mint instead of
+            // starting its own.
+            assert_eq!(kickoff_count, 1);
+            assert_eq!(manager.take_geap_refresh_waiters().len(), 2);
+            // Taking the waiters closes the window.
+            assert!(manager.geap_refresh_waiters.is_none());
+        });
+    });
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn declined_geap_kickoff_leaves_no_in_flight_window() {
+    App::test((), |mut app| async move {
+        let manager = app.add_model(|_| make_manager_with_geap(geap_loaded("expired", Some(0))));
+        manager.update(&mut app, |manager, ctx| {
+            let binding = geap_gate();
+            // A kickoff that hits one of its own guards returns without
+            // minting, dropping the sender rather than installing it.
+            let receiver = manager.begin_expired_geap_refresh(&binding, ctx, |_, _waiter, _| {});
+            assert!(receiver.is_some());
+            // No window was opened, so a later request starts a fresh kickoff
+            // instead of attaching to a mint that is not running. This is what
+            // makes "waiters present" mean "mint in flight".
+            assert!(manager.geap_refresh_waiters.is_none());
+        });
+    });
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn geap_mint_failure_cooldown_suppresses_the_blocking_wait() {
+    let binding = geap_gate();
+    let mut manager = make_manager_with_geap(geap_loaded("expired", Some(0)));
+    assert!(manager.geap_expired_refresh_eligibility(&binding));
+
+    // A failed mint restores the expired credential, so without the cooldown
+    // every following request would block on a mint that is failing.
+    manager.record_geap_mint_failure();
+    assert!(!manager.geap_expired_refresh_eligibility(&binding));
+
+    // A later success reopens the blocking path.
+    manager.clear_geap_mint_failure();
+    assert!(manager.geap_expired_refresh_eligibility(&binding));
+}
+
+// ── chatgpt connection status ──────────────────
+
+fn chatgpt_connected() -> ChatGPTConnectionStatus {
+    ChatGPTConnectionStatus::Connected(ChatGPTConnection {
+        email: Some("user@example.com".into()),
+        connected_at: SystemTime::now(),
+        token_sharing_active: true,
+    })
+}
+
+/// Runs `f` against a fresh manager and returns the events it emitted.
+fn chatgpt_events(
+    f: impl FnOnce(&mut ApiKeyManager, &mut ModelContext<ApiKeyManager>) + 'static,
+) -> Vec<ApiKeyManagerEvent> {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let events_for_test = events.clone();
+    warpui_core::App::test((), |mut app| async move {
+        let manager = app.add_model(|_| make_manager(ApiKeys::default()));
+        let sink = events_for_test.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_model(&manager, move |_, event, _| {
+                sink.borrow_mut().push(event.clone());
+            });
+        });
+        manager.update(&mut app, f);
+    });
+    Rc::try_unwrap(events).unwrap().into_inner()
+}
+
+#[test]
+fn chatgpt_connection_is_only_reported_when_connected() {
+    let mut mgr = make_manager(ApiKeys::default());
+    assert_eq!(mgr.chatgpt_connection(), None);
+    mgr.chatgpt_connection = ChatGPTConnectionStatus::NotConnected;
+    assert_eq!(mgr.chatgpt_connection(), None);
+    mgr.chatgpt_connection = chatgpt_connected();
+    assert_eq!(
+        mgr.chatgpt_connection().map(|c| c.token_sharing_active),
+        Some(true)
+    );
+}
+
+#[test]
+fn set_chatgpt_connection_status_emits_only_on_change() {
+    let events = chatgpt_events(|manager, ctx| {
+        manager.set_chatgpt_connection_status(ChatGPTConnectionStatus::NotConnected, ctx);
+        manager.set_chatgpt_connection_status(ChatGPTConnectionStatus::NotConnected, ctx);
+        manager.set_chatgpt_connection_status(chatgpt_connected(), ctx);
+    });
+    assert_eq!(
+        events,
+        vec![
+            ApiKeyManagerEvent::ChatGPTConnectionUpdated,
+            ApiKeyManagerEvent::ChatGPTConnectionUpdated,
+        ]
+    );
+}
+
+#[test]
+fn set_chatgpt_connection_status_does_not_clear_pending_connect() {
+    let events = chatgpt_events(|manager, ctx| {
+        manager.set_chatgpt_oauth_pending(true, ctx);
+        // A refresh unrelated to the browser handoff (e.g. opening settings)
+        // must not be mistaken for the attempt finishing.
+        manager.set_chatgpt_connection_status(ChatGPTConnectionStatus::NotConnected, ctx);
+        assert!(manager.chatgpt_oauth_pending());
+    });
+    assert!(!events.iter().any(is_connect_failed));
+}
+
+fn is_connect_failed(event: &ApiKeyManagerEvent) -> bool {
+    matches!(event, ApiKeyManagerEvent::ChatGPTConnectFailed(_))
+}
+
+#[test]
+fn resolve_chatgpt_oauth_reports_failure_when_server_has_no_link() {
+    let events = chatgpt_events(|manager, ctx| {
+        manager.set_chatgpt_oauth_pending(true, ctx);
+        manager.resolve_chatgpt_oauth(Some(ChatGPTConnectionStatus::NotConnected), ctx);
+        assert!(!manager.chatgpt_oauth_pending());
+        assert_eq!(
+            manager.chatgpt_connection_status(),
+            &ChatGPTConnectionStatus::NotConnected
+        );
+    });
+    assert_eq!(
+        events,
+        vec![
+            ApiKeyManagerEvent::ChatGPTConnectionUpdated,
+            ApiKeyManagerEvent::ChatGPTConnectionUpdated,
+            ApiKeyManagerEvent::ChatGPTConnectFailed(ChatGPTConnectFailure::Unknown),
+        ]
+    );
+}
+
+#[test]
+fn resolve_chatgpt_oauth_succeeds_when_server_reports_link() {
+    let events = chatgpt_events(|manager, ctx| {
+        manager.set_chatgpt_oauth_pending(true, ctx);
+        manager.resolve_chatgpt_oauth(Some(chatgpt_connected()), ctx);
+        assert!(!manager.chatgpt_oauth_pending());
+        assert!(manager.chatgpt_connection().is_some());
+    });
+    assert!(!events.iter().any(is_connect_failed));
+}
+
+#[test]
+fn resolve_chatgpt_oauth_keeps_cached_status_when_fetch_failed() {
+    let events = chatgpt_events(|manager, ctx| {
+        manager.set_chatgpt_connection_status(chatgpt_connected(), ctx);
+        manager.set_chatgpt_oauth_pending(true, ctx);
+        manager.resolve_chatgpt_oauth(None, ctx);
+        assert!(!manager.chatgpt_oauth_pending());
+        assert!(manager.chatgpt_connection().is_some());
+    });
+    assert!(!events.iter().any(is_connect_failed));
+}
+
+#[test]
+fn fail_chatgpt_oauth_reports_the_browser_reported_reason() {
+    let events = chatgpt_events(|manager, ctx| {
+        manager.set_chatgpt_oauth_pending(true, ctx);
+        manager.fail_chatgpt_oauth(ChatGPTConnectFailure::AlreadyLinked, ctx);
+        assert!(!manager.chatgpt_oauth_pending());
+    });
+    assert_eq!(
+        events,
+        vec![
+            ApiKeyManagerEvent::ChatGPTConnectionUpdated,
+            ApiKeyManagerEvent::ChatGPTConnectionUpdated,
+            ApiKeyManagerEvent::ChatGPTConnectFailed(ChatGPTConnectFailure::AlreadyLinked),
+        ]
+    );
+}
+
+#[test]
+fn chatgpt_connect_failure_parses_server_error_codes() {
+    let cases = [
+        ("already_linked", ChatGPTConnectFailure::AlreadyLinked),
+        ("email_unverified", ChatGPTConnectFailure::EmailUnverified),
+        ("denied", ChatGPTConnectFailure::Denied),
+        ("account_mismatch", ChatGPTConnectFailure::AccountMismatch),
+        ("failed", ChatGPTConnectFailure::Unknown),
+        ("", ChatGPTConnectFailure::Unknown),
+    ];
+    for (code, expected) in cases {
+        assert_eq!(
+            ChatGPTConnectFailure::from_deep_link_code(code),
+            expected,
+            "code {code:?}"
+        );
+    }
+}
+
+#[test]
+fn fail_chatgpt_oauth_without_pending_attempt_is_a_no_op() {
+    let events = chatgpt_events(|manager, ctx| {
+        manager.fail_chatgpt_oauth(ChatGPTConnectFailure::Denied, ctx);
+    });
+    assert!(events.is_empty());
+}
+
+#[test]
+fn resolve_chatgpt_oauth_without_pending_attempt_never_reports_failure() {
+    // e.g. an ordinary login while nothing was pending.
+    let events = chatgpt_events(|manager, ctx| {
+        manager.resolve_chatgpt_oauth(Some(ChatGPTConnectionStatus::NotConnected), ctx);
+    });
+    assert_eq!(events, vec![ApiKeyManagerEvent::ChatGPTConnectionUpdated]);
+}
+
+// ── grok expiry + blocking-refresh eligibility ──────────────────
+
+#[cfg(not(target_family = "wasm"))]
+fn expired_grok_tokens() -> GrokTokens {
+    // Already past hard expiry, with a refresh token available.
+    GrokTokens {
+        access_token: "stale-access".into(),
+        refresh_token: Some("refresh".into()),
+        expires_at: Some(SystemTime::now() - Duration::from_secs(60)),
+        connected_at: None,
+    }
+}
+
+#[test]
+fn grok_is_expired_semantics() {
+    // Past hard expiry.
+    assert!(
+        GrokTokens {
+            expires_at: Some(SystemTime::now() - Duration::from_secs(1)),
+            ..Default::default()
+        }
+        .is_expired()
+    );
+    // Still valid, even if near expiry (within the proactive lead window).
+    assert!(!grok_tokens("tok", Some(60)).is_expired());
+    // Unknown expiry is never considered expired.
+    assert!(!grok_tokens("tok", None).is_expired());
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn grok_expired_refresh_token_returns_token_when_expired() {
+    let mgr = make_manager_with_grok(ApiKeys::default(), Some(expired_grok_tokens()));
+    assert_eq!(
+        mgr.grok_expired_refresh_token(true),
+        Some("refresh".to_string())
+    );
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn grok_expired_refresh_token_none_when_byo_disabled() {
+    let mgr = make_manager_with_grok(ApiKeys::default(), Some(expired_grok_tokens()));
+    assert_eq!(mgr.grok_expired_refresh_token(false), None);
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn grok_expired_refresh_token_none_when_near_expiry_but_valid() {
+    // Within the proactive lead window but not yet expired: the background timer
+    // handles this, so the blocking path stays out of it.
+    let mgr = make_manager_with_grok(ApiKeys::default(), Some(grok_tokens("near", Some(60))));
+    assert_eq!(mgr.grok_expired_refresh_token(true), None);
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn grok_expired_refresh_token_none_when_no_tokens() {
+    let mgr = make_manager_with_grok(ApiKeys::default(), None);
+    assert_eq!(mgr.grok_expired_refresh_token(true), None);
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn grok_expired_refresh_token_none_when_no_refresh_token() {
+    let mut tokens = expired_grok_tokens();
+    tokens.refresh_token = None;
+    let mgr = make_manager_with_grok(ApiKeys::default(), Some(tokens));
+    assert_eq!(mgr.grok_expired_refresh_token(true), None);
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn grok_expired_refresh_token_none_when_no_expiry() {
+    // A token with no known expiry is never considered expired.
+    let mgr = make_manager_with_grok(ApiKeys::default(), Some(grok_tokens("no-expiry", None)));
+    assert_eq!(mgr.grok_expired_refresh_token(true), None);
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn grok_expired_refresh_token_ignores_in_flight_refresh() {
+    // Eligibility is independent of whether a refresh is already running: a
+    // request must still be able to attach to the in-flight refresh (that
+    // coordination happens in `begin_expired_grok_refresh`), rather than being
+    // told no refresh is needed and sending the expired token.
+    let mut mgr = make_manager_with_grok(ApiKeys::default(), Some(expired_grok_tokens()));
+    mgr.grok_refresh_waiters = Some(Vec::new());
+    assert_eq!(
+        mgr.grok_expired_refresh_token(true),
+        Some("refresh".to_string())
+    );
+}

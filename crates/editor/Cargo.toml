@@ -1,0 +1,82 @@
+[package]
+name = "warp_editor"
+authors = ["Warp Team <dev@warp.dev>"]
+version = "0.1.0"
+edition = "2024"
+description = "Text editing for Warp"
+exclude = ["test_data/*",]
+publish.workspace = true
+license.workspace = true
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[features]
+test-util = []
+
+[dependencies]
+anyhow.workspace = true
+arrayvec.workspace = true
+asset_cache.workspace = true
+async-channel.workspace = true
+bytes.workspace = true
+enum-iterator.workspace = true
+futures-lite.workspace = true
+float-cmp.workspace = true
+instant.workspace = true
+itertools.workspace = true
+lazy_static.workspace = true
+log.workspace = true
+mime_guess.workspace = true
+num-traits.workspace = true
+ordered-float.workspace = true
+html5ever.workspace = true
+markup5ever = "0.35.0"
+ipynb_parser.workspace = true
+markdown_parser.workspace = true
+mermaid_to_svg.workspace = true
+parking_lot.workspace = true
+rand.workspace = true
+rangemap.workspace = true
+regex-automata.workspace = true
+regex-syntax = "0.8.2"
+urlocator.workspace = true
+serde.workspace = true
+serde_yaml.workspace = true
+string-offset.workspace = true
+sum_tree.workspace = true
+thiserror.workspace = true
+unicode-linebreak.workspace = true
+pathfinder_color = "0.5.0"
+unicode-segmentation.workspace = true
+unicode-width.workspace = true
+vec1.workspace = true
+warpui_core.workspace = true
+warp_core.workspace = true
+warp_errors.workspace = true
+warp_util.workspace = true
+rayon.workspace = true
+line-ending.workspace = true
+vim.workspace = true
+imara-diff = "0.2"
+
+[dev-dependencies]
+rust-embed.workspace = true
+enclose = "1.1.8"
+env_logger.workspace = true
+sum_tree = { workspace = true, features = ["test-util"] }
+warp_core = { workspace = true, features = ["test-util"] }
+warpui = { workspace = true, features = ["test-util"] }
+criterion = { version = "0.5.1", features = ["html_reports"] }
+
+[[bench]]
+name = "buffer_bench"
+harness = false
+
+[[bench]]
+name = "char_cell_bench"
+harness = false
+required-features = ["test-util"]
+
+[[bench]]
+name = "text_layout_bench"
+harness = false

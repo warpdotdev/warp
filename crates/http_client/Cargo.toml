@@ -1,0 +1,46 @@
+[package]
+name = "http_client"
+edition = "2024"
+authors.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[features]
+test-util = []
+
+[dependencies]
+anyhow.workspace = true
+async-compat.workspace = true
+async-stream.workspace = true
+bytes.workspace = true
+cfg-if.workspace = true
+futures.workspace = true
+http.workspace = true
+log.workspace = true
+oauth2.workspace = true
+prevent_sleep.workspace = true
+prost.workspace = true
+reqwest.workspace = true
+reqwest-eventsource.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_urlencoded.workspace = true
+warp_core.workspace = true
+warp_errors.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# Used to read the current OTEL span context and inject it as a trace-link
+# header on cloud-agent requests. Native-only so the wasm build is unaffected.
+opentelemetry.workspace = true
+tracing.workspace = true
+tracing-opentelemetry.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+gloo.workspace = true
+wasm-bindgen-futures.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+# Install a real OTEL tracer/subscriber in tests so an active span produces a
+# valid span context for the trace-link header.
+opentelemetry_sdk.workspace = true
+tracing-subscriber.workspace = true

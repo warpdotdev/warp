@@ -1,0 +1,53 @@
+[advisories]
+git-fetch-with-cli = true
+ignore = [
+    { id = "RUSTSEC-2025-0141", reason = "bincode is unmaintained, but considered to be complete." },
+    { id = "RUSTSEC-2024-0388", reason = "derivative is unmaintained; we should try to find an alternative." },
+    { id = "RUSTSEC-2024-0425", reason = "get-size is unmaintained; we should try to find an alternative." },
+    { id = "RUSTSEC-2024-0427", reason = "get-size-derive is an unmaintained dependency of get-size." },
+    { id = "RUSTSEC-2024-0370", reason = "proc-macro-error is a unmaintained dependency of get-size-derive." },
+    { id = "RUSTSEC-2024-0384", reason = "instant is unmaintained; we should migrate to web-time." },
+    { id = "RUSTSEC-2020-0077", reason = "memmap is unmaintained; we should migrate to memmap2." },
+    { id = "RUSTSEC-2024-0436", reason = "paste is unmaintained; this is a dependency of metal, which we should eliminate by moving to the objc2 family of crates."},
+    { id = "RUSTSEC-2023-0081", reason = "safemem is unmaintained; this is a dependency of plist." },
+]
+
+[licenses]
+# Don't worry about licenses for crates in this workspace.
+private = { ignore = true }
+# Explicitly allowed licenses.
+# This list must stay in sync with about.toml's accepted list.
+# CI enforces this via script/check_license_config_sync.
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CC0-1.0",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "MPL-2.0",
+    "Unlicense",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "Zlib",
+]
+
+[bans]
+# We allow dependencies on multiple versions of crates.
+multiple-versions = "allow"
+# Do not allow wildcard versions, except in our private path-based dependencies
+# (i.e.: workspace crates).
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+allow-git = [
+    # Allow git reference to Core Foundation crates until they publish an updated
+    # version to crates.io.
+    "https://github.com/servo/core-foundation-rs",
+]
+# Allow git references to all GitHub repositories in the warpdotdev organization.
+allow-org = { github = ["warpdotdev"] }

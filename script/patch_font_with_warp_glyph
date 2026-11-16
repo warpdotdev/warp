@@ -1,0 +1,113 @@
+#!/usr/bin/env -S fontforge -script
+# Script that patches a given font to include the Warp logo as a glyph in the font,
+# using a unicode codepoint in the private use area.
+import os
+import sys
+
+import fontforge
+import psMat
+
+# Default values match what we used when initially patching Roboto.
+SCRIPT_DIR = os.path.dirname(os.path.abspath(sys.argv[0]))
+DEFAULT_SVG_PATH = os.path.join(SCRIPT_DIR, "warp.svg")
+DEFAULT_CODEPOINT = 0xE500  # Private Use Area
+DEFAULT_GLYPH_NAME = "warpLogo"
+
+
+def usage(exit_code: int) -> None:
+    prog = os.path.basename(sys.argv[0])
+    print(
+        "\n".join(
+            [
+                f"Usage: {prog} <font.ttf> [--svg <icon.svg>] [--codepoint <hex>] [--name <glyph_name>]",
+                "",
+                "Patches the given font by importing an SVG icon as a new glyph.",
+                "Defaults:",
+                f"  --svg {DEFAULT_SVG_PATH}",
+                f"  --codepoint 0x{DEFAULT_CODEPOINT:04X}",
+                f"  --name {DEFAULT_GLYPH_NAME}",
+            ]
+        )
+    )
+    raise SystemExit(exit_code)
+
+
+def parse_args(argv):
+    if len(argv) < 2 or argv[1] in ("-h", "--help"):
+        usage(0 if len(argv) >= 2 else 2)
+
+    font_path = argv[1]
+    svg_path = DEFAULT_SVG_PATH
+    codepoint = DEFAULT_CODEPOINT
+    glyph_name = DEFAULT_GLYPH_NAME
+
+    i = 2
+    while i < len(argv):
+        arg = argv[i]
+
+        if arg == "--svg":
+            i += 1
+            if i >= len(argv):
+                usage(2)
+            svg_path = argv[i]
+        elif arg == "--codepoint":
+            i += 1
+            if i >= len(argv):
+                usage(2)
+            v = argv[i]
+            # Accept 0xE500, E500, or decimal.
+            codepoint = int(v, 16) if (v.startswith("0x") or any(c in v.lower() for c in "abcdef")) else int(v)
+        elif arg == "--name":
+            i += 1
+            if i >= len(argv):
+                usage(2)
+            glyph_name = argv[i]
+        else:
+            print(f"Unknown argument: {arg}")
+            usage(2)
+
+        i += 1
+
+    return font_path, svg_path, codepoint, glyph_name
+
+
+def patch_font(font_path: str, svg_path: str, codepoint: int, glyph_name: str) -> None:
+    if not os.path.exists(font_path):
+        raise SystemExit(f"Font not found: {font_path}")
+
+    if not os.path.exists(svg_path):
+        raise SystemExit(f"SVG not found: {svg_path}")
+
+    font = fontforge.open(font_path)
+
+    # Create or replace the glyph.
+    g = font.createChar(codepoint, glyph_name)
+    g.clear()
+
+    # Import the outlines.
+    g.importOutlines(svg_path)
+
+    # Clean up and make it robust for rasterization.
+    g.removeOverlap()
+    g.simplify()
+    g.correctDirection()
+
+    # Keep the logo from looking low: align the bottom of the imported outline to the baseline.
+    # (This is the same adjustment we ended up applying after the initial patch.)
+    xmin, ymin, xmax, ymax = g.boundingBox()
+    if ymin != 0:
+        g.transform(psMat.translate(0, -ymin))
+        g.round()
+
+    font.generate(font_path)
+    font.close()
+
+
+def main():
+    font_path, svg_path, codepoint, glyph_name = parse_args(sys.argv)
+    patch_font(font_path, svg_path, codepoint, glyph_name)
+    print(f"Patched {font_path} with U+{codepoint:04X} ({glyph_name})")
+
+
+if __name__ == "__main__":
+    main()

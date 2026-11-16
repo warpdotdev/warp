@@ -1,0 +1,5346 @@
+use std::borrow::Cow;
+use std::collections::{HashMap, HashSet};
+use std::ffi::OsString;
+use std::future::Future;
+use std::io::{self, Write};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::{Duration, SystemTime};
+
+use ai::skills::{ParsedSkill, WARP_SKILL_DIRS_ENV, parse_skills_dirs_env};
+use anyhow::{Context as _, anyhow};
+use chrono::{DateTime, Utc};
+use futures::FutureExt as _;
+use futures::channel::oneshot;
+use futures::future::{self, Either, FusedFuture};
+use itertools::Itertools as _;
+use oneshot::{Canceled, Receiver};
+use session_sharing_protocol::sharer::SessionRetentionReason;
+use tempfile::TempDir;
+use tracing::Instrument as _;
+use uuid::Uuid;
+use warp_cli::agent::{Harness, HarnessTransport, OutputFormat};
+use warp_cli::mcp::MCPSpec;
+use warp_cli::share::ShareRequest;
+use warp_core::features::FeatureFlag;
+use warp_core::{safe_debug, safe_error, safe_info, safe_warn};
+use warp_errors::{ErrorExt, ReportErrorLogMode, register_error, report_error, report_if_error};
+use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
+use warp_graphql::queries::task_restricted_git_credentials::GitHubCredentialMode;
+use warp_managed_secrets::ManagedSecretValue;
+use warpui::r#async::executor::Background;
+use warpui::r#async::{FutureExt, TimeoutError, Timer};
+use warpui::{
+    AppContext, Entity, EntityId, ModelContext, ModelHandle, ModelSpawner, SingletonEntity,
+};
+
+use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
+use crate::ai::agent::{
+    AIAgentActionResultType, AIAgentExchange, AIAgentInput, AIAgentOutput, AIAgentOutputStatus,
+    BaseUserQuery, CancellationReason, FinishedAIAgentOutput, RenderableAIError,
+    RequestFileEditsResult, TransientNetworkErrorKind,
+};
+use crate::ai::agent_sdk::driver::harness::exit_escalation::{
+    ExitEscalation, ExitEscalationAction, ExitEscalationEvent, driver_result_after_harness_run,
+};
+use crate::ai::agent_sdk::driver::harness::launch_warmup::LaunchFileWarmup;
+use crate::ai::agent_sdk::driver::harness::{
+    HarnessCleanupDisposition, HarnessKind, HarnessRunner, ResumePayload, SavePoint,
+    ThirdPartyHarness, ThirdPartyHarnessTelemetryEvent, harness_env_vars, renders_natively,
+    task_env_vars,
+};
+use crate::ai::agent_sdk::environment_snapshot::EnvironmentSnapshotReporter;
+use crate::ai::agent_sdk::execution_config;
+use crate::ai::agent_sdk::setup_observability::{
+    OzRunTimelineEvent, SetupClientEventReporter, SetupStep,
+};
+use crate::ai::ambient_agents::task::HarnessModelConfig;
+use crate::ai::ambient_agents::{
+    AmbientAgentTaskId, AmbientConversationStatus, conversation_output_status_from_conversation,
+};
+use crate::ai::aws_credentials::BedrockOidcCredentialsConfig;
+use crate::ai::bedrock_credentials;
+use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
+use crate::ai::blocklist::block::FinishReason;
+use crate::ai::blocklist::local_agent_task_sync_model::LocalAgentTaskSyncModel;
+use crate::ai::blocklist::orchestration_event_streamer::{
+    register_agent_event_consumer, unregister_agent_event_consumer,
+};
+use crate::ai::blocklist::orchestration_events::OrchestrationEventService;
+use crate::ai::blocklist::pending_cli_harness_prompt_queue::PendingCliHarnessPromptQueue;
+use crate::ai::blocklist::{
+    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, ConversationStatusUpdate, FinalizeReason,
+    QueuedQueryEvent, QueuedQueryModel, finalize_recording_for_conversation,
+};
+use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
+use crate::ai::document::ai_document_model::{AIDocumentModel, AIDocumentModelEvent};
+use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
+use crate::ai::llms::{LLMId, LLMPreferences};
+use crate::auth::AuthStateProvider;
+use crate::auth::credentials::Credentials;
+use crate::cloud_object::{CloudObject, CloudObjectLookup as _};
+use crate::send_telemetry_from_app_ctx;
+use crate::server::ids::{ServerId, SyncId};
+use crate::server::server_api::ServerApiProvider;
+use crate::server::server_api::ai::{AIClient, TaskGitCredentialsError, TaskStatusUpdate};
+use crate::server::server_api::harness_support::{
+    HarnessSupportClient, ResolvePromptAttachedSkill, ResolvePromptRequest,
+};
+use crate::server::server_api::managed_secrets::AppManagedSecretManager as ManagedSecretManager;
+use crate::server::team_scope::RequestTeamScope;
+use crate::terminal::ShellLaunchData;
+use crate::terminal::cli_agent_sessions::plugin_manager::{
+    CliAgentPluginManager, PluginInstallError, plugin_manager_for_with_shell,
+};
+use crate::terminal::cli_agent_sessions::{
+    CLIAgentSessionStatus, CLIAgentSessionsModel, CLIAgentSessionsModelEvent,
+};
+use crate::terminal::model::BlockId;
+use crate::terminal::view::ConversationRestorationInNewPaneType;
+use crate::workspaces::user_workspaces::{HeadlessTeamScope, ResolvedTeamScope, UserWorkspaces};
+use crate::workspaces::workspace::BillingMetadata;
+
+pub(crate) mod agent_setup;
+pub(crate) mod attachments;
+#[cfg(feature = "local_fs")]
+pub(crate) mod cache_setup;
+mod checkpoint_coordinator;
+pub(crate) mod cloud_provider;
+pub(crate) mod environment;
+#[cfg(feature = "local_fs")]
+pub(crate) mod environment_checkout;
+mod environment_checkout_protocol;
+mod environment_preparation;
+mod error_classification;
+mod failure_output;
+pub(crate) mod git_credentials;
+pub(crate) mod harness;
+mod harness_output_monitor;
+pub(crate) mod mcp_startup;
+pub(super) mod output;
+mod preview_proxy;
+mod preview_retention;
+mod prewarmed;
+mod restored_children;
+mod setup_vars;
+mod skill_references;
+mod snapshot;
+pub(crate) mod terminal;
+mod termination;
+
+use environment::PrepareEnvironmentError;
+use git_credentials::ManagedStoreOwner;
+pub(crate) use mcp_startup::MCP_SERVER_STARTUP_TIMEOUT;
+use preview_retention::PreviewRetention;
+pub(crate) use snapshot::upload_snapshot_for_handoff;
+use terminal::TerminalDriverEvent;
+use termination::{Interrupt, InterruptWatch, RunEndCause};
+
+/// Races `run_future` against optional background credential refresh loops,
+/// dropping the loops automatically when `run_future` resolves.
+///
+/// Both refresh loops run forever when active; they are dropped when
+/// `futures::select!` picks the `run_future` arm. This consolidates the
+/// otherwise-repeated 4-arm `match (git, bedrock)` pattern that would
+/// otherwise appear once per harness type.
+async fn with_credential_refreshes<F, T>(
+    run_future: F,
+    git_task_id: Option<String>,
+    ai_client: Arc<dyn AIClient>,
+    use_factory_repositories: bool,
+    bedrock_oidc_credentials: Option<(BedrockOidcCredentialsConfig, Option<RequestTeamScope>)>,
+    foreground: &ModelSpawner<AgentDriver>,
+) -> Result<T, AgentDriverError>
+where
+    F: Future<Output = Result<T, AgentDriverError>>,
+{
+    let mode = foreground
+        .spawn(|me, _| me.github_credential_mode)
+        .await
+        .unwrap_or(GitHubCredentialMode::RestrictedInstallation);
+    let git_refresh = async move {
+        match git_task_id {
+            Some(task_id) => {
+                git_credentials::refresh_loop(task_id, ai_client, use_factory_repositories, mode)
+                    .await
+            }
+            None => future::pending::<Result<(), TaskGitCredentialsError>>().await,
+        }
+    }
+    .fuse();
+
+    let bedrock_refresh = async move {
+        match bedrock_oidc_credentials {
+            Some((config, request_scope)) => {
+                bedrock_credentials::refresh_loop(config, request_scope, foreground).await
+            }
+            None => future::pending::<()>().await,
+        }
+    }
+    .fuse();
+
+    let run_future = run_future.fuse();
+    futures::pin_mut!(run_future, git_refresh, bedrock_refresh);
+    futures::select! {
+        result = run_future => result,
+        result = git_refresh => {
+            result.map_err(AgentDriverError::GitCredentialsFetchFailed)?;
+            Err(AgentDriverError::InvalidRuntimeState)
+        },
+        _ = bedrock_refresh => unreachable!("Bedrock credentials refresh loop resolved unexpectedly"),
+    }
+}
+
+const HARNESS_SAVE_INTERVAL: Duration = Duration::from_secs(5 * 60);
+/// Delay after the initial exit request before retrying with the harness's
+/// follow-up input (e.g. Claude's confirmation-dialog dismissal). Sent
+/// unconditionally, without waiting to see whether it's needed.
+const HARNESS_EXIT_FOLLOWUP_DELAY: Duration = Duration::from_secs(1);
+/// Delay after the follow-up retry before giving up on a graceful exit and
+/// force-killing the harness's process group. Together with
+/// `HARNESS_EXIT_FOLLOWUP_DELAY` this bounds the whole escalation ladder to
+/// ~15s from the initial exit request — independent of, and much shorter
+/// than, `WARP_SANDBOX_DEADLINE`.
+const HARNESS_EXIT_FORCE_KILL_DELAY: Duration = Duration::from_secs(14);
+/// Bound on the end-of-run wait for `LocalAgentTaskSyncModel` to finish
+/// delivering queued task status updates before the process may exit.
+const TASK_STATUS_FLUSH_TIMEOUT: Duration = Duration::from_secs(5);
+/// Timeout for individual harness auth preflight commands.
+const PREFLIGHT_CHECK_TIMEOUT: Duration = Duration::from_secs(30);
+/// How long the echo that shows the transport fallback notice may take before setup moves on.
+const TRANSPORT_FALLBACK_NOTICE_TIMEOUT: Duration = Duration::from_secs(10);
+/// Last-resort bound for draining `PendingCliHarnessPromptQueue` when the CLI-harness plugin
+/// never reports `CLIAgentSessionsModelEvent::StatusChanged` with `CLIAgentSessionStatus::InProgress`
+/// — the normal drain signal. Finding anything still queued once this window elapses is not a
+/// routine race: a healthy plugin reports `InProgress` almost immediately after the harness
+/// starts processing its turn, so hitting this fallback indicates a broken or missing plugin
+/// integration (e.g. a Codex session on the OSC 9 fallback, whose notifications only ever map
+/// to `Success`, never `InProgress`). Draining is idempotent, so this is a silent no-op in the
+/// healthy case where the normal drain already ran. Set below the ~10 minutes the server allows
+/// before it expects the agent to have started working after a run is claimed, so this fallback
+/// still has a chance to recover queued prompts before the server considers the run stalled.
+const PENDING_CLI_HARNESS_PROMPT_QUEUE_FALLBACK_DRAIN_TIMEOUT: Duration =
+    Duration::from_secs(8 * 60);
+pub(crate) const WARP_DRIVE_SYNC_TIMEOUT: Duration = Duration::from_secs(60);
+/// Maximum time to wait for an automatic error resume before propagating the error.
+/// If no follow-up status arrives within this window, the driver terminates with the
+/// original error so the CLI does not hang indefinitely.
+///
+/// This is re-armed per recovery attempt: a recovery that lands flips the conversation
+/// back to `InProgress`, which cancels the deadline, and a subsequent failure schedules a
+/// fresh one. So it bounds a single attempt, not the whole recovery chain — but a single
+/// attempt's wait (including the recovery backoff) still has to fit inside it.
+pub(crate) const AUTO_RESUME_TIMEOUT: Duration = Duration::from_secs(120);
+/// Signals to Claude child-harness hooks that Warp already owns the background
+/// message-listener lifecycle, so the plugin should reuse the shared state
+/// files instead of spawning and cleaning up its own listener.
+///
+/// When this variable is absent, the Claude plugin falls back to its legacy
+/// self-managed listener path so older Warp builds and standalone plugin
+/// invocations keep working.
+pub(crate) const OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV: &str =
+    "OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY";
+/// Warp-branded name for the same signal, injected alongside the `OZ_` one with the same value.
+pub(crate) const WARP_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV: &str =
+    "WARP_MESSAGE_LISTENER_MANAGED_EXTERNALLY";
+/// Optional root directory for the per-session Claude message-listener state
+/// that Warp and the Claude hook scripts share.
+pub(crate) const OZ_MESSAGE_LISTENER_STATE_ROOT_ENV: &str = "OZ_MESSAGE_LISTENER_STATE_ROOT";
+/// Warp-branded name for the same state root, injected alongside the `OZ_` one.
+pub(crate) const WARP_MESSAGE_LISTENER_STATE_ROOT_ENV: &str = "WARP_MESSAGE_LISTENER_STATE_ROOT";
+// Keep exporting the legacy `OZ_PARENT_*` names to child hooks until the
+// external Claude plugin has fully migrated to the canonical
+// `OZ_MESSAGE_LISTENER_*` names.
+const LEGACY_OZ_PARENT_LISTENER_MANAGED_EXTERNALLY_ENV: &str =
+    "OZ_PARENT_LISTENER_MANAGED_EXTERNALLY";
+const LEGACY_OZ_PARENT_STATE_ROOT_ENV: &str = "OZ_PARENT_STATE_ROOT";
+
+/// Abstraction over how [`IdleTimeoutSender::end_run_after`] waits out its deadline, so tests
+/// can substitute a controllable wait for a real, wall-clock-dependent `thread::sleep` and
+/// deterministically exercise the moment the timer commits to firing.
+trait IdleWait: Send + Sync {
+    fn wait(&self, duration: Duration);
+}
+
+struct RealIdleWait;
+
+impl IdleWait for RealIdleWait {
+    fn wait(&self, duration: Duration) {
+        thread::sleep(duration);
+    }
+}
+
+/// Sends one exit signal for run idle timeouts or standby expiry.
+///
+/// We use a generation-based approach to cancel timers instead of storing timer handles:
+///
+/// - `tx_cell` holds the completion sender; taking it ensures we only complete once.
+/// - `timer_generation` starts at 0 and is incremented each time we want to cancel
+///   existing timers and potentially start a new one. When a timer fires, it checks
+///   if its generation still matches the current generation. If not, the timer was
+///   "cancelled" by a newer timer and should not complete the conversation.
+///
+/// This approach avoids the complexity of storing and cancelling timer handles,
+/// while allowing multiple events to safely race without double-completion.
+pub(crate) struct IdleTimeoutSender<T: Send + 'static> {
+    tx_cell: Arc<Mutex<Option<oneshot::Sender<T>>>>,
+    generation: Arc<AtomicUsize>,
+    /// Most recent [`Self::arm_refreshable`] call. Held here rather than by the caller so a
+    /// long-lived refresher cannot re-arm with a superseded outcome.
+    pending: Arc<Mutex<Option<(T, Duration)>>>,
+    wait: Arc<dyn IdleWait>,
+    /// Invoked synchronously, on whichever thread wins the race to complete the run,
+    /// immediately before the value is sent — including on `end_run_after`'s background
+    /// timer thread, before it ever touches the oneshot. Lets a caller commit
+    /// externally-observable state (e.g. "this conversation's ambient run is exiting") at the
+    /// exact moment of commitment, rather than only after the completion reaches the model
+    /// thread via the oneshot and any further async plumbing (QUALITY-1801).
+    on_commit: Arc<dyn Fn() + Send + Sync>,
+    preview_retention: Option<PreviewRetention>,
+}
+
+// Hand-written so cloning does not require `T: Clone`. Every field is a shared handle, so
+// clones drive the same completion.
+impl<T: Send + 'static> Clone for IdleTimeoutSender<T> {
+    fn clone(&self) -> Self {
+        Self {
+            tx_cell: Arc::clone(&self.tx_cell),
+            generation: Arc::clone(&self.generation),
+            pending: Arc::clone(&self.pending),
+            wait: Arc::clone(&self.wait),
+            on_commit: Arc::clone(&self.on_commit),
+            preview_retention: self.preview_retention.clone(),
+        }
+    }
+}
+
+impl<T: Send + 'static> IdleTimeoutSender<T> {
+    /// Creates a shared, single-use exit signal without starting a timer.
+    pub(crate) fn new(tx: oneshot::Sender<T>) -> Self {
+        Self {
+            tx_cell: Arc::new(Mutex::new(Some(tx))),
+            generation: Arc::new(AtomicUsize::new(0)),
+            pending: Arc::new(Mutex::new(None)),
+            wait: Arc::new(RealIdleWait),
+            on_commit: Arc::new(|| {}),
+            preview_retention: None,
+        }
+    }
+
+    /// Registers `on_commit` to run synchronously, on whichever thread performs it, immediately
+    /// before every future completion send.
+    fn with_on_commit(mut self, on_commit: impl Fn() + Send + Sync + 'static) -> Self {
+        self.on_commit = Arc::new(on_commit);
+        self
+    }
+
+    /// End the run by sending `value` immediately.
+    pub(crate) fn end_run_now(&self, value: T) {
+        if let Ok(mut guard) = self.tx_cell.lock()
+            && let Some(sender) = guard.take()
+        {
+            self.generation.fetch_add(1, Ordering::SeqCst);
+            (self.on_commit)();
+            let _ = sender.send(value);
+        }
+    }
+
+    /// End the run after `timeout` by sending `value`, unless cancelled before then.
+    pub(crate) fn end_run_after(&self, timeout: Duration, value: T) {
+        self.schedule_idle_timeout(timeout, value, false);
+    }
+
+    fn schedule_idle_timeout(&self, timeout: Duration, value: T, retain_previews: bool) {
+        // Increment the generation counter to invalidate any existing timers,
+        // then capture the new generation for our timer to check against.
+        let current_gen = {
+            let Ok(_guard) = self.tx_cell.lock() else {
+                return;
+            };
+            self.generation.fetch_add(1, Ordering::SeqCst) + 1
+        };
+        let sender = self.clone();
+        let wait = Arc::clone(&self.wait);
+
+        // Spawn a background thread that will complete the oneshot after the idle timeout,
+        // unless a follow-up query resets the timer (by bumping the generation counter).
+        thread::spawn(move || {
+            wait.wait(timeout);
+            if retain_previews
+                && !timeout.is_zero()
+                && let Some(retention) = sender.preview_retention.clone()
+            {
+                let background = retention.background.clone();
+                background
+                    .spawn(async move {
+                        sender
+                            .finish_retained_idle(current_gen, value, retention)
+                            .await;
+                    })
+                    .detach();
+            } else {
+                sender.commit_idle_timeout(current_gen, value);
+            }
+        });
+    }
+    async fn finish_retained_idle(&self, generation: usize, value: T, retention: PreviewRetention) {
+        while self.generation.load(Ordering::SeqCst) == generation {
+            let delay = (retention.check)().await;
+            if self.generation.load(Ordering::SeqCst) != generation {
+                return;
+            }
+            match delay {
+                Some(delay) => (retention.wait)(delay).await,
+                None => {
+                    self.commit_idle_timeout(generation, value);
+                    return;
+                }
+            }
+        }
+    }
+
+    fn commit_idle_timeout(&self, generation: usize, value: T) {
+        if let Ok(mut guard) = self.tx_cell.lock()
+            && self.generation.load(Ordering::SeqCst) == generation
+            && let Some(sender) = guard.take()
+        {
+            (self.on_commit)();
+            let _ = sender.send(value);
+        }
+    }
+
+    /// Cancel any pending idle timers.
+    ///
+    /// Also drops the recorded [`Self::arm_refreshable`] outcome, so a refresher that outlives the
+    /// cancellation cannot reschedule the exit it was cancelling.
+    pub(crate) fn cancel_idle_timeout(&self) {
+        if let Ok(mut pending) = self.pending.lock() {
+            *pending = None;
+        }
+        // Serialize invalidation with the final generation check and synchronous exit commitment.
+        if let Ok(_guard) = self.tx_cell.lock() {
+            self.generation.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    /// End the run with `value`, deferring by a positive `idle_timeout` and completing immediately
+    /// for zero or `None`.
+    fn complete_with_optional_idle(&self, idle_timeout: Option<Duration>, value: T) {
+        match idle_timeout {
+            Some(Duration::ZERO) => {
+                self.cancel_idle_timeout();
+                self.end_run_now(value);
+            }
+            Some(idle_timeout) => self.schedule_idle_timeout(idle_timeout, value, true),
+            None => self.end_run_now(value),
+        }
+    }
+}
+
+impl<T: Clone + Send + 'static> IdleTimeoutSender<T> {
+    /// End the run with `value` after `window`, recording both for [`Self::refresh`].
+    ///
+    /// Re-arming replaces the recorded outcome, so a run that fails, resumes, and fails again
+    /// exits reporting its most recent failure.
+    fn arm_refreshable(&self, window: Duration, value: T) {
+        if let Ok(mut pending) = self.pending.lock() {
+            *pending = Some((value.clone(), window));
+        }
+        self.schedule_idle_timeout(window, value, true);
+    }
+
+    /// Push an armed deadline out by its original window. Returns that window, or `None` if
+    /// nothing was armed.
+    fn refresh(&self) -> Option<Duration> {
+        let (value, window) = {
+            let pending = self.pending.lock().ok()?;
+            pending.clone()?
+        };
+        self.schedule_idle_timeout(window, value, true);
+        Some(window)
+    }
+}
+
+/// Owns the post-failure debug window's idle deadline and the set of debug-turn conversations
+/// pinning it open, for the retained setup-failure lingering path (REMOTE-2661). The idle timer
+/// is free to expire only when no turn is pinning it. Idempotent by turn ID.
+struct DebugWindowController<T: Clone + Send + 'static> {
+    idle_timeout: IdleTimeoutSender<T>,
+    active_turns: Arc<Mutex<HashSet<AIConversationId>>>,
+}
+
+// Hand-written for the same reason as `IdleTimeoutSender`: every field is a shared handle, so
+// clones drive the same underlying state.
+impl<T: Clone + Send + 'static> Clone for DebugWindowController<T> {
+    fn clone(&self) -> Self {
+        Self {
+            idle_timeout: self.idle_timeout.clone(),
+            active_turns: Arc::clone(&self.active_turns),
+        }
+    }
+}
+
+impl<T: Clone + Send + 'static> DebugWindowController<T> {
+    fn new(idle_timeout: IdleTimeoutSender<T>) -> Self {
+        Self {
+            idle_timeout,
+            active_turns: Arc::new(Mutex::new(HashSet::new())),
+        }
+    }
+
+    fn is_pinned(&self) -> bool {
+        self.active_turns
+            .lock()
+            .is_ok_and(|turns| !turns.is_empty())
+    }
+
+    /// Arms or moves the idle deadline. No-op while pinned, since the deadline must not slide
+    /// out from under a turn about to finish and re-arm it anyway. Returns whether it armed.
+    fn refresh_idle(&self, value: T, window: Duration) -> bool {
+        if self.is_pinned() {
+            return false;
+        }
+        self.idle_timeout.arm_refreshable(window, value);
+        true
+    }
+
+    /// Pushes a previously armed deadline out by its original window, unless pinned. Used for
+    /// keystroke-level viewer-input refreshes.
+    fn refresh_from_last_armed(&self) -> Option<Duration> {
+        if self.is_pinned() {
+            return None;
+        }
+        self.idle_timeout.refresh()
+    }
+
+    /// Cancels the idle expiry while at least one debug turn is active. Returns `true` only when
+    /// this call added a new active turn.
+    fn pin_for_turn(&self, turn_id: AIConversationId) -> bool {
+        let Ok(mut turns) = self.active_turns.lock() else {
+            return false;
+        };
+        let was_empty = turns.is_empty();
+        let inserted = turns.insert(turn_id);
+        drop(turns);
+        if was_empty && inserted {
+            self.idle_timeout.cancel_idle_timeout();
+        }
+        inserted
+    }
+
+    /// Removes the pin for `turn_id`, re-arming a full idle window once the last active turn
+    /// ends. Returns `false` for a duplicate or unknown turn ID.
+    fn finish_turn(&self, turn_id: AIConversationId, value: T, window: Duration) -> bool {
+        let Ok(mut turns) = self.active_turns.lock() else {
+            return false;
+        };
+        if !turns.remove(&turn_id) {
+            return false;
+        }
+        let now_empty = turns.is_empty();
+        drop(turns);
+        if now_empty {
+            self.idle_timeout.arm_refreshable(window, value);
+        }
+        true
+    }
+}
+
+/// The status update reported for a run that failed during environment preparation.
+///
+/// The code must stay `EnvironmentSetupFailed`: `TaskStatusMessage::is_environment_setup_failure`
+/// matches that variant alone, and the cloud-continuation resolver keys its no-CTA tombstone off
+/// that check.
+fn setup_failure_status_update(error: &AgentDriverError) -> TaskStatusUpdate {
+    match error {
+        AgentDriverError::SetupCommandFailed {
+            command, output, ..
+        } => error_classification::setup_command_status_update(error, command, output.as_deref()),
+        _ => TaskStatusUpdate::with_error_code(
+            error.to_string(),
+            PlatformErrorCode::EnvironmentSetupFailed,
+        ),
+    }
+}
+
+/// The post-failure debug window's deadline, `window` from now. Shared by
+/// `report_failure_before_lingering` and `publish_debug_window_deadline` so both agree.
+fn debug_window_deadline(window: Duration) -> DateTime<Utc> {
+    Utc::now() + chrono::Duration::from_std(window).unwrap_or_default()
+}
+
+fn debug_turn_task_state(status: &ConversationStatus) -> Option<AgentTaskState> {
+    match status {
+        ConversationStatus::InProgress => Some(AgentTaskState::InProgress),
+        ConversationStatus::Success => Some(AgentTaskState::Succeeded),
+        ConversationStatus::Error => Some(AgentTaskState::Error),
+        ConversationStatus::Cancelled => Some(AgentTaskState::Cancelled),
+        ConversationStatus::Blocked { .. } => Some(AgentTaskState::Blocked),
+        ConversationStatus::TransientError | ConversationStatus::WaitingForEvents => None,
+    }
+}
+
+/// How long the driver should stay alive after the conversation reaches `status`. `None` exits
+/// immediately.
+///
+/// The two windows are deliberately independent and neither is a fallback for the other:
+/// `idle_on_complete` keeps a healthy run available for a follow-up, while `idle_on_fail` keeps a
+/// failed run's shared session attachable. The agent process is the session sharer, so exiting on
+/// error is what tears that session down.
+fn idle_window_for_terminal_status(
+    status: &SDKConversationOutputStatus,
+    idle_on_complete: Option<Duration>,
+    idle_on_fail: Option<Duration>,
+) -> Option<Duration> {
+    match status {
+        SDKConversationOutputStatus::Success
+        | SDKConversationOutputStatus::Blocked { .. }
+        | SDKConversationOutputStatus::Cancelled { .. } => idle_on_complete,
+        SDKConversationOutputStatus::Error { .. } => idle_on_fail,
+    }
+}
+
+/// [`idle_window_for_terminal_status`] for a third-party CLI harness session.
+///
+/// A failed CLI session is the same situation as a failed Oz conversation — the agent process is
+/// still the session sharer — so `--idle-on-fail` has to apply to both, or the flag silently does
+/// nothing depending on which harness the run happened to use.
+fn idle_window_for_cli_session_status(
+    status: &CLIAgentSessionStatus,
+    idle_on_complete: Option<Duration>,
+    idle_on_fail: Option<Duration>,
+) -> Option<Duration> {
+    match status {
+        CLIAgentSessionStatus::Success
+        | CLIAgentSessionStatus::Blocked { .. }
+        | CLIAgentSessionStatus::Cancelled => idle_on_complete,
+        CLIAgentSessionStatus::Failed { .. } => idle_on_fail,
+        CLIAgentSessionStatus::InProgress => None,
+    }
+}
+
+/// What a native conversation status change means for a harness exit signal driven by that
+/// conversation (see `AgentDriver::subscribe_to_native_conversation_status_events`).
+#[derive(Debug, PartialEq, Eq)]
+enum HarnessIdleAction {
+    /// A turn is under way; a pending exit must not fire underneath it.
+    CancelIdle,
+    /// The turn settled; exit after `window`, or immediately when `None`.
+    Exit {
+        window: Option<Duration>,
+        /// The window is a post-failure debug window, kept open by viewer input.
+        failed: bool,
+    },
+    /// Quiescent but not settled; leave the signal as it is.
+    Ignore,
+}
+
+/// [`idle_window_for_terminal_status`] for a harness whose progress is the status of the native
+/// conversation it drives. While the harness `is_settling_turn` (see
+/// [`HarnessRunner::is_settling_turn`]) a settled status is transitional, so nothing is
+/// scheduled on it; the turn that follows cancels any idle anyway.
+fn harness_idle_action_for_conversation_status(
+    status: &ConversationStatus,
+    idle_on_complete: Option<Duration>,
+    idle_on_fail: Option<Duration>,
+    is_settling_turn: bool,
+) -> HarnessIdleAction {
+    if is_settling_turn && !matches!(status, ConversationStatus::InProgress) {
+        return HarnessIdleAction::Ignore;
+    }
+    match status {
+        ConversationStatus::InProgress => HarnessIdleAction::CancelIdle,
+        ConversationStatus::Success
+        | ConversationStatus::Cancelled
+        | ConversationStatus::Blocked { .. } => HarnessIdleAction::Exit {
+            window: idle_on_complete,
+            failed: false,
+        },
+        ConversationStatus::Error => HarnessIdleAction::Exit {
+            window: idle_on_fail,
+            failed: true,
+        },
+        ConversationStatus::TransientError | ConversationStatus::WaitingForEvents => {
+            HarnessIdleAction::Ignore
+        }
+    }
+}
+
+/// Low-cardinality `outcome=` label for the ambient agent idle lifecycle logs.
+fn terminal_status_log_outcome(status: &SDKConversationOutputStatus) -> &'static str {
+    match status {
+        SDKConversationOutputStatus::Success
+        | SDKConversationOutputStatus::Blocked { .. }
+        | SDKConversationOutputStatus::Cancelled { .. } => "non_error_completion",
+        SDKConversationOutputStatus::Error { .. } => "error",
+    }
+}
+
+/// [`terminal_status_log_outcome`] for a third-party CLI harness session.
+fn cli_session_status_log_outcome(status: &CLIAgentSessionStatus) -> &'static str {
+    match status {
+        CLIAgentSessionStatus::Success
+        | CLIAgentSessionStatus::Blocked { .. }
+        | CLIAgentSessionStatus::Cancelled => "non_error_completion",
+        CLIAgentSessionStatus::Failed { .. } => "error",
+        CLIAgentSessionStatus::InProgress => "in_progress",
+    }
+}
+
+/// How to resume an existing conversation when starting an agent run.
+///
+/// Harnesses that render through a native conversation (Oz, and third-party harnesses driven
+/// over ACP) restore the full conversation into the terminal pane and treat any new prompt as a
+/// follow-up; terminal-driven third-party harnesses round-trip a harness-specific payload (see
+/// [`ResumePayload`]) instead.
+pub enum ResumeOptions {
+    Native(Box<ConversationRestorationInNewPaneType>),
+    ThirdParty(Box<ResumePayload>),
+}
+
+/// Configures the terminal and resources for a normal run or task-free standby preparation.
+#[derive(Default)]
+pub struct AgentDriverOptions {
+    /// Initial working directory for the agent's terminal session.
+    pub working_dir: PathBuf,
+    /// Secrets to inject into the agent's terminal session.
+    pub secrets: HashMap<String, ManagedSecretValue>,
+    /// Supplies terminal variables that override secrets but precede provider and run variables.
+    pub environment_variables: HashMap<String, String>,
+    /// ID of the task being executed.
+    pub task_id: Option<AmbientAgentTaskId>,
+    /// Execution identity supplied by the cloud launch.
+    pub execution_id: Option<String>,
+    pub use_factory_repositories: bool,
+    pub github_credential_mode: GitHubCredentialMode,
+    pub(crate) credential_store_owner: Option<ManagedStoreOwner>,
+    /// Server-owned experiments retained without client interpretation.
+    pub experimental: Option<serde_json::Map<String, serde_json::Value>>,
+    /// Parent run ID for child orchestration flows, if this task was spawned by another run.
+    pub parent_run_id: Option<String>,
+    /// Whether the agent run should share its session.
+    pub should_share: bool,
+    /// How long to keep the session alive after the agent run completes, if at all.
+    pub idle_on_complete: Option<Duration>,
+    /// How long to keep the session alive after the agent run ends in a terminal error, if at
+    /// all. Set by the cloud worker from the environment's post-failure session retention policy
+    /// so the failed run's shared session stays attachable for debugging.
+    pub idle_on_fail: Option<Duration>,
+    /// If set, resume an existing conversation instead of starting fresh. The variant
+    /// determines which harness-specific path is taken (Oz transcript restore vs.
+    /// third-party-harness payload rehydration).
+    pub resume: Option<ResumeOptions>,
+    /// Cloud providers to configure within the agent's session.
+    pub cloud_providers: Vec<Box<dyn cloud_provider::CloudProvider>>,
+    pub workspace: environment::WorkspaceConfiguration,
+    pub computer_use_config: Option<(bool, Option<LLMId>)>,
+    /// Selected execution harness for this run.
+    pub selected_harness: Harness,
+    /// How the selected harness is driven. Only used for non-Oz harnesses.
+    pub harness_transport: HarnessTransport,
+    /// Why the run is driven over a PTY although it was requested over ACP, when the sandbox
+    /// had no ACP adapter. The session shows a notice saying so before the harness starts.
+    pub harness_transport_fallback: Option<harness::TransportFallbackReason>,
+    /// Model config for the selected harness. Only used for non-Oz harnesses.
+    pub third_party_harness_model_config: Option<HarnessModelConfig>,
+    /// Stable team scope assigned to this run and its headless window.
+    pub team_scope: Option<HeadlessTeamScope>,
+    pub(crate) bedrock_oidc_credentials: Option<BedrockOidcCredentialsConfig>,
+    /// Whether to skip end-of-run snapshot upload.
+    pub snapshot_disabled: Option<bool>,
+    /// End-of-run snapshot upload timeout override.
+    pub snapshot_upload_timeout: Option<Duration>,
+    /// Declarations script timeout override.
+    pub snapshot_script_timeout: Option<Duration>,
+    /// Periodic checkpoint cadence override. Only used when `FeatureFlag::PeriodicHandoffCheckpoints` is enabled.
+    pub checkpoint_interval: Option<Duration>,
+    /// Skip the initial `StartFromAmbientRunPrompt` so the agent waits for a
+    /// follow-up instead of hallucinating an empty turn. Sourced from the
+    /// `--skip-initial-turn` CLI flag, which the worker emits when the
+    /// execution input has neither a prompt nor a snapshot token.
+    pub skip_initial_turn: bool,
+    /// Fail the run when MCP servers fail to start, instead of continuing
+    /// without the unavailable servers.
+    pub strict_mcp_startup: bool,
+    /// MCP server startup timeout override.
+    pub mcp_startup_timeout: Option<Duration>,
+}
+
+/// Terminal setup for a new session or a pre-warmed assignment.
+struct TerminalLaunchInputs {
+    should_share: bool,
+    conversation_restoration: Option<ConversationRestorationInNewPaneType>,
+    selected_harness: Harness,
+    harness_transport: HarnessTransport,
+}
+
+/// Driver state derived from [`AgentDriverOptions`], with every optional override resolved.
+struct RunConfiguration {
+    working_dir: PathBuf,
+    resolved_env_vars: Arc<HashMap<OsString, OsString>>,
+    preparation_file: Option<environment_preparation::PreparationFile>,
+    harness_config_dir: Option<TempDir>,
+    secrets: HashMap<String, ManagedSecretValue>,
+    task_id: Option<AmbientAgentTaskId>,
+    execution_id: Option<String>,
+    use_factory_repositories: bool,
+    github_credential_mode: GitHubCredentialMode,
+    credential_store_owner: Option<ManagedStoreOwner>,
+    experimental: Option<serde_json::Map<String, serde_json::Value>>,
+    parent_run_id: Option<String>,
+    idle_on_complete: Option<Duration>,
+    idle_on_fail: Option<Duration>,
+    restored_conversation_id: Option<AIConversationId>,
+    resume_payload: Option<ResumePayload>,
+    cloud_providers: Vec<Box<dyn cloud_provider::CloudProvider>>,
+    workspace: environment::WorkspaceConfiguration,
+    skill_dirs: Vec<PathBuf>,
+    skill_reference_dirs: Vec<PathBuf>,
+    computer_use_config: Option<(bool, Option<LLMId>)>,
+    third_party_harness_model_config: Option<HarnessModelConfig>,
+    team_scope: Option<HeadlessTeamScope>,
+    bedrock_oidc_credentials: Option<BedrockOidcCredentialsConfig>,
+    snapshot_disabled: bool,
+    snapshot_upload_timeout: Duration,
+    snapshot_script_timeout: Duration,
+    checkpoint_interval: Duration,
+    skip_initial_turn: bool,
+    strict_mcp_startup: bool,
+    mcp_startup_timeout: Duration,
+    harness_transport_fallback: Option<harness::TransportFallbackReason>,
+}
+
+/// Resolves run options into terminal inputs and driver configuration.
+///
+/// This is the only place [`AgentDriverOptions`] is destructured. A new option therefore cannot
+/// be honored when a run starts normally while being silently dropped when a pre-warmed sandbox
+/// is assigned its task.
+fn split_run_options(
+    options: AgentDriverOptions,
+) -> Result<(TerminalLaunchInputs, RunConfiguration), AgentDriverError> {
+    let AgentDriverOptions {
+        working_dir,
+        secrets,
+        environment_variables,
+        task_id,
+        execution_id,
+        use_factory_repositories,
+        github_credential_mode,
+        credential_store_owner,
+        experimental,
+        parent_run_id,
+        should_share,
+        idle_on_complete,
+        idle_on_fail,
+        resume,
+        cloud_providers,
+        workspace,
+        computer_use_config,
+        selected_harness,
+        harness_transport,
+        harness_transport_fallback,
+        third_party_harness_model_config,
+        team_scope,
+        bedrock_oidc_credentials,
+        snapshot_disabled,
+        snapshot_upload_timeout,
+        snapshot_script_timeout,
+        checkpoint_interval,
+        skip_initial_turn,
+        strict_mcp_startup,
+        mcp_startup_timeout,
+    } = options;
+    if !working_dir.is_absolute() {
+        return Err(AgentDriverError::ConfigBuildFailed(anyhow!(
+            "agent workspace root must be absolute"
+        )));
+    }
+
+    // Split the unified resume option into the two internal slots that the rest of
+    // the driver consumes: native conversation restoration vs. third-party
+    // harness payload rehydration.
+    let (conversation_restoration, resume_payload) = match resume {
+        Some(ResumeOptions::Native(restoration)) => (Some(*restoration), None),
+        Some(ResumeOptions::ThirdParty(payload)) => (None, Some(*payload)),
+        None => (None, None),
+    };
+
+    // Extract the conversation ID if we're restoring a conversation.
+    // This will be used when submitting the initial query to continue the conversation.
+    let restored_conversation_id =
+        conversation_restoration
+            .as_ref()
+            .and_then(|restoration| match restoration {
+                ConversationRestorationInNewPaneType::Historical { conversation, .. } => {
+                    Some(conversation.id())
+                }
+                _ => None,
+            });
+
+    let mut env_vars = build_secret_env_vars(&secrets, &environment_variables)?;
+    env_vars.extend(
+        environment_variables
+            .into_iter()
+            .map(|(name, value)| (OsString::from(name), OsString::from(value))),
+    );
+
+    // Inject cloud provider env vars.
+    cloud_provider::collect_env_vars(&cloud_providers, &mut env_vars)?;
+    env_vars.extend(task_env_vars(
+        task_id.as_ref(),
+        parent_run_id.as_deref(),
+        selected_harness,
+    ));
+    let (harness_env, harness_config_dir) = harness_env_vars(
+        selected_harness,
+        harness_transport,
+        third_party_harness_model_config.as_ref(),
+    )
+    .map_err(|error| AgentDriverError::HarnessConfigSetupFailed {
+        harness: selected_harness.to_string(),
+        error,
+    })?;
+    env_vars.extend(harness_env);
+    let credential_store_owner = credential_store_owner
+        .or_else(|| task_id.map(|id| ManagedStoreOwner::Task(id.to_string())));
+    if github_credential_mode == GitHubCredentialMode::RestrictedInstallation {
+        let owner = credential_store_owner
+            .as_ref()
+            .ok_or(AgentDriverError::InvalidRuntimeState)?;
+        git_credentials::validate_restricted_child_environment(&env_vars)
+            .map_err(AgentDriverError::ConfigBuildFailed)?;
+        env_vars.extend(
+            git_credentials::restricted_child_environment(owner)
+                .map_err(AgentDriverError::ConfigBuildFailed)?,
+        );
+    }
+    if github_credential_mode == GitHubCredentialMode::Legacy {
+        env_vars.insert("WARP_GITHUB_CREDENTIAL_MODE".into(), "legacy".into());
+    }
+    let preparation_file = environment_preparation::launch_environment(
+        workspace.preparation_policy.as_ref(),
+        task_id.map(|id| id.to_string()).as_deref(),
+        &working_dir,
+        &mut env_vars,
+    )
+    .map_err(AgentDriverError::ConfigBuildFailed)?;
+    if let Some(dirs) = &workspace.factory_skill_dirs {
+        env_vars.insert(
+            OsString::from(WARP_SKILL_DIRS_ENV),
+            OsString::from(dirs.iter().map(|dir| dir.to_string_lossy()).join(",")),
+        );
+    }
+    if let Err(error) = git_credentials::prepend_azure_cli_wrapper_to_path(&mut env_vars) {
+        safe_warn!(
+            safe: ("Failed to add the Azure CLI authentication wrapper to PATH"),
+            full: ("Failed to add the Azure CLI authentication wrapper to PATH: {error:#}")
+        );
+    }
+
+    // Signal to third-party harnesses (e.g. Claude Code) that we're in a sandbox
+    // so they allow root execution with permissive flags.
+    if warp_isolation_platform::detect().is_some() {
+        env_vars.insert(OsString::from("IS_SANDBOX"), OsString::from("1"));
+        tracing::Span::current().record("is_sandbox", true);
+    }
+
+    env_vars.insert(
+        OsString::from("WARP_VARS_FILE"),
+        setup_vars::file_path(&working_dir, &env_vars).into_os_string(),
+    );
+
+    let skill_dirs = workspace
+        .factory_skill_dirs
+        .clone()
+        .unwrap_or_else(parse_skills_dirs_env);
+    // Without an execution configuration nothing is merged in, so every folder is the definition's.
+    let skill_reference_dirs = workspace
+        .definition_skill_dirs
+        .clone()
+        .unwrap_or_else(|| skill_dirs.clone());
+    Ok((
+        TerminalLaunchInputs {
+            should_share,
+            conversation_restoration,
+            selected_harness,
+            harness_transport,
+        },
+        RunConfiguration {
+            working_dir,
+            resolved_env_vars: Arc::new(env_vars),
+            preparation_file,
+            harness_config_dir,
+            secrets,
+            task_id,
+            execution_id,
+            use_factory_repositories,
+            github_credential_mode,
+            credential_store_owner,
+            experimental,
+            parent_run_id,
+            idle_on_complete,
+            idle_on_fail,
+            restored_conversation_id,
+            resume_payload,
+            cloud_providers,
+            workspace,
+            skill_dirs,
+            skill_reference_dirs,
+            computer_use_config,
+            third_party_harness_model_config,
+            team_scope,
+            bedrock_oidc_credentials,
+            snapshot_disabled: snapshot_disabled.unwrap_or(false),
+            snapshot_upload_timeout: snapshot_upload_timeout
+                .unwrap_or(snapshot::DEFAULT_SNAPSHOT_UPLOAD_TIMEOUT),
+            snapshot_script_timeout: snapshot_script_timeout
+                .unwrap_or(snapshot::DEFAULT_DECLARATIONS_SCRIPT_TIMEOUT),
+            checkpoint_interval: checkpoint_interval
+                .unwrap_or(checkpoint_coordinator::DEFAULT_CHECKPOINT_INTERVAL),
+            skip_initial_turn,
+            strict_mcp_startup,
+            mcp_startup_timeout: mcp_startup_timeout.unwrap_or(MCP_SERVER_STARTUP_TIMEOUT),
+            harness_transport_fallback,
+        },
+    ))
+}
+
+/// The workspace setup a standby sandbox completed before its assignment arrived.
+pub(crate) struct StandbyWorkspace {
+    pub harness: Harness,
+    /// What was prepared. An assignment is accepted only when its own workspace matches this.
+    pub configuration: environment::WorkspaceConfiguration,
+    /// Repositories to scan for skills, carried over from the preparation.
+    pub repositories: Vec<crate::ai::cloud_environments::SourceRepo>,
+}
+
+/// A run's workspace, before or after setup.
+pub(crate) enum WorkspaceState {
+    /// Set up when the run starts.
+    Pending(environment::WorkspaceConfiguration),
+    /// Set up ahead of time by a standby sandbox, so the run skips preparation entirely.
+    Prepared(StandbyWorkspace),
+}
+
+/// Owns a headless terminal for agent runs or standby resource preparation.
+pub struct AgentDriver {
+    terminal_driver: ModelHandle<terminal::TerminalDriver>,
+    /// Root directory for workspace-wide environment and snapshot operations.
+    working_dir: PathBuf,
+    /// Directory where the selected harness runs.
+    harness_working_dir: PathBuf,
+
+    /// Secrets available to the running agent.
+    /// - Secrets are injected as environment variables when the terminal session is created.
+    /// - Secrets are passed to MCP servers during spawning.
+    secrets: Arc<HashMap<String, ManagedSecretValue>>,
+
+    /// Env vars passed to the terminal session, including resolved secrets, cloud
+    /// provider vars, task vars, and sandbox flags. Passed to
+    /// `build_runner` so harnesses can look up resolved secret values
+    /// without re-deriving precedence.
+    resolved_env_vars: Arc<HashMap<OsString, OsString>>,
+    _preparation_file: Option<environment_preparation::PreparationFile>,
+    setup_vars: Option<setup_vars::SetupVars>,
+    harness_config_dir: Option<TempDir>,
+
+    output_format: OutputFormat,
+
+    // The associated task ID for this agent run, if any.
+    task_id: Option<AmbientAgentTaskId>,
+    execution_id: Option<String>,
+    preview_proxy: Option<preview_proxy::Manager>,
+    use_factory_repositories: bool,
+    github_credential_mode: GitHubCredentialMode,
+    credential_store_owner: Option<ManagedStoreOwner>,
+    #[allow(
+        dead_code,
+        reason = "the driver retains server-owned experiments without interpreting them"
+    )]
+    pub experimental: Option<serde_json::Map<String, serde_json::Value>>,
+    team_scope: Option<HeadlessTeamScope>,
+    bedrock_oidc_credentials: Option<BedrockOidcCredentialsConfig>,
+
+    /// Harness adapter for the running agent. This is only set if:
+    /// - The harness has started successfully.
+    /// - We're using a third-party harness.
+    /// In the future, we _may_ use the harness abstraction for the Oz agent as well.
+    harness: Option<Arc<dyn HarnessRunner>>,
+
+    // Optional idle timeout after completion. If set, the process will stay alive for follow-ups
+    // and exit after this period of inactivity.
+    idle_on_complete: Option<Duration>,
+
+    // Optional idle timeout after a terminal error. If set, the process (and with it the shared
+    // session it is sharing) stays alive after the conversation fails, so a human can attach to
+    // the failed run and keep working in its environment.
+    idle_on_fail: Option<Duration>,
+
+    // Whether a viewer-input subscription is already refreshing an open debug window. Guards
+    // against stacking a second subscription when a run fails, is resumed, and fails again.
+    debug_window_refresh_installed: bool,
+
+    // When the debug window's deadline was last published to the server, used to throttle
+    // republishing on high-frequency viewer input.
+    last_published_debug_deadline: Option<SystemTime>,
+
+    // The conversation ID to continue (if provided).
+    restored_conversation_id: Option<AIConversationId>,
+
+    /// If set, a third-party-harness conversation to resume. Consumed when
+    /// preparing the harness runner and cleared afterward.
+    resume_payload: Option<ResumePayload>,
+
+    /// Cloud providers set up within this driver session.
+    cloud_providers: Vec<Box<dyn cloud_provider::CloudProvider>>,
+
+    /// The run's workspace, taken once when setup starts and `None` from then on.
+    workspace: Option<WorkspaceState>,
+    skill_dirs: Vec<PathBuf>,
+    /// The Factory definition's entries in `skill_dirs`, the only ones that hold reference files.
+    skill_reference_dirs: Vec<PathBuf>,
+    /// Whether a skill name in an earlier `skill_dirs` entry hides the same name in later ones.
+    /// Set once skill references add generated folders, which rely on folder order.
+    skill_dirs_first_name_wins: bool,
+    factory_repository_contract: bool,
+    computer_use_configured: bool,
+
+    // End-of-run snapshot upload controls.
+    snapshot_disabled: bool,
+    snapshot_upload_timeout: Duration,
+    snapshot_script_timeout: Duration,
+
+    /// Periodic workspace-handoff checkpoint coordinator; `None` unless both handoff flags are enabled and the run has a cloud task id.
+    checkpoint_coordinator: Option<checkpoint_coordinator::CheckpointCoordinatorHandle>,
+
+    /// Conversation ID this driver is running. Set at construction for
+    /// resumed runs and on `ConversationServerTokenAssigned` for fresh
+    /// runs; consumed by `unregister_streamer_consumer` at end of run.
+    run_conversation_id: Option<AIConversationId>,
+
+    /// Parent agent run's `run_id` from the server task metadata, when
+    /// this driver run was spawned by another agent. Stamped onto the
+    /// conversation's `parent_agent_id` field at register time so the
+    /// streamer recognizes the child role in driver-hosted processes.
+    parent_run_id: Option<String>,
+    third_party_harness_model_config: Option<HarnessModelConfig>,
+
+    /// Async writer that records `file` declarations for paths the agent creates or edits
+    /// via `RequestFileEdits`. `Some` only when `FeatureFlag::OzHandoff` is enabled, the run
+    /// has a cloud task id, and `--no-snapshot` was not set; `None` keeps the observer a
+    /// pure no-op for local and disabled runs.
+    snapshot_file_writer: Option<snapshot::DeclarationsWriterHandle>,
+
+    /// Whether the driver should skip dispatching the initial
+    /// `StartFromAmbientRunPrompt`. Mirror of `AgentDriverOptions::skip_initial_turn`,
+    /// sourced from the `--skip-initial-turn` CLI flag. Read by `execute_run`
+    /// to gate the empty-prompt short-circuit path.
+    skip_initial_turn: bool,
+
+    /// Whether MCP server startup failures are fatal for the run.
+    strict_mcp_startup: bool,
+    /// How long to wait for MCP servers to start before degrading (or failing,
+    /// in strict mode).
+    mcp_startup_timeout: Duration,
+    /// Why a run requested over ACP is driven over a PTY; see
+    /// `AgentDriverOptions::harness_transport_fallback`.
+    harness_transport_fallback: Option<harness::TransportFallbackReason>,
+    sandbox_deadline: Option<SystemTime>,
+}
+
+#[derive(Clone)]
+pub(crate) enum SDKConversationOutputStatus {
+    Success,
+    Error { error: RenderableAIError },
+    Cancelled { reason: CancellationReason },
+    Blocked { blocked_action: String },
+}
+
+impl SDKConversationOutputStatus {
+    pub fn into_result(self) -> Result<(), AgentDriverError> {
+        match self {
+            SDKConversationOutputStatus::Success => Ok(()),
+            SDKConversationOutputStatus::Error { error } => {
+                Err(AgentDriverError::ConversationError { error })
+            }
+            // NOTE: this doesn't happen in the SDK (yet) because CTRL+C kills the whole program.
+            SDKConversationOutputStatus::Cancelled { reason } => {
+                Err(AgentDriverError::ConversationCancelled { reason })
+            }
+            SDKConversationOutputStatus::Blocked { blocked_action } => {
+                Err(AgentDriverError::ConversationBlocked { blocked_action })
+            }
+        }
+    }
+}
+
+/// Task configuration for running an agent.
+#[derive(Debug)]
+pub struct Task {
+    /// The prompt for the agent.
+    pub prompt: AgentRunPrompt,
+    pub model: Option<LLMId>,
+    /// ID of the profile to run as (SyncId string). If None, use the default profile.
+    pub profile: Option<String>,
+    /// MCP server specifications to start prior to execution.
+    pub mcp_specs: Vec<MCPSpec>,
+    /// Which harness to use for executing the agent run.
+    pub harness: HarnessKind,
+}
+
+/// Prompt that we initialize an agent driver with. Can represent either a local prompt or
+/// a prompt that we resolve server-side.
+#[derive(Debug, Clone)]
+pub enum AgentRunPrompt {
+    /// Prompt is provided locally (already resolved to a plain string).
+    Local(String),
+    /// Server resolves prompt from the task's stored prompt.
+    /// Used when task_id is provided without an explicit prompt.
+    ServerSide {
+        /// Optional skill whose instructions are sent to the agent.
+        skill: Option<ParsedSkill>,
+        /// Directory where task attachments were downloaded.
+        attachments_dir: Option<String>,
+    },
+}
+
+/// The stage of bringing up a third-party harness over ACP at which setup failed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HarnessSetupStage {
+    Manifest,
+    Validate,
+    BridgeSpawn,
+    BridgeAccept,
+    Initialize,
+    SessionOpen,
+    ModelConfig,
+    ExternalConversation,
+    BeginTurn,
+}
+
+impl HarnessSetupStage {
+    /// The stage's snake_case label, as recorded on failure metrics.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Manifest => "manifest",
+            Self::Validate => "validate",
+            Self::BridgeSpawn => "bridge_spawn",
+            Self::BridgeAccept => "bridge_accept",
+            Self::Initialize => "initialize",
+            Self::SessionOpen => "session_open",
+            Self::ModelConfig => "model_config",
+            Self::ExternalConversation => "external_conversation",
+            Self::BeginTurn => "begin_turn",
+        }
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum AgentDriverError {
+    #[error("Terminal session is not available.")]
+    TerminalUnavailable,
+    #[error("Invalid runtime state - please file a bug report.")]
+    InvalidRuntimeState,
+    #[error("Requested MCP server not found: {0}")]
+    MCPServerNotFound(uuid::Uuid),
+    #[error("Failed to resolve managed MCP server {uid}: {message}")]
+    ManagedMcpResolutionFailed { uid: Uuid, message: String },
+    #[error("Failed to start MCP servers: {}", .details.join("; "))]
+    MCPStartupFailed {
+        /// One line per unavailable server (e.g. "'datadog' failed to start:
+        /// connection refused").
+        details: Vec<String>,
+    },
+    #[error("Failed to parse MCP server JSON: {0}")]
+    MCPJsonParseError(String),
+    #[error("MCP server configuration is missing required variables")]
+    MCPMissingVariables,
+    #[error(
+        "MCP server '{server_name}' references secret(s) that are not available to this run: {}",
+        .secret_names.join(", ")
+    )]
+    MCPUnresolvedSecrets {
+        server_name: String,
+        secret_names: Vec<String>,
+    },
+    #[error("Agent profile \"{0}\" not found")]
+    ProfileError(String),
+    #[error(
+        "Failed to authenticate with server - please log in via 'oz login', provide an API key via '--api-key <key>', or set the WARP_API_KEY environment variable"
+    )]
+    NotLoggedIn,
+    #[error("Saved prompt not found for id {0}")]
+    AIWorkflowNotFound(String),
+    #[error("Terminal bootstrap failed")]
+    BootstrapFailed {
+        #[source]
+        error: terminal::BootstrapError,
+    },
+    #[error("Unable to share agent session")]
+    ShareSessionFailed {
+        #[source]
+        error: terminal::ShareSessionError,
+    },
+    #[error("Error syncing Warp Drive")]
+    WarpDriveSyncFailed,
+    #[error("Requested environment not found: {0}")]
+    EnvironmentNotFound(String),
+    #[error("Environment setup failed: {0}")]
+    EnvironmentSetupFailed(String),
+    #[error("Environment setup failed: {message}")]
+    SetupCommandFailed {
+        message: String,
+        command: String,
+        output: Option<String>,
+    },
+    #[error("Environment setup failed: {message}")]
+    SetupCommandTimedOut { message: String },
+    #[error("Cloud provider setup failed")]
+    CloudProviderSetupFailed(#[from] cloud_provider::CloudProviderSetupError),
+    #[error("Could not resolve working directory {}", path.display())]
+    InvalidWorkingDirectory {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("{error}")]
+    ConversationError { error: RenderableAIError },
+    #[error("Conversation was canceled: {reason}")]
+    ConversationCancelled { reason: CancellationReason },
+    #[error("The agent got stuck waiting for user confirmation on the action: {blocked_action}")]
+    ConversationBlocked { blocked_action: String },
+    /// The shell process exited while an environment setup command was
+    /// running (e.g. the command ran `exit`), so the run cannot continue.
+    /// `command` is the (secret-redacted) command that was in flight (or
+    /// most recently submitted) when the shell died.
+    #[error(
+        "The shell exited during setup command `{command}`, so the run could not continue. \
+         Check the setup commands for this environment."
+    )]
+    SetupCommandExitedShell { command: String },
+    #[error("Failed to refresh team metadata")]
+    TeamMetadataRefreshFailed(#[source] anyhow::Error),
+    #[error("{0}")]
+    SkillResolutionFailed(String),
+    #[error("Failed to fetch git credentials")]
+    GitCredentialsFetchFailed(#[source] TaskGitCredentialsError),
+    #[error("Failed to build agent configuration")]
+    ConfigBuildFailed(#[source] anyhow::Error),
+    #[error("Failed to resolve server-side prompt")]
+    PromptResolutionFailed(#[source] anyhow::Error),
+    #[error("Failed to fetch task secrets")]
+    SecretsFetchFailed(#[source] anyhow::Error),
+    #[error("Failed to fetch task metadata")]
+    TaskMetadataFetchFailed(#[source] anyhow::Error),
+    #[error("Failed to load conversation: {0}")]
+    ConversationLoadFailed(String),
+    #[error("Failed to initialize AWS Bedrock credentials: {0}")]
+    AwsBedrockCredentialsFailed(String),
+    #[error(
+        "Conversation {conversation_id} was produced by the {expected} harness, but --harness {got} was requested. \
+         Re-run with --harness {expected} (or omit --harness to match) to continue this conversation."
+    )]
+    ConversationHarnessMismatch {
+        conversation_id: String,
+        expected: String,
+        got: String,
+    },
+    #[error(
+        "Task {task_id} was created with the {expected} harness, but --harness {got} was requested. \
+         Re-run with --harness {expected} (or omit --harness to match) to continue this task."
+    )]
+    TaskHarnessMismatch {
+        task_id: String,
+        expected: String,
+        got: String,
+    },
+    #[error(
+        "Conversation {conversation_id} has no stored transcript for the {harness} harness. \
+         The prior run may have crashed before saving any state."
+    )]
+    ConversationResumeStateMissing {
+        harness: String,
+        conversation_id: String,
+    },
+    #[error("Harness command exited with code {exit_code}")]
+    HarnessCommandFailed {
+        exit_code: i32,
+        output: Option<String>,
+    },
+    #[error("Harness '{harness}' setup failed: {reason}")]
+    HarnessSetupFailed {
+        harness: String,
+        /// Set when the failure belongs to one stage of ACP setup; `None` for failures of
+        /// harness setup that is not stage-specific.
+        stage: Option<HarnessSetupStage>,
+        reason: String,
+    },
+    #[error("Harness '{harness}' config setup failed")]
+    HarnessConfigSetupFailed {
+        harness: String,
+        #[source]
+        error: anyhow::Error,
+    },
+    #[error("Harness '{harness}' auth preflight failed")]
+    HarnessAuthCheckFailed {
+        harness: String,
+        /// Stderr/stdout captured from the failing command, for logs.
+        detail: String,
+    },
+    #[error("Harness '{harness}' reported a runtime failure matching '{pattern}'")]
+    HarnessRuntimeFailureDetected {
+        harness: String,
+        /// The originating needle from `runtime_error_patterns` that hit.
+        pattern: String,
+        /// Matching row(s) from the harness block, trimmed and capped.
+        excerpt: String,
+    },
+    /// The harness did not exit within the graceful-shutdown escalation
+    /// ladder (`run_harness`'s exit request, follow-up retry, and force-kill)
+    /// and had to be forcibly terminated.
+    #[error(
+        "Harness '{harness}' did not exit within the graceful shutdown window and was \
+         forcibly terminated."
+    )]
+    HarnessExitTimedOut { harness: String },
+    /// `WARP_SANDBOX_DEADLINE` expired before `run_internal` completed.
+    /// For free plans, this is a user-facing limit (upgrade to remove it).
+    /// For paid plans, it's a configurable limit the user or team set.
+    /// Either way, it's a task outcome — the user's requested work didn't fit
+    /// in the time they (or their plan) allow, so report as `FAILED`.
+    #[error("{}", sandbox_deadline_message(*on_free_plan))]
+    SandboxDeadlineReached {
+        /// Whether the run's workspace is on the free plan, which determines
+        /// whether the message points the user at upgrading.
+        on_free_plan: bool,
+    },
+}
+
+/// User-facing message for [`AgentDriverError::SandboxDeadlineReached`].
+///
+/// The free plan's runtime cap is fixed, so those runs get an upgrade hint;
+/// paid plans can configure the limit and are only told it was hit.
+const fn sandbox_deadline_message(on_free_plan: bool) -> &'static str {
+    if on_free_plan {
+        "Sandbox maximum runtime reached. Upgrade to a paid plan to remove this limit."
+    } else {
+        "Sandbox maximum runtime reached."
+    }
+}
+
+/// Environment variable holding the Unix timestamp (seconds) at which the sandbox
+/// hosting this run will be hard-killed.
+const SANDBOX_DEADLINE_ENV: &str = "WARP_SANDBOX_DEADLINE";
+
+/// Returns the instant at which the sandbox hosting this run will be hard-killed.
+///
+/// `None` outside a Warp-hosted sandbox, since the server only injects a deadline for
+/// Docker Sandbox and Namespace runs. Local and self-hosted runs have no bounded lifetime
+/// to report.
+pub(crate) fn sandbox_deadline() -> Option<SystemTime> {
+    let deadline_unix = std::env::var(SANDBOX_DEADLINE_ENV)
+        .ok()?
+        .parse::<i64>()
+        .ok()?;
+    if deadline_unix <= 0 {
+        return None;
+    }
+    SystemTime::UNIX_EPOCH.checked_add(Duration::from_secs(deadline_unix as u64))
+}
+
+impl ErrorExt for AgentDriverError {
+    fn is_actionable(&self) -> bool {
+        error_classification::classify_driver_error(self).0 == AgentTaskState::Error
+    }
+}
+register_error!(AgentDriverError);
+
+impl From<warpui::ModelDropped> for AgentDriverError {
+    fn from(_: warpui::ModelDropped) -> Self {
+        AgentDriverError::InvalidRuntimeState
+    }
+}
+
+impl From<PrepareEnvironmentError> for AgentDriverError {
+    fn from(error: PrepareEnvironmentError) -> Self {
+        let message = error.to_string();
+        match error {
+            PrepareEnvironmentError::InvalidRuntimeState => AgentDriverError::InvalidRuntimeState,
+            PrepareEnvironmentError::TerminalDriver { source } => source,
+            PrepareEnvironmentError::SetupCommand { command, output } => {
+                AgentDriverError::SetupCommandFailed {
+                    message,
+                    command,
+                    output,
+                }
+            }
+            PrepareEnvironmentError::SetupCommandTimedOut { .. } => {
+                AgentDriverError::SetupCommandTimedOut { message }
+            }
+            _ => AgentDriverError::EnvironmentSetupFailed(message),
+        }
+    }
+}
+
+impl AgentDriver {
+    fn idle_timeout_sender<T: Send + 'static>(
+        &self,
+        tx: oneshot::Sender<T>,
+        ctx: &ModelContext<Self>,
+    ) -> IdleTimeoutSender<T> {
+        let mut sender = IdleTimeoutSender::new(tx);
+        if preview_retention::is_namespace_sandbox(warp_isolation_platform::detect())
+            && let Some(task_id) = self.task_id
+        {
+            sender.preview_retention = PreviewRetention::new(
+                task_id,
+                self.execution_id.as_deref(),
+                ServerApiProvider::as_ref(ctx).get_ai_client(),
+                ctx.background_executor(),
+            );
+        }
+        sender
+    }
+
+    /// Creates the driver and terminal without running workspace setup or submitting a prompt.
+    #[tracing::instrument(name = "AgentDriver::create", skip_all, err, fields(
+        tags.cloud_agent = true,
+        task_id = ?options.task_id,
+        parent_run_id = ?options.parent_run_id,
+        is_sandbox = tracing::field::Empty,
+    ))]
+    pub fn create(
+        options: AgentDriverOptions,
+        ctx: &mut AppContext,
+    ) -> Result<ModelHandle<Self>, AgentDriverError> {
+        // If we're not logged in, the root view will go to an auth screen, and all subsequent steps will fail.
+        // This should be impossible, since we enforce login before reaching this point.
+        if !AuthStateProvider::as_ref(ctx).get().is_logged_in() {
+            return Err(AgentDriverError::NotLoggedIn);
+        }
+        let (terminal_inputs, config) = split_run_options(options)?;
+        let TerminalLaunchInputs {
+            should_share,
+            conversation_restoration,
+            selected_harness,
+            harness_transport,
+        } = terminal_inputs;
+        let idle_on_complete = config.idle_on_complete;
+        let idle_on_fail = config.idle_on_fail;
+        let working_dir = config.working_dir.clone();
+        let task_id = config.task_id;
+
+        safe_info!(
+            safe: ("Initializing agent driver: share={should_share}, idle_on_complete={idle_on_complete:?}, idle_on_fail={idle_on_fail:?}"),
+            full: (
+                "Initializing agent driver: share={should_share}, idle_on_complete={idle_on_complete:?}, idle_on_fail={idle_on_fail:?}, working_dir={}",
+                working_dir.display()
+            )
+        );
+
+        let terminal_driver = terminal::TerminalDriver::create(
+            terminal::TerminalDriverOptions {
+                working_dir: working_dir.clone(),
+                env_vars: HashMap::clone(&config.resolved_env_vars),
+                should_share,
+                task_id,
+                conversation_restoration,
+                team_scope: config.team_scope.as_ref(),
+            },
+            ctx,
+        )?;
+        Ok(ctx.add_singleton_model::<Self, _>(move |ctx| {
+            // Subscribe to TerminalDriver events for task-specific handling.
+            ctx.subscribe_to_model(&terminal_driver, |me, _, event, ctx| {
+                me.handle_terminal_driver_event(event, ctx);
+            });
+
+            let mut me = Self::with_terminal(working_dir, terminal_driver);
+            me.apply_run_configuration(config, ctx);
+
+            me.bind_run_conversation(selected_harness, harness_transport, should_share, ctx);
+            me
+        }))
+    }
+
+    fn bind_run_conversation(
+        &mut self,
+        selected_harness: Harness,
+        harness_transport: HarnessTransport,
+        should_share: bool,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let task_id = self.task_id;
+        let native_queue_enabled = renders_natively(selected_harness, harness_transport)
+            && (should_share || task_id.is_some());
+        log::info!(
+            "event=driver_queue_configuration task_id={task_id:?} harness={selected_harness} transport={harness_transport:?} sharing_requested={should_share} native_queue_enabled={native_queue_enabled}",
+        );
+        if native_queue_enabled {
+            let terminal = self.terminal_driver.as_ref(ctx).terminal_view().clone();
+            terminal.update(ctx, |terminal, ctx| {
+                terminal.ai_controller().update(ctx, |controller, ctx| {
+                    controller.bind_native_prompt_conversation(self.restored_conversation_id, ctx);
+                });
+            });
+        }
+        // Register before execution so the first child can satisfy the parent's gate.
+        if let Some(conversation_id) = self.restored_conversation_id {
+            stamp_parent_agent_id_if_some(conversation_id, self.parent_run_id.as_deref(), ctx);
+            register_agent_event_consumer(conversation_id, ctx.model_id(), ctx);
+            self.run_conversation_id = Some(conversation_id);
+        }
+    }
+
+    /// Creates the driver around an already-created terminal, with no run configuration applied.
+    fn with_terminal(
+        working_dir: PathBuf,
+        terminal_driver: ModelHandle<terminal::TerminalDriver>,
+    ) -> Self {
+        Self {
+            terminal_driver,
+            harness_working_dir: working_dir.clone(),
+            working_dir,
+            secrets: Arc::new(HashMap::new()),
+            resolved_env_vars: Arc::new(HashMap::new()),
+            _preparation_file: None,
+            setup_vars: None,
+            harness_config_dir: None,
+            output_format: OutputFormat::default(),
+            task_id: None,
+            execution_id: None,
+            preview_proxy: None,
+            use_factory_repositories: false,
+            github_credential_mode: GitHubCredentialMode::Legacy,
+            credential_store_owner: None,
+            experimental: None,
+            team_scope: None,
+            bedrock_oidc_credentials: None,
+            harness: None,
+            idle_on_complete: None,
+            idle_on_fail: None,
+            debug_window_refresh_installed: false,
+            last_published_debug_deadline: None,
+            restored_conversation_id: None,
+            resume_payload: None,
+            cloud_providers: Vec::new(),
+            workspace: Some(WorkspaceState::Pending(
+                environment::WorkspaceConfiguration::default(),
+            )),
+            skill_dirs: parse_skills_dirs_env(),
+            skill_reference_dirs: Vec::new(),
+            skill_dirs_first_name_wins: false,
+            factory_repository_contract: false,
+            computer_use_configured: false,
+            snapshot_disabled: false,
+            snapshot_upload_timeout: snapshot::DEFAULT_SNAPSHOT_UPLOAD_TIMEOUT,
+            snapshot_script_timeout: snapshot::DEFAULT_DECLARATIONS_SCRIPT_TIMEOUT,
+            checkpoint_coordinator: None,
+            run_conversation_id: None,
+            parent_run_id: None,
+            third_party_harness_model_config: None,
+            snapshot_file_writer: None,
+            skip_initial_turn: false,
+            strict_mcp_startup: false,
+            mcp_startup_timeout: MCP_SERVER_STARTUP_TIMEOUT,
+            harness_transport_fallback: None,
+            sandbox_deadline: sandbox_deadline(),
+        }
+    }
+
+    /// Installs a run's configuration, replacing any configuration already applied.
+    ///
+    /// [`TerminalLaunchInputs`] is deliberately absent: those options control terminal setup and
+    /// have no driver state to update. Runtime state that outlives configuration — the harness,
+    /// the output format, and pre-warmed preparation results — is left untouched so a standby
+    /// driver can take an assignment in place.
+    fn apply_run_configuration(&mut self, config: RunConfiguration, ctx: &mut ModelContext<Self>) {
+        let RunConfiguration {
+            working_dir,
+            resolved_env_vars,
+            preparation_file,
+            harness_config_dir,
+            secrets,
+            task_id,
+            execution_id,
+            use_factory_repositories,
+            github_credential_mode,
+            credential_store_owner,
+            experimental,
+            parent_run_id,
+            idle_on_complete,
+            idle_on_fail,
+            restored_conversation_id,
+            resume_payload,
+            cloud_providers,
+            workspace,
+            skill_dirs,
+            skill_reference_dirs,
+            computer_use_config,
+            third_party_harness_model_config,
+            team_scope,
+            bedrock_oidc_credentials,
+            snapshot_disabled,
+            snapshot_upload_timeout,
+            snapshot_script_timeout,
+            checkpoint_interval,
+            skip_initial_turn,
+            strict_mcp_startup,
+            mcp_startup_timeout,
+            harness_transport_fallback,
+        } = config;
+        self.working_dir = working_dir;
+        self.resolved_env_vars = resolved_env_vars;
+        self._preparation_file = preparation_file;
+        self.harness_config_dir = harness_config_dir;
+        self.secrets = Arc::new(secrets);
+        self.task_id = task_id;
+        self.execution_id = execution_id;
+        self.preview_proxy = None;
+        if FeatureFlag::PreviewUrlsMcp.is_enabled()
+            && std::env::var("WARP_PREVIEW_PROXY_ENABLED").as_deref() == Ok("1")
+            && let Some(task_id) = task_id
+        {
+            match preview_proxy::Manager::start(
+                task_id,
+                self.execution_id.as_deref(),
+                ServerApiProvider::as_ref(ctx).get_ai_client(),
+            ) {
+                Ok(manager) => self.preview_proxy = Some(manager),
+                Err(error) => log::error!("Preview proxy runtime failed to start: {error:#}"),
+            }
+        }
+        self.use_factory_repositories = use_factory_repositories;
+        self.github_credential_mode = github_credential_mode;
+        self.credential_store_owner = credential_store_owner;
+        self.factory_repository_contract = use_factory_repositories;
+        self.experimental = experimental;
+        self.parent_run_id = parent_run_id;
+        self.idle_on_complete = idle_on_complete;
+        self.idle_on_fail = idle_on_fail;
+        self.restored_conversation_id = restored_conversation_id;
+        self.resume_payload = resume_payload;
+        self.cloud_providers = cloud_providers;
+        // A standby sandbox already prepared its workspace, and an assignment is accepted only
+        // after `same_preparation` confirms it matches, so those results stand.
+        self.workspace = match self.workspace.take() {
+            prepared @ Some(WorkspaceState::Prepared(_)) => prepared,
+            _ => Some(WorkspaceState::Pending(workspace)),
+        };
+        self.skill_dirs = skill_dirs;
+        self.skill_reference_dirs = skill_reference_dirs;
+        self.skill_dirs_first_name_wins = false;
+        self.third_party_harness_model_config = third_party_harness_model_config;
+        self.team_scope = team_scope;
+        self.bedrock_oidc_credentials = bedrock_oidc_credentials;
+        self.snapshot_disabled = snapshot_disabled;
+        self.snapshot_upload_timeout = snapshot_upload_timeout;
+        self.snapshot_script_timeout = snapshot_script_timeout;
+        self.skip_initial_turn = skip_initial_turn;
+        self.strict_mcp_startup = strict_mcp_startup;
+        self.mcp_startup_timeout = mcp_startup_timeout;
+        self.harness_transport_fallback = harness_transport_fallback;
+
+        self.computer_use_configured = computer_use_config.is_some();
+        if let Some((enabled, model_id)) = computer_use_config {
+            let terminal_view_id = self.terminal_driver.as_ref(ctx).terminal_view().id();
+            AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles, ctx| {
+                profiles.set_session_computer_use(terminal_view_id, enabled, ctx);
+            });
+            LLMPreferences::handle(ctx).update(ctx, |preferences, _| {
+                preferences.set_computer_use_llm_override(terminal_view_id, model_id);
+            });
+        }
+
+        // Spawn the async declarations writer only when the snapshot pipeline will actually
+        // read what it produces: feature enabled, cloud task run, and --no-snapshot not set.
+        let handoff_enabled = FeatureFlag::OzHandoff.is_enabled() && !snapshot_disabled;
+        self.snapshot_file_writer = task_id.filter(|_| handoff_enabled).map(|id| {
+            snapshot::DeclarationsWriterHandle::new(
+                id,
+                self.working_dir.clone(),
+                &ctx.background_executor(),
+            )
+        });
+
+        // Spawn the periodic checkpoint coordinator under the same gates as the
+        // declarations writer above, plus the dedicated rollout flag. `None` keeps
+        // `run_snapshot_upload` on the legacy one-shot upload path unchanged.
+        self.checkpoint_coordinator = task_id
+            .filter(|_| handoff_enabled && FeatureFlag::PeriodicHandoffCheckpoints.is_enabled())
+            .map(|id| {
+                checkpoint_coordinator::CheckpointCoordinatorHandle::new(
+                    ServerApiProvider::as_ref(ctx).get_harness_support_client(),
+                    id,
+                    self.working_dir.clone(),
+                    // Shared with the history subscription so every attempt can drain
+                    // queued `file` appends before the declarations script runs, exactly
+                    // as `run_snapshot_upload` does on the legacy path.
+                    self.snapshot_file_writer.clone(),
+                    ctx.spawner(),
+                    checkpoint_interval,
+                    snapshot_script_timeout,
+                    snapshot_upload_timeout,
+                    ctx.background_executor(),
+                )
+            });
+    }
+
+    /// Minimal constructor for unit tests that need a live `AgentDriver` model to call
+    /// methods on (e.g. `load_environment_skills`, `load_global_skills`) without
+    /// bootstrapping a full agent run.
+    ///
+    /// The caller is responsible for creating the `TerminalDriver` handle beforehand
+    /// (e.g. via `TerminalDriver::create_from_existing_view`) and for registering all
+    /// required singleton models before constructing the driver.
+    #[cfg(test)]
+    pub(crate) fn new_for_test(
+        working_dir: PathBuf,
+        terminal_driver: ModelHandle<terminal::TerminalDriver>,
+        ctx: &mut ModelContext<Self>,
+    ) -> Self {
+        ctx.subscribe_to_model(&terminal_driver, |me, _, event, ctx| {
+            me.handle_terminal_driver_event(event, ctx);
+        });
+        Self::with_terminal(working_dir, terminal_driver)
+    }
+
+    /// Pair to the registration in `create` / `execute_run`. No-op when
+    /// nothing was registered.
+    fn unregister_streamer_consumer(&self, ctx: &mut ModelContext<Self>) {
+        if self.computer_use_configured {
+            let terminal_view_id = self.terminal_driver.as_ref(ctx).terminal_view().id();
+            AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles, ctx| {
+                profiles.clear_session_computer_use(terminal_view_id, ctx);
+            });
+            LLMPreferences::handle(ctx).update(ctx, |preferences, _| {
+                preferences.clear_computer_use_llm_override(terminal_view_id);
+            });
+        }
+        let terminal = self.terminal_driver.as_ref(ctx).terminal_view().clone();
+        terminal.update(ctx, |terminal, ctx| {
+            terminal.ai_controller().update(ctx, |controller, ctx| {
+                controller.unbind_native_prompt_conversation(ctx);
+            });
+        });
+        let Some(conversation_id) = self.run_conversation_id else {
+            return;
+        };
+        unregister_agent_event_consumer(conversation_id, ctx.model_id(), ctx);
+    }
+
+    pub fn set_output_format(&mut self, output_format: OutputFormat) {
+        self.output_format = output_format;
+    }
+
+    pub fn add_share_requests(
+        &self,
+        share_requests: impl IntoIterator<Item = ShareRequest>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.terminal_driver.update(ctx, |td, ctx| {
+            td.add_share_requests(share_requests, ctx);
+        });
+    }
+
+    fn extend_shared_session_retention(
+        &mut self,
+        reason: SessionRetentionReason,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.terminal_driver.update(ctx, |driver, ctx| {
+            driver.extend_shared_session_retention(reason, ctx);
+        });
+    }
+
+    /// Waits until sandbox teardown should begin and returns the corresponding deadline error.
+    async fn sandbox_shutdown_timer(
+        foreground: &ModelSpawner<Self>,
+    ) -> Result<(), AgentDriverError> {
+        /// How far before the sandbox deadline to start the teardown sequence.
+        const SHUTDOWN_WARNING_WINDOW: Duration = Duration::from_secs(5 * 60);
+
+        let maybe_wait = foreground
+            .spawn(|me, _| me.sandbox_deadline)
+            .await?
+            .and_then(|deadline| {
+                let warning_at = deadline.checked_sub(SHUTDOWN_WARNING_WINDOW)?;
+                match warning_at.duration_since(SystemTime::now()) {
+                    Ok(wait) => Some(wait),
+                    // Already inside the warning window — trigger immediately.
+                    Err(_) => Some(Duration::ZERO),
+                }
+            });
+
+        // Resolved before waiting because everything after the timer fires competes with the
+        // shutdown window. Billing metadata is already loaded by then — cloud runs block on
+        // `SetupStep::TeamMetadataRefresh` before the driver starts — so this read does not race
+        // the initial fetch. Defaults to the non-free message if unavailable, so a paying customer
+        // is never told to upgrade.
+        let on_free_plan = if maybe_wait.is_some() {
+            foreground
+                .spawn(|_, ctx| {
+                    UserWorkspaces::as_ref(ctx)
+                        .current_workspace_billing_metadata()
+                        .is_some_and(BillingMetadata::is_free_plan)
+                })
+                .await
+                .unwrap_or(false)
+        } else {
+            false
+        };
+        let timer = maybe_wait
+            .map(|wait| Either::Left(Timer::after(wait).map(|_| ())))
+            .unwrap_or_else(|| Either::Right(future::pending::<()>()));
+        timer.await;
+
+        Err(AgentDriverError::SandboxDeadlineReached { on_free_plan })
+    }
+
+    /// Runs `task` until it completes, session sharing fails, the sandbox shutdown window begins,
+    /// or an interrupt arrives.
+    ///
+    /// The returned [`InterruptWatch`] must stay alive through teardown: non-signal outcomes disarm
+    /// it, while signal handling retains its registrations so a second signal can terminate a
+    /// stuck artifact save.
+    async fn run_until_end(
+        task: Task,
+        foreground: &ModelSpawner<Self>,
+        background: &Background,
+    ) -> Result<
+        (
+            Option<Result<(), AgentDriverError>>,
+            RunEndCause,
+            InterruptWatch,
+        ),
+        AgentDriverError,
+    > {
+        // Primary: WARP_SANDBOX_DEADLINE client-side timer.
+        //
+        // The server injects WARP_SANDBOX_DEADLINE (Unix timestamp, seconds since
+        // epoch) into the container environment at sandbox creation time for both
+        // Docker Sandbox and Namespace. The sandbox deadline is set to
+        // MaxInstanceRuntime + SandboxShutdownWarningWindow (5 min); this timer
+        // fires SandboxShutdownWarningWindow before that hard kill, giving the
+        // normal AgentDriver teardown path — snapshot then recording — time to
+        // complete while the agent is still running.
+        //
+        // Secondary: SIGTERM / SIGINT detection (Unix only).
+        //
+        // SIGTERM is how external shutdowns reach the client: server-initiated
+        // sandbox/instance teardown (both Docker Sandbox and Namespace send
+        // SIGTERM ~10-20 seconds before SIGKILL), container-runtime stops, and
+        // self-hosted workers being terminated. When the deadline timer is
+        // active it fires 5 minutes earlier and wins this race, but SIGTERM is
+        // the primary signal whenever WARP_SANDBOX_DEADLINE is absent or the
+        // shutdown was not deadline-driven. SIGINT (Ctrl-C) uses the same killed
+        // path so a handoff snapshot can be saved before default terminate. A
+        // second SIGINT/SIGTERM emulates the default action immediately.
+        //
+        // When WARP_SANDBOX_DEADLINE is absent and no interrupt arrives,
+        // run_internal runs to completion as before (local and self-hosted runs
+        // are unaffected).
+        let mut interrupt_watch = match InterruptWatch::register(background).await {
+            Ok(watch) => watch,
+            Err(error) => {
+                log::warn!(
+                    "Failed to register interrupt handlers; continuing without graceful \
+                     interrupt handling: {error}"
+                );
+                tracing::warn!(
+                    tags.cloud_agent = true,
+                    error = ?error,
+                    "failed to register interrupt handlers; continuing without graceful interrupt handling"
+                );
+                InterruptWatch::noop()
+            }
+        };
+
+        let (finished, cause) = {
+            let session_share_failure = foreground
+                .spawn(|me, ctx| {
+                    me.terminal_driver
+                        .update(ctx, |driver, _| driver.wait_for_session_share_failure())
+                })
+                .await?
+                .fuse();
+            let signal_fut = interrupt_watch.wait();
+            let run = Self::run_internal(task, foreground.clone()).fuse();
+            let timer = Self::sandbox_shutdown_timer(foreground).fuse();
+            let signal = signal_fut.fuse();
+            futures::pin_mut!(run, timer, signal, session_share_failure);
+
+            futures::select_biased! {
+                signal = signal => (None, RunEndCause::Signal(signal)),
+                error = session_share_failure => (Some(Err(error)), RunEndCause::Completed),
+                result = run => (Some(result), RunEndCause::Completed),
+                result = timer => (
+                    Some(result),
+                    RunEndCause::SandboxDeadline,
+                ),
+            }
+        };
+
+        Ok((finished, cause, interrupt_watch))
+    }
+
+    /// Runs `task` to completion and reports its terminal state to the server.
+    ///
+    /// Exit guarantee: before the returned future resolves (after which the
+    /// caller may terminate the process), the driver waits for queued
+    /// `LocalAgentTaskSyncModel` status updates to finish delivering, reports
+    /// driver-level errors itself, and — for error-free runs where no terminal
+    /// state was confirmed delivered — reports `SUCCEEDED` directly (see
+    /// `flush_task_status_before_exit`), so a graceful exit never leaves the
+    /// server task `IN_PROGRESS`. Abrupt exits (SIGKILL, panics, Unix SIGINT/
+    /// SIGTERM after a best-effort handoff snapshot and re-raise — which
+    /// terminate the process without resolving this future — and aborts before
+    /// the task id is known) are NOT covered and rely on server-side stale-task
+    /// cleanup.
+    pub fn run(
+        &mut self,
+        task: Task,
+        ctx: &mut ModelContext<Self>,
+    ) -> impl Future<Output = Result<(), AgentDriverError>> + use<> {
+        let (tx, rx) = oneshot::channel();
+        let foreground = ctx.spawner();
+        let foreground_for_error = foreground.clone();
+        let server_api = ServerApiProvider::as_ref(ctx).get_ai_client();
+        let task_id = self.task_id;
+        let background = ctx.background_executor();
+
+        ctx.spawn(
+            async move {
+                // Mark the task as IN_PROGRESS before starting work. This covers
+                // the gap during environment setup, MCP startup, etc. — before any
+                // conversation exists and LocalAgentTaskSyncModel can fire.
+                if let Some(task_id) = task_id
+                    && let Err(e) = server_api
+                        .update_agent_task(
+                            task_id,
+                            Some(AgentTaskState::InProgress),
+                            None,
+                            None,
+                            None,
+                            None,
+                            None,
+                        )
+                        .await
+                        .context("Failed to update agent task state to InProgress")
+                {
+                    report_error!(e);
+                }
+                let (finished, cause, interrupt_watch) =
+                    match Self::run_until_end(task, &foreground, &background).await {
+                        Ok(outcome) => outcome,
+                        Err(error) => {
+                            if let Some(task_id) = task_id {
+                                report_if_error!(git_credentials::close_restricted_credentials(
+                                    &task_id.to_string()
+                                ));
+                            }
+                            let _ = foreground.spawn(|me, _| me.harness_config_dir.take()).await;
+                            if tx.send(Err(error)).is_err() {
+                                report_error!("Caller did not wait for agent driver to finish");
+                            }
+                            return;
+                        }
+                    };
+                if let Some(task_id) = task_id {
+                    report_if_error!(git_credentials::close_restricted_credentials(
+                        &task_id.to_string()
+                    ));
+                }
+                match cause {
+                    RunEndCause::SandboxDeadline => {
+                        tracing::info!(tags.cloud_agent = true, "sandbox deadline approaching");
+                        log::info!(
+                            "Sandbox deadline approaching (WARP_SANDBOX_DEADLINE); aborting \
+                             run_internal to allow recording finalization"
+                        );
+                    }
+                    RunEndCause::Signal(Interrupt::Terminate) => {
+                        log::warn!(
+                            "SIGTERM received; aborting run_internal to save a handoff snapshot \
+                             before remaining teardown (limited grace period before SIGKILL)"
+                        );
+                    }
+                    RunEndCause::Signal(Interrupt::Interrupt) => {
+                        log::warn!(
+                            "SIGINT received; aborting run_internal to save a handoff snapshot \
+                             before restoring default terminate"
+                        );
+                    }
+                    RunEndCause::Completed => {}
+                }
+
+                let snapshot_disabled = foreground
+                    .spawn(|me, _| me.snapshot_disabled)
+                    .await
+                    .unwrap_or(true);
+                let snapshot_allowed =
+                    FeatureFlag::OzHandoff.is_enabled() && task_id.is_some() && !snapshot_disabled;
+                // Dropping `run_internal` bypasses `run_harness`'s final-save path. Normal completion
+                // already finished these saves inside `run_harness`. If the harness completed normally,
+                // we don't want to force-terminate and re-save its state here.
+                if !matches!(cause, RunEndCause::Completed) {
+                    Self::finish_interrupted_harness_saves(&foreground).await;
+                }
+
+                match cause {
+                    RunEndCause::Signal(signal) => {
+                        eprintln!("Received {signal}; shutting down...");
+                        // Keep handlers registered so a second SIGINT/SIGTERM can still
+                        // emulate default terminate if snapshot/recording gets stuck.
+                        Self::save_run_artifacts(&foreground, snapshot_allowed).await;
+                        let _ = foreground.spawn(|me, _| me.harness_config_dir.take()).await;
+                        interrupt_watch.terminate(signal);
+                    }
+                    RunEndCause::Completed | RunEndCause::SandboxDeadline => {
+                        interrupt_watch.disarm();
+                        Self::unregister_end_of_run_consumers(&foreground).await;
+                        Self::save_run_artifacts(&foreground, snapshot_allowed).await;
+                        if let Some(task_id) = task_id {
+                            Self::flush_task_status_before_exit(
+                                task_id,
+                                matches!(&finished, Some(Ok(()))),
+                                &server_api,
+                                &foreground,
+                            )
+                            .await;
+                        }
+                        let result = finished.unwrap_or(Err(AgentDriverError::InvalidRuntimeState));
+                        if let Err(AgentDriverError::HarnessExitTimedOut { harness }) = &result {
+                            Self::send_harness_exit_telemetry(harness, "timed_out", &foreground)
+                                .await;
+                        }
+                        let result = driver_result_after_harness_run(result);
+                        let _ = foreground.spawn(|me, _| me.harness_config_dir.take()).await;
+                        if tx.send(result).is_err() {
+                            report_error!("Caller did not wait for agent driver to finish");
+                        }
+                        Self::cleanup(foreground.clone()).await;
+                    }
+                }
+            },
+            |_, _, _| {},
+        );
+
+        let server_api_for_error = ServerApiProvider::as_ref(ctx).get_ai_client();
+
+        async move {
+            if let Some(ref task_id) = task_id {
+                log::info!("Executing task {task_id}");
+            }
+
+            let result = match rx.await {
+                Ok(result) => result,
+                Err(Canceled) => {
+                    log::error!("Agent driver exited abruptly");
+                    Err(AgentDriverError::InvalidRuntimeState)
+                }
+            };
+
+            if let Err(err) = &result {
+                report_error!(err);
+            }
+
+            // Report driver-level errors directly to the server. These errors
+            // occur before or outside a conversation (e.g. bootstrap, MCP startup,
+            // environment setup) so LocalAgentTaskSyncModel never fires for them.
+            // Success/blocked/cancelled are handled by LocalAgentTaskSyncModel.
+            if let (Some(task_id), Err(err)) = (task_id, &result) {
+                report_driver_error(task_id, err, &server_api_for_error).await;
+                if matches!(
+                    err,
+                    AgentDriverError::EnvironmentSetupFailed(_)
+                        | AgentDriverError::SetupCommandFailed { .. }
+                        | AgentDriverError::SetupCommandTimedOut { .. }
+                        | AgentDriverError::SetupCommandExitedShell { .. }
+                ) {
+                    let _ = foreground_for_error
+                        .spawn(|me, ctx| {
+                            me.extend_shared_session_retention(
+                                SessionRetentionReason::SetupFailed,
+                                ctx,
+                            );
+                        })
+                        .await;
+                }
+            }
+
+            result
+        }
+    }
+
+    /// Flushes task-status reporting before the process may exit: waits
+    /// (bounded by [`TASK_STATUS_FLUSH_TIMEOUT`]) for `LocalAgentTaskSyncModel`
+    /// to finish delivering queued `update_agent_task` calls, then — for
+    /// error-free runs where no terminal state was confirmed delivered (e.g. a
+    /// `--skip-initial-turn` run with no follow-up, or a third-party harness
+    /// whose plugin never reported a terminal status) — reports `SUCCEEDED`
+    /// directly so the task cannot be left `IN_PROGRESS`.
+    ///
+    /// Contract: an error-free driver exit is reported as `SUCCEEDED` whenever
+    /// nothing more specific was delivered. A bounded harness-exit timeout is
+    /// not error-free in this sense: the CLI session may already have reported
+    /// Failed/Blocked/Cancelled, so that path drains queued updates and skips
+    /// this fallback. Other shutdown paths choose their classification by
+    /// resolving the run with `Ok` or a specific `AgentDriverError`.
+    ///
+    /// Failed runs only get the drain: the caller reports the error itself via
+    /// `report_driver_error` after receiving the result.
+    async fn flush_task_status_before_exit(
+        task_id: AmbientAgentTaskId,
+        run_succeeded: bool,
+        server_api: &Arc<dyn AIClient>,
+        foreground: &ModelSpawner<Self>,
+    ) {
+        match foreground
+            .spawn(move |_, ctx| {
+                LocalAgentTaskSyncModel::handle(ctx)
+                    .update(ctx, |model, _| model.wait_for_idle(task_id))
+            })
+            .await
+        {
+            Ok(wait) => {
+                if wait.with_timeout(TASK_STATUS_FLUSH_TIMEOUT).await.is_err() {
+                    log::warn!(
+                        "Timed out waiting for queued task status updates to flush for task {task_id}"
+                    );
+                }
+            }
+            Err(err) => log::warn!("Could not wait for the task status flush: {err}"),
+        }
+
+        if !run_succeeded {
+            return;
+        }
+
+        let confirmed_terminal_state = foreground
+            .spawn(move |_, ctx| {
+                LocalAgentTaskSyncModel::as_ref(ctx).confirmed_terminal_state(&task_id)
+            })
+            .await
+            .ok()
+            .flatten();
+        if let Some(state) = confirmed_terminal_state {
+            log::debug!("Task {task_id} already reported terminal state {state:?} before exit");
+            return;
+        }
+
+        log::warn!(
+            "No terminal task state was confirmed delivered for task {task_id}; \
+             reporting SUCCEEDED as a fallback before exit"
+        );
+        if let Err(err) = server_api
+            .update_agent_task(
+                task_id,
+                Some(AgentTaskState::Succeeded),
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+        {
+            report_error!(anyhow!(err).context(format!(
+                "Failed to report the fallback SUCCEEDED state for task {task_id}"
+            )));
+        }
+    }
+
+    /// Log all valid environment IDs for the user.
+    pub(super) fn log_valid_environments(app: &AppContext) {
+        let environments = CloudAmbientAgentEnvironment::get_all(app);
+        if environments.is_empty() {
+            log::error!("No environments available for this user.");
+        } else {
+            log::error!("Valid environment IDs:");
+            for env in environments {
+                log::error!("  - {} ({})", env.sync_id(), env.model().string_model.name);
+            }
+        }
+    }
+
+    /// Check that the working directory exists. Since it's user-specified, we don't automatically
+    /// create the directory (in case they made a typo).
+    fn check_working_dir(&self) -> impl Future<Output = Result<(), AgentDriverError>> + use<> {
+        let working_dir = self.working_dir.clone();
+        async move {
+            match async_fs::metadata(&working_dir).await {
+                Ok(metadata) => {
+                    if metadata.is_dir() {
+                        Ok(())
+                    } else {
+                        Err(AgentDriverError::InvalidWorkingDirectory {
+                            path: working_dir.to_owned(),
+                            source: io::ErrorKind::NotADirectory.into(),
+                        })
+                    }
+                }
+                Err(err) => Err(AgentDriverError::InvalidWorkingDirectory {
+                    path: working_dir.to_owned(),
+                    source: err,
+                }),
+            }
+        }
+    }
+
+    /// Runs the agent to completion.
+    /// Driving the agent mostly requires main-thread UI framework updates, but using `async` and
+    /// a `ModelSpawner` lets us express the high-level process linearly rather than in a
+    /// series of callbacks and state machine updates.
+    #[tracing::instrument(name = "AgentDriver::run_internal", skip_all, err, fields(tags.cloud_agent = true))]
+    async fn run_internal(
+        task: Task,
+        foreground: ModelSpawner<Self>,
+    ) -> Result<(), AgentDriverError> {
+        safe_debug!(
+            safe: ("Running agent driver"),
+            full: ("Running agent driver for query `{:?}`", task.prompt)
+        );
+
+        let setup_span = tracing::info_span!("agent_run_setup", tags.cloud_agent = true);
+        let (
+            setup_events,
+            task_id_for_refresh,
+            ai_client_for_refresh,
+            use_factory_repositories,
+            bedrock_config_for_refresh,
+        ) = async {
+            let (setup_events, environment_snapshot_reporter) = foreground
+                .spawn(|me, ctx| {
+                    let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client().clone();
+                    let background = ctx.background_executor();
+                    match me.task_id {
+                        Some(task_id) => (
+                            SetupClientEventReporter::new(
+                                task_id,
+                                ai_client.clone(),
+                                background.clone(),
+                            ),
+                            EnvironmentSnapshotReporter::new(task_id, ai_client, background),
+                        ),
+                        None => {
+                            report_error!(
+                                "No task ID found for driver - cannot report client events"
+                            );
+                            (
+                                SetupClientEventReporter::noop(
+                                    ai_client.clone(),
+                                    background.clone(),
+                                ),
+                                EnvironmentSnapshotReporter::noop(ai_client, background),
+                            )
+                        }
+                    }
+                })
+                .await?;
+
+            foreground
+                .spawn(|me, _| me.check_working_dir())
+                .await?
+                .await?;
+
+            // IMPORTANT: Wait for the terminal session to bootstrap before starting MCP servers.
+            // Some of the initializations are necessary for the MCP servers to start correctly.
+            //
+            // Why: MCP server startup can happen before we actually execute the agent prompt. For
+            // `TransportType::CLIServer` MCPs we currently depend on `AISettings.mcp_execution_path`,
+            // which is populated as part of terminal bootstrap. Waiting for the session bootstrap
+            // here avoids a subtle race where MCP spawn runs with an unset PATH and then the driver
+            // only fails via a timeout.
+            agent_setup::bootstrap_terminal(&foreground, &setup_events).await?;
+
+            // Once the terminal session is bootstrapped, perform cloud provider setup before spawning MCP servers.
+            // MCP servers *may* rely on cloud provider credentials.
+            setup_events
+                .record_result(
+                    SetupStep::CloudProviderSetup,
+                    Self::setup_cloud_providers(&foreground),
+                )
+                .await?;
+
+            // For the Oz harness only: set up model overrides and profile information.
+            if matches!(&task.harness, HarnessKind::Oz) {
+                let profile = task.profile.clone();
+                setup_events
+                    .record_result(SetupStep::AgentProfileConfiguration, async {
+                        foreground
+                            .spawn(move |me, ctx| me.configure_terminal(profile, ctx))
+                            .await??;
+                        Ok::<(), AgentDriverError>(())
+                    })
+                    .await?;
+
+                if let Some(model_id) = task.model.clone() {
+                    foreground
+                        .spawn(move |me, ctx| me.set_base_model_override(model_id, ctx))
+                        .await??;
+                }
+            }
+
+            // For all harnesses: wait for the shared session and prepare the environment.
+            setup_events
+                .record_result(SetupStep::SharedSessionEstablishment, async {
+                    foreground
+                        .spawn(|me, ctx| {
+                            me.terminal_driver
+                                .update(ctx, |driver, _| driver.wait_for_session_shared())
+                        })
+                        .await?
+                        .await
+                })
+                .await?;
+            // Clone global skill repos before environment prep can change the
+            // terminal's cwd into a single environment repo.
+            // We do this for all harnesses, so that the skills *may* be discovered by third-party
+            // harnesses if appropriate.
+            let (workspace, factory_repository_contract, session_shell_type) = foreground
+                .spawn(|me, ctx| {
+                    (
+                        me.workspace.take(),
+                        me.factory_repository_contract,
+                        me.terminal_driver
+                            .as_ref(ctx)
+                            .active_session_shell_type(ctx),
+                    )
+                })
+                .await?;
+            let (global_skill_resolution, prepared_workspace) = match workspace
+                .ok_or(AgentDriverError::InvalidRuntimeState)?
+            {
+                // A standby sandbox already cloned the repositories and ran the setup
+                // commands, so the run resumes from those results.
+                WorkspaceState::Prepared(prepared) => {
+                    let global_skill_resolution =
+                        agent_setup::resolve_global_skills(&foreground).await?;
+                    let harness_working_dir = foreground
+                        .spawn(|me, _| me.harness_working_dir.clone())
+                        .await?;
+                    (
+                        global_skill_resolution,
+                        agent_setup::PreparedWorkspace {
+                            harness_working_dir,
+                            repositories: prepared.repositories,
+                        },
+                    )
+                }
+                WorkspaceState::Pending(mut workspace) => {
+                    let launch_file_warmup = match &task.harness {
+                        HarnessKind::ThirdParty(harness) => {
+                            LaunchFileWarmup::start(harness.launch_file_roots(), &setup_events)
+                        }
+                        HarnessKind::Oz | HarnessKind::Unsupported(_) => None,
+                    };
+                    Self::initialize_setup_vars(&foreground, true).await?;
+                    let global_skill_resolution =
+                        agent_setup::prepare_global_skills(&foreground, &setup_events).await?;
+                    // The Factory definition checkout is run-scoped: the dispatch decides
+                    // whether this run gets one by attaching the clone variables,
+                    // independent of which environment the run executes in.
+                    environment::prepend_factory_definition_clone(
+                        &mut workspace.setup_commands,
+                        session_shell_type,
+                    );
+                    let cloud_env_mcp_scan = if workspace.needs_preparation() {
+                        // Subscribe to file-based MCP discovery BEFORE prepare_environment
+                        // triggers the pipeline so no CloudEnvMcpScanComplete events are
+                        // missed.
+                        //
+                        // File-based MCP discovery is Oz-only.
+                        // TODO(REMOTE-1345): handle MCP setup for third-party harnesses.
+                        match &task.harness {
+                            HarnessKind::Oz => {
+                                let source_repos = workspace.source_repos.clone();
+                                Some(
+                                    foreground
+                                        .spawn(move |me, ctx| {
+                                            let expected_repo_paths: Vec<PathBuf> = source_repos
+                                                .iter()
+                                                .map(|repo| me.working_dir.join(&repo.repo))
+                                                .collect();
+                                            me.wait_for_cloud_env_file_based_mcp_scan(
+                                                expected_repo_paths,
+                                                MCP_SERVER_STARTUP_TIMEOUT,
+                                                ctx,
+                                            )
+                                        })
+                                        .await?,
+                                )
+                            }
+                            HarnessKind::ThirdParty(_) | HarnessKind::Unsupported(_) => None,
+                        }
+                    } else {
+                        None
+                    };
+                    let prepared = match agent_setup::prepare_workspace(
+                        &foreground,
+                        task.harness.harness(),
+                        workspace,
+                        &setup_events,
+                        environment_snapshot_reporter,
+                    )
+                    .await
+                    {
+                        Ok(prepared) => prepared,
+                        Err(error) => {
+                            // Preserve the terminal session when environment setup fails.
+                            Self::linger_after_failure(&foreground, "environment_setup", &error)
+                                .await;
+                            return Err(error);
+                        }
+                    };
+                    // The harness launch is next, and an unfinished warm-up would compete with
+                    // it for the same storage.
+                    if let Some(warmup) = &launch_file_warmup {
+                        warmup.stop();
+                    }
+                    Self::read_setup_vars(
+                        &foreground,
+                        true,
+                        matches!(&task.harness, HarnessKind::Oz),
+                    )
+                    .await?;
+                    let harness_working_dir = prepared.harness_working_dir.clone();
+                    foreground
+                        .spawn(move |me, _| me.harness_working_dir = harness_working_dir)
+                        .await?;
+                    if let Some(scan) = cloud_env_mcp_scan {
+                        Self::await_file_based_mcp_startup(
+                            SetupStep::FileBasedMcpDiscovery,
+                            SetupStep::FileBasedMcpReadiness,
+                            scan,
+                            MCP_SERVER_STARTUP_TIMEOUT,
+                            &setup_events,
+                            &foreground,
+                        )
+                        .await?;
+                    }
+                    (global_skill_resolution, prepared)
+                }
+            };
+            if matches!(&task.harness, HarnessKind::Oz) {
+                let managed_mcp_client = foreground
+                    .spawn(|_, ctx| ServerApiProvider::as_ref(ctx).get_managed_mcp_client())
+                    .await?;
+                let task_id = foreground.spawn(|me, _| me.task_id).await?;
+                let mcp_startup_result = setup_events
+                    .record_result(
+                        SetupStep::McpServerStartup,
+                        mcp_startup::start_task_and_profile_mcp_servers(
+                            &task.mcp_specs,
+                            managed_mcp_client,
+                            mcp_startup::McpStartupMode::Run,
+                            task_id,
+                            &foreground,
+                        ),
+                    )
+                    .await;
+                Self::handle_mcp_startup_result(mcp_startup_result, &foreground).await?;
+            }
+
+            if FeatureFlag::FactorySkillReferences.is_enabled()
+                && let Some(discovery) = Self::discover_skill_references(&foreground).await
+            {
+                let report = setup_events
+                    .record_value_with_error_flag(
+                        SetupStep::SkillReferenceResolution,
+                        Self::resolve_skill_references(discovery, &foreground),
+                        |report| report.warning_count() > 0,
+                    )
+                    .await;
+                setup_events.post_timeline_event_with_payload(
+                    OzRunTimelineEvent::SkillSourcesResolved,
+                    report.timeline_payload(),
+                );
+            }
+
+            // Skill loading is Oz-only; third-party harnesses have their own skill systems.
+            if matches!(&task.harness, HarnessKind::Oz) {
+                // Load skills from repos synchronously so the initial message includes them.
+                // File trees are ready after prepare_environment and global skill repo cloning above.
+                agent_setup::load_skills(
+                    &foreground,
+                    prepared_workspace.repositories,
+                    global_skill_resolution,
+                    &setup_events,
+                )
+                .await;
+                if factory_repository_contract {
+                    agent_setup::load_factory_deferred_repositories_skill(&foreground).await;
+                }
+            }
+
+            let (
+                task_id_for_refresh,
+                ai_client_for_refresh,
+                use_factory_repositories,
+                bedrock_config_for_refresh,
+            ) = foreground
+                .spawn(|me, ctx| {
+                    let task_id = if FeatureFlag::GitCredentialRefresh.is_enabled()
+                        || me.github_credential_mode == GitHubCredentialMode::RestrictedInstallation
+                    {
+                        me.task_id.map(|id| id.to_string())
+                    } else {
+                        None
+                    };
+                    let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client().clone();
+                    let bedrock_config = me.bedrock_oidc_credentials.clone().map(|config| {
+                        let request_scope =
+                            me.team_scope.as_ref().map(RequestTeamScope::from_scope);
+                        (config, request_scope)
+                    });
+                    (
+                        task_id,
+                        ai_client,
+                        me.use_factory_repositories,
+                        bedrock_config,
+                    )
+                })
+                .await?;
+
+            Ok::<_, AgentDriverError>((
+                setup_events,
+                task_id_for_refresh,
+                ai_client_for_refresh,
+                use_factory_repositories,
+                bedrock_config_for_refresh,
+            ))
+        }
+        .instrument(setup_span)
+        .await?;
+
+        // Run the harness with a prompt, racing it against optional background refresh
+        // loops for git credentials and Bedrock OIDC credentials via
+        // `with_credential_refreshes`. Refresh futures never resolve on their own —
+        // they are dropped automatically when the harness result resolves.
+        match task.harness {
+            HarnessKind::Oz => {
+                // Join global file-based MCP startup immediately before the first Oz turn so it
+                // can overlap preceding setup without omitting tools from the first request.
+                let initial_global_scan = foreground
+                    .spawn(|me, ctx| {
+                        me.wait_for_initial_global_file_based_mcp_scan(
+                            MCP_SERVER_STARTUP_TIMEOUT,
+                            ctx,
+                        )
+                    })
+                    .await?;
+                Self::await_file_based_mcp_startup(
+                    SetupStep::InitialGlobalMcpScan,
+                    SetupStep::InitialGlobalMcpReadiness,
+                    initial_global_scan,
+                    MCP_SERVER_STARTUP_TIMEOUT,
+                    &setup_events,
+                    &foreground,
+                )
+                .await?;
+
+                Self::prepare_local_subtree(&foreground).await?;
+                let status_rx = foreground
+                    .spawn(move |me, ctx| me.execute_run(task.prompt, ctx))
+                    .await?;
+
+                let conversation_status = with_credential_refreshes(
+                    async move {
+                        status_rx.await.map_err(|_| {
+                            report_error!("Subscription dropped before agent finished");
+                            AgentDriverError::InvalidRuntimeState
+                        })
+                    },
+                    task_id_for_refresh,
+                    ai_client_for_refresh,
+                    use_factory_repositories,
+                    bedrock_config_for_refresh,
+                    &foreground,
+                )
+                .await?;
+
+                log::info!(
+                    "Ambient agent Oz lifecycle: event=run_exit_received idle_on_complete_elapsed_or_not_configured=true next=terminal_teardown_after_flush"
+                );
+
+                // Pause before returning to make sure that all conversation events are transmitted before the session is closed.
+                // TODO: This is a bit of a bandaid fix, and it would be better if we explicitly waited for the session to end before terminating.
+                // The way we could do that is through having the driver wait for all in-flight streams to be finished before terminating
+                // and then call stop_sharing_session when they're done. To know when streams are finished, we would need to modify start_ordered_terminal_events_listener
+                // to send a message when the streams are finished, flushed, and the websocket is disconnected. For now, we'll just sleep for a second, as this seems
+                // to be enough time for the streams to be finished and the events to be flushed.
+                warpui::r#async::Timer::after(Duration::from_secs(1)).await;
+
+                conversation_status.into_result()
+            }
+            HarnessKind::ThirdParty(harness) => {
+                // Harnesses that render through the native conversation are driven over ACP;
+                // the rest run their interactive CLI in the terminal.
+                let transport = if harness.drives_cli_agent_session() {
+                    HarnessTransport::Pty
+                } else {
+                    HarnessTransport::Acp
+                };
+                let setup_events = setup_events.with_transport(transport);
+                let harness_setup_events = setup_events.clone();
+                let (harness_exit_rx, runner) = setup_events
+                    .record_result(SetupStep::ThirdPartyHarnessPreparation, async {
+                        let harness_exit_rx = Self::setup_harness(
+                            harness.as_ref(),
+                            &foreground,
+                            &harness_setup_events,
+                        )
+                        .await?;
+                        let runner = Self::prepare_harness(
+                            &task.prompt,
+                            &task.mcp_specs,
+                            harness.as_ref(),
+                            &foreground,
+                        )
+                        .await?;
+
+                        Self::run_preflight_checks(
+                            harness.as_ref(),
+                            &foreground,
+                            &harness_setup_events,
+                        )
+                        .await?;
+                        Self::show_transport_fallback_notice(harness.harness(), &foreground).await;
+                        Ok::<_, AgentDriverError>((harness_exit_rx, runner))
+                    })
+                    .await?;
+                let runtime_error_patterns = harness.runtime_error_patterns_for_run();
+                let runtime_error_patterns: Vec<&str> =
+                    runtime_error_patterns.iter().map(String::as_str).collect();
+
+                with_credential_refreshes(
+                    Self::run_harness(
+                        runner,
+                        &runtime_error_patterns,
+                        &foreground,
+                        harness_exit_rx,
+                        &setup_events,
+                    ),
+                    task_id_for_refresh,
+                    ai_client_for_refresh,
+                    use_factory_repositories,
+                    bedrock_config_for_refresh,
+                    &foreground,
+                )
+                .await
+            }
+            HarnessKind::Unsupported(harness) => Err(AgentDriverError::HarnessSetupFailed {
+                harness: harness.to_string(),
+                stage: None,
+                reason: format!(
+                    "The {harness} harness is only supported for local child agent launches."
+                ),
+            }),
+        }
+    }
+
+    /// Holds the agent process — and with it the run's shared session — open for the
+    /// `--idle-on-fail` window before a setup failure propagates. A no-op without that flag.
+    ///
+    /// The session is established before environment preparation, so a run that dies during setup
+    /// still has a joinable one, which is the case this feature exists for: the environment is
+    /// broken and someone wants to look around inside it.
+    async fn linger_after_failure(
+        foreground: &ModelSpawner<Self>,
+        stage: &str,
+        error: &AgentDriverError,
+    ) {
+        // The terminal may still be executing setup; do not retain it or accept debug turns.
+        if matches!(error, AgentDriverError::SetupCommandTimedOut { .. }) {
+            log::warn!(
+                "Environment setup lifecycle: event=timeout_teardown stage={stage} retention_skipped=true"
+            );
+            return;
+        }
+        let idle_on_fail = match foreground.spawn(|me, _| me.idle_on_fail).await {
+            Ok(idle_on_fail) => idle_on_fail,
+            Err(spawn_error) => {
+                log::warn!(
+                    "Could not read idle-on-fail window after {stage} failure: {spawn_error}"
+                );
+                return;
+            }
+        };
+        let Some(window) = idle_on_fail else {
+            return;
+        };
+
+        Self::report_failure_before_lingering(foreground, stage, error, window).await;
+
+        let (tx, rx) = oneshot::channel::<()>();
+        let armed = foreground.spawn(move |me, ctx| {
+            let controller = DebugWindowController::new(me.idle_timeout_sender(tx, ctx));
+            me.arm_setup_failure_debug_window(controller, window, ctx);
+        });
+        if let Err(error) = armed.await {
+            log::warn!("Could not arm the post-failure debug window: {error}");
+            return;
+        }
+
+        log::info!(
+            "Ambient agent idle lifecycle: event=idle_timeout_scheduled stage={stage} timeout={window:?} outcome=setup_failure"
+        );
+        let _ = rx.await;
+        log::info!(
+            "Ambient agent idle lifecycle: event=idle_window_elapsed stage={stage} outcome=setup_failure"
+        );
+    }
+
+    /// Arms a post-failure debug window and pushes its deadline out on every viewer input, so a
+    /// session someone is working in is not torn down underneath them.
+    ///
+    /// Both failure paths route through here so a conversation error and a setup failure behave
+    /// identically. The refresh subscription is installed once per driver.
+    fn arm_debug_window<T: Clone + Send + 'static>(
+        &mut self,
+        idle_timeout: IdleTimeoutSender<T>,
+        value: T,
+        window: Duration,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        // Recorded on the timer rather than captured below, so re-arming supersedes it.
+        idle_timeout.arm_refreshable(window, value);
+
+        // A newly armed window always publishes. The throttle exists for keystroke-level
+        // refreshes; letting it suppress this would leave the previous window's deadline on the
+        // run, which reads as already-expired and hides that the session is reachable.
+        self.last_published_debug_deadline = None;
+        self.publish_debug_window_deadline(window, None, None, ctx);
+
+        if self.debug_window_refresh_installed {
+            return;
+        }
+        self.debug_window_refresh_installed = true;
+
+        self.subscribe_to_viewer_input_refresh(ctx, move || idle_timeout.refresh());
+    }
+
+    /// Subscribes the terminal driver's viewer-input events to `refresh`, publishing the
+    /// resulting deadline on each keystroke. Callers supply the refresh function so a pin-aware
+    /// one and a plain one can share this wiring.
+    fn subscribe_to_viewer_input_refresh(
+        &self,
+        ctx: &mut ModelContext<Self>,
+        refresh: impl Fn() -> Option<Duration> + Send + 'static,
+    ) {
+        let terminal_driver = self.terminal_driver.clone();
+        ctx.subscribe_to_model(&terminal_driver, move |me, _, event, ctx| {
+            if matches!(event, TerminalDriverEvent::SharedSessionViewerInput)
+                && let Some(window) = refresh()
+            {
+                log::debug!(
+                    "Ambient agent idle lifecycle: event=idle_timeout_refreshed trigger=viewer_input"
+                );
+                me.publish_debug_window_deadline(window, None, None, ctx);
+            }
+        });
+    }
+
+    /// Arms the post-failure debug window for a retained environment-setup failure and installs
+    /// the subscriptions that keep it alive across a debug turn (REMOTE-2661).
+    ///
+    /// Unlike [`Self::arm_debug_window`], no conversation exists yet: a turn pins the window for
+    /// its duration (accepted → terminal) since there's no viewer input to refresh it otherwise.
+    fn arm_setup_failure_debug_window(
+        &mut self,
+        controller: DebugWindowController<()>,
+        window: Duration,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        controller.refresh_idle((), window);
+        // The first deadline already went out with the setup-failure state; record it so the
+        // throttle counts it as published.
+        self.last_published_debug_deadline = Some(SystemTime::now());
+
+        let terminal_surface_id = self.terminal_driver.as_ref(ctx).terminal_view().id();
+
+        let viewer_input_controller = controller.clone();
+        self.subscribe_to_viewer_input_refresh(ctx, move || {
+            viewer_input_controller.refresh_from_last_armed()
+        });
+
+        let history_model = BlocklistAIHistoryModel::handle(ctx);
+        ctx.subscribe_to_model(&history_model, move |me, _, event, ctx| {
+            let BlocklistAIHistoryEvent::UpdatedConversationStatus {
+                conversation_id,
+                terminal_surface_id: event_terminal_surface_id,
+                update: ConversationStatusUpdate::Changed { .. },
+                new_status,
+            } = event
+            else {
+                return;
+            };
+            if *event_terminal_surface_id != terminal_surface_id {
+                return;
+            }
+
+            if new_status.is_in_progress() {
+                let refreshed = controller.refresh_idle((), window);
+                let newly_pinned = controller.pin_for_turn(*conversation_id);
+                if refreshed || newly_pinned {
+                    log::info!(
+                        "Ambient agent idle lifecycle: event=debug_turn_accepted conversation_id={conversation_id:?}"
+                    );
+                    me.last_published_debug_deadline = None;
+                    me.publish_debug_window_deadline(
+                        window,
+                        Some(true),
+                        Some(AgentTaskState::InProgress),
+                        ctx,
+                    );
+                }
+            } else if (new_status.is_done() || new_status.is_blocked())
+                && controller.finish_turn(*conversation_id, (), window)
+            {
+                log::info!(
+                    "Ambient agent idle lifecycle: event=debug_turn_finished conversation_id={conversation_id:?}"
+                );
+                me.last_published_debug_deadline = None;
+                me.publish_debug_window_deadline(
+                    window,
+                    Some(controller.is_pinned()),
+                    debug_turn_task_state(new_status),
+                    ctx,
+                );
+            }
+            // WaitingForEvents / TransientError are quiescent-but-not-terminal: the turn stays
+            // pinned without a fresh accept or finish transition.
+        });
+    }
+
+    /// Publishes the debug window's current deadline for display, and optionally the
+    /// REMOTE-2661 `debug_agent_active` pin flag alongside it.
+    ///
+    /// The deadline is throttled and advisory, since the agent process owns the real timer.
+    /// `debug_agent_active`, when `Some`, is never throttled: a pin/unpin is a discrete change.
+    fn publish_debug_window_deadline(
+        &mut self,
+        window: Duration,
+        debug_agent_active: Option<bool>,
+        task_state: Option<AgentTaskState>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        const MIN_PUBLISH_INTERVAL: Duration = Duration::from_secs(30);
+
+        let Some(task_id) = self.task_id else {
+            return;
+        };
+        let now = SystemTime::now();
+        let deadline_throttled = self.last_published_debug_deadline.is_some_and(|last| {
+            now.duration_since(last)
+                .is_ok_and(|elapsed| elapsed < MIN_PUBLISH_INTERVAL)
+        });
+        if deadline_throttled && debug_agent_active.is_none() && task_state.is_none() {
+            return;
+        }
+        self.last_published_debug_deadline = Some(now);
+
+        // A throttled republish still needs a deadline value, so a debug_agent_active-only
+        // update doesn't omit `session_debug_until` entirely.
+        let deadline = debug_window_deadline(window);
+        let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
+        ctx.spawn(
+            async move {
+                ai_client
+                    .update_agent_task(
+                        task_id,
+                        task_state,
+                        None,
+                        None,
+                        None,
+                        Some(deadline),
+                        debug_agent_active,
+                    )
+                    .await
+            },
+            move |_me, result, _ctx| {
+                if let Err(error) = result {
+                    log::warn!(
+                        "Failed to publish debug window deadline for run {task_id}: {error:#}"
+                    );
+                }
+            },
+        );
+    }
+
+    /// Reports the run's terminal failure state, its status message, and the debug window's
+    /// first deadline in one update, so the server never sees a terminal setup failure without
+    /// also knowing a debug window is opening.
+    ///
+    /// A setup failure never creates a conversation, so `LocalAgentTaskSyncModel` never derives
+    /// task state for it, and the run would otherwise read as in-progress for the whole window.
+    async fn report_failure_before_lingering(
+        foreground: &ModelSpawner<Self>,
+        stage: &str,
+        error: &AgentDriverError,
+        window: Duration,
+    ) {
+        let resolved = foreground
+            .spawn(|me, ctx| {
+                me.task_id
+                    .map(|task_id| (task_id, ServerApiProvider::as_ref(ctx).get_ai_client()))
+            })
+            .await;
+        let Ok(Some((task_id, ai_client))) = resolved else {
+            return;
+        };
+
+        let status = setup_failure_status_update(error);
+        let deadline = debug_window_deadline(window);
+        if let Err(error) = ai_client
+            .update_agent_task(
+                task_id,
+                Some(AgentTaskState::Failed),
+                None,
+                None,
+                Some(status),
+                Some(deadline),
+                None,
+            )
+            .await
+        {
+            log::warn!(
+                "Failed to report {stage} failure for run {task_id} before lingering: {error:#}"
+            );
+        }
+    }
+
+    /// Run the authentication preflight check for a third-party harness.
+    ///
+    /// Uses `execute_command` so the check appears as a collapsible block in
+    /// the shared session UI, mirroring how environment setup commands
+    /// surface.
+    async fn run_preflight_checks(
+        harness: &dyn ThirdPartyHarness,
+        foreground: &ModelSpawner<Self>,
+        events: &SetupClientEventReporter,
+    ) -> Result<(), AgentDriverError> {
+        let harness_name = harness.cli_agent().command_prefix().to_owned();
+
+        if let Some(cmd) = harness.auth_check_command() {
+            log::info!("Running auth check for {harness_name}: {cmd}");
+            if harness.drives_cli_agent_session() {
+                Self::run_single_preflight(&cmd, &harness_name, foreground).await?;
+            } else {
+                events
+                    .record_result(
+                        SetupStep::AcpAuthPreflight,
+                        Self::run_single_preflight(&cmd, &harness_name, foreground),
+                    )
+                    .await?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Tells whoever watches the session why a run requested over ACP runs in the terminal, with
+    /// a setup block that echoes [`harness::transport_fallback_notice`]. It runs right before the
+    /// harness starts, as its own block: prefixing the harness command would stop the viewer from
+    /// recognising the harness's block. Best effort, so it never fails the run.
+    async fn show_transport_fallback_notice(
+        selected_harness: Harness,
+        foreground: &ModelSpawner<Self>,
+    ) {
+        let Ok(Some(reason)) = foreground
+            .spawn(|me, _| me.harness_transport_fallback)
+            .await
+        else {
+            return;
+        };
+        let command = harness::transport_fallback_notice_command(selected_harness, reason);
+        let shown: Result<(), AgentDriverError> = async {
+            let start_future = foreground
+                .spawn(move |me, ctx| {
+                    me.terminal_driver
+                        .update(ctx, |driver, ctx| driver.execute_command(&command, ctx))
+                })
+                .await??;
+            let command_handle = start_future.await?;
+            if command_handle
+                .with_timeout(TRANSPORT_FALLBACK_NOTICE_TIMEOUT)
+                .await
+                .is_err()
+            {
+                log::warn!("The transport fallback notice did not finish in time");
+            }
+            Ok(())
+        }
+        .await;
+        if let Err(error) = shown {
+            log::warn!("Failed to show the transport fallback notice: {error}");
+        }
+    }
+
+    /// Run a single preflight check command and return an error if it fails.
+    async fn run_single_preflight(
+        command: &str,
+        harness_name: &str,
+        foreground: &ModelSpawner<Self>,
+    ) -> Result<(), AgentDriverError> {
+        let cmd = command.to_owned();
+        let start_future = foreground
+            .spawn(move |me, ctx| {
+                me.terminal_driver
+                    .update(ctx, |driver, ctx| driver.execute_command(&cmd, ctx))
+            })
+            .await??;
+
+        let command_handle = start_future.await?;
+        let block_id = command_handle.block_id().clone();
+
+        let exit_code = match command_handle.with_timeout(PREFLIGHT_CHECK_TIMEOUT).await {
+            Err(TimeoutError) => {
+                log::error!("Preflight auth check timed out for {harness_name}");
+                return Err(AgentDriverError::HarnessAuthCheckFailed {
+                    harness: harness_name.to_owned(),
+                    detail: "command timed out".to_owned(),
+                });
+            }
+            Ok(result) => result?,
+        };
+
+        if !exit_code.was_successful() {
+            let output_text = Self::fetch_preflight_block_output(&block_id, foreground).await;
+            let detail = if output_text.is_empty() {
+                format!("exit code {}", exit_code.value())
+            } else {
+                format!("exit code {}: {}", exit_code.value(), output_text)
+            };
+            safe_error!(
+                safe: (
+                    "Preflight auth check failed for {harness_name} (exit code {})",
+                    exit_code.value()
+                ),
+                full: ("Preflight auth check failed for {harness_name}. {detail}")
+            );
+            return Err(AgentDriverError::HarnessAuthCheckFailed {
+                harness: harness_name.to_owned(),
+                detail,
+            });
+        }
+
+        log::info!("Preflight auth check passed for {harness_name}");
+        Ok(())
+    }
+
+    async fn fetch_preflight_block_output(
+        block_id: &BlockId,
+        foreground: &ModelSpawner<Self>,
+    ) -> String {
+        let block_id = block_id.clone();
+        let plaintext = foreground
+            .spawn(move |me, ctx| {
+                me.terminal_driver
+                    .as_ref(ctx)
+                    .block_output_plaintext(&block_id, ctx)
+            })
+            .await;
+        match plaintext {
+            Ok(Some(text)) => text.trim().to_owned(),
+            Ok(None) | Err(_) => String::new(),
+        }
+    }
+
+    /// Sets up the third-party harness by subscribing to CLI session events and
+    /// installing the Warp plugin and platform plugin, if applicable.
+    ///
+    /// Returns a oneshot receiver that fires when the harness should exit
+    /// (either immediately on completion or after the idle-on-complete timeout).
+    async fn setup_harness(
+        harness: &dyn ThirdPartyHarness,
+        foreground: &ModelSpawner<Self>,
+        events: &SetupClientEventReporter,
+    ) -> Result<oneshot::Receiver<()>, AgentDriverError> {
+        let (exit_tx, exit_rx) = oneshot::channel();
+        let harness_exit = foreground
+            .spawn(move |me, ctx| me.idle_timeout_sender(exit_tx, ctx))
+            .await?;
+
+        // Harnesses that report progress through the native conversation instead of a CLI agent
+        // session have no hook plugin to install; the conversation's own status drives their
+        // idle window instead.
+        if !harness.drives_cli_agent_session() {
+            foreground
+                .spawn(move |me, ctx| {
+                    me.subscribe_to_native_conversation_status_events(harness_exit, ctx)
+                })
+                .await?;
+            return Ok(exit_rx);
+        }
+
+        // Subscribe to CLI agent session events so we can update the task
+        // state as the harness emits stop/blocked notifications.
+        foreground
+            .spawn(move |me, ctx| me.subscribe_to_cli_agent_session_events(harness_exit, ctx))
+            .await?;
+
+        // Install plugins before running the harness command.
+        Self::setup_harness_plugins(harness, foreground, events).await?;
+
+        Ok(exit_rx)
+    }
+
+    async fn setup_harness_plugins(
+        harness: &dyn ThirdPartyHarness,
+        foreground: &ModelSpawner<Self>,
+        events: &SetupClientEventReporter,
+    ) -> Result<(), AgentDriverError> {
+        let harness_name = harness.cli_agent().command_prefix();
+        let requires_platform_plugin = harness.requires_verified_platform_plugin();
+        let shell_launch_data = foreground
+            .spawn(|me, ctx| me.terminal_driver.as_ref(ctx).active_shell_launch_data(ctx))
+            .await?;
+        // Without an explicit shell the plugin manager falls back to a bare `bash`, which on
+        // Windows resolves to the WSL launcher in System32 rather than a usable shell.
+        let (shell_path, shell_type) = match shell_launch_data {
+            Some(ShellLaunchData::Executable {
+                executable_path,
+                shell_type,
+            })
+            | Some(ShellLaunchData::MSYS2 {
+                executable_path,
+                shell_type,
+            }) => (Some(executable_path), Some(shell_type)),
+            Some(ShellLaunchData::WSL { .. })
+            | Some(ShellLaunchData::DockerSandbox { .. })
+            | None => (None, None),
+        };
+        let Some(manager) =
+            plugin_manager_for_with_shell(harness.cli_agent(), shell_path, shell_type, None)
+        else {
+            if requires_platform_plugin {
+                return Err(Self::required_platform_plugin_error(
+                    harness_name,
+                    "Required platform plugin manager is unavailable",
+                ));
+            }
+            return Ok(());
+        };
+
+        Self::setup_notification_plugin(manager.as_ref(), events).await;
+        Self::setup_platform_plugin(
+            harness_name,
+            manager.as_ref(),
+            requires_platform_plugin,
+            events,
+        )
+        .await
+    }
+
+    async fn setup_notification_plugin(
+        manager: &dyn CliAgentPluginManager,
+        events: &SetupClientEventReporter,
+    ) {
+        if !manager.can_auto_install() {
+            return;
+        }
+        if manager.needs_update() {
+            if let Err(e) = events
+                .record_result(
+                    SetupStep::ThirdPartyHarnessPreparationNotificationPluginUpdate,
+                    manager.update(),
+                )
+                .await
+            {
+                log::warn!("Plugin update failed (continuing): {e}");
+            }
+        } else if !manager.is_installed()
+            && let Err(e) = events
+                .record_result(
+                    SetupStep::ThirdPartyHarnessPreparationNotificationPluginInstall,
+                    manager.install(),
+                )
+                .await
+        {
+            log::warn!("Plugin installation failed (continuing): {e}");
+        }
+    }
+
+    async fn setup_platform_plugin(
+        harness_name: &str,
+        manager: &dyn CliAgentPluginManager,
+        required: bool,
+        events: &SetupClientEventReporter,
+    ) -> Result<(), AgentDriverError> {
+        if manager.platform_plugin_needs_update() {
+            if let Err(e) = events
+                .record_result(
+                    SetupStep::ThirdPartyHarnessPreparationPlatformPluginUpdate,
+                    manager.update_platform_plugin(),
+                )
+                .await
+            {
+                if required {
+                    return Err(Self::required_platform_plugin_error(
+                        harness_name,
+                        Self::plugin_failure_reason("Required platform plugin update failed", &e),
+                    ));
+                }
+                log::warn!("Platform plugin update failed (continuing): {e}");
+            }
+        } else if !manager.is_platform_plugin_installed()
+            && let Err(e) = events
+                .record_result(
+                    SetupStep::ThirdPartyHarnessPreparationPlatformPluginInstall,
+                    manager.install_platform_plugin(),
+                )
+                .await
+        {
+            if required {
+                return Err(Self::required_platform_plugin_error(
+                    harness_name,
+                    Self::plugin_failure_reason("Required platform plugin installation failed", &e),
+                ));
+            }
+            log::warn!("Platform plugin installation failed (continuing): {e}");
+        }
+
+        if required {
+            Self::verify_required_platform_plugin(harness_name, manager)?;
+        }
+        Ok(())
+    }
+
+    fn verify_required_platform_plugin(
+        harness_name: &str,
+        manager: &dyn CliAgentPluginManager,
+    ) -> Result<(), AgentDriverError> {
+        if !manager.is_platform_plugin_installed() {
+            return Err(Self::required_platform_plugin_error(
+                harness_name,
+                "Required platform plugin is not installed",
+            ));
+        }
+        if manager.platform_plugin_needs_update() {
+            return Err(Self::required_platform_plugin_error(
+                harness_name,
+                "Required platform plugin is below the minimum supported version",
+            ));
+        }
+        Ok(())
+    }
+
+    fn plugin_failure_reason(summary: &str, error: &PluginInstallError) -> String {
+        let log = error.log.trim();
+        if log.is_empty() {
+            format!("{summary}: {error}")
+        } else {
+            format!("{summary}: {error}\n{log}")
+        }
+    }
+
+    fn required_platform_plugin_error(
+        harness: &str,
+        reason: impl Into<String>,
+    ) -> AgentDriverError {
+        AgentDriverError::HarnessSetupFailed {
+            harness: harness.to_owned(),
+            stage: None,
+            reason: reason.into(),
+        }
+    }
+
+    /// Configure a third-party harness for execution. This will set `self.harness` and
+    /// return a handle to the harness runner.
+    async fn prepare_harness(
+        prompt: &AgentRunPrompt,
+        mcp_specs: &[MCPSpec],
+        harness: &dyn ThirdPartyHarness,
+        foreground: &ModelSpawner<Self>,
+    ) -> Result<Arc<dyn harness::HarnessRunner>, AgentDriverError> {
+        let (
+            workspace_root,
+            harness_working_dir,
+            task_id,
+            server_api,
+            managed_mcp_client,
+            terminal_driver,
+            skill_dirs,
+            factory_repository_contract,
+        ) = foreground
+            .spawn(|me, ctx| {
+                if me.harness.is_some() {
+                    log::error!(
+                        "Attempted to prepare a third-party harness, but one was already configured"
+                    );
+                    return Err(AgentDriverError::InvalidRuntimeState);
+                }
+
+                Ok((
+                    me.working_dir.clone(),
+                    me.harness_working_dir.clone(),
+                    me.task_id,
+                    ServerApiProvider::as_ref(ctx).get(),
+                    ServerApiProvider::as_ref(ctx).get_managed_mcp_client(),
+                    me.terminal_driver.clone(),
+                    me.skill_dirs.clone(),
+                    me.factory_repository_contract,
+                ))
+            })
+            .await
+            .map_err(|_| AgentDriverError::InvalidRuntimeState)
+            .flatten()?;
+
+        let (
+            prompt_text,
+            system_prompt,
+            resumption_prompt,
+            server_context,
+            usage_context,
+            prompt_attribution,
+        ) = match prompt {
+            AgentRunPrompt::Local(text) => {
+                (Cow::Borrowed(text.as_str()), None, None, None, None, None)
+            }
+            AgentRunPrompt::ServerSide {
+                skill,
+                attachments_dir,
+            } => {
+                let skill = skill
+                    .as_ref()
+                    .map(|parsed_skill| ResolvePromptAttachedSkill {
+                        name: parsed_skill.name.clone(),
+                        content: parsed_skill.content.clone(),
+                        path: Some(parsed_skill.path.display_path()),
+                    });
+                let request = ResolvePromptRequest {
+                    skill,
+                    attachments_dir: attachments_dir.clone(),
+                };
+                let resolved = match task_id.as_ref() {
+                    Some(task_id) => server_api.resolve_prompt_for_task(task_id, request).await,
+                    None => server_api.resolve_prompt(request).await,
+                }
+                .map_err(AgentDriverError::PromptResolutionFailed)?;
+                (
+                    Cow::Owned(resolved.prompt),
+                    resolved.system_prompt,
+                    resolved.resumption_prompt,
+                    resolved.context,
+                    resolved.harness_usage,
+                    resolved
+                        .user_query_b64
+                        .as_deref()
+                        .and_then(BaseUserQuery::decode_b64),
+                )
+            }
+        };
+
+        let (secrets, third_party_harness_model_config) = foreground
+            .spawn(|me, _| {
+                (
+                    Arc::clone(&me.secrets),
+                    me.third_party_harness_model_config.clone(),
+                )
+            })
+            .await
+            .map_err(|_| AgentDriverError::InvalidRuntimeState)?;
+
+        // Clone the raw secrets before the MCP closure consumes the Arc, so the
+        // harness can read structured fields (e.g. OpenAI `base_url`) directly.
+        let secrets_for_harness = Arc::clone(&secrets);
+
+        // Resolve MCP specs into harness-native JSON format.
+        let mcp_specs = mcp_specs.to_vec();
+        let resolved_mcp_servers =
+            Self::resolve_mcp_specs_to_json(&mcp_specs, secrets, managed_mcp_client, foreground)
+                .await?;
+        if !resolved_mcp_servers.configs.is_empty() {
+            log::info!(
+                "Resolved {} MCP server(s) for third-party harness",
+                resolved_mcp_servers.configs.len()
+            );
+        }
+
+        let resolved_env_vars = foreground
+            .spawn(|me, _| Arc::clone(&me.resolved_env_vars))
+            .await
+            .map_err(|_| AgentDriverError::InvalidRuntimeState)?;
+        let resume = foreground
+            .spawn(|me, _| me.resume_payload.take())
+            .await
+            .map_err(|_| AgentDriverError::InvalidRuntimeState)?;
+
+        let runner: Arc<dyn HarnessRunner> = harness
+            .build_runner(
+                prompt_text.as_ref(),
+                system_prompt.as_deref(),
+                resumption_prompt.as_deref(),
+                server_context.as_deref(),
+                prompt_attribution.as_ref(),
+                &workspace_root,
+                &harness_working_dir,
+                task_id,
+                server_api.clone(),
+                terminal_driver,
+                resume,
+                &resolved_env_vars,
+                &skill_dirs,
+                factory_repository_contract,
+                &secrets_for_harness,
+                &resolved_mcp_servers,
+                third_party_harness_model_config.as_ref(),
+            )?
+            .into();
+        runner
+            .persistence()
+            .initialize(server_api, task_id, usage_context);
+
+        let stored_runner = runner.clone();
+        foreground
+            .spawn(move |me, _| me.harness = Some(stored_runner))
+            .await?;
+
+        Ok(runner)
+    }
+
+    /// Execute a configured external harness in the terminal.
+    ///
+    /// The `harness_exit_rx` oneshot fires when the subscription determines it's
+    /// time to exit (either immediately on completion or after the idle timeout).
+    ///
+    /// While the harness runs, a background scanner watches its block for
+    /// known runtime failure substrings (e.g. invalid API key, exhausted
+    /// credits). If one is detected we send `/exit` to the harness and
+    /// synthesize a [`AgentDriverError::HarnessRuntimeFailureDetected`]
+    /// failure, which `report_driver_error` reports to the server with the
+    /// same `AuthenticationRequired` error code used by the auth preflight.
+    async fn run_harness(
+        runner: Arc<dyn harness::HarnessRunner>,
+        runtime_error_patterns: &[&str],
+        foreground: &ModelSpawner<Self>,
+        harness_exit_rx: oneshot::Receiver<()>,
+        setup_events: &SetupClientEventReporter,
+    ) -> Result<(), AgentDriverError> {
+        let harness_name = runner.harness_name().to_owned();
+
+        // Start the third-party harness.
+        let command_handle = setup_events
+            .record_result(
+                SetupStep::ThirdPartyHarnessStart,
+                runner.start(foreground, setup_events),
+            )
+            .await?;
+        setup_events
+            .post_timeline_event(OzRunTimelineEvent::AgentStarted)
+            .await;
+        let block_id = command_handle.block_id().clone();
+        let mut command_handle = command_handle.fuse();
+        let mut harness_exit_rx = harness_exit_rx.fuse();
+
+        let scanner_fut = harness_output_monitor::watch_block_for_errors(
+            block_id.clone(),
+            runtime_error_patterns,
+            foreground,
+        )
+        .fuse();
+        futures::pin_mut!(scanner_fut);
+
+        // Detected runtime error, if any. Promoted to the final return
+        // value below after final-save + cleanup run.
+        let mut detected_runtime_failure: Option<harness_output_monitor::DetectedHarnessError> =
+            None;
+
+        let mut save_requests = runner.save_requests();
+
+        // Periodically save the conversation while the command is running and handle
+        // exiting gracefully once the idle timeout elapses.
+        let command_result = loop {
+            futures::select! {
+                exit_code = command_handle => break exit_code,
+                _ = warpui::r#async::Timer::after(HARNESS_SAVE_INTERVAL).fuse() => {
+                    log::debug!("Triggering periodic save of harness conversation data");
+                    report_if_error!(runner
+                        .clone()
+                        .enqueue_save(SavePoint::Periodic, foreground)
+                        .await
+                        .context("Failed to enqueue periodic harness conversation save"));
+                }
+                save_point = {
+                    let save_requests = save_requests.clone();
+                    async move {
+                        match save_requests {
+                            Some(save_requests) => save_requests.recv().await.ok(),
+                            None => future::pending().await,
+                        }
+                    }
+                }.fuse() => match save_point {
+                    Some(save_point) => {
+                        report_if_error!(runner
+                            .clone()
+                            .enqueue_save(save_point, foreground)
+                            .await
+                            .context("Failed to enqueue harness conversation save"));
+                    }
+                    // The runner closed its channel; stop polling it.
+                    None => save_requests = None,
+                },
+                _ = harness_exit_rx => {
+                    let start_event = ExitEscalationEvent::ShutdownRequested {
+                        awaiting_input: Self::session_blocked_on_needs_input(foreground).await,
+                    };
+                    break Self::escalate_harness_exit(
+                        runner.as_ref(),
+                        &harness_name,
+                        start_event,
+                        &mut command_handle,
+                        foreground,
+                    )
+                    .await;
+                }
+                detected = scanner_fut => {
+                    if let Some(error) = detected {
+                        log::warn!(
+                            "Runtime failure detected for {harness_name}: pattern={}, excerpt={}",
+                            error.pattern,
+                            error.excerpt,
+                        );
+                        let telemetry_harness = harness_name.clone();
+                        let telemetry_pattern = error.pattern.clone();
+                        let _ = foreground
+                            .spawn(move |_, ctx| {
+                                use warp_core::telemetry::TelemetryEvent as _;
+                                let event =
+                                    ThirdPartyHarnessTelemetryEvent::RuntimeErrorDetected {
+                                        harness: telemetry_harness,
+                                        pattern: telemetry_pattern,
+                                    };
+                                send_telemetry_from_app_ctx!(event, ctx);
+                            })
+                            .await;
+                        let session_status = foreground
+                            .spawn(|me, ctx| {
+                                let view_id =
+                                    me.terminal_driver.as_ref(ctx).terminal_view().id();
+                                CLIAgentSessionsModel::handle(ctx)
+                                    .as_ref(ctx)
+                                    .session(view_id)
+                                    .map(|session| session.status.clone())
+                            })
+                            .await
+                            .ok()
+                            .flatten();
+                        if harness_output_monitor::should_suppress_runtime_failure(
+                            session_status.as_ref(),
+                        ) {
+                            log::info!(
+                                "Ignoring runtime failure for {harness_name}: \
+                                 session already marked Success or Failed via plugin \
+                                 (pattern={}, excerpt={})",
+                                error.pattern,
+                                error.excerpt,
+                            );
+                        } else {
+                            detected_runtime_failure = Some(error);
+                            break Self::escalate_harness_exit(
+                                runner.as_ref(),
+                                &harness_name,
+                                ExitEscalationEvent::ScannerDetected,
+                                &mut command_handle,
+                                foreground,
+                            )
+                            .await;
+                        }
+                    }
+                    // When the schedule exhausts without a hit, the `Fuse`
+                    // wrapper makes this branch stay Pending forever, so
+                    // we don't busy-loop.
+                }
+            }
+        };
+
+        let failure_output = match command_result.as_ref() {
+            Ok(exit_code) if !exit_code.was_successful() => {
+                Self::fetch_harness_failure_output(&block_id, foreground).await
+            }
+            Ok(_) | Err(_) => None,
+        };
+        // Final save after the command finishes.
+        log::debug!("Triggering final save of harness conversation data");
+        let final_save_succeeded = match runner.finalize_saves(foreground).await {
+            Ok(()) => true,
+            Err(_) => {
+                log::warn!("Harness final conversation save failed");
+                false
+            }
+        };
+        let cleanup_disposition = if final_save_succeeded
+            && detected_runtime_failure.is_none()
+            && matches!(command_result.as_ref(), Ok(exit_code) if exit_code.was_successful())
+        {
+            HarnessCleanupDisposition::PreserveResumptionStateIfSupported
+        } else {
+            HarnessCleanupDisposition::DropResumptionState
+        };
+        if let Err(err) = runner
+            .cleanup(cleanup_disposition, foreground)
+            .await
+            .context("Failed to clean up harness runtime state")
+        {
+            report_error!(err);
+        }
+
+        // A runtime failure detected mid-run takes precedence over the
+        // harness's own exit code: surface the actionable detail rather
+        // than a generic "exit code N".
+        if let Some(error) = detected_runtime_failure {
+            return Err(AgentDriverError::HarnessRuntimeFailureDetected {
+                harness: harness_name,
+                pattern: error.pattern,
+                excerpt: error.excerpt,
+            });
+        }
+
+        let exit_code = command_result?;
+        log::debug!("Agent harness exited with status {exit_code}");
+        if exit_code.was_successful() {
+            Ok(())
+        } else {
+            Err(AgentDriverError::HarnessCommandFailed {
+                exit_code: exit_code.value(),
+                output: failure_output,
+            })
+        }
+    }
+
+    async fn fetch_harness_failure_output(
+        block_id: &BlockId,
+        foreground: &ModelSpawner<Self>,
+    ) -> Option<String> {
+        let block_id = block_id.clone();
+        foreground
+            .spawn(move |me, ctx| {
+                me.terminal_driver
+                    .as_ref(ctx)
+                    .block_output_plaintext(&block_id, ctx)
+            })
+            .await
+            .ok()
+            .flatten()
+            .map(|output| harness::prepare_harness_failure_output(&output))
+            .filter(|output| !output.is_empty())
+    }
+
+    /// `/exit`, then a follow-up Enter after [`HARNESS_EXIT_FOLLOWUP_DELAY`],
+    /// then a best-effort force-kill after [`HARNESS_EXIT_FORCE_KILL_DELAY`].
+    /// Returns as soon as the command handle resolves, or after the force-kill
+    /// attempt, without waiting to prove the process exited.
+    async fn escalate_harness_exit(
+        runner: &dyn harness::HarnessRunner,
+        harness_name: &str,
+        start_event: ExitEscalationEvent,
+        mut command_handle: &mut (
+                 impl FusedFuture<Output = Result<warp_core::command::ExitCode, AgentDriverError>>
+                 + Unpin
+             ),
+        foreground: &ModelSpawner<Self>,
+    ) -> Result<warp_core::command::ExitCode, AgentDriverError> {
+        let mut escalation = ExitEscalation::new();
+        match escalation.on_event(start_event) {
+            ExitEscalationAction::SendExit => {}
+            ExitEscalationAction::ForceKillAndFinish => {
+                return Self::force_kill_and_report_timeout(harness_name, 1, foreground).await;
+            }
+            ExitEscalationAction::SendFollowup
+            | ExitEscalationAction::Finish
+            | ExitEscalationAction::Ignore => {
+                log::error!(
+                    "Harness exit ladder started in an unexpected state for {harness_name}"
+                );
+                return Err(AgentDriverError::InvalidRuntimeState);
+            }
+        }
+
+        log::info!(
+            "Ambient agent CLI lifecycle: event=harness_exit_attempt \
+             harness={harness_name} attempt=1 method=exit"
+        );
+        Self::send_harness_exit_telemetry(harness_name, "exit", foreground).await;
+        report_if_error!(
+            runner
+                .exit(foreground)
+                .await
+                .context("Failed to exit harness")
+        );
+
+        let resolved = futures::select! {
+            exit_code = command_handle => Some(exit_code),
+            _ = warpui::r#async::Timer::after(HARNESS_EXIT_FOLLOWUP_DELAY).fuse() => None,
+        };
+        if let Some(exit_code) = resolved {
+            let _ = escalation.on_event(ExitEscalationEvent::CommandExited);
+            return exit_code;
+        }
+
+        match escalation.on_event(ExitEscalationEvent::FollowupDeadlineElapsed) {
+            ExitEscalationAction::SendFollowup => {}
+            ExitEscalationAction::SendExit
+            | ExitEscalationAction::ForceKillAndFinish
+            | ExitEscalationAction::Finish
+            | ExitEscalationAction::Ignore => {
+                log::error!("Harness exit ladder missed follow-up transition for {harness_name}");
+                return Err(AgentDriverError::InvalidRuntimeState);
+            }
+        }
+
+        log::info!(
+            "Ambient agent CLI lifecycle: event=harness_exit_attempt \
+             harness={harness_name} attempt=2 method=exit_followup"
+        );
+        Self::send_harness_exit_telemetry(harness_name, "exit_followup", foreground).await;
+        report_if_error!(
+            runner
+                .exit_followup(foreground)
+                .await
+                .context("Failed to send harness exit follow-up")
+        );
+
+        let resolved = futures::select! {
+            exit_code = command_handle => Some(exit_code),
+            _ = warpui::r#async::Timer::after(HARNESS_EXIT_FORCE_KILL_DELAY).fuse() => None,
+        };
+        if let Some(exit_code) = resolved {
+            let _ = escalation.on_event(ExitEscalationEvent::CommandExited);
+            return exit_code;
+        }
+
+        match escalation.on_event(ExitEscalationEvent::ForceKillDeadlineElapsed) {
+            ExitEscalationAction::ForceKillAndFinish => {}
+            ExitEscalationAction::SendExit
+            | ExitEscalationAction::SendFollowup
+            | ExitEscalationAction::Finish
+            | ExitEscalationAction::Ignore => {
+                log::error!("Harness exit ladder missed force-kill transition for {harness_name}");
+                return Err(AgentDriverError::InvalidRuntimeState);
+            }
+        }
+
+        Self::force_kill_and_report_timeout(harness_name, 3, foreground).await
+    }
+
+    async fn force_kill_and_report_timeout(
+        harness_name: &str,
+        attempt: u8,
+        foreground: &ModelSpawner<Self>,
+    ) -> Result<warp_core::command::ExitCode, AgentDriverError> {
+        log::warn!(
+            "Ambient agent CLI lifecycle: event=harness_exit_attempt \
+             harness={harness_name} attempt={attempt} method=force_kill"
+        );
+        Self::send_harness_exit_telemetry(harness_name, "force_kill", foreground).await;
+        Self::force_kill_harness(foreground).await;
+        Err(AgentDriverError::HarnessExitTimedOut {
+            harness: harness_name.to_owned(),
+        })
+    }
+
+    async fn session_blocked_on_needs_input(foreground: &ModelSpawner<Self>) -> bool {
+        foreground
+            .spawn(|me, ctx| {
+                let view_id = me.terminal_driver.as_ref(ctx).terminal_view().id();
+                CLIAgentSessionsModel::handle(ctx)
+                    .as_ref(ctx)
+                    .session(view_id)
+                    .is_some_and(|session| session.is_blocked_on_needs_input())
+            })
+            .await
+            .unwrap_or(false)
+    }
+
+    /// Force-kills the harness and attempts a final conversation save after a sandbox-deadline
+    /// or signal interruption. Dropping `run_internal` for either cause bypasses
+    /// `run_harness`'s ordinary final-save path, so this recovers it best-effort.
+    // TODO(vkodithala): Decide how runner cleanup fits within the remaining shutdown budget;
+    // force-killing skips bridge and resumption-state cleanup.
+    async fn finish_interrupted_harness_saves(foreground: &ModelSpawner<Self>) {
+        let Ok(Some(runner)) = foreground.spawn(|me, _| me.harness.clone()).await else {
+            return;
+        };
+        Self::force_kill_harness(foreground).await;
+        if runner.finalize_saves(foreground).await.is_err() {
+            log::warn!("Harness final save after interruption failed");
+        }
+    }
+
+    /// Best-effort SIGKILL of the harness process group on this driver's terminal.
+    async fn force_kill_harness(foreground: &ModelSpawner<Self>) {
+        let shell_process_info = match foreground
+            .spawn(|me, ctx| me.terminal_driver.as_ref(ctx).shell_process_info(ctx))
+            .await
+        {
+            Ok(info) => info,
+            Err(error) => {
+                report_error!(anyhow!(error).context("Failed to force-kill harness"));
+                return;
+            }
+        };
+        let Some(shell_process_info) = shell_process_info else {
+            log::warn!("No shell process info available; skipping harness force-kill");
+            return;
+        };
+        harness::process_control::force_kill_harness_if_safe(&shell_process_info);
+    }
+
+    /// Emits a telemetry event for one attempt in the harness exit
+    /// escalation ladder (`method` is `"exit"`, `"exit_followup"`, or
+    /// `"force_kill"`), or for the ladder running out (`"timed_out"`), so
+    /// how often graceful exit succeeds vs. requires escalation is
+    /// measurable in production instead of only reconstructable from logs.
+    async fn send_harness_exit_telemetry(
+        harness_name: &str,
+        method: &'static str,
+        foreground: &ModelSpawner<Self>,
+    ) {
+        let harness = harness_name.to_owned();
+        let _ = foreground
+            .spawn(move |_, ctx| {
+                use warp_core::telemetry::TelemetryEvent as _;
+                let event = ThirdPartyHarnessTelemetryEvent::ExitEscalation { harness, method };
+                send_telemetry_from_app_ctx!(event, ctx);
+            })
+            .await;
+    }
+
+    /// Configure the active terminal session with the specified profile.
+    fn configure_terminal(
+        &self,
+        profile: Option<String>,
+        ctx: &mut ModelContext<Self>,
+    ) -> Result<(), AgentDriverError> {
+        let terminal_id = self.terminal_driver.as_ref(ctx).terminal_view().id();
+
+        if let Some(profile) = profile {
+            let server_id = ServerId::try_from(profile.as_str())
+                .map_err(|_| AgentDriverError::ProfileError(profile.clone()))?;
+            let sync_id = SyncId::ServerId(server_id);
+            AIExecutionProfilesModel::handle(ctx).update(ctx, |model, ctx| {
+                if let Some(profile_id) = model.get_profile_id_by_sync_id(&sync_id, ctx) {
+                    model.set_active_profile(terminal_id, profile_id, ctx);
+                } else {
+                    return Err(AgentDriverError::ProfileError(profile.clone()));
+                }
+                Ok(())
+            })?;
+        }
+
+        Ok(())
+    }
+
+    fn set_base_model_override(
+        &self,
+        model_id: LLMId,
+        ctx: &mut ModelContext<Self>,
+    ) -> Result<(), AgentDriverError> {
+        let terminal_view = self.terminal_driver.as_ref(ctx).terminal_view();
+        let terminal_view_id = terminal_view.id();
+        let scope = ResolvedTeamScope::from_scope(
+            &UserWorkspaces::as_ref(ctx).team_context_for_window(terminal_view.window_id(ctx)),
+        );
+        log::info!("Selecting base agent model {model_id} (from agent driver)");
+
+        LLMPreferences::handle(ctx).update(ctx, |preferences, ctx| {
+            preferences.update_preferred_agent_mode_llm(&scope, &model_id, terminal_view_id, ctx);
+        });
+        Ok(())
+    }
+
+    /// Execute an AI run in the terminal session and wait for it to complete.
+    ///
+    /// Conversation output is streamed as it's available.
+    fn execute_run(
+        &self,
+        task_prompt: AgentRunPrompt,
+        ctx: &mut ModelContext<Self>,
+    ) -> Receiver<SDKConversationOutputStatus> {
+        // Create a oneshot channel to signal task completion. This is `run_exit`'s
+        // internal signal, not the receiver returned to the caller: see the
+        // `internal_rx` wiring at the end of this function for why.
+        let (internal_tx, internal_rx) = oneshot::channel();
+        // Tracks this run's conversation id for `on_commit` below, which can run on a
+        // background timer thread with no model access of its own. Seeded from
+        // `self.run_conversation_id` so a resumed conversation — already known at
+        // construction time, per `AgentDriver::new` — is covered from the start; a fresh
+        // run instead learns it later, updated alongside `me.run_conversation_id` once
+        // `ConversationServerTokenAssigned` fires below.
+        let committed_conversation_id: Arc<Mutex<Option<AIConversationId>>> =
+            Arc::new(Mutex::new(self.run_conversation_id));
+        let exit_commit_handle = OrchestrationEventService::as_ref(ctx).exit_commit_handle();
+        #[cfg(test)]
+        let post_commit_gate = tests::test_post_commit_gate();
+        #[cfg_attr(not(test), allow(unused_mut))]
+        let mut run_exit = self.idle_timeout_sender(internal_tx, ctx).with_on_commit({
+            let committed_conversation_id = Arc::clone(&committed_conversation_id);
+            move || {
+                if let Ok(guard) = committed_conversation_id.lock()
+                    && let Some(conversation_id) = *guard
+                {
+                    exit_commit_handle.commit(conversation_id);
+                }
+                // Test-only: lets a test pause deterministically right here — the commit has
+                // already landed, but the completion value has not been sent yet, so nothing
+                // (including the async forwarder that runs model-side cleanup) can have
+                // observed this run ending.
+                #[cfg(test)]
+                if let Some(gate) = &post_commit_gate {
+                    gate.wait(Duration::ZERO);
+                }
+            }
+        });
+        #[cfg(test)]
+        {
+            if let Some(wait) = tests::test_idle_wait_override() {
+                run_exit = run_exit.with_wait(wait);
+            }
+        }
+        let terminal = self.terminal_driver.as_ref(ctx).terminal_view();
+        let prepared_conversation_id = terminal
+            .as_ref(ctx)
+            .ai_controller()
+            .as_ref(ctx)
+            .native_prompt_conversation_id();
+        let restored_conversation_id = prepared_conversation_id.or(self.restored_conversation_id);
+        let queue_run_exit = run_exit.clone();
+        if let Some(conversation_id) = prepared_conversation_id {
+            let queue_run_exit = queue_run_exit.clone();
+            ctx.subscribe_to_model(&QueuedQueryModel::handle(ctx), move |me, _, event, ctx| {
+                let event_id = match event {
+                    QueuedQueryEvent::Appended {
+                        conversation_id, ..
+                    }
+                    | QueuedQueryEvent::DispatchStateChanged { conversation_id }
+                    | QueuedQueryEvent::Removed {
+                        conversation_id, ..
+                    }
+                    | QueuedQueryEvent::Cleared { conversation_id } => *conversation_id,
+                    _ => return,
+                };
+                if event_id != conversation_id {
+                    return;
+                }
+                let queue = QueuedQueryModel::as_ref(ctx);
+                if queue.has_pending_native_injections(conversation_id) {
+                    queue_run_exit.cancel_idle_timeout();
+                } else if BlocklistAIHistoryModel::as_ref(ctx)
+                    .conversation(&conversation_id)
+                    .is_some_and(|conversation| {
+                        conversation.status() == &ConversationStatus::Success
+                    })
+                {
+                    queue_run_exit.complete_with_optional_idle(
+                        me.idle_on_complete,
+                        SDKConversationOutputStatus::Success,
+                    );
+                }
+            });
+        }
+
+        // ServerSide prompts enter the agent view and emit
+        // `CloudModeSetupPhaseEnded` to tear down the Cloud Mode Setup V2 chip.
+        // (Local prompts have no cloud setup phase; they enter the view with
+        // the user prompt below.)
+        //
+        // When `skip_initial_turn` is set, also schedule the deferred `Success`
+        // now so the run isn't stuck waiting for a turn that will never arrive.
+        // The `AppendedExchange` handler below cancels this timer if a follow-up
+        // shows up, keeping the run alive long enough to handle the new turn.
+        if matches!(&task_prompt, AgentRunPrompt::ServerSide { .. }) {
+            self.terminal_driver.update(ctx, |td, ctx| {
+                td.with_terminal_view(ctx, |terminal, ctx| {
+                    if FeatureFlag::AgentView.is_enabled() {
+                        terminal.enter_agent_view(
+                            None,
+                            restored_conversation_id,
+                            AgentViewEntryOrigin::Cli,
+                            ctx,
+                        );
+                    }
+                    terminal
+                        .model
+                        .lock()
+                        .send_cloud_mode_setup_phase_ended_for_shared_session();
+                })
+            });
+            if self.skip_initial_turn && prepared_conversation_id.is_none() {
+                run_exit.complete_with_optional_idle(
+                    self.idle_on_complete,
+                    SDKConversationOutputStatus::Success,
+                );
+            }
+        }
+
+        // Subscribe before the conversation starts.
+        let history_model_handle = BlocklistAIHistoryModel::handle(ctx);
+        let terminal_id = self.terminal_driver.as_ref(ctx).terminal_view().id();
+        let mut written_conversation_id = false;
+
+        ctx.subscribe_to_model(&history_model_handle, move |me, _, event, ctx| {
+            if event.terminal_surface_id().is_some_and(|id| id != terminal_id) {
+                return;
+            }
+
+            // Fresh runs learn their conversation_id via
+            // `ConversationServerTokenAssigned`; resumed runs already
+            // registered in `new` (and so skip this branch).
+            if me.run_conversation_id.is_none()
+                && let BlocklistAIHistoryEvent::ConversationServerTokenAssigned {
+                    conversation_id,
+                    ..
+                } = event
+                {
+                    me.run_conversation_id = Some(*conversation_id);
+                    if let Ok(mut guard) = committed_conversation_id.lock() {
+                        *guard = Some(*conversation_id);
+                    }
+                    stamp_parent_agent_id_if_some(
+                        *conversation_id,
+                        me.parent_run_id.as_deref(),
+                        ctx,
+                    );
+                    register_agent_event_consumer(*conversation_id, ctx.model_id(), ctx);
+                }
+
+            match event {
+                BlocklistAIHistoryEvent::UpdatedTodoList { .. } => {
+                    // TODO: Log TODO list updates.
+                }
+                BlocklistAIHistoryEvent::AppendedExchange {
+                    exchange_id,
+                    conversation_id,
+                    ..
+                } => {
+                    let Some(conversation) = BlocklistAIHistoryModel::as_ref(ctx)
+                        .conversation(conversation_id)
+                    else {
+                        log::warn!("Invalid conversation ID: {conversation_id:?}");
+                        return;
+                    };
+
+                    let Some(exchange) = conversation.exchange_with_id(*exchange_id) else {
+                        log::warn!("Invalid exchange ID: {exchange_id:?}");
+                        return;
+                    };
+
+                    // When a new exchange is appended, we should already have its inputs available.
+                    report_if_error!(me
+                        .write_exchange_inputs(exchange)
+                        .context("Failed to write exchange inputs"));
+
+                    // Forward any successful file-edit paths from this exchange's inputs to the
+                    // snapshot declarations writer so the end-of-run upload covers files written
+                    // outside any declared repo.
+                    if let Some(writer) = me.snapshot_file_writer.as_ref() {
+                        let mut paths = Vec::new();
+                        for input in &exchange.input {
+                            if let AIAgentInput::ActionResult { result, .. } = input
+                                && let AIAgentActionResultType::RequestFileEdits(
+                                    RequestFileEditsResult::Success { updated_files, .. },
+                                ) = &result.result
+                                {
+                                    for updated in updated_files {
+                                        paths.push(updated.file_context.file_name.clone());
+                                    }
+                                }
+                        }
+                        writer.append(paths);
+                    }
+
+                    // Reset the idle timer only if we've already scheduled one.
+                    // This handles the case where a follow-up query creates new exchanges after
+                    // the conversation has finished and an idle timer was set.
+                    run_exit.cancel_idle_timeout();
+                }
+                BlocklistAIHistoryEvent::UpdatedStreamingExchange {
+                    exchange_id,
+                    conversation_id,
+                    ..
+                } => {
+                    // Get conversation data first to avoid borrowing conflicts
+                    let history_model = BlocklistAIHistoryModel::handle(ctx);
+                    let conversation_data = history_model.as_ref(ctx).conversation(conversation_id)
+                        .and_then(|conv| {
+                            let token = conv.server_conversation_token().map(|t| t.as_str().to_string());
+                            let exchange = conv.exchange_with_id(*exchange_id)?;
+                            Some((token, exchange))
+                        });
+                    let Some((token_opt, exchange)) = conversation_data else {
+                        log::warn!("Invalid conversation or exchange ID: {conversation_id:?}, {exchange_id:?}");
+                        return;
+                    };
+
+                    if !written_conversation_id
+                        && let Some(token) = token_opt {
+                            report_if_error!(output::with_stdout_buffered(|buf| match me.output_format {
+                                OutputFormat::Json | OutputFormat::Ndjson => output::json::conversation_started(&token, buf),
+                                OutputFormat::Text | OutputFormat::Pretty => output::text::conversation_started(&token, buf),
+                            }).context("Failed to write conversation ID"));
+                            written_conversation_id = true;
+                        }
+
+                    // Once the outputs are fully streamed from the server, write them to stdout.
+                    if exchange.output_status.is_finished() {
+                        report_if_error!(me
+                            .write_exchange_output(exchange)
+                            .context("Failed to write exchange output"));
+                    }
+
+                }
+
+                BlocklistAIHistoryEvent::UpdatedConversationStatus { terminal_surface_id: conversation_terminal_id, conversation_id, .. } => {
+                    if *conversation_terminal_id != terminal_id {
+                        return;
+                    }
+                    let history_model = BlocklistAIHistoryModel::as_ref(ctx);
+                    let bound_conversation_id = me.run_conversation_id
+                        .or(restored_conversation_id)
+                        .or_else(|| history_model.active_conversation_id(terminal_id));
+                    if bound_conversation_id != Some(*conversation_id) {
+                        return;
+                    }
+                    let Some(conversation) = history_model.conversation(conversation_id) else {
+                        log::warn!("No active conversation for terminal view {conversation_terminal_id} with id {conversation_id}");
+                        return;
+                    };
+
+                    if conversation.status().is_in_progress() {
+                        // Conversation resumed or a new one started; cancel any
+                        // pending idle timeout.
+                        log::info!(
+                            "Ambient agent idle lifecycle: event=idle_timeout_cancel_requested task_id={:?} terminal_view_id={terminal_id:?} trigger=conversation_in_progress",
+                            me.task_id
+                        );
+                        run_exit.cancel_idle_timeout();
+                        return;
+                    }
+
+                    // wait_for_events keeps the run alive via the
+                    // action_model's running_actions; the executor owns
+                    // the watchdog. Don't resolve run_exit.
+                    if conversation.status().is_waiting_for_events() {
+                        return;
+                    }
+
+                    if conversation.status().is_transient_error() {
+                        // An automatic recovery is in flight. Don't terminate yet, but bound
+                        // the wait so the CLI doesn't hang if it never completes; a successful
+                        // recovery returns to InProgress, which cancels this deadline.
+                        log::info!(
+                            "Ambient agent idle lifecycle: event=idle_timeout_scheduled task_id={:?} terminal_view_id={terminal_id:?} timeout={AUTO_RESUME_TIMEOUT:?} outcome=automatic_resume_pending",
+                            me.task_id
+                        );
+                        let error = conversation
+                            .root_task_exchanges()
+                            .last()
+                            .and_then(|exchange| match &exchange.output_status {
+                                AIAgentOutputStatus::Finished {
+                                    finished_output: FinishedAIAgentOutput::Error { error, .. },
+                                } => Some(error.clone()),
+                                _ => None,
+                            })
+                            .unwrap_or_else(|| {
+                                RenderableAIError::transient_network_error(
+                                    false,
+                                    false,
+                                    TransientNetworkErrorKind::MissingExchangeError,
+                                )
+                            });
+                        run_exit.end_run_after(
+                            AUTO_RESUME_TIMEOUT,
+                            SDKConversationOutputStatus::Error { error },
+                        );
+                        return;
+                    }
+
+                    // Conversation is no longer in progress. Handle completion based on the result.
+                    if let Some(conversation_status) =
+                         conversation_output_status_from_conversation(conversation)
+                    {
+                        let output_status = match conversation_status {
+                            AmbientConversationStatus::Success => {
+                                SDKConversationOutputStatus::Success
+                            }
+                            AmbientConversationStatus::Cancelled { reason } => {
+                                SDKConversationOutputStatus::Cancelled { reason }
+                            }
+                            AmbientConversationStatus::Error { error } => {
+                                SDKConversationOutputStatus::Error { error }
+                            }
+                            AmbientConversationStatus::Blocked { blocked_action } => {
+                                SDKConversationOutputStatus::Blocked { blocked_action }
+                            }
+                        };
+
+                        if matches!(output_status, SDKConversationOutputStatus::Success)
+                            && QueuedQueryModel::as_ref(ctx).has_pending_native_injections(*conversation_id)
+                        {
+                            log::info!(
+                                "event=worker_exit_deferred task_id={:?} conversation_id={conversation_id} reason=pending_native_injections queue_len={}",
+                                me.task_id, QueuedQueryModel::as_ref(ctx).queue(*conversation_id).len(),
+                            );
+                            run_exit.cancel_idle_timeout();
+                            return;
+                        }
+
+                        // Errors here are terminal: in-flight recoveries surface as
+                        // TransientError (handled above). Whether the process outlives either
+                        // kind of terminal status is controlled by the `--idle-on-complete` /
+                        // `--idle-on-fail` flags; see `idle_window_for_terminal_status`.
+                        let idle_window = idle_window_for_terminal_status(
+                            &output_status,
+                            me.idle_on_complete,
+                            me.idle_on_fail,
+                        );
+                        let outcome = terminal_status_log_outcome(&output_status);
+                        if let Some(idle_timeout) = idle_window {
+                            log::info!(
+                                "Ambient agent idle lifecycle: event=idle_timeout_scheduled task_id={:?} terminal_view_id={terminal_id:?} timeout={idle_timeout:?} outcome={outcome}",
+                                me.task_id
+                            );
+                        } else {
+                            log::info!(
+                                "Ambient agent idle lifecycle: event=run_completion_immediate task_id={:?} terminal_view_id={terminal_id:?} outcome={outcome}",
+                                me.task_id
+                            );
+                        }
+                        match idle_window {
+                            // A failure window is held open by the human working in the session,
+                            // so it goes through the shared arming path that refreshes on viewer
+                            // input. The success window has no such notion.
+                            Some(window)
+                                if matches!(
+                                    output_status,
+                                    SDKConversationOutputStatus::Error { .. }
+                                ) =>
+                            {
+                                me.arm_debug_window(run_exit.clone(), output_status, window, ctx);
+                            }
+                            // Whether the run exits immediately (no idle window) or a deferred
+                            // window later elapses on its own, `run_exit`'s `on_commit` hook
+                            // (see `execute_run`) commits the conversation exiting
+                            // synchronously, on whichever thread completes the run, strictly
+                            // before the completion signal is observable. That covers both
+                            // cases uniformly, closing off any orchestration event still
+                            // buffered for this conversation before it could otherwise race the
+                            // teardown that follows and get cancelled, leaving the run stuck
+                            // `InProgress` (QUALITY-1801).
+                            None | Some(_) => {
+                                run_exit.complete_with_optional_idle(idle_window, output_status);
+                            }
+                        }
+                    }
+                }
+
+                BlocklistAIHistoryEvent::SetActiveConversation { .. } => {
+                    // Continuing an existing conversation should reset the idle timer.
+                    run_exit.cancel_idle_timeout();
+                }
+                BlocklistAIHistoryEvent::StartedNewConversation { .. }
+                | BlocklistAIHistoryEvent::ReassignedExchange { .. }
+                | BlocklistAIHistoryEvent::ClearedConversationsForTerminalSurface { .. }
+                | BlocklistAIHistoryEvent::UpdatedAutoexecuteOverride { .. }
+                | BlocklistAIHistoryEvent::SplitConversation { .. }
+                | BlocklistAIHistoryEvent::RemoveConversation { .. }
+                | BlocklistAIHistoryEvent::DeletedConversation { .. }
+                | BlocklistAIHistoryEvent::RestoredConversations { .. }
+                | BlocklistAIHistoryEvent::CreatedSubtask { .. }
+                | BlocklistAIHistoryEvent::UpgradedTask { .. }
+                | BlocklistAIHistoryEvent::UpdatedConversationTitle { .. }
+                | BlocklistAIHistoryEvent::UpdatedConversationMetadata { .. }
+                | BlocklistAIHistoryEvent::ClearedActiveConversation { .. }
+                | BlocklistAIHistoryEvent::UpdatedConversationArtifacts { .. }
+                | BlocklistAIHistoryEvent::ConversationServerTokenAssigned { .. }
+                | BlocklistAIHistoryEvent::ConversationTransferredBetweenTerminalSurfaces { .. }
+                | BlocklistAIHistoryEvent::NewConversationRequestComplete { .. }
+                | BlocklistAIHistoryEvent::OrchestrationConfigUpdated { .. }
+                | BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated { .. }
+                | BlocklistAIHistoryEvent::LocalSharedSessionEstablished { .. } => (),
+            }
+        });
+
+        // Subscribe to document model events to emit artifact_created when plans sync to Warp Drive.
+        ctx.subscribe_to_model(&AIDocumentModel::handle(ctx), move |me, _, event, ctx| {
+            let AIDocumentModelEvent::DocumentSaveStatusUpdated(document_id) = event else {
+                return;
+            };
+
+            let doc_model = AIDocumentModel::as_ref(ctx);
+
+            // Only emit when the document transitions to "Saved" (has a ServerId)
+            if !doc_model.get_document_save_status(document_id).is_saved() {
+                return;
+            }
+
+            // Get the document to extract the notebook link
+            let Some(document) = doc_model.get_current_document(document_id) else {
+                return;
+            };
+
+            // Get the notebook link from the document model
+            let Some(notebook_link) =
+                doc_model.get_document_warp_drive_object_link(document_id, ctx)
+            else {
+                return;
+            };
+
+            let document_id_str = document_id.to_string();
+
+            report_if_error!(
+                output::with_stdout_buffered(|buf| {
+                    match me.output_format {
+                        OutputFormat::Json | OutputFormat::Ndjson => {
+                            output::json::plan_artifact_created(
+                                &document_id_str,
+                                &notebook_link,
+                                &document.title,
+                                buf,
+                            )
+                        }
+                        OutputFormat::Text | OutputFormat::Pretty => {
+                            output::text::plan_artifact_created(
+                                &document_id_str,
+                                &notebook_link,
+                                &document.title,
+                                buf,
+                            )
+                        }
+                    }
+                })
+                .context("Failed to write artifact_created")
+            );
+        });
+
+        // Submit the AI query.
+        if !self.skip_initial_turn {
+            tracing::info!("Submitting initial AI query");
+
+            self.terminal_driver.update(ctx, |td, ctx| {
+                td.with_terminal_view(ctx, |terminal, ctx| match task_prompt {
+                    AgentRunPrompt::Local(prompt_str) => {
+                        if FeatureFlag::AgentView.is_enabled() {
+                            terminal.enter_agent_view(
+                                Some(prompt_str),
+                                restored_conversation_id,
+                                AgentViewEntryOrigin::Cli,
+                                ctx,
+                            );
+                        } else if let Some(conversation_id) = prepared_conversation_id {
+                            terminal.ai_controller().update(ctx, |controller, ctx| {
+                                controller.send_user_query_in_conversation_no_lrc_subagent(
+                                    prompt_str,
+                                    conversation_id,
+                                    None,
+                                    ctx,
+                                );
+                            });
+                        } else {
+                            terminal.set_ai_input_mode_with_query(Some(&prompt_str), ctx);
+                            terminal
+                                .input()
+                                .update(ctx, |input, ctx| input.input_enter(ctx));
+                        }
+                    }
+                    AgentRunPrompt::ServerSide {
+                        skill,
+                        attachments_dir,
+                    } => {
+                        let Some(task_id) = self.task_id else {
+                            report_error!("ServerSide prompt without task_id");
+                            return;
+                        };
+                        let ambient_run_id = task_id.to_string();
+                        terminal.ai_controller().update(ctx, |controller, ctx| {
+                            controller.send_ai_input_with_context(
+                                |context| AIAgentInput::StartFromAmbientRunPrompt {
+                                    ambient_run_id: ambient_run_id.clone(),
+                                    context,
+                                    runtime_skill: skill.clone(),
+                                    attachments_dir: attachments_dir.clone(),
+                                },
+                                ctx,
+                            );
+                        });
+                    }
+                })
+            });
+        }
+
+        if self.skip_initial_turn
+            && let Some(conversation_id) = prepared_conversation_id
+        {
+            QueuedQueryModel::handle(ctx).update(ctx, |queue, ctx| {
+                queue.finish_native_setup(conversation_id, ctx);
+            });
+            // No prompt was ever sent for a promptless run, so the conversation is definitely
+            // idle here: `drain_queued_prompts` alone is sufficient, since it already detects a
+            // shared-session head row and delegates to the controller itself. A separate,
+            // preceding dispatch call would race it -- starting a second row's stream before the
+            // first produced any output cancels the first, silently dropping it.
+            self.terminal_driver.update(ctx, |td, ctx| {
+                td.with_terminal_view(ctx, |terminal, ctx| {
+                    terminal.drain_queued_prompts(conversation_id, FinishReason::Complete, ctx);
+                });
+            });
+            if !QueuedQueryModel::as_ref(ctx).has_pending_native_injections(conversation_id)
+                && !self
+                    .terminal_driver
+                    .as_ref(ctx)
+                    .terminal_view()
+                    .as_ref(ctx)
+                    .ai_controller()
+                    .as_ref(ctx)
+                    .has_active_stream_for_conversation(conversation_id, ctx)
+            {
+                queue_run_exit.complete_with_optional_idle(
+                    self.idle_on_complete,
+                    SDKConversationOutputStatus::Success,
+                );
+            }
+        }
+
+        // Wrap `internal_rx` instead of returning it directly: once the run's `on_commit` has
+        // committed the exiting flag (synchronously, on whichever thread completed the run),
+        // this drops any orchestration events still queued for the conversation, for every exit
+        // path, immediate or deferred. That drop needs model access, which `on_commit` doesn't
+        // have on a background timer thread, so it happens here instead, once the completion
+        // value reaches this model's own executor.
+        let (external_tx, external_rx) = oneshot::channel();
+        ctx.spawn(internal_rx, move |me, result, ctx| {
+            if let Some(conversation_id) = me.run_conversation_id {
+                OrchestrationEventService::handle(ctx).update(ctx, |service, _| {
+                    service.drop_pending_events_for_exiting_conversation(conversation_id);
+                });
+            }
+            if let Ok(status) = result {
+                let _ = external_tx.send(status);
+            }
+        });
+        external_rx
+    }
+
+    /// Write the inputs to an exchange to stdout.
+    fn write_exchange_inputs(&self, exchange: &AIAgentExchange) -> io::Result<()> {
+        output::with_stdout_buffered(|buf| {
+            for input in &exchange.input {
+                self.write_input(buf, input)?;
+            }
+            Ok(())
+        })
+    }
+
+    /// Write the outputs of an exchange to stdout.
+    fn write_exchange_output(&self, exchange: &AIAgentExchange) -> io::Result<()> {
+        let Some(shared) = exchange.output_status.output() else {
+            return Ok(());
+        };
+        let output = shared.get();
+
+        output::with_stdout_buffered(|buf| self.write_output(buf, &output))
+    }
+
+    /// Format an agent input for display.
+    fn write_input<W: Write>(&self, w: &mut W, input: &AIAgentInput) -> io::Result<()> {
+        match self.output_format {
+            OutputFormat::Json | OutputFormat::Ndjson => output::json::format_input(input, w),
+            OutputFormat::Text | OutputFormat::Pretty => output::text::format_input(input, w),
+        }
+    }
+
+    /// Format an agent output for display.
+    fn write_output<W: Write>(&self, w: &mut W, output: &AIAgentOutput) -> io::Result<()> {
+        match self.output_format {
+            OutputFormat::Json | OutputFormat::Ndjson => output::json::format_output(output, w),
+            OutputFormat::Text | OutputFormat::Pretty => output::text::format_output(output, w),
+        }
+    }
+
+    /// Subscribe to the singleton `CLIAgentSessionsModel` so that idle-on-complete
+    /// timers are driven by CLI agent session status changes.
+    ///
+    /// Task state reporting is handled centrally by `LocalAgentTaskSyncModel`;
+    /// the driver only registers the `terminal_view_id → task_id` mapping
+    /// so that the sync model can look up the task for each session.
+    fn subscribe_to_cli_agent_session_events(
+        &self,
+        harness_exit: IdleTimeoutSender<()>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let terminal_view_id = self.terminal_driver.as_ref(ctx).terminal_view().id();
+
+        // Register this session with LocalAgentTaskSyncModel so CLI agent
+        // status changes are reported to the server.
+        if let Some(task_id) = self.task_id {
+            LocalAgentTaskSyncModel::handle(ctx).update(ctx, |model, ctx| {
+                model.register_cli_session(terminal_view_id, task_id, ctx);
+            });
+
+            // See `PENDING_CLI_HARNESS_PROMPT_QUEUE_FALLBACK_DRAIN_TIMEOUT`: bounded fallback
+            // in case this session never emits a genuine `StatusChanged{InProgress}` (e.g. a
+            // Codex session on the OSC 9 fallback path).
+            ctx.spawn(
+                async move {
+                    Timer::after(PENDING_CLI_HARNESS_PROMPT_QUEUE_FALLBACK_DRAIN_TIMEOUT).await;
+                },
+                move |me, _, ctx| {
+                    let delivered_count = me.drain_and_deliver_pending_cli_harness_prompts(
+                        task_id,
+                        terminal_view_id,
+                        ctx,
+                    );
+                    if delivered_count > 0 {
+                        log::warn!(
+                            "Ambient agent CLI lifecycle: unexpectedly had to fall back to a \
+                             bounded timeout to drain {delivered_count} queued shared-session \
+                             prompt(s) for task {task_id} — the CLI-harness plugin never reported \
+                             InProgress; this likely indicates a broken or missing plugin \
+                             integration. terminal_view_id={terminal_view_id:?}"
+                        );
+                    }
+                },
+            );
+        }
+
+        ctx.subscribe_to_model(&CLIAgentSessionsModel::handle(ctx), move |me, _, event, ctx| match event {
+                CLIAgentSessionsModelEvent::StatusChanged {
+                    terminal_view_id: event_tid,
+                    status,
+                    ..
+                } => {
+                    if *event_tid != terminal_view_id {
+                        return;
+                    }
+
+                    // Drive the idle timer for the harness exit signal.
+                    match status {
+                        CLIAgentSessionStatus::Success
+                        | CLIAgentSessionStatus::Failed { .. }
+                        | CLIAgentSessionStatus::Blocked { .. }
+                        | CLIAgentSessionStatus::Cancelled => {
+                            if !matches!(status, CLIAgentSessionStatus::Blocked { .. }) {
+                                me.request_harness_save(ctx);
+                            }
+                            let idle_window = idle_window_for_cli_session_status(
+                                status,
+                                me.idle_on_complete,
+                                me.idle_on_fail,
+                            );
+                            let outcome = cli_session_status_log_outcome(status);
+                            if let Some(idle_timeout) = idle_window {
+                                log::info!(
+                                    "Ambient agent CLI lifecycle: event=idle_timeout_scheduled task_id={:?} terminal_view_id={terminal_view_id:?} timeout={idle_timeout:?} outcome={outcome}",
+                                    me.task_id
+                                );
+                            } else {
+                                log::info!(
+                                    "Ambient agent CLI lifecycle: event=run_completion_immediate task_id={:?} terminal_view_id={terminal_view_id:?} outcome={outcome}",
+                                    me.task_id
+                                );
+                            }
+                            match idle_window {
+                                // A failure window is held open by whoever is debugging in the
+                                // session, so it refreshes on viewer input like the Oz path.
+                                Some(window)
+                                    if matches!(status, CLIAgentSessionStatus::Failed { .. }) =>
+                                {
+                                    me.arm_debug_window(harness_exit.clone(), (), window, ctx);
+                                }
+                                _ => harness_exit.complete_with_optional_idle(idle_window, ()),
+                            }
+                        }
+                        CLIAgentSessionStatus::InProgress => {
+                            log::info!(
+                                "Ambient agent CLI lifecycle: event=idle_timeout_cancel_requested task_id={:?} terminal_view_id={terminal_view_id:?} trigger=session_in_progress",
+                                me.task_id
+                            );
+                            harness_exit.cancel_idle_timeout();
+
+                            // A genuine, plugin-reported confirmation that the harness is
+                            // already running — unlike the synthetic `InProgress` optimistically
+                            // set at registration (which never emits `StatusChanged`; see
+                            // `LocalAgentTaskSyncModel::register_cli_session`) — so it's safe to
+                            // deliver any shared-session prompts queued while waiting for this
+                            // task's harness session to start.
+                            if let Some(task_id) = me.task_id {
+                                me.drain_and_deliver_pending_cli_harness_prompts(
+                                    task_id,
+                                    terminal_view_id,
+                                    ctx,
+                                );
+                            }
+                        }
+                    }
+                }
+                CLIAgentSessionsModelEvent::SessionUpdated {
+                    terminal_view_id: event_tid,
+                    ..
+                } => {
+                    if *event_tid != terminal_view_id {
+                        return;
+                    }
+
+                    let Some(runner) = me.harness.clone() else {
+                        return;
+                    };
+                    let foreground = ctx.spawner();
+                    ctx.spawn(
+                        async move {
+                            report_if_error!(
+                                runner
+                                    .handle_session_update(&foreground)
+                                    .await
+                                    .context("Failed to handle harness session update"),
+                                ReportErrorLogMode::OncePerRun
+                            );
+                        },
+                        |_, _, _| {},
+                    );
+                }
+                CLIAgentSessionsModelEvent::Started { .. }
+                | CLIAgentSessionsModelEvent::InputSessionChanged { .. }
+                | CLIAgentSessionsModelEvent::Ended { .. } => {}
+            });
+    }
+    /// Drives the harness exit signal from the status of the driver's bound native conversation,
+    /// for harnesses that author that conversation's turns themselves (see
+    /// `ConversationDriver::ExternalHarness`). Mirrors [`Self::subscribe_to_cli_agent_session_events`]
+    /// so `--idle-on-complete`, `--idle-on-fail`, and the viewer-input debug window behave the
+    /// same whichever way a third-party harness reports progress.
+    fn subscribe_to_native_conversation_status_events(
+        &self,
+        harness_exit: IdleTimeoutSender<()>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let terminal_view_id = self.terminal_driver.as_ref(ctx).terminal_view().id();
+        ctx.subscribe_to_model(&BlocklistAIHistoryModel::handle(ctx), move |me, _, event, ctx| {
+            let BlocklistAIHistoryEvent::UpdatedConversationStatus {
+                conversation_id,
+                terminal_surface_id,
+                update: ConversationStatusUpdate::Changed { .. },
+                new_status,
+            } = event
+            else {
+                return;
+            };
+            if *terminal_surface_id != terminal_view_id {
+                return;
+            }
+            let bound_conversation_id = me
+                .terminal_driver
+                .as_ref(ctx)
+                .terminal_view()
+                .as_ref(ctx)
+                .ai_controller()
+                .as_ref(ctx)
+                .native_prompt_conversation_id();
+            if bound_conversation_id != Some(*conversation_id) {
+                return;
+            }
+            let is_settling_turn = me
+                .harness
+                .as_ref()
+                .is_some_and(|runner| runner.is_settling_turn());
+            match harness_idle_action_for_conversation_status(
+                new_status,
+                me.idle_on_complete,
+                me.idle_on_fail,
+                is_settling_turn,
+            ) {
+                HarnessIdleAction::CancelIdle => {
+                    log::info!(
+                        "Ambient agent harness lifecycle: event=idle_timeout_cancel_requested task_id={:?} conversation_id={conversation_id} trigger=turn_in_progress",
+                        me.task_id
+                    );
+                    harness_exit.cancel_idle_timeout();
+                }
+                HarnessIdleAction::Exit { window, failed } => {
+                    me.request_harness_save(ctx);
+                    log::info!(
+                        "Ambient agent harness lifecycle: event=turn_settled task_id={:?} conversation_id={conversation_id} failed={failed} idle_window={window:?}",
+                        me.task_id
+                    );
+                    match window {
+                        // A failure window is held open by whoever is debugging in the
+                        // session, so it refreshes on viewer input like the other paths.
+                        Some(window) if failed => {
+                            me.arm_debug_window(harness_exit.clone(), (), window, ctx)
+                        }
+                        _ => harness_exit.complete_with_optional_idle(window, ()),
+                    }
+                }
+                HarnessIdleAction::Ignore => {
+                    if is_settling_turn {
+                        log::info!(
+                            "Ambient agent harness lifecycle: event=idle_exit_deferred task_id={:?} conversation_id={conversation_id} status={new_status:?} reason=turn_settling",
+                            me.task_id
+                        );
+                    }
+                }
+            }
+        });
+    }
+
+    fn request_harness_save(&self, ctx: &mut ModelContext<Self>) {
+        let Some(runner) = self.harness.clone() else {
+            return;
+        };
+        let foreground = ctx.spawner();
+        ctx.spawn(
+            async move {
+                report_if_error!(
+                    runner
+                        .enqueue_save(SavePoint::PostTurn, &foreground)
+                        .await
+                        .context("Failed to enqueue harness conversation save")
+                );
+            },
+            |_, _, _| {},
+        );
+    }
+
+    /// Drains and delivers, as genuine PTY follow-ups via `TerminalDriver::send_text_to_cli`,
+    /// any shared-session prompts queued (see `accept_agent_prompt` in
+    /// `terminal_view_adaptor.rs`) while `task_id`'s CLI-harness session had no live PTY yet.
+    /// Returns how many prompts were delivered, so callers (e.g. the bounded fallback timeout)
+    /// can tell an empty, already-drained queue apart from one that genuinely had work pending.
+    /// Safe to call from multiple triggers (the normal `StatusChanged{InProgress}` signal and
+    /// the bounded fallback timeout) since draining is idempotent: nothing happens once the
+    /// queue for this task is already empty.
+    fn drain_and_deliver_pending_cli_harness_prompts(
+        &self,
+        task_id: AmbientAgentTaskId,
+        terminal_view_id: EntityId,
+        ctx: &mut ModelContext<Self>,
+    ) -> usize {
+        let queued = PendingCliHarnessPromptQueue::handle(ctx)
+            .update(ctx, |queue, _ctx| queue.drain(task_id));
+        let delivered_count = queued.len();
+        for prompt in queued {
+            log::info!(
+                "Delivering a shared-session prompt that had been queued while waiting for \
+                 this task's CLI-harness session to start (event=queued_shared_session_prompt_delivered \
+                 task_id={task_id} terminal_view_id={terminal_view_id:?} \
+                 participant_id={:?})",
+                prompt.participant_id
+            );
+            self.terminal_driver.update(ctx, |terminal_driver, ctx| {
+                terminal_driver.send_text_to_cli(prompt.prompt, ctx);
+            });
+        }
+        delivered_count
+    }
+
+    /// Removes the task mapping registered for CLI agent session status updates, and drops any
+    /// shared-session prompts still queued for it (its CLI-harness session either never started
+    /// or already ended).
+    fn unregister_cli_agent_task_sync(&self, ctx: &mut ModelContext<Self>) {
+        let terminal_view_id = self.terminal_driver.as_ref(ctx).terminal_view().id();
+        LocalAgentTaskSyncModel::handle(ctx).update(ctx, |model, _| {
+            model.unregister_cli_session(terminal_view_id);
+        });
+        if let Some(task_id) = self.task_id {
+            PendingCliHarnessPromptQueue::handle(ctx).update(ctx, |queue, _ctx| {
+                queue.clear(task_id);
+            });
+        }
+    }
+
+    /// Handle events re-emitted by the `TerminalDriver`.
+    fn handle_terminal_driver_event(
+        &mut self,
+        event: &TerminalDriverEvent,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        match event {
+            TerminalDriverEvent::SlowBootstrap => {
+                tracing::event!(
+                    tracing::Level::WARN,
+                    tags.cloud_agent = true,
+                    "slow bootstrap"
+                );
+                eprintln!(
+                    "Warning: Terminal session is slow to bootstrap. See https://docs.warp.dev/support-and-community/troubleshooting-and-support/known-issues#shells to troubleshoot."
+                );
+            }
+            TerminalDriverEvent::EstablishedSharedSession {
+                session_id,
+                join_url,
+            } => {
+                tracing::event!(
+                    tracing::Level::INFO,
+                    tags.cloud_agent = true,
+                    session_id = %*session_id,
+                    "shared session established",
+                );
+                write_session_joined(join_url, self.output_format);
+
+                // If running as part of a task, store the session-sharing link.
+                if let Some(task_id) = self.task_id {
+                    let server_api = ServerApiProvider::as_ref(ctx).get_ai_client();
+                    let session_id = *session_id;
+                    ctx.spawn(
+                        async move {
+                            report_if_error!(
+                                server_api
+                                    .update_agent_task(
+                                        task_id,
+                                        None,
+                                        Some(session_id),
+                                        None,
+                                        None,
+                                        None,
+                                        None,
+                                    )
+                                    .await
+                                    .context("Error setting ambient agent shared session ID")
+                            );
+                        },
+                        |_, _, _| {},
+                    );
+                }
+            }
+            // Only meaningful while a post-failure debug window is open, which subscribes to
+            // the terminal driver separately. Nothing to do on the steady-state path.
+            TerminalDriverEvent::SharedSessionViewerInput => {}
+        }
+    }
+
+    /// Set up each cloud provider in sequence.
+    async fn setup_cloud_providers(spawner: &ModelSpawner<Self>) -> Result<(), AgentDriverError> {
+        let (mut providers, terminal_spawner) = spawner
+            .spawn(|me, ctx| {
+                let terminal_spawner = me.terminal_driver.update(ctx, |_, ctx| ctx.spawner());
+                // Temporarily take all cloud providers so we can move them onto the background thread.
+                //
+                // Since the Vec of cloud providers is owned by the AgentDriver model, which is
+                // itself owned by the UI framework, we can only mutate them in-place on the UI thread.
+                // So that `CloudProvider::setup` can be `async` _and_ take `&mut self`, the
+                // `setup_cloud_providers` future takes ownership of all the providers, and then moves
+                // them back to the UI thread. This is somewhat similar to how views and models are removed
+                // from the UI framework temporarily while being mutated.
+                let providers = std::mem::take(&mut me.cloud_providers);
+                (providers, terminal_spawner)
+            })
+            .await?;
+
+        let mut result = Ok(());
+
+        for provider in providers.iter_mut() {
+            let provider_result = provider.setup(terminal_spawner.clone()).await;
+            if provider_result.is_err() {
+                result = provider_result;
+                break;
+            }
+        }
+
+        // Restore the cloud providers.
+        spawner
+            .spawn(move |me, _| {
+                me.cloud_providers = providers;
+            })
+            .await?;
+
+        result?;
+        Ok(())
+    }
+
+    /// Perform cleanup after the agent has finished running.
+    async fn cleanup(spawner: ModelSpawner<Self>) {
+        let Ok((providers, task_id)) = spawner
+            .spawn(|me, _| (std::mem::take(&mut me.cloud_providers), me.task_id))
+            .await
+        else {
+            report_error!("Unable to retrieve cloud providers for cleanup");
+            return;
+        };
+
+        log::info!(
+            "Ambient agent lifecycle: event=driver_cleanup_started task_id={task_id:?} next=terminal_process_exit"
+        );
+
+        for provider in providers {
+            if let Err(err) = provider.cleanup().await {
+                report_error!(anyhow!(err).context("Unable to clean up cloud provider"));
+            }
+        }
+    }
+
+    async fn unregister_end_of_run_consumers(foreground: &ModelSpawner<Self>) {
+        let _ = foreground
+            .spawn(|me, ctx| {
+                // Stop accepting CLI session status updates now that the run is done.
+                // Already accepted task updates remain queued until delivery finishes.
+                me.unregister_cli_agent_task_sync(ctx);
+                // Unregister the driver consumer now that the run is done. The streamer
+                // will tear down the SSE if no other consumer remains and the
+                // conversation isn't a child.
+                me.unregister_streamer_consumer(ctx);
+            })
+            .await;
+    }
+
+    async fn save_run_artifacts(foreground: &ModelSpawner<Self>, snapshot_allowed: bool) {
+        let snapshot_upload = async {
+            if snapshot_allowed {
+                Self::run_snapshot_upload(foreground).await;
+            }
+        };
+        futures::join!(snapshot_upload, Self::finalize_run_recording(foreground));
+    }
+
+    async fn finalize_run_recording(foreground: &ModelSpawner<Self>) {
+        if let Ok(Some(finalization)) = foreground
+            .spawn(|me, ctx| {
+                me.run_conversation_id.and_then(|conversation_id| {
+                    finalize_recording_for_conversation(
+                        conversation_id,
+                        FinalizeReason::RunEnded,
+                        true,
+                        ctx,
+                    )
+                })
+            })
+            .await
+        {
+            let (finalization_result, actual_reason) = finalization.resolve().await;
+            log::info!(
+                "Recording finalization completed before agent driver exit \
+                 (reason={actual_reason:?}): {finalization_result:?}"
+            );
+        }
+    }
+
+    /// Invoke the end-of-run snapshot upload pipeline if the feature flag is enabled and this
+    /// driver is associated with a cloud task. Errors are logged internally; this helper always
+    /// returns so cleanup can proceed.
+    #[tracing::instrument(skip_all, fields(tags.cloud_agent = true))]
+    async fn run_snapshot_upload(spawner: &ModelSpawner<Self>) {
+        let oz_handoff_enabled = FeatureFlag::OzHandoff.is_enabled();
+
+        // Snapshot upload is only meaningful for cloud task runs, so short-circuit before
+        // pulling the rest of the context onto this task.
+        let Ok((
+            task_id,
+            snapshot_disabled,
+            upload_timeout,
+            script_timeout,
+            checkpoint_coordinator,
+        )) = spawner
+            .spawn(|me, _| {
+                (
+                    me.task_id,
+                    me.snapshot_disabled,
+                    me.snapshot_upload_timeout,
+                    me.snapshot_script_timeout,
+                    me.checkpoint_coordinator.clone(),
+                )
+            })
+            .await
+        else {
+            return;
+        };
+        let Some(task_id) = task_id.filter(|_| oz_handoff_enabled) else {
+            return;
+        };
+        if snapshot_disabled {
+            log::info!("Skipping snapshot upload because --no-snapshot was specified");
+            return;
+        }
+
+        // An active coordinator replaces the legacy upload below. Budget must come from
+        // `finalize_budget`: the coordinator's floor is `script_timeout + upload_timeout`,
+        // so a smaller budget silently skips the final attempt.
+        if let Some(coordinator) = checkpoint_coordinator {
+            coordinator
+                .finalize(checkpoint_coordinator::finalize_budget(
+                    script_timeout,
+                    upload_timeout,
+                ))
+                .await;
+            return;
+        }
+
+        let Ok((working_dir, client)) = spawner
+            .spawn(|me, ctx| {
+                let client = ServerApiProvider::as_ref(ctx).get_harness_support_client();
+                (me.working_dir.clone(), client)
+            })
+            .await
+        else {
+            report_error!(
+                "Unable to retrieve snapshot upload context for cleanup",
+                extra: { "task_id" => %task_id }
+            );
+            return;
+        };
+
+        // Drain any pending declarations writes from the history subscription before the
+        // declarations script runs. This guarantees no driver-side `file` append is still in
+        // flight when the bash script appends its `repo` entries.
+        if let Ok(Some(writer)) = spawner.spawn(|me, _| me.snapshot_file_writer.clone()).await {
+            writer.flush().await;
+        }
+
+        // Regenerate the declarations file so the upload pipeline sees the latest workspace
+        // state. The helper swallows its own errors at ERROR level; we just proceed.
+        snapshot::run_declarations_script(&working_dir, &task_id, script_timeout).await;
+
+        // Cap the upload so a pathological slow upload cannot wedge cleanup.
+        // On timeout we surface via report_error! so Sentry captures the incident and on-call
+        // alerting can fire, then let cloud-provider teardown continue.
+        if let Err(TimeoutError) = snapshot::upload_snapshot_from_declarations(client, &task_id)
+            .with_timeout(upload_timeout)
+            .await
+        {
+            report_error!(
+                "Snapshot upload timed out; continuing with cleanup",
+                extra: { "timeout" => ?upload_timeout, "task_id" => %task_id }
+            );
+        }
+    }
+}
+
+/// Build the env-var map for the agent terminal session from managed secrets.
+///
+/// Invariant: the server resolves at most one typed auth secret per harness, so
+/// env-var collisions between typed secrets cannot occur in practice.
+///
+/// Precedence order:
+/// 1. Worker-injected process env (already non-empty in `std::env`). Never overridden.
+/// 2. Typed auth secrets (`AnthropicApiKey`, `AnthropicBedrock*`). Inserted atomically:
+///    if any one env var for a typed secret is already worker-injected, the entire
+///    secret is skipped.
+/// 3. Generic `RawValue` secrets. Skipped on collision with either of the above.
+/// Metadata environment collisions are errors, including empty injected values.
+///
+/// `runtime_env` is the terminal environment applied on top of these secrets, so a secret that
+/// collides with a non-empty entry in it is skipped rather than silently overwritten later.
+pub(super) fn build_secret_env_vars(
+    secrets: &HashMap<String, ManagedSecretValue>,
+    runtime_env: &HashMap<String, String>,
+) -> Result<HashMap<OsString, OsString>, AgentDriverError> {
+    let already_set = |name: &str| {
+        std::env::var(name).is_ok_and(|v| !v.is_empty())
+            || runtime_env.get(name).is_some_and(|v| !v.is_empty())
+    };
+    for (name, secret) in secrets {
+        let normalized_name = name.to_ascii_uppercase();
+        if matches!(secret, ManagedSecretValue::RawValue { .. })
+            && normalized_name.starts_with("WARP_METADATA_")
+            && (std::env::var_os(&normalized_name).is_some()
+                || runtime_env.contains_key(&normalized_name))
+        {
+            return Err(AgentDriverError::EnvironmentSetupFailed(format!(
+                "Metadata environment variable {normalized_name} conflicts with managed secret {name:?}"
+            )));
+        }
+    }
+    let mut env_vars = HashMap::with_capacity(secrets.len() + 1);
+
+    // Phase 1: Record which env-var names are claimed by typed auth secrets.
+    let typed_env_names = typed_secret_env_names(secrets);
+
+    // Phase 2: Insert typed auth secrets atomically.
+    for (name, secret) in secrets {
+        let entries = typed_secret_entries(secret);
+        if entries.is_empty() {
+            continue;
+        }
+
+        if let Some((conflict, _)) = entries.iter().find(|(env_name, _)| already_set(env_name)) {
+            log::warn!(
+                "Skipping auth secret '{name}' ({:?}): '{conflict}' is already set \
+                 in the process environment",
+                secret.secret_type(),
+            );
+            continue;
+        }
+
+        for (env_name, env_value) in entries {
+            env_vars.insert(OsString::from(env_name), OsString::from(env_value));
+        }
+    }
+
+    // Phase 3: Insert generic RawValue secrets, skipping any that collide
+    // with worker-injected env vars or typed-secret-claimed names.
+    for (name, secret) in secrets {
+        let ManagedSecretValue::RawValue { value } = secret else {
+            continue;
+        };
+        let env_name = name.as_str();
+
+        if already_set(env_name) {
+            log::warn!("Skipping managed secret {env_name}: already set in environment");
+            continue;
+        }
+        if typed_env_names.contains(env_name) {
+            log::warn!("Skipping generic secret '{env_name}': overridden by a typed auth secret");
+            continue;
+        }
+
+        env_vars.insert(OsString::from(env_name), OsString::from(value.as_str()));
+    }
+
+    Ok(env_vars)
+}
+
+/// The env-var names that any typed auth secret in `secrets` will populate.
+/// Used for phase-3 collision detection and by the suffix resolver.
+fn typed_secret_env_names(secrets: &HashMap<String, ManagedSecretValue>) -> HashSet<&'static str> {
+    let mut names = HashSet::new();
+    for secret in secrets.values() {
+        for (env_name, _) in typed_secret_entries(secret) {
+            names.insert(env_name);
+        }
+    }
+    names
+}
+
+fn typed_secret_entries(secret: &ManagedSecretValue) -> Vec<(&'static str, &str)> {
+    match secret {
+        ManagedSecretValue::RawValue { .. } => vec![],
+        ManagedSecretValue::AnthropicApiKey { api_key } => {
+            vec![("ANTHROPIC_API_KEY", api_key.as_str())]
+        }
+        ManagedSecretValue::AnthropicBedrockApiKey {
+            aws_bearer_token_bedrock,
+            aws_region,
+        } => vec![
+            (
+                "AWS_BEARER_TOKEN_BEDROCK",
+                aws_bearer_token_bedrock.as_str(),
+            ),
+            ("CLAUDE_CODE_USE_BEDROCK", "1"),
+            ("AWS_REGION", aws_region.as_str()),
+        ],
+        ManagedSecretValue::AnthropicBedrockAccessKey {
+            aws_access_key_id,
+            aws_secret_access_key,
+            aws_session_token,
+            aws_region,
+        } => {
+            let mut entries = vec![
+                ("AWS_ACCESS_KEY_ID", aws_access_key_id.as_str()),
+                ("AWS_SECRET_ACCESS_KEY", aws_secret_access_key.as_str()),
+                ("CLAUDE_CODE_USE_BEDROCK", "1"),
+                ("AWS_REGION", aws_region.as_str()),
+            ];
+            if let Some(token) = aws_session_token.as_deref() {
+                entries.push(("AWS_SESSION_TOKEN", token));
+            }
+            entries
+        }
+        ManagedSecretValue::OpenaiApiKey { api_key, .. } => {
+            vec![("OPENAI_API_KEY", api_key.as_str())]
+        }
+        ManagedSecretValue::LlmProviderApiKey {
+            provider_id,
+            api_key,
+            ..
+        } => match provider_id.as_str() {
+            "anthropic" => vec![("ANTHROPIC_API_KEY", api_key.as_str())],
+            "openai" => vec![("OPENAI_API_KEY", api_key.as_str())],
+            // Pi reads every other provider's key from its auth.json.
+            _ => vec![],
+        },
+        // A registry credential authenticates an image pull, not the agent process, and
+        // is never injected into the terminal session.
+        ManagedSecretValue::DockerRegistry { .. } => vec![],
+        ManagedSecretValue::AwsEcrCredential { .. } => vec![],
+    }
+}
+
+impl Entity for AgentDriver {
+    type Event = ();
+}
+
+/// The only reason that `AgentDriver` is a singleton entity is to ensure the UI framework
+/// doesn't drop it. Generally, we should not assume there's only one running agent.
+impl SingletonEntity for AgentDriver {}
+
+/// Write the run ID to stdout using the appropriate output format.
+pub(super) fn write_run_started(run_id: &str, output_format: OutputFormat) {
+    report_if_error!(
+        output::with_stdout_buffered(|buf| match output_format {
+            OutputFormat::Json | OutputFormat::Ndjson => output::json::run_started(run_id, buf),
+            OutputFormat::Text | OutputFormat::Pretty => output::text::run_started(run_id, buf),
+        })
+        .context("Failed to write run ID")
+    );
+}
+
+/// Report a driver-level error to the server for the given task.
+///
+/// Used for errors that occur before or outside a conversation. Errors
+/// that occur while the agent is running should be reported through
+/// the `LocalAgentTaskSyncModel`.
+pub(super) async fn report_driver_error(
+    task_id: AmbientAgentTaskId,
+    err: &AgentDriverError,
+    server_api: &Arc<dyn AIClient>,
+) {
+    let (state, status_update) = error_classification::classify_driver_error(err);
+    if let Err(e) = server_api
+        .update_agent_task(
+            task_id,
+            Some(state),
+            None,
+            None,
+            Some(status_update),
+            None,
+            None,
+        )
+        .await
+    {
+        report_error!(
+            anyhow!(e).context(format!("Failed to report driver error for task {task_id}"))
+        );
+    }
+}
+
+/// Stamps `parent_agent_id` (= parent's `run_id` under v2) onto the
+/// driver-hosted conversation so the streamer's child-role check
+/// succeeds. No-op when `parent_run_id` is `None` (a top-level run).
+fn stamp_parent_agent_id_if_some(
+    conv_id: AIConversationId,
+    parent_run_id: Option<&str>,
+    ctx: &mut ModelContext<AgentDriver>,
+) {
+    let Some(parent_run_id) = parent_run_id else {
+        return;
+    };
+    let parent_run_id = parent_run_id.to_owned();
+    BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, _| {
+        if let Some(conv) = history.conversation_mut(&conv_id) {
+            conv.set_parent_agent_id(parent_run_id);
+        }
+    });
+}
+
+/// Write the session URL to stdout using the appropriate output format
+fn write_session_joined(join_url: &str, output_format: OutputFormat) {
+    report_if_error!(
+        output::with_stdout_buffered(|buf| match output_format {
+            OutputFormat::Json | OutputFormat::Ndjson =>
+                output::json::shared_session_established(join_url, buf),
+            OutputFormat::Text | OutputFormat::Pretty => {
+                output::text::shared_session_established(join_url, buf)
+            }
+        })
+        .context("Failed to write shared session event")
+    );
+}
+
+#[cfg(test)]
+#[path = "driver_tests.rs"]
+mod tests;
+
+#[cfg(all(test, feature = "local_fs", not(feature = "skip_login")))]
+#[path = "driver/standby_bootstrap_tests.rs"]
+mod standby_bootstrap_tests;

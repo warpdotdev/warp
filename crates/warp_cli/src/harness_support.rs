@@ -1,0 +1,141 @@
+use clap::{Args, Subcommand, ValueEnum};
+
+/// Commands to support third-party agent harnesses running within Oz.
+///
+/// These commands are invoked by external agent harnesses (e.g. Claude Code)
+/// during a cloud agent run to interact with Oz platform APIs.
+#[derive(Debug, Clone, Args)]
+pub struct HarnessSupportArgs {
+    /// The run ID to associate with harness-support API calls.
+    #[arg(long = "run-id", env = "OZ_RUN_ID")]
+    pub run_id: String,
+
+    #[command(subcommand)]
+    pub command: HarnessSupportCommand,
+}
+
+impl HarnessSupportCommand {
+    pub(crate) fn as_str_for_tracing(&self) -> &'static str {
+        match self {
+            HarnessSupportCommand::Ping => "harness-support ping",
+            HarnessSupportCommand::ReportArtifact(_) => "harness-support report-artifact",
+            HarnessSupportCommand::ReportExternalReference(_) => {
+                "harness-support report-external-reference"
+            }
+            HarnessSupportCommand::NotifyUser(_) => "harness-support notify-user",
+            HarnessSupportCommand::FinishTask(_) => "harness-support finish-task",
+            HarnessSupportCommand::ReportShutdown(_) => "harness-support report-shutdown",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum HarnessSupportCommand {
+    /// Verify connectivity by fetching and displaying the current run.
+    #[command(hide = true)]
+    Ping,
+
+    /// Report an artifact back to the Oz platform.
+    ReportArtifact(ReportArtifactArgs),
+
+    /// Report a URL-addressable external reference (e.g. a filed Linear issue, a spec
+    /// document, a deployed preview) back to the Oz platform as an `EXTERNAL_REFERENCE`
+    /// artifact.
+    ReportExternalReference(ReportExternalReferenceArgs),
+
+    /// Send a progress notification to the task's originating platform (Slack, Linear, etc.).
+    NotifyUser(NotifyUserArgs),
+
+    /// Report task completion or failure, as well as a summary of the task.
+    FinishTask(FinishTaskArgs),
+
+    /// Report that the agent process is shutting down.
+    ReportShutdown(ReportShutdownArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct ReportArtifactArgs {
+    #[command(subcommand)]
+    pub command: ReportArtifactCommand,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum ReportArtifactCommand {
+    /// Report a pull request artifact.
+    PullRequest(PullRequestArtifactArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct PullRequestArtifactArgs {
+    /// URL of the pull request.
+    #[arg(long)]
+    pub url: String,
+
+    /// Branch name associated with the pull request.
+    #[arg(long)]
+    pub branch: String,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct ReportExternalReferenceArgs {
+    /// URL of the external reference (required, max 2048 chars).
+    #[arg(long)]
+    pub url: String,
+
+    /// Reference type (required, max 256 chars, e.g. "LINEAR_ISSUE", "GITHUB_PR").
+    #[arg(long = "reference-type")]
+    pub reference_type: String,
+
+    /// Optional human-readable title.
+    #[arg(long)]
+    pub title: Option<String>,
+
+    /// Optional metadata as a JSON object string (e.g. '{"key":"val"}').
+    #[arg(long)]
+    pub metadata: Option<String>,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct NotifyUserArgs {
+    /// The message to send as a progress update.
+    #[arg(long)]
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum TaskStatus {
+    Success,
+    Failure,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct FinishTaskArgs {
+    /// Whether the task succeeded or failed.
+    #[arg(long)]
+    pub status: TaskStatus,
+
+    /// A summary of the task outcome.
+    #[arg(long)]
+    pub summary: String,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct ReportShutdownArgs {
+    /// Error category for abnormal shutdown (e.g. "oom", "timeout").
+    /// Omit for clean shutdown.
+    #[arg(long)]
+    pub error_category: Option<String>,
+
+    /// Human-readable error message for abnormal shutdown.
+    /// Omit for clean shutdown.
+    #[arg(long)]
+    pub error_message: Option<String>,
+
+    /// PID of the agent process that exited.
+    #[arg(long)]
+    pub pid: Option<u32>,
+    /// Process exit code for abnormal shutdown.
+    /// Omit for clean shutdown or when the exit code is unavailable.
+    #[arg(long, value_parser = clap::value_parser!(u8).range(1..))]
+    pub exit_code: Option<u8>,
+}

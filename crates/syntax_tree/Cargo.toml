@@ -1,0 +1,25 @@
+[package]
+name = "syntax_tree"
+version = "0.1.0"
+edition = "2024"
+authors = ["Warp Team <dev@warp.dev>"]
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+rangemap.workspace = true
+arborium.workspace = true
+warpui_core.workspace = true
+warp_editor.workspace = true
+languages.workspace = true
+futures.workspace = true
+futures-lite.workspace = true
+parking_lot.workspace = true
+log.workspace = true
+string-offset.workspace = true
+streaming-iterator = "0.1.9"
+warp_util.workspace = true
+
+[dev-dependencies]
+warp_editor = { workspace = true, features = ["test-util"] }
+warpui = { workspace = true, features = ["test-util"] }

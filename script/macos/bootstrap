@@ -1,0 +1,100 @@
+#!/bin/sh
+#
+# Run this script once to prepare your machine to develop Warp. This script is
+# a work in progress, and may be incomplete.
+
+set -e
+
+. "$PWD/script/warp_sudo"
+
+DEVELOPER_DIR="$(xcode-select -p 2>/dev/null || true)"
+if [ -z "$DEVELOPER_DIR" ] || [ ! -x "$DEVELOPER_DIR/usr/bin/xcodebuild" ] || [ "$DEVELOPER_DIR" = "/Library/Developer/CommandLineTools" ]; then
+    XCODE_APP=""
+    # Prefer the stable /Applications/Xcode.app when present so users with
+    # both stable and beta/versioned installs aren't switched away from it.
+    if [ -x "/Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild" ]; then
+        XCODE_APP="/Applications/Xcode.app"
+    else
+        for candidate in /Applications/Xcode*.app; do
+            if [ -x "$candidate/Contents/Developer/usr/bin/xcodebuild" ]; then
+                XCODE_APP="$candidate"
+                break
+            fi
+        done
+    fi
+    if [ -z "$XCODE_APP" ]; then
+        echo "Please install Xcode before continuing."
+        exit 1
+    fi
+    echo "Selected Xcode at $XCODE_APP"
+    echo "You may be prompted for your password so bootstrap can set Xcode as the active developer directory."
+    warp_sudo xcode-select --switch "$XCODE_APP/Contents/Developer"
+fi
+# Mimic actually launching XCode, which performs some necessary set-up of the
+# development environment.
+xcodebuild -runFirstLaunch
+
+if ! command -v brew; then
+    echo "Installing brew..."
+    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+    echo "Please make sure brew is set correctly in your PATH"
+    exit 1
+fi
+
+if ! command -v cargo; then
+    echo "Installing rust..."
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+    echo "Please start a new terminal session so that cargo is in your PATH"
+    exit 1
+fi
+
+# Install various binaries through cargo.
+"$PWD"/script/install_cargo_test_deps
+"$PWD"/script/install_cargo_release_deps
+"$PWD"/script/install_cargo_bundle
+
+# Homebrew asks for confirmation before installing by default; opt out so
+# bootstrap runs non-interactively.
+export HOMEBREW_NO_ASK=1
+
+# Update brew
+brew update
+
+brew install jq
+brew install shellcheck
+brew install getsentry/tools/sentry-cli
+brew install clang-format
+brew install create-dmg
+brew install multitime
+# Prefer the cask over the formula to avoid pulling in the dotnet formula
+# dependency, which fails to link when /opt/homebrew/bin/dotnet already
+# exists as a symlink to a non-Homebrew install (e.g. the
+# /usr/local/share/dotnet install from Microsoft or the Xcode toolchain).
+# Skip entirely when a working pwsh is already on PATH — covers an existing
+# cask install, a non-Homebrew /usr/local/bin/pwsh, or any other working pwsh.
+if ! pwsh --version >/dev/null 2>&1; then
+    brew install --cask powershell
+fi
+brew install pkgconf
+brew install llvm
+brew install protobuf
+
+# Install PSScriptAnalyzer for PowerShell linting
+pwsh -Command "Install-Module -Name PSScriptAnalyzer -Force -Scope CurrentUser"
+
+if ! [ "$(command -v docker)" ]; then
+    brew install --cask docker
+fi
+
+if ! [ "$(command -v gcloud)" ]; then
+    brew install google-cloud-sdk
+fi
+
+if [[ "${WARP_SKIP_GCLOUD_AUTH:-0}" != "1" ]] && [[ -z $(gcloud auth print-identity-token) ]]; then
+    echo "gcloud CLI authentication missing.  Press enter to continue..."
+    read var
+    gcloud auth login
+fi
+
+# Needed for building for Mac ARM machines (e.g. M1)
+rustup target add aarch64-apple-darwin

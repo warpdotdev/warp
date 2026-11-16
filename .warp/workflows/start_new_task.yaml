@@ -1,0 +1,18 @@
+name: "Create new branch off of master"
+command: 
+  |
+  new_branch={{new_branch_name}};
+  git checkout master && git pull origin master && git rev-parse --verify "$new_branch";
+  if [[ $? -ne 0 ]]; then
+    git checkout -b "$new_branch";
+  else
+    yellow=`tput setaf 3`;
+    reset=`tput sgr0`;
+    echo "${yellow}Branch $new_branch already exists${reset}" && git checkout "$new_branch"
+  fi
+description: "Starts a new clean branch off of master if it doesn't already exist"
+arguments:
+  - name: new_branch_name
+    description: Name of the new branch for a task
+author: Warp Team
+shells: []

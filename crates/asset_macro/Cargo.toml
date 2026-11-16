@@ -1,0 +1,18 @@
+[package]
+name = "asset_macro"
+version = "0.1.0"
+edition = "2024"
+publish.workspace = true
+license.workspace = true
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+proc-macro = true
+
+[dependencies]
+quote = "1"
+syn = { version = "2", default-features = false, features = ["derive", "parsing", "proc-macro", "printing"] }
+proc-macro2 = "1"
+sha2.workspace = true
+warp_util.workspace = true

@@ -1,0 +1,46 @@
+{
+  "fill" : "system-dark",
+  "groups" : [
+    {
+      "layers" : [
+        {
+          "fill-specializations" : [
+            {
+              "value" : "none"
+            },
+            {
+              "appearance" : "dark",
+              "value" : "none"
+            }
+          ],
+          "image-name" : "Glyph.svg",
+          "name" : "Glyph"
+        },
+        {
+          "glass" : false,
+          "image-name" : "Guidelines.svg",
+          "name" : "Guidelines"
+        },
+        {
+          "fill" : "none",
+          "image-name" : "PLACE HERE.png",
+          "name" : "PLACE HERE"
+        }
+      ],
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.5
+      },
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.5
+      }
+    }
+  ],
+  "supported-platforms" : {
+    "circles" : [
+      "watchOS"
+    ],
+    "squares" : "shared"
+  }
+}

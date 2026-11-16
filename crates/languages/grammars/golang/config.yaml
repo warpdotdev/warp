@@ -1,0 +1,10 @@
+display_name: "Go"
+indent_unit: tab
+comment_prefix: "//"
+brackets:
+  - start: "{"
+    end: "}"
+  - start: "("
+    end: ")"
+  - start: "["
+    end: "]"

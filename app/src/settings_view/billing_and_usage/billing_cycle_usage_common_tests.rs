@@ -1,0 +1,599 @@
+use warp_core::features::FeatureFlag;
+use warpui::{App, SingletonEntity};
+
+use super::{
+    BarSegment, aggregate_segments, filter_entries_by_attributed_team, filter_legacy_buckets,
+    format_cost_cents, format_credits, format_usage_cost, has_non_viewer_data, legend_cost_types,
+    members_for_team,
+};
+use crate::auth::UserUid;
+use crate::server::ids::ServerId;
+use crate::settings::UsageDisplayUnit;
+use crate::test_util::billing_unit::{set_charge_unit, set_usage_display_unit};
+use crate::test_util::settings::initialize_settings_for_tests;
+use crate::workspaces::team::{MembershipRole, Team, TeamMember};
+use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::workspace::{
+    AiCreditsUsageAndCostSubjectType, AiCreditsUsageAndCostType, AiCreditsUsageBucket,
+    AiCreditsUsageSource, BillingCycleUsageEntry, ChargeUnit, WorkspaceMember,
+    WorkspaceMemberUsageInfo,
+};
+
+const VIEWER_UID: &str = "viewer-uid";
+const OTHER_UID: &str = "other-uid";
+
+fn entry(
+    subject_type: AiCreditsUsageAndCostSubjectType,
+    subject_uid: Option<&str>,
+    cost_type: AiCreditsUsageAndCostType,
+    usage_bucket: AiCreditsUsageBucket,
+    usage_source: AiCreditsUsageSource,
+    credits_used: i32,
+    cost_cents: i32,
+) -> BillingCycleUsageEntry {
+    BillingCycleUsageEntry {
+        subject_type,
+        subject_uid: subject_uid.map(|s| s.to_string()),
+        subject_display_name: None,
+        cost_type,
+        usage_bucket,
+        usage_source,
+        credits_used: f64::from(credits_used),
+        cost_cents: f64::from(cost_cents),
+        attributed_team_uid: None,
+    }
+}
+
+#[test]
+fn cents_billed_usage_uses_credit_equivalent_despite_credits_display_preference() {
+    App::test((), |mut app| async move {
+        let _flag = FeatureFlag::CreditEquivalentBillingUsage.override_enabled(true);
+        initialize_settings_for_tests(&mut app);
+        app.add_singleton_model(UserWorkspaces::default_mock);
+        set_charge_unit(&mut app, ChargeUnit::Cents);
+        set_usage_display_unit(&mut app, UsageDisplayUnit::Credits);
+
+        let mut included = viewer_user_entry();
+        included.credits_used = 120.4;
+        let mut paid = included.clone();
+        paid.cost_type = AiCreditsUsageAndCostType::Payg;
+        paid.credits_used = 5.25;
+        paid.cost_cents = 50.;
+
+        let (segments, credits, cents) = aggregate_segments([&included, &paid]);
+
+        app.read(|ctx| {
+            let charge_unit = UserWorkspaces::as_ref(ctx).charge_unit();
+            assert_eq!(
+                format_usage_cost(segments[0].credits, segments[0].cost_cents, charge_unit),
+                "$2.17"
+            );
+            assert_eq!(
+                format_usage_cost(segments[1].credits, segments[1].cost_cents, charge_unit),
+                "$0.09"
+            );
+            assert_eq!(format_usage_cost(credits, cents, charge_unit), "$2.26");
+            assert_eq!(cents, 50.);
+        });
+    });
+}
+
+#[test]
+fn credit_billed_usage_shows_charged_cost_when_credit_equivalent_flag_is_enabled() {
+    let _flag = FeatureFlag::CreditEquivalentBillingUsage.override_enabled(true);
+    assert_eq!(format_usage_cost(125.65, 50., ChargeUnit::Credits), "$0.50");
+}
+
+#[test]
+fn usage_dollars_show_charged_cost_when_credit_equivalent_flag_is_disabled() {
+    let _flag = FeatureFlag::CreditEquivalentBillingUsage.override_enabled(false);
+    assert_eq!(format_usage_cost(120.4, 0., ChargeUnit::Cents), "$0.00");
+    assert_eq!(format_usage_cost(125.65, 50., ChargeUnit::Cents), "$0.50");
+}
+
+#[test]
+fn cost_only_team_usage_is_visible() {
+    let mut cost_only = entry(
+        AiCreditsUsageAndCostSubjectType::Team,
+        None,
+        AiCreditsUsageAndCostType::Aggregate,
+        AiCreditsUsageBucket::Aggregate,
+        AiCreditsUsageSource::Aggregate,
+        0,
+        0,
+    );
+    cost_only.cost_cents = 0.6;
+
+    assert!(has_non_viewer_data(
+        &[viewer_user_entry(), cost_only.clone()],
+        Some(VIEWER_UID)
+    ));
+    assert_eq!(
+        legend_cost_types(&[cost_only]),
+        vec![AiCreditsUsageAndCostType::Aggregate]
+    );
+}
+
+/// Boilerplate viewer-owned User row for predicate tests.
+fn viewer_user_entry() -> BillingCycleUsageEntry {
+    entry(
+        AiCreditsUsageAndCostSubjectType::User,
+        Some(VIEWER_UID),
+        AiCreditsUsageAndCostType::BaseLimit,
+        AiCreditsUsageBucket::Ai,
+        AiCreditsUsageSource::Local,
+        10,
+        0,
+    )
+}
+
+#[test]
+fn has_non_viewer_data_returns_false_when_entries_empty() {
+    assert!(!has_non_viewer_data(&[], Some(VIEWER_UID)));
+}
+
+#[test]
+fn has_non_viewer_data_returns_false_when_only_viewer_user_rows() {
+    let entries = vec![viewer_user_entry(), viewer_user_entry()];
+    assert!(!has_non_viewer_data(&entries, Some(VIEWER_UID)));
+}
+
+#[test]
+fn has_non_viewer_data_returns_true_for_team_aggregate_row() {
+    // TeamAggregate visibility represents "everyone else's usage" as a single
+    // Team-typed row, even when the workspace currently has only one member
+    // (e.g. a teammate left mid-cycle after incurring AI costs).
+    let entries = vec![
+        viewer_user_entry(),
+        entry(
+            AiCreditsUsageAndCostSubjectType::Team,
+            None,
+            AiCreditsUsageAndCostType::Aggregate,
+            AiCreditsUsageBucket::Aggregate,
+            AiCreditsUsageSource::Aggregate,
+            500,
+            300,
+        ),
+    ];
+    assert!(has_non_viewer_data(&entries, Some(VIEWER_UID)));
+}
+
+#[test]
+fn has_non_viewer_data_returns_true_for_other_user_row() {
+    // PerUserTotals / FullBreakdown emit per-user rows, so a departed teammate
+    // shows up as a User entry with a non-viewer UID.
+    let entries = vec![entry(
+        AiCreditsUsageAndCostSubjectType::User,
+        Some(OTHER_UID),
+        AiCreditsUsageAndCostType::BaseLimit,
+        AiCreditsUsageBucket::Ai,
+        AiCreditsUsageSource::Local,
+        50,
+        0,
+    )];
+    assert!(has_non_viewer_data(&entries, Some(VIEWER_UID)));
+}
+
+#[test]
+fn has_non_viewer_data_returns_true_for_service_account_row() {
+    let entries = vec![entry(
+        AiCreditsUsageAndCostSubjectType::ServiceAccount,
+        Some("sa-uid"),
+        AiCreditsUsageAndCostType::BaseLimit,
+        AiCreditsUsageBucket::Ai,
+        AiCreditsUsageSource::Cloud,
+        25,
+        0,
+    )];
+    assert!(has_non_viewer_data(&entries, Some(VIEWER_UID)));
+}
+
+#[test]
+fn has_non_viewer_data_treats_missing_subject_uid_as_non_viewer() {
+    // Defensive: a User row with no UID is conservatively treated as a non-
+    // viewer subject so we never accidentally drop team scaffolding.
+    let entries = vec![entry(
+        AiCreditsUsageAndCostSubjectType::User,
+        None,
+        AiCreditsUsageAndCostType::BaseLimit,
+        AiCreditsUsageBucket::Ai,
+        AiCreditsUsageSource::Local,
+        1,
+        0,
+    )];
+    assert!(has_non_viewer_data(&entries, Some(VIEWER_UID)));
+}
+
+#[test]
+fn has_non_viewer_data_treats_missing_viewer_uid_as_non_viewer() {
+    // Signed-out / unidentified viewer: any subject we can't prove belongs
+    // to them counts as non-viewer data.
+    let entries = vec![viewer_user_entry()];
+    assert!(has_non_viewer_data(&entries, None));
+}
+
+#[test]
+fn filter_legacy_buckets_drops_voice_and_suggested_code_diffs_in_input_order() {
+    let entries = vec![
+        entry(
+            AiCreditsUsageAndCostSubjectType::User,
+            Some(VIEWER_UID),
+            AiCreditsUsageAndCostType::BaseLimit,
+            AiCreditsUsageBucket::Ai,
+            AiCreditsUsageSource::Local,
+            10,
+            0,
+        ),
+        entry(
+            AiCreditsUsageAndCostSubjectType::User,
+            Some(VIEWER_UID),
+            AiCreditsUsageAndCostType::BaseLimit,
+            AiCreditsUsageBucket::Voice,
+            AiCreditsUsageSource::Local,
+            3,
+            0,
+        ),
+        entry(
+            AiCreditsUsageAndCostSubjectType::User,
+            Some(VIEWER_UID),
+            AiCreditsUsageAndCostType::BaseLimit,
+            AiCreditsUsageBucket::Compute,
+            AiCreditsUsageSource::Local,
+            5,
+            0,
+        ),
+        entry(
+            AiCreditsUsageAndCostSubjectType::User,
+            Some(VIEWER_UID),
+            AiCreditsUsageAndCostType::BaseLimit,
+            AiCreditsUsageBucket::SuggestedCodeDiffs,
+            AiCreditsUsageSource::Local,
+            7,
+            0,
+        ),
+        entry(
+            AiCreditsUsageAndCostSubjectType::User,
+            Some(VIEWER_UID),
+            AiCreditsUsageAndCostType::Aggregate,
+            AiCreditsUsageBucket::Aggregate,
+            AiCreditsUsageSource::Aggregate,
+            100,
+            50,
+        ),
+        entry(
+            AiCreditsUsageAndCostSubjectType::User,
+            Some(VIEWER_UID),
+            AiCreditsUsageAndCostType::BaseLimit,
+            AiCreditsUsageBucket::Platform,
+            AiCreditsUsageSource::Cloud,
+            2,
+            0,
+        ),
+    ];
+
+    let filtered = filter_legacy_buckets(&entries);
+
+    let kept_buckets: Vec<_> = filtered.iter().map(|e| e.usage_bucket.clone()).collect();
+    assert_eq!(
+        kept_buckets,
+        vec![
+            AiCreditsUsageBucket::Ai,
+            AiCreditsUsageBucket::Compute,
+            AiCreditsUsageBucket::Aggregate,
+            AiCreditsUsageBucket::Platform,
+        ],
+        "expected Voice + SuggestedCodeDiffs dropped while preserving the rest in input order"
+    );
+}
+
+#[test]
+fn aggregate_segments_merges_dupes_drops_zeros_and_sorts() {
+    let entries = [
+        // Same (BonusGrant, Compute) appears twice across different sources;
+        // should merge into one segment.
+        entry(
+            AiCreditsUsageAndCostSubjectType::User,
+            Some(VIEWER_UID),
+            AiCreditsUsageAndCostType::BonusGrant,
+            AiCreditsUsageBucket::Compute,
+            AiCreditsUsageSource::Local,
+            10,
+            5,
+        ),
+        entry(
+            AiCreditsUsageAndCostSubjectType::User,
+            Some(VIEWER_UID),
+            AiCreditsUsageAndCostType::BonusGrant,
+            AiCreditsUsageBucket::Compute,
+            AiCreditsUsageSource::Cloud,
+            7,
+            3,
+        ),
+        // BaseLimit/Ai — should sort before any BonusGrant entry.
+        entry(
+            AiCreditsUsageAndCostSubjectType::User,
+            Some(VIEWER_UID),
+            AiCreditsUsageAndCostType::BaseLimit,
+            AiCreditsUsageBucket::Ai,
+            AiCreditsUsageSource::Local,
+            20,
+            0,
+        ),
+        entry(
+            AiCreditsUsageAndCostSubjectType::User,
+            Some(VIEWER_UID),
+            AiCreditsUsageAndCostType::Payg,
+            AiCreditsUsageBucket::Ai,
+            AiCreditsUsageSource::Local,
+            0,
+            42,
+        ),
+        entry(
+            AiCreditsUsageAndCostSubjectType::User,
+            Some(VIEWER_UID),
+            AiCreditsUsageAndCostType::AmbientBonusGrant,
+            AiCreditsUsageBucket::Ai,
+            AiCreditsUsageSource::Cloud,
+            0,
+            0,
+        ),
+    ];
+
+    let (segments, total_credits, total_cost_cents) = aggregate_segments(entries.iter());
+
+    let key = |s: &BarSegment| (s.cost_type.clone(), s.usage_bucket.clone());
+    let keys: Vec<_> = segments.iter().map(key).collect();
+    assert_eq!(
+        keys,
+        vec![
+            (
+                AiCreditsUsageAndCostType::BaseLimit,
+                AiCreditsUsageBucket::Ai
+            ),
+            (
+                AiCreditsUsageAndCostType::BonusGrant,
+                AiCreditsUsageBucket::Compute
+            ),
+            (AiCreditsUsageAndCostType::Payg, AiCreditsUsageBucket::Ai),
+        ],
+        "expected cost-type order, excluding only unused entries"
+    );
+
+    let bonus = &segments[1];
+    assert_eq!(bonus.credits, 17.0, "10 + 7 merged credits");
+    assert_eq!(bonus.cost_cents, 8.0, "5 + 3 merged cost cents");
+
+    assert_eq!(total_credits, 20.0 + 17.0);
+    assert_eq!(total_cost_cents, 50.0);
+}
+
+#[test]
+fn legend_cost_types_excludes_unused_bucket() {
+    // Regression: a base-limit row with no usage must not surface "Base" in
+    // the legend while only Pay-as-you-go credits were actually spent.
+    let entries = vec![
+        entry(
+            AiCreditsUsageAndCostSubjectType::User,
+            Some(VIEWER_UID),
+            AiCreditsUsageAndCostType::BaseLimit,
+            AiCreditsUsageBucket::Ai,
+            AiCreditsUsageSource::Local,
+            0,
+            0,
+        ),
+        entry(
+            AiCreditsUsageAndCostSubjectType::User,
+            Some(VIEWER_UID),
+            AiCreditsUsageAndCostType::Payg,
+            AiCreditsUsageBucket::Ai,
+            AiCreditsUsageSource::Local,
+            50,
+            120,
+        ),
+    ];
+
+    assert_eq!(
+        legend_cost_types(&entries),
+        vec![AiCreditsUsageAndCostType::Payg],
+        "unused BaseLimit row must be dropped from the legend"
+    );
+}
+
+#[test]
+fn legend_cost_types_includes_used_buckets_in_display_order() {
+    // Buckets with real usage appear in the canonical legend order regardless
+    // of input order (Payg listed before BaseLimit here).
+    let entries = vec![
+        entry(
+            AiCreditsUsageAndCostSubjectType::User,
+            Some(VIEWER_UID),
+            AiCreditsUsageAndCostType::Payg,
+            AiCreditsUsageBucket::Ai,
+            AiCreditsUsageSource::Local,
+            5,
+            10,
+        ),
+        entry(
+            AiCreditsUsageAndCostSubjectType::User,
+            Some(VIEWER_UID),
+            AiCreditsUsageAndCostType::BaseLimit,
+            AiCreditsUsageBucket::Ai,
+            AiCreditsUsageSource::Local,
+            8,
+            0,
+        ),
+    ];
+
+    assert_eq!(
+        legend_cost_types(&entries),
+        vec![
+            AiCreditsUsageAndCostType::BaseLimit,
+            AiCreditsUsageAndCostType::Payg,
+        ],
+        "used buckets should render in canonical order, not input order"
+    );
+}
+
+#[test]
+fn legend_cost_types_excludes_legacy_only_buckets() {
+    // Voice / SuggestedCodeDiffs usage is written as BaseLimit credits but is
+    // dropped from the bars; the legend must match and not show "Base".
+    let entries = vec![
+        entry(
+            AiCreditsUsageAndCostSubjectType::User,
+            Some(VIEWER_UID),
+            AiCreditsUsageAndCostType::BaseLimit,
+            AiCreditsUsageBucket::Voice,
+            AiCreditsUsageSource::Local,
+            12,
+            0,
+        ),
+        entry(
+            AiCreditsUsageAndCostSubjectType::User,
+            Some(VIEWER_UID),
+            AiCreditsUsageAndCostType::BaseLimit,
+            AiCreditsUsageBucket::SuggestedCodeDiffs,
+            AiCreditsUsageSource::Local,
+            4,
+            0,
+        ),
+    ];
+
+    assert!(
+        legend_cost_types(&entries).is_empty(),
+        "legacy-only base-limit usage must not surface any legend bucket"
+    );
+}
+
+fn entry_attributed_to(team_uid: Option<&str>) -> BillingCycleUsageEntry {
+    BillingCycleUsageEntry {
+        attributed_team_uid: team_uid.map(str::to_string),
+        ..viewer_user_entry()
+    }
+}
+
+fn workspace_member(uid: &str) -> WorkspaceMember {
+    WorkspaceMember {
+        uid: UserUid::new(uid),
+        email: format!("{uid}@warp.dev"),
+        role: MembershipRole::User,
+        is_disabled: false,
+        usage_info: WorkspaceMemberUsageInfo {
+            is_unlimited: false,
+            request_limit: 0,
+            requests_used_since_last_refresh: 0,
+            included_usage_cents: None,
+            usage_cents_used_since_last_refresh: None,
+            is_request_limit_prorated: false,
+        },
+    }
+}
+
+fn team_with_members(uids: &[&str]) -> Team {
+    let members = uids
+        .iter()
+        .map(|uid| TeamMember {
+            uid: UserUid::new(uid),
+            email: format!("{uid}@warp.dev"),
+            role: MembershipRole::User,
+            is_disabled: false,
+        })
+        .collect();
+    Team::from_local_cache(
+        ServerId::from(1),
+        "Team A".to_string(),
+        None,
+        None,
+        Some(members),
+        None,
+    )
+}
+
+#[test]
+fn filter_entries_by_attributed_team_keeps_only_the_selected_team() {
+    // The workspace-wide payload carries every team's usage; a viewer looking
+    // at team A must not see team B's numbers.
+    let entries = vec![
+        entry_attributed_to(Some("team-a")),
+        entry_attributed_to(Some("team-b")),
+        entry_attributed_to(Some("team-a")),
+    ];
+
+    let filtered = filter_entries_by_attributed_team(&entries, "team-a");
+
+    assert_eq!(filtered.len(), 2);
+    assert!(
+        filtered
+            .iter()
+            .all(|e| e.attributed_team_uid.as_deref() == Some("team-a"))
+    );
+}
+
+#[test]
+fn filter_entries_by_attributed_team_drops_unattributed_entries() {
+    // Rows the server couldn't attribute can't be proven to belong to the
+    // selected team, so they're dropped rather than counted here — same as
+    // the web.
+    let entries = vec![entry_attributed_to(None)];
+
+    assert!(filter_entries_by_attributed_team(&entries, "team-a").is_empty());
+}
+
+#[test]
+fn members_for_team_drops_workspace_members_from_other_teams() {
+    // Otherwise other teams' members would still show up as zero-usage rows.
+    let members = vec![workspace_member("in-team"), workspace_member("other-team")];
+
+    let scoped = members_for_team(&members, Some(&team_with_members(&["in-team"])));
+
+    assert_eq!(
+        scoped.iter().map(|m| m.uid).collect::<Vec<_>>(),
+        vec![UserUid::new("in-team")]
+    );
+}
+
+#[test]
+fn members_for_team_keeps_every_member_when_team_is_unknown() {
+    let members = vec![workspace_member("a"), workspace_member("b")];
+
+    assert_eq!(members_for_team(&members, None), members);
+}
+
+#[test]
+fn aggregate_segments_preserves_fractional_segments_and_totals() {
+    let mut local = viewer_user_entry();
+    local.credits_used = 0.6;
+    local.cost_cents = 0.6;
+    let mut cloud = local.clone();
+    cloud.usage_source = AiCreditsUsageSource::Cloud;
+    let mut other_bucket = local.clone();
+    other_bucket.usage_bucket = AiCreditsUsageBucket::Compute;
+    other_bucket.credits_used = 0.25;
+    other_bucket.cost_cents = 0.25;
+
+    let (segments, credits, cents) = aggregate_segments([&local, &cloud, &other_bucket]);
+
+    assert_eq!(segments.len(), 2);
+    assert_eq!(segments[0].credits, 1.2);
+    assert_eq!(segments[0].cost_cents, 1.2);
+    assert_eq!(segments[1].credits, 0.25);
+    assert_eq!(credits, 1.45);
+    assert_eq!(cents, 1.45);
+    assert_eq!(format_credits(credits), "1");
+    assert_eq!(format_cost_cents(cents), "$0.01");
+}
+
+#[test]
+fn format_credits_rounds_only_for_display() {
+    assert_eq!(format_credits(0.499999), "0");
+    assert_eq!(format_credits(0.5), "1");
+    assert_eq!(format_credits(999.5), "1,000");
+}
+
+#[test]
+fn format_cost_cents_rounds_before_splitting_dollars_and_cents() {
+    assert_eq!(format_cost_cents(0.499999), "$0.00");
+    assert_eq!(format_cost_cents(0.5), "$0.01");
+    assert_eq!(format_cost_cents(99.5), "$1.00");
+    assert_eq!(format_cost_cents(123456.5), "$1,234.57");
+}

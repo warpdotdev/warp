@@ -1,0 +1,216 @@
+#!/usr/bin/env bash
+#
+# Builds a Warp binary and bundles it up for distribution.
+
+set -e
+
+# On macOS, we need to use LLVM's clang for wasm32-unknown-unknown target
+if [[ "$OSTYPE" == "darwin"* ]]; then
+  LLVM_CLANG="/opt/homebrew/opt/llvm/bin/clang"
+  if [ ! -f "$LLVM_CLANG" ]; then
+    echo "Error: LLVM clang not found at $LLVM_CLANG"
+    echo "Please install it with: brew install llvm"
+    exit 1
+  fi
+  export CC_wasm32_unknown_unknown="$LLVM_CLANG"
+fi
+
+WORKSPACE_ROOT_DIR="$(pwd)"
+CARGO_TARGET_DIR="$WORKSPACE_ROOT_DIR/target/wasm32-unknown-unknown"
+
+# By default we build dev bundles.
+RELEASE_CHANNEL="dev"
+# TODO: We should enable crash_reporting before enabling for trusted testers.
+# https://linear.app/warpdotdev/issue/PLAT-428/crash-reporting-on-web
+FEATURES="release_bundle,gui"
+FEATURES_ADDITIONS=()
+DEBUG=false
+append_features() {
+  local feature
+  local -a requested_features
+
+  IFS=',' read -r -a requested_features <<< "$1"
+  for feature in "${requested_features[@]}"; do
+    if [[ -n "$feature" && ",$FEATURES," != *",$feature,"* ]]; then
+      FEATURES="${FEATURES:+$FEATURES,}$feature"
+    fi
+  done
+}
+
+PARAMS=""
+while (( "$#" )); do
+  case "$1" in
+    --debug)
+      DEBUG=true
+      shift
+      ;;
+    --check-only)
+      echo 'Only running `cargo check` and not producing a bundle.'
+      CHECK_ONLY="true"
+      shift
+      ;;
+    --no-split)
+      NO_SPLIT="true"
+      shift
+      ;;
+    --nouniversal)
+      # Discard the --nouniversal argument, which is only used for macOS
+      # bundles.
+      shift
+      ;;
+    -c|--channel)
+      if [ -n "$2" ] && [ "${2:0:1}" != "-" ]; then
+        RELEASE_CHANNEL=$2
+        shift 2
+      else
+        echo "Error: Argument for $1 is missing" >&2
+        exit 1
+      fi
+      ;;
+    --release-tag)
+      if [ -n "$2" ] && [ "${2:0:1}" != "-" ]; then
+        echo "Setting release tag to $2"
+        export GIT_RELEASE_TAG=$2
+        shift 2
+      else
+        echo "Error: Argument for $1 is missing" >&2
+        exit 1
+      fi
+      ;;
+    --features)
+      if [ -n "$2" ] && [ "${2:0:1}" != "-" ]; then
+        FEATURES_ADDITIONS+=("$2")
+        shift 2
+      else
+        echo "Error: Argument for $1 is missing" >&2
+        exit 1
+      fi
+      ;;
+    --override-features)
+      if [ -n "$2" ] && [ "${2:0:1}" != "-" ]; then
+        # Use this only when intentionally replacing the release and channel
+        # defaults (including local's remote_tty).
+        FEATURES_OVERRIDE=$2
+        shift 2
+      else
+        echo "Error: Argument for $1 is missing" >&2
+        exit 1
+      fi
+      ;;
+    *) # preserve positional arguments
+      PARAMS="$PARAMS $1"
+      shift
+      ;;
+  esac
+done
+# set positional arguments in their proper place
+eval set -- "$PARAMS"
+
+if [[ $DEBUG = true ]]; then
+  CARGO_PROFILE="dev-wasm"
+elif [[ $RELEASE_CHANNEL = "local" || $RELEASE_CHANNEL = "dev" ]]; then
+  # For dev bundles, we want to enable debug assertions to
+  # catch violations that would otherwise silently pass in
+  # a normal release build (e.g. in stable).
+  CARGO_PROFILE="release-wasm-debug_assertions"
+else
+  CARGO_PROFILE="release-wasm"
+fi
+
+# The `dev` profile needs to be special-cased for historical
+# reasons: https://doc.rust-lang.org/cargo/guide/build-cache.html#build-cache.
+# We don't use the `dev` profile today when bundling for wasm
+# but this is left in the script to future-proof the use of the `dev` profile.
+if [[ "$CARGO_PROFILE" == "dev" ]]; then
+  CARGO_TARGET_OUTPUT_DIR="$CARGO_TARGET_DIR/debug"
+else
+  CARGO_TARGET_OUTPUT_DIR="$CARGO_TARGET_DIR/$CARGO_PROFILE"
+fi
+
+OUT_DIR="$CARGO_TARGET_OUTPUT_DIR/bundle/wasm"
+mkdir -p "$OUT_DIR"
+ASSET_TARGET_DIR="$CARGO_TARGET_OUTPUT_DIR/bundle/assets"
+mkdir -p "$ASSET_TARGET_DIR"
+EXTRAS_DIR="$CARGO_TARGET_OUTPUT_DIR/bundle/extras"
+mkdir -p "$EXTRAS_DIR"
+
+# Update parameters based on the target release channel.
+#
+# WARP_BIN is the name of the binary produced by cargo.
+# N.B. The bundled outputs will always be warp.js and warp_bg.wasm.
+if [[ $RELEASE_CHANNEL = "local" ]]; then
+  WARP_BIN="warp"
+  FEATURES="$FEATURES"
+elif [[ $RELEASE_CHANNEL = "dev" ]]; then
+  WARP_BIN="dev"
+elif [[ $RELEASE_CHANNEL = "preview" ]]; then
+  WARP_BIN="preview"
+  FEATURES="$FEATURES,preview_channel"
+elif [[ $RELEASE_CHANNEL = "stable" ]]; then
+  WARP_BIN="stable"
+elif [[ $RELEASE_CHANNEL = "oss" ]]; then
+  WARP_BIN="warp-oss"
+fi
+
+if [ -n "${FEATURES_OVERRIDE+x}" ]; then
+  FEATURES="$FEATURES_OVERRIDE"
+else
+  for features in "${FEATURES_ADDITIONS[@]}"; do
+    append_features "$features"
+  done
+fi
+
+# These cargo features were removed and replaced by environment variables read
+# by warp-channel-config. Intercept them after merging --features additions so
+# that existing invocations keep working without dropping bundle defaults.
+for mapping in \
+    "with_local_server:WITH_LOCAL_SERVER" \
+    "with_local_session_sharing_server:WITH_LOCAL_SESSION_SHARING_SERVER" \
+    "with_sandbox_telemetry:WITH_SANDBOX_TELEMETRY"; do
+    feature="${mapping%%:*}"
+    env_var="${mapping##*:}"
+    if [[ ",$FEATURES," =~ ,"$feature", ]]; then
+        export "$env_var"=1
+        FEATURES="$(echo "$FEATURES" | sed "s/,$feature,/,/; s/^$feature,//; s/,$feature$//; s/^$feature$//")"
+        FEATURES="$(echo "$FEATURES" | sed 's/,,*/,/g; s/^,//; s/,$//')"
+        echo "Note: '$feature' is no longer a cargo feature; setting $env_var=1 instead."
+    fi
+done
+
+# If we only want to check that compilation will succeed, perform the checks
+# then exit.  We use this script to invoke `cargo check` to ensure that we are
+# using the same feature flags and profile that we would be using in production.
+if [[ "$CHECK_ONLY" == "true" ]]; then
+  ASSET_TARGET_DIR="$ASSET_TARGET_DIR" cargo check --target wasm32-unknown-unknown --profile "$CARGO_PROFILE" --bin "$WARP_BIN" --features "$FEATURES"
+  exit 0
+fi
+
+# Build the wasm binary.
+echo "Building and bundling Warp for channel $RELEASE_CHANNEL"
+ASSET_TARGET_DIR="$ASSET_TARGET_DIR" cargo build --target wasm32-unknown-unknown --profile "$CARGO_PROFILE" --bin "$WARP_BIN" --features "$FEATURES"
+
+# Generate linked JS and wasm files that can be run in the browser.
+echo "Running wasm-bindgen on $CARGO_TARGET_OUTPUT_DIR/$WARP_BIN.wasm"
+wasm-bindgen --target web --out-dir "$OUT_DIR" --out-name "warp" --keep-debug --no-typescript "$CARGO_TARGET_OUTPUT_DIR/$WARP_BIN.wasm"
+
+WASM_BINARY_OUT="${OUT_DIR}/warp_bg.wasm"
+WASM_BINARY_DEBUG="${EXTRAS_DIR}/warp_bg.debug.wasm"
+
+if [[ "$NO_SPLIT" != "true" ]]; then
+  # Run Sentry's wasm-split binary to separate out debug information from the
+  # wasm binary.
+  #
+  # Binary releases of wasm-split can be found here:
+  # https://github.com/getsentry/symbolicator/releases
+  wasm-split "$WASM_BINARY_OUT" --debug-out "$WASM_BINARY_DEBUG" --strip --strip-names
+fi
+
+# If this is being run within a GitHub action, set an output variable with the
+# directory containing all built packages.
+if [ "${GITHUB_ACTIONS}" == "true" ]; then
+  echo "::echo::on"
+  echo "packages_dir=$OUT_DIR" >> "$GITHUB_OUTPUT"
+  echo "assets_dir=$ASSET_TARGET_DIR" >> "$GITHUB_OUTPUT"
+  echo "debug_executable_path=$WASM_BINARY_DEBUG" >> "$GITHUB_OUTPUT"
+  echo "::echo::off"
+fi

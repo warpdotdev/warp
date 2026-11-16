@@ -1,0 +1,2 @@
+ALTER TABLE blocks DROP COLUMN ps1;
+ALTER TABLE blocks DROP COLUMN honor_ps1;

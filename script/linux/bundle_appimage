@@ -1,0 +1,98 @@
+#!/usr/bin/env bash
+#
+# Builds an AppImage as part of the bundling process.
+#
+# Required environment variables:
+#   - WORKSPACE_ROOT_DIR: The root directory of the Cargo workspace.
+#   - DIST_DIR: A temporary directory we can use for staging files as we build the package.
+#   - OUT_DIR: The directory into which we should place the final package.
+#   - CARGO_TARGET_OUTPUT_DIR: The cargo target directory containing build output.
+#   - RELEASE_CHANNEL: The release channel we're bundling (e.g.: "dev").
+#   - BUNDLE_ID: The app ID for the bundle (e.g.: "dev.warp.WarpDev").
+#   - EXECUTABLE_PATH: The path to the compiled executable we want to install.
+#   - BINARY_NAME: The name that the compiled executable should have on the target machine.
+#   - APPIMAGE_NAME: The name of the AppImage file to produce.
+
+STAGE_DIR="$DIST_DIR/appimagepkg"
+APP_DIR="$DIST_DIR/AppDir"
+
+# Extract channel suffix from BINARY_NAME
+if [ "$ARTIFACT" = "cli" ]; then
+  CHANNEL_SUFFIX="${BINARY_NAME#oz}"
+else
+  CHANNEL_SUFFIX="${BINARY_NAME#warp}"
+fi
+PACKAGE_NAME="warp-terminal$CHANNEL_SUFFIX"
+
+
+# Adding NO_STRIP to stop linuxdeploy from attempting to strip symbols
+# from binaries built on a different arch than the current symbol.
+BUILD_ARCH="${BUILD_ARCH:-$(uname -m)}"
+if [ "$BUILD_ARCH" != "$(uname -m)" ]; then
+  export NO_STRIP=1
+fi
+
+cleanup() {
+  # Delete the directories used as staging areas during the bundling
+  # process.
+  if [ -d "$STAGE_DIR" ]; then
+    rm -rf "$STAGE_DIR"
+  fi
+  if [ -d "$APP_DIR" ]; then
+    rm -rf "$APP_DIR"
+  fi
+}
+
+# Run cleanup() when the script terminates (whether it succeeded or failed).
+trap cleanup EXIT
+
+# Construct a directory to contain the staged package contents.
+rm -rf "$STAGE_DIR"
+mkdir -p "$STAGE_DIR"
+
+# Populate the directory with the package contents, in the appropriate
+# locations.
+OPT_DIR="/opt/warpdotdev/$PACKAGE_NAME"
+source "$WORKSPACE_ROOT_DIR/script/linux/bundle_install" "$STAGE_DIR"
+
+# Modify the "Exec=" line in the .desktop file to use the name of the installed
+# binary and not our /usr/bin symlink (which doesn't exist in an AppImage).
+sed -i -E 's/Exec=warp-terminal/Exec=warp/' "$STAGE_DIR/usr/share/applications/$BUNDLE_ID.desktop"
+
+# Find all icon files from inside the package staging directory.
+ICON_FILES=( $(find "$STAGE_DIR/usr/share/icons" -name "*.png") )
+
+# Make sure there's no lingering AppDir from a previous execution.
+rm -rf "$APP_DIR"
+
+# Run linuxdeploy to create an appropriately-structured AppDir and turn it into
+# an AppImage, located in OUT_DIR.
+#
+# We use a custom input plugin (bundled-resources) to copy Warp's bundled
+# resources into the AppDir alongside the executable, since linuxdeploy only
+# deploys the binary, desktop file, and icons by default.
+cd "$OUT_DIR"
+echo "Running linuxdeploy to create the AppImage"
+export WARP_BINARY_NAME="$BINARY_NAME"
+export WARP_PACKAGE_NAME="$PACKAGE_NAME"
+export WARP_BUNDLED_RESOURCES_DIR="${STAGE_DIR}${OPT_DIR}/resources"
+export PATH="$WORKSPACE_ROOT_DIR/script/linux:$PATH"
+linuxdeploy \
+  --appdir "$APP_DIR" \
+  --executable "${STAGE_DIR}${OPT_DIR}/$BINARY_NAME" \
+  --desktop-file "$STAGE_DIR/usr/share/applications/$BUNDLE_ID.desktop" \
+  $(for i in "${ICON_FILES[@]}"; do echo "--icon-file $i "; done) \
+  --plugin warp \
+  --output appimage
+
+APPIMAGE_PATH="$OUT_DIR/$APPIMAGE_NAME"
+
+# If this is being run within a GitHub action, set an output variable with the
+# location of the AppImage so it can be referenced by subsequent actions.
+if [ "${GITHUB_ACTIONS}" == "true" ]; then
+  echo "::echo::on"
+  echo "appimage_path=$APPIMAGE_PATH" >> "$GITHUB_OUTPUT"
+  echo "::echo::off"
+fi
+
+echo "Successfully built AppImage at $APPIMAGE_PATH!"

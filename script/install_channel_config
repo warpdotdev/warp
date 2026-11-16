@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+#
+# Installs the warp_channel_config binary at a pinned revision.
+#
+# This script acts as a lockfile: the REVISION variable pins the exact version
+# of the config binary to the code that reads its output. Update REVISION when
+# the config binary changes.
+#
+# Usage:
+#   ./script/install_channel_config          # install if not already at pinned rev
+#   ./script/install_channel_config --force  # force reinstall
+
+REPO="ssh://git@github.com/warpdotdev/warp-channel-config.git"
+REVISION="e6140c3850df629c8e75a8cfecb9bdcd5df7f946"
+BIN_NAME="warp-channel-config"
+
+# Check for repo access before attempting to `cargo install` the binary.
+if ! ls_remote_error=$(git ls-remote --exit-code "${REPO}" HEAD 2>&1 >/dev/null); then
+    echo "Cannot access ${REPO}. Skipping install." >&2
+    echo "${ls_remote_error}" >&2
+    exit 1
+fi
+
+FORCE_FLAG=""
+if [ "${1:-}" = "--force" ]; then
+    FORCE_FLAG="--force"
+fi
+
+cargo install ${FORCE_FLAG} --git "${REPO}" --rev "${REVISION}" --bin "${BIN_NAME}"

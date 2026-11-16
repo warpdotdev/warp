@@ -1,0 +1,66 @@
+{
+  "type": "assignment",
+  "generation": "generation-abc",
+  "execution_config": {
+    "taskId": "550e8400-e29b-41d4-a716-446655440000",
+    "executionId": "42",
+    "conversationId": null,
+    "parentRunId": null,
+    "teamId": "7",
+    "harness": "OZ",
+    "modelId": "auto",
+    "reasoningLevel": null,
+    "profileId": null,
+    "mcpServersJson": "{}",
+    "skills": [],
+    "factorySkillDirs": [],
+    "factoryBranch": null,
+    "computerUseEnabled": false,
+    "computerUseModelId": null,
+    "inferenceProviders": {
+      "awsBedrock": {
+        "roleArn": "arn:aws:iam::123456789012:role/bedrock",
+        "region": null
+      }
+    },
+    "repositories": [
+      {
+        "forge": "GITHUB",
+        "owner": "warpdotdev",
+        "name": "warp",
+        "ref": null,
+        "cloneFrom": null,
+        "preserveOrigin": false,
+        "expectedSha": null
+      }
+    ],
+    "deferredRepositories": [],
+    "setupCommands": [],
+    "providers": {
+      "gcp": {
+        "projectNumber": "123456789012",
+        "poolId": "pool",
+        "providerId": "provider",
+        "serviceAccountEmail": null
+      },
+      "aws": null
+    },
+    "sessionSharingAcls": [
+      {
+        "subjectType": "TEAM",
+        "email": null,
+        "access": "VIEW"
+      }
+    ],
+    "skipInitialTurn": false,
+    "idleOnCompleteSeconds": null,
+    "idleOnFailSeconds": null,
+    "snapshotDisabled": false
+  },
+  "runtime_env": {
+    "OZ_RUN_ID": "550e8400-e29b-41d4-a716-446655440000",
+    "WARP_SANDBOX_DEADLINE": "1767225600"
+  },
+  "api_key": "wk-placeholder-not-a-real-key",
+  "expires_at": "2026-01-01T00:00:00Z"
+}

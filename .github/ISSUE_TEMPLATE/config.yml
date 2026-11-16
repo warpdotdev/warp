@@ -1,0 +1,26 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Warp GitHub Search
+    url: https://github.com/warpdotdev/warp/issues?q=is%3Aissue+is%3Aopen+a+sort%3Areactions-%2B1-desc
+    about: Search Warp's open bugs and enhancements.
+  - name: Warp Documentation
+    url: https://docs.warp.dev/support-and-billing/known-issues?q=
+    about: Documentation for features, known issues, troubleshooting, keyboard shortcuts, telemetry table, and more!
+  - name: Warp Changelog
+    url: https://docs.warp.dev/changelog
+    about: See our changelog to learn about new features, improvements, bug fixes, and Oz updates.
+  - name: Contact Us
+    url: https://docs.warp.dev/support-and-community/troubleshooting-and-support/sending-us-feedback
+    about: Submit feedback and contact the Warp support team for things like Billing, Enterprise, and other issues.
+  - name: Warp Preview Slack Community
+    url: https://go.warp.dev/join-preview
+    about: Discuss give feedback on the new features with other Warp Preview users.
+  - name: Warp Discord Community
+    url: https://discord.com/invite/warpdotdev
+    about: Discuss what you want to see in a Modern ADE with a community of other Warp users.
+  - name: Warp Homepage
+    url: https://www.warp.dev/
+    about: Homepage for all things Warp.
+  - name: Warp Licenses
+    url: https://docs.warp.dev/support-and-community/privacy-security-and-licensing/open-source-licenses
+    about: See the open source projects Warp depends on and their licenses.

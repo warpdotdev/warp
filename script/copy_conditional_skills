@@ -1,0 +1,108 @@
+#!/usr/bin/env bash
+#
+# Copy channel-gated bundled skills into the app bundle.
+#
+# Usage:
+#   copy_conditional_skills <channel> <gated_skills_src> <dest_skills_dir>
+#
+# Arguments:
+#   channel:          Release channel (local, dev, preview, stable).
+#   gated_skills_src: Path to resources/channel-gated-skills/.
+#   dest_skills_dir:  Destination skills directory (e.g. .../bundled/skills/).
+#
+# Gating is progressive: earlier gates include all skills from later gates.
+# For example, a dogfood build includes skills from both dogfood/ and
+# preview/.  The stable channel has no gate — stable-ready skills belong
+# in resources/bundled/skills/ (the always-bundled directory).
+
+set -e
+
+if [ $# -ne 3 ]; then
+  echo "Usage: $0 <channel> <gated_skills_src> <dest_skills_dir>" >&2
+  exit 1
+fi
+
+CHANNEL="$1"
+GATED_SKILLS_SRC="$2"
+DEST_SKILLS_DIR="$3"
+
+# Gate labels ordered from most-inclusive to least-inclusive.
+# A channel's gate includes all gates at or after its position.
+GATE_ORDER=("dogfood" "preview")
+
+if [ ! -d "$GATED_SKILLS_SRC" ]; then
+  exit 0
+fi
+
+# Error out if a stable/ gate directory exists — stable skills should live
+# in the always-bundled resources/bundled/skills/ directory instead.
+if [ -d "$GATED_SKILLS_SRC/stable" ]; then
+  echo "Error: found a 'stable/' directory in $GATED_SKILLS_SRC." >&2
+  echo "The stable channel does not use gated skills. Move stable-ready skills to resources/bundled/skills/ (the always-bundled directory) instead." >&2
+  exit 1
+fi
+
+# Map the release channel to its gate label.
+case "$CHANNEL" in
+  local|dev) GATE="dogfood" ;;
+  preview)   GATE="preview" ;;
+  *)
+    echo "  Channel '$CHANNEL' has no gated skills, skipping"
+    exit 0
+    ;;
+esac
+
+# Build the set of included gates (progressive: this gate and all after it).
+INCLUDED_GATES=()
+FOUND=false
+for g in "${GATE_ORDER[@]}"; do
+  if [ "$g" = "$GATE" ]; then
+    FOUND=true
+  fi
+  if [ "$FOUND" = true ]; then
+    INCLUDED_GATES+=("$g")
+  fi
+done
+
+# Helper: check if a value is in the included gates list.
+is_included() {
+  local needle="$1"
+  for g in "${INCLUDED_GATES[@]}"; do
+    if [ "$g" = "$needle" ]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+# Iterate over gate directories and copy matching skills.
+for gate_dir in "$GATED_SKILLS_SRC"/*/; do
+  # Skip if the glob didn't match anything.
+  [ -d "$gate_dir" ] || continue
+
+  gate_name="$(basename "$gate_dir")"
+
+  if ! is_included "$gate_name"; then
+    # List the skills that would have been included for the skip message.
+    skills=""
+    for skill_dir in "$gate_dir"/*/; do
+      [ -d "$skill_dir" ] || continue
+      if [ -n "$skills" ]; then
+        skills="$skills, "
+      fi
+      skills="$skills$(basename "$skill_dir")"
+    done
+    echo "  Skipping gate '$gate_name' (channel '$CHANNEL') — would include: $skills"
+    continue
+  fi
+
+  for skill_dir in "$gate_dir"/*/; do
+    [ -d "$skill_dir" ] || continue
+
+    skill_name="$(basename "$skill_dir")"
+    dest="$DEST_SKILLS_DIR/$skill_name"
+    echo "  Copying gated skill: $skill_name (gate: $gate_name)"
+    mkdir -p "$dest"
+    cp -R "$skill_dir"/. "$dest"/
+  done
+done

@@ -1,0 +1,13 @@
+[package]
+authors = ["Warp Team <dev@warp.dev>"]
+edition = "2024"
+name = "virtual-fs"
+version = "0.1.0"
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+dunce = "1.0.1"
+getset.workspace = true
+tempfile.workspace = true
+typed-path.workspace = true

@@ -1,0 +1,47 @@
+{
+  "fill" : {
+    "automatic-gradient" : "extended-srgb:0.00000,0.53333,1.00000,1.00000"
+  },
+  "groups" : [
+    {
+      "blend-mode" : "normal",
+      "hidden" : false,
+      "layers" : [
+        {
+          "blend-mode" : "multiply",
+          "fill" : "none",
+          "glass" : false,
+          "image-name" : "Glyph (1).svg",
+          "name" : "Glyph (1)",
+          "opacity" : 1
+        },
+        {
+          "blend-mode" : "overlay",
+          "fill" : "none",
+          "glass" : false,
+          "hidden" : false,
+          "image-name" : "4-2.png",
+          "name" : "4-2",
+          "opacity" : 1
+        }
+      ],
+      "lighting" : "individual",
+      "opacity" : 1,
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.5
+      },
+      "specular" : true,
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.5
+      }
+    }
+  ],
+  "supported-platforms" : {
+    "circles" : [
+      "watchOS"
+    ],
+    "squares" : "shared"
+  }
+}

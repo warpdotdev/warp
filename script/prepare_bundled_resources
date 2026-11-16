@@ -1,0 +1,157 @@
+#!/usr/bin/env bash
+#
+# Prepares bundled resources for distribution.
+#
+# This script copies resources that should be bundled with Warp into a
+# destination directory. It is used by macOS and Linux build scripts.
+#
+# Usage:
+#   prepare_bundled_resources <destination_directory> [channel]
+#
+# Arguments:
+#   destination_directory:  The directory where resources should be installed.
+#                           Resources will be copied to subdirectories within
+#                           this path (e.g., $DEST_DIR/skills).
+#   channel:                (Optional) Release channel (local, dev, preview,
+#                           stable). Used to include channel-gated skills.
+#
+# Environment variables:
+#   SKIP_SETTINGS_SCHEMA: Set to "1" to skip generating the JSON settings
+#                         schema. By default the schema is always generated
+#                         so that production bundles never accidentally omit it.
+#   SETTINGS_SCHEMA_EXECUTABLE: Path to a runnable compiled Warp executable.
+#                               The script invokes its dump-settings-schema
+#                               subcommand to generate the schema.
+#   SETTINGS_SCHEMA_SOURCE: Path to an existing settings schema to copy.
+#                           This is required when the compiled executable cannot
+#                           run on the current host.
+
+set -e
+
+if [ $# -lt 1 ] || [ $# -gt 2 ]; then
+  echo "Error: Expected 1-2 arguments but received $#" >&2
+  echo "Usage: $0 <destination_directory> [channel]" >&2
+  exit 1
+fi
+
+DEST_DIR="$1"
+CHANNEL="${2:-}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+RESOURCES_SRC="$REPO_ROOT/resources"
+
+# Validate that the source resources directory exists
+if [ ! -d "$RESOURCES_SRC" ]; then
+  echo "Error: Resources directory not found at $RESOURCES_SRC" >&2
+  exit 1
+fi
+
+# Create the destination directory if it doesn't exist
+mkdir -p "$DEST_DIR"
+
+# Copy bundled resources
+if [ -d "$RESOURCES_SRC/bundled" ]; then
+  echo "Copying bundled resources to $DEST_DIR/bundled"
+  rm -rf "$DEST_DIR/bundled"
+  cp -R "$RESOURCES_SRC/bundled" "$DEST_DIR/bundled"
+else
+  echo "Warning: No bundled directory found at $RESOURCES_SRC/bundled" >&2
+fi
+
+if [ -n "$GIT_RELEASE_TAG" ]; then
+  VERSION_METADATA_DIR="$DEST_DIR/bundled/metadata"
+  VERSION_METADATA_PATH="$VERSION_METADATA_DIR/version.json"
+
+  echo "Writing bundled Warp version metadata to $VERSION_METADATA_PATH"
+  mkdir -p "$VERSION_METADATA_DIR"
+  printf '{\n  "warp_version": "%s"\n}\n' "$GIT_RELEASE_TAG" > "$VERSION_METADATA_PATH"
+fi
+
+# Copy channel-gated skills matching the current release channel.
+GATED_SRC="$REPO_ROOT/resources/channel-gated-skills"
+DEST_SKILLS="$DEST_DIR/bundled/skills"
+
+if [ -n "$CHANNEL" ] && [ -d "$GATED_SRC" ]; then
+  echo "Copying channel-gated skills for channel '$CHANNEL'..."
+  "$SCRIPT_DIR/copy_conditional_skills" \
+    "$CHANNEL" \
+    "$GATED_SRC" \
+    "$DEST_SKILLS"
+fi
+
+# Generate third-party license attribution.
+#
+# Additional (non-Cargo) third-party license files to include in the output.
+# Each entry is: "Component Name|License Identifier|path/to/LICENSE/relative/to/repo/root"
+# When adding a new third-party component to the bundle, add its license file
+# to the repo alongside the component and add an entry here.
+ADDITIONAL_LICENSES=(
+    "Alacritty (alacritty_terminal)|Apache-2.0|crates/warp_terminal/src/model/LICENSE-ALACRITTY"
+    "Hack Font|MIT|app/assets/bundled/fonts/hack/LICENSE.md"
+    "Roboto Font|SIL Open Font License|app/assets/bundled/fonts/roboto/LICENSE.txt"
+    "bash-preexec|MIT|app/assets/bundled/bootstrap/bash-preexec-LICENSE.md"
+    "Claude API Skill|Apache-2.0|resources/bundled/skills/claude-api/LICENSE.txt"
+    "rudder-sdk-rust|MIT|app/src/server/telemetry/LICENSE-RUDDER-SDK-RUST.txt"
+    "Windows Terminal|MIT|app/assets/windows/LICENSE-WINDOWS-TERMINAL"
+    "GitHub Desktop|MIT|app/src/code_review/GITHUB-DESKTOP-LICENSE"
+)
+
+# Build the third-party licenses file unless the NO_LICENSES envvar is set.
+if [ -z "$NO_LICENSES" ]; then
+  LICENSES_OUTPUT="$DEST_DIR/THIRD_PARTY_LICENSES.txt"
+  echo "Generating third-party licenses at $LICENSES_OUTPUT"
+  cargo about generate \
+      --workspace \
+      --manifest-path "$REPO_ROOT/Cargo.toml" \
+      -c "$REPO_ROOT/about.toml" \
+      -o "$LICENSES_OUTPUT" \
+      "$REPO_ROOT/about.hbs"
+
+  # Append additional (non-Cargo) third-party licenses.
+  for entry in "${ADDITIONAL_LICENSES[@]}"; do
+      IFS='|' read -r name license_id license_path <<< "$entry"
+      license_file="$REPO_ROOT/$license_path"
+      if [ ! -f "$license_file" ]; then
+          echo "Error: License file not found: $license_file" >&2
+          exit 1
+      fi
+      printf '\n%s (%s)\n' "$name" "$license_id" >> "$LICENSES_OUTPUT"
+      printf '%0.s-' {1..80} >> "$LICENSES_OUTPUT"
+      printf '\n' >> "$LICENSES_OUTPUT"
+      cat "$license_file" >> "$LICENSES_OUTPUT"
+      printf '\n' >> "$LICENSES_OUTPUT"
+  done
+fi
+
+# Generate settings JSON schema unless explicitly skipped.
+if [ "${SKIP_SETTINGS_SCHEMA:-}" != "1" ]; then
+  SCHEMA_OUTPUT="$DEST_DIR/settings_schema.json"
+  if [ -n "${SETTINGS_SCHEMA_EXECUTABLE:-}" ] && [ -n "${SETTINGS_SCHEMA_SOURCE:-}" ]; then
+    echo "Error: SETTINGS_SCHEMA_EXECUTABLE and SETTINGS_SCHEMA_SOURCE are mutually exclusive." >&2
+    exit 1
+  elif [ -n "${SETTINGS_SCHEMA_EXECUTABLE:-}" ]; then
+    if [ ! -x "$SETTINGS_SCHEMA_EXECUTABLE" ]; then
+      echo "Error: Settings schema executable is not runnable: $SETTINGS_SCHEMA_EXECUTABLE" >&2
+      exit 1
+    fi
+    echo "Generating settings schema at $SCHEMA_OUTPUT"
+    "$SETTINGS_SCHEMA_EXECUTABLE" dump-settings-schema "$SCHEMA_OUTPUT"
+  elif [ -n "${SETTINGS_SCHEMA_SOURCE:-}" ]; then
+    if [ ! -f "$SETTINGS_SCHEMA_SOURCE" ]; then
+      echo "Error: Settings schema source does not exist: $SETTINGS_SCHEMA_SOURCE" >&2
+      exit 1
+    fi
+    echo "Copying settings schema to $SCHEMA_OUTPUT"
+    cp "$SETTINGS_SCHEMA_SOURCE" "$SCHEMA_OUTPUT"
+  else
+    echo "Error: Set SETTINGS_SCHEMA_EXECUTABLE or SETTINGS_SCHEMA_SOURCE when preparing a settings schema." >&2
+    exit 1
+  fi
+
+  if [ ! -s "$SCHEMA_OUTPUT" ]; then
+    echo "Error: Settings schema was not written to $SCHEMA_OUTPUT" >&2
+    exit 1
+  fi
+fi
+
+echo "Successfully prepared bundled resources in $DEST_DIR"

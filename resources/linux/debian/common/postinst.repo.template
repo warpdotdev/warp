@@ -1,0 +1,155 @@
+# Determine the path to the apt-config command.
+APT_CONFIG="$(command -v apt-config 2> /dev/null)"
+
+# Use apt-config to determine the locations of some important apt directories.
+eval $("$APT_CONFIG" shell APT_TRUSTED_KEYRING_DIR 'Dir::Etc::trustedparts/d')
+eval $("$APT_CONFIG" shell APT_SOURCE_LIST_DIR 'Dir::Etc::sourceparts/d')
+
+# Install/update our package signing key.
+# This is the content of https://releases.warp.dev/linux/keys/warp.asc, but
+# dearmored and base64-encoded.
+SIGNING_KEY_PATH="${APT_TRUSTED_KEYRING_DIR}@@REPO_NAME@@.gpg"
+base64 -d - > "$SIGNING_KEY_PATH" <<SIGNINGKEY
+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
+SIGNINGKEY
+
+# If our package repository hasn't been configured yet, set it up.
+#
+# apt supports two source-list formats: the legacy one-line `.list` format and
+# the RFC 822-style `.sources` (DEB822) format. Newer apt (e.g. Ubuntu 26.04's
+# `apt modernize-sources`) converts `.list` files to `.sources`. If we only
+# check for `.list` here, a post-modernization upgrade ends up writing a fresh
+# `.list` alongside the converted `.sources`, producing duplicate-source
+# warnings on every `apt update` (#10011).
+#
+# Behavior:
+#   - If neither `.sources` nor `.list` exists, write `.sources` (the modern
+#     format the reporter recommended; supported by every apt version Warp's
+#     packages target).
+#   - If either format already exists, leave it alone. We don't migrate a
+#     legacy `.list` to `.sources` here — that's the user's tooling's job
+#     (`apt modernize-sources` handles it cleanly), and overwriting their
+#     potentially-edited file would be hostile.
+if [ -d "$APT_SOURCE_LIST_DIR" ]; then
+	APT_SOURCE_LIST_LEGACY="${APT_SOURCE_LIST_DIR}@@REPO_NAME@@.list"
+	APT_SOURCE_LIST_DEB822="${APT_SOURCE_LIST_DIR}@@REPO_NAME@@.sources"
+	if [ ! -f "$APT_SOURCE_LIST_LEGACY" ] && [ ! -f "$APT_SOURCE_LIST_DEB822" ]; then
+		# If the source list directory exists but our repository isn't
+		# configured in either format, install our repo.
+		cat > "$APT_SOURCE_LIST_DEB822" <<EOF
+### THIS FILE IS AUTOMATICALLY CONFIGURED ###
+# You may comment out this entry, but other modifications to the file may be lost.
+
+Types: deb
+URIs: https://releases.warp.dev/linux/deb
+Suites: @@CHANNEL@@
+Components: main
+Architectures: @@ARCH@@
+Signed-By: $SIGNING_KEY_PATH
+EOF
+	fi
+fi
+

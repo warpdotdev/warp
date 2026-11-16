@@ -1,0 +1,11 @@
+display_name: "Rust"
+indent_unit:
+  space: 4
+comment_prefix: "//"
+brackets:
+  - start: "{"
+    end: "}"
+  - start: "("
+    end: ")"
+  - start: "["
+    end: "]"

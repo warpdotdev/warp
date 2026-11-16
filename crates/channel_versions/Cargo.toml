@@ -1,0 +1,28 @@
+[package]
+name = "channel_versions"
+version = "0.1.0"
+edition = "2024"
+publish.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "apply_overrides"
+required-features = ["cli"]
+
+[[bin]]
+name = "version_compare"
+required-features = ["cli"]
+
+[features]
+default = ["cli"]
+cli = ["dep:clap"]
+
+[dependencies]
+anyhow = "1.0"
+chrono = {version = "0.4.23", features = ["serde"]}
+clap = { workspace = true, features = ["derive"], optional = true }
+lazy_static = "1.4.0"
+memo-map = "0.3.1"
+regex = "1"
+serde = {version = "1.0", features = ["derive", "rc"]}
+serde_json.workspace = true

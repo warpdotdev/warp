@@ -1,0 +1,18 @@
+#!/bin/bash
+set -eo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")"/../.. && pwd)"
+cd "${REPO_ROOT}"
+
+WASM_BINDGEN_VERSION="$(cargo metadata --format-version 1 | jq -rc '.packages[] | select(.name == "wasm-bindgen") | .version')"
+cargo install wasm-bindgen-cli --version "$WASM_BINDGEN_VERSION"
+
+# We source the bundle script so we can access it's calculated $OUT_DIR.
+source ./script/wasm/bundle --debug --no-split --channel local "$@"
+
+BUNDLE_DIR="$(dirname "$OUT_DIR")"
+
+cp "$WORKSPACE_ROOT_DIR/script/wasm/dev-index.html" "$BUNDLE_DIR/index.html"
+echo  "Built Warp to $BUNDLE_DIR"
+
+cargo run --release --package serve-wasm -- "$BUNDLE_DIR"

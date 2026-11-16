@@ -1,0 +1,15 @@
+[package]
+name = "vim"
+version = "0.1.0"
+edition = "2024"
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+warp_core.workspace = true
+warpui_core.workspace = true
+log.workspace = true
+itertools.workspace = true
+string-offset.workspace = true
+anyhow.workspace = true
+unindent = "0.2.4"

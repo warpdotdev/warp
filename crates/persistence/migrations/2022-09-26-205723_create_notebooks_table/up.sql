@@ -1,0 +1,4 @@
+CREATE TABLE notebooks (
+    id INTEGER NOT NULL PRIMARY KEY,
+    author_id INTEGER NOT NULL
+);

@@ -1,0 +1,728 @@
+#![cfg_attr(not(feature = "local_fs"), allow(dead_code))]
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use fuzzy_match::{
+    FuzzyMatchResult, contains_wildcards, match_indices_case_insensitive,
+    match_wildcard_pattern_case_insensitive,
+};
+use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
+
+cfg_if::cfg_if! {
+    if #[cfg(feature = "local_fs")] {
+        use crate::workspace::ActiveSession;
+        use command::blocking::Command;
+        use repo_metadata::local_model::GetContentsArgs;
+        use repo_metadata::wrapper_model::RepoMetadataEvent;
+        use repo_metadata::RepoMetadataModel;
+        use repo_metadata::repository_identifier::RepositoryIdentifier;
+        use repo_metadata::repositories::DetectedRepositories;
+        use std::cell::RefCell;
+        use std::collections::HashMap;
+        use warp_util::local_or_remote_path::LocalOrRemotePath;
+    }
+}
+
+use super::search_item::FileSearchResult;
+
+/// Shared model for file search functionality across different UI components.
+/// This singleton provides common file discovery, fuzzy matching, and git integration.
+pub struct FileSearchModel {
+    /// Cached flattened repo contents keyed by repo root location (local or remote).
+    /// Populated lazily on first query, invalidated when the file tree changes.
+    #[cfg(feature = "local_fs")]
+    repo_contents_cache: RefCell<HashMap<LocalOrRemotePath, Arc<Vec<FileSearchResult>>>>,
+}
+
+impl FileSearchModel {
+    #[cfg_attr(not(feature = "local_fs"), allow(unused_variables))]
+    pub fn new(ctx: &mut ModelContext<Self>) -> Self {
+        #[cfg(feature = "local_fs")]
+        ctx.subscribe_to_model(
+            &RepoMetadataModel::handle(ctx),
+            |me, _, event, _ctx| match event {
+                RepoMetadataEvent::FileTreeUpdated { ids } => {
+                    let mut cache = me.repo_contents_cache.borrow_mut();
+                    for id in ids {
+                        if let Some(key) = id.to_local_or_remote_path() {
+                            cache.remove(&key);
+                        }
+                    }
+                }
+                RepoMetadataEvent::RepositoryRemoved { id }
+                | RepoMetadataEvent::RepositoryUpdated { id } => {
+                    if let Some(key) = id.to_local_or_remote_path() {
+                        me.repo_contents_cache.borrow_mut().remove(&key);
+                    }
+                }
+                RepoMetadataEvent::FileTreeEntryUpdated { .. }
+                | RepoMetadataEvent::StandingQueryResultsUpdated { .. }
+                | RepoMetadataEvent::UpdatingRepositoryFailed { .. }
+                | RepoMetadataEvent::IncrementalUpdateReady { .. } => {}
+            },
+        );
+
+        Self {
+            #[cfg(feature = "local_fs")]
+            repo_contents_cache: RefCell::new(HashMap::new()),
+        }
+    }
+
+    #[cfg(not(feature = "local_fs"))]
+    pub fn repo_root(&self, _app: &AppContext) -> Option<PathBuf> {
+        None
+    }
+
+    #[cfg(feature = "local_fs")]
+    pub fn repo_root(&self, app: &AppContext) -> Option<PathBuf> {
+        self.repo_root_location(app)
+            .and_then(|loc| PathBuf::try_from(loc).ok())
+    }
+
+    /// Returns the repo root as a `LocalOrRemotePath`, supporting both local and SSH sessions.
+    #[cfg(not(feature = "local_fs"))]
+    pub fn repo_root_location(
+        &self,
+        _app: &AppContext,
+    ) -> Option<warp_util::local_or_remote_path::LocalOrRemotePath> {
+        None
+    }
+
+    /// Returns the repo root as a `LocalOrRemotePath`, supporting both local and SSH sessions.
+    #[cfg(feature = "local_fs")]
+    pub fn repo_root_location(&self, app: &AppContext) -> Option<LocalOrRemotePath> {
+        let active_window_id = app.windows().state().active_window;
+        let working_dir =
+            active_window_id.and_then(|wid| ActiveSession::as_ref(app).working_directory(wid))?;
+        DetectedRepositories::as_ref(app).get_root_for_path(working_dir)
+    }
+
+    #[cfg(not(feature = "local_fs"))]
+    pub fn get_folder_contents(&self, _app: &AppContext) -> Vec<FileSearchResult> {
+        Vec::new()
+    }
+
+    /// Fetches files and folders from the current working directory (non-recursive).
+    ///
+    /// For local sessions this reads the filesystem directly via `std::fs::read_dir`.
+    /// For remote sessions it queries the `RepoMetadataModel`, which receives
+    /// lazy-loaded first-level snapshots from the remote server on every
+    /// `NavigatedToDirectory`.
+    #[cfg(feature = "local_fs")]
+    pub fn get_folder_contents(&self, app: &AppContext) -> Vec<FileSearchResult> {
+        let active_window_id = app.windows().state().active_window;
+        let working_dir =
+            active_window_id.and_then(|wid| ActiveSession::as_ref(app).working_directory(wid));
+
+        match working_dir {
+            // Local session: read the filesystem directly.
+            Some(LocalOrRemotePath::Local(local_path)) => {
+                let current_dir: &Path = local_path.as_path();
+                let current_dir_string = current_dir.to_string_lossy().to_string();
+
+                match std::fs::read_dir(current_dir) {
+                    Ok(entries) => entries
+                        .filter_map(|entry| {
+                            entry.ok().map(|entry| {
+                                let path = entry.path();
+                                FileSearchResult {
+                                    path: path
+                                        .strip_prefix(current_dir)
+                                        .expect("path should be a descendant of current_dir")
+                                        .to_string_lossy()
+                                        .to_string(),
+                                    project_directory: current_dir_string.clone(),
+                                    is_directory: path.is_dir(),
+                                }
+                            })
+                        })
+                        .collect(),
+                    Err(err) => {
+                        log::warn!("Failed to read {current_dir_string}: {err:#}");
+                        Vec::new()
+                    }
+                }
+            }
+            // Remote session: query repo metadata (populated by the remote
+            // server's NavigatedToDirectory lazy-load).
+            Some(LocalOrRemotePath::Remote(remote_path)) => {
+                let id = RepositoryIdentifier::Remote(remote_path.clone());
+                let repo_metadata = RepoMetadataModel::as_ref(app);
+                // Truncated results (capped at the repo metadata budget) are
+                // intentionally used as-is to return partial matches rather
+                // than nothing.
+                let contents =
+                    match repo_metadata.get_repo_contents(&id, GetContentsArgs::default(), app) {
+                        Ok(repo_contents) => repo_contents.contents,
+                        Err(_) => return Vec::new(),
+                    };
+                let root_std_path = &remote_path.path;
+                contents
+                    .iter()
+                    .filter_map(|content| {
+                        let (path_std, is_directory) = match content {
+                            repo_metadata::RepoContent::File(file) => (&*file.path, false),
+                            repo_metadata::RepoContent::Directory(dir) => (&*dir.path, true),
+                        };
+                        let relative = path_std.strip_prefix(root_std_path)?;
+                        // Only include direct children (no nested paths).
+                        let trimmed = relative.trim_end_matches('/');
+                        if trimmed.is_empty() || trimmed.contains('/') {
+                            return None;
+                        }
+                        let mut path = relative.to_owned();
+                        if is_directory && !path.ends_with('/') {
+                            path.push('/');
+                        }
+                        Some(FileSearchResult {
+                            path,
+                            project_directory: root_std_path.to_string(),
+                            is_directory,
+                        })
+                    })
+                    .collect()
+            }
+            None => Vec::new(),
+        }
+    }
+
+    /// Gets repository contents (files and directories) for the current working directory.
+    /// Supports both local and remote repos.
+    ///
+    /// When `query` is non-empty, it is pushed down into the repo-metadata
+    /// traversal as a filter so the result cap applies to *matching* files
+    /// rather than the first files encountered in traversal order. These
+    /// query-specific results are not cached. When `query` is empty (zero
+    /// state) the full unfiltered contents are returned and cached per repo
+    /// root location, invalidated when the file tree changes.
+    #[cfg(feature = "local_fs")]
+    pub fn get_repo_contents(&self, query: &str, app: &AppContext) -> Arc<Vec<FileSearchResult>> {
+        self.get_repo_contents_with_options(query, true, app)
+    }
+
+    /// Gets repository files (no directories) for the current working directory.
+    ///
+    /// Intended for search surfaces that only ever open files and cannot act on
+    /// directory entries, such as the Command Palette file filter. Excluding
+    /// directories keeps them from consuming the repo-metadata result cap, which
+    /// otherwise starves file matches when many directories match the query.
+    #[cfg(feature = "local_fs")]
+    pub fn get_repo_file_contents(
+        &self,
+        query: &str,
+        app: &AppContext,
+    ) -> Arc<Vec<FileSearchResult>> {
+        self.get_repo_contents_with_options(query, false, app)
+    }
+
+    #[cfg(feature = "local_fs")]
+    fn get_repo_contents_with_options(
+        &self,
+        query: &str,
+        include_folders: bool,
+        app: &AppContext,
+    ) -> Arc<Vec<FileSearchResult>> {
+        let Some(repo_root) = self.repo_root_location(app) else {
+            return Arc::new(Vec::new());
+        };
+
+        // Query-filtered results are query-specific, so bypass the per-repo
+        // cache and traverse the in-memory index fresh. The file-only variant
+        // (`!include_folders`) is likewise uncached, since the shared cache
+        // holds the directory-inclusive contents.
+        if !query.is_empty() || !include_folders {
+            return Arc::new(self.get_contents_from_repo(&repo_root, query, include_folders, app));
+        }
+
+        if let Some(cached) = self.repo_contents_cache.borrow().get(&repo_root) {
+            return cached.clone();
+        }
+
+        let contents = self.get_contents_from_repo(&repo_root, query, include_folders, app);
+
+        let arc = Arc::new(contents);
+        self.repo_contents_cache
+            .borrow_mut()
+            .insert(repo_root, arc.clone());
+        arc
+    }
+
+    /// Gets repository contents with git status information for prioritization.
+    /// Reuses the cached repo contents from `get_repo_contents`.
+    #[cfg(feature = "local_fs")]
+    pub fn get_repo_contents_with_git_status(
+        &self,
+        app: &AppContext,
+    ) -> (Arc<Vec<FileSearchResult>>, HashSet<String>) {
+        let contents = self.get_repo_contents("", app);
+        let git_changed_files = self
+            .repo_root(app)
+            .and_then(|repo_root| self.get_git_changed_files(&repo_root).ok())
+            .unwrap_or_default();
+        (contents, git_changed_files)
+    }
+
+    /// Gets repository contents from the LocalRepoMetadataModel for the current working directory (WASM stub)
+    #[cfg(not(feature = "local_fs"))]
+    pub fn get_repo_contents(&self, _query: &str, _app: &AppContext) -> Arc<Vec<FileSearchResult>> {
+        Arc::new(Vec::new())
+    }
+
+    /// Gets repository files (no directories) for the current working directory (WASM stub)
+    #[cfg(not(feature = "local_fs"))]
+    pub fn get_repo_file_contents(
+        &self,
+        _query: &str,
+        _app: &AppContext,
+    ) -> Arc<Vec<FileSearchResult>> {
+        Arc::new(Vec::new())
+    }
+
+    /// Gets repository contents with git status information for prioritization (WASM stub)
+    #[cfg(not(feature = "local_fs"))]
+    pub fn get_repo_contents_with_git_status(
+        &self,
+        _app: &AppContext,
+    ) -> (Arc<Vec<FileSearchResult>>, HashSet<String>) {
+        (Arc::new(Vec::new()), HashSet::new())
+    }
+
+    /// Builds the [`GetContentsArgs`] used to traverse repo metadata.
+    ///
+    /// For an empty `query` this returns the default args (unfiltered). For a
+    /// non-empty `query` it installs a traversal filter that keeps only entries
+    /// whose repo-relative path (produced by `relative_path`) fuzzy-matches the
+    /// query. Pushing the query into traversal ensures the result cap applies
+    /// to *matching* files rather than the first files encountered.
+    #[cfg(feature = "local_fs")]
+    fn contents_args<F>(query: &str, include_folders: bool, relative_path: F) -> GetContentsArgs
+    where
+        F: for<'a> Fn(&repo_metadata::RepoContent<'a>) -> Option<String> + Send + Sync + 'static,
+    {
+        let base = if include_folders {
+            GetContentsArgs::default()
+        } else {
+            GetContentsArgs::default().exclude_folders()
+        };
+        if query.is_empty() {
+            return base;
+        }
+        let query = query.to_string();
+        base.with_filter(move |content| {
+            relative_path(content)
+                .is_some_and(|path| FileSearchModel::fuzzy_match_path(&path, &query).is_some())
+        })
+    }
+
+    /// Gets repository contents for a local or remote repo root, converting
+    /// absolute paths to repo-relative `FileSearchResult`s.
+    ///
+    /// When `query` is non-empty it is pushed down as a traversal filter (see
+    /// [`Self::contents_args`]) so the repo-metadata result cap applies to
+    /// matching files rather than the first files encountered in traversal
+    /// order.
+    #[cfg(feature = "local_fs")]
+    fn get_contents_from_repo(
+        &self,
+        repo_root: &LocalOrRemotePath,
+        query: &str,
+        include_folders: bool,
+        app: &AppContext,
+    ) -> Vec<FileSearchResult> {
+        let repo_metadata = RepoMetadataModel::as_ref(app);
+
+        match repo_root {
+            LocalOrRemotePath::Local(local_path) => {
+                let Ok(canonical_repo_path) = dunce::canonicalize(local_path) else {
+                    return Vec::new();
+                };
+                let Some(id) = RepositoryIdentifier::try_local(local_path) else {
+                    return Vec::new();
+                };
+                let args = Self::contents_args(query, include_folders, {
+                    let canonical_repo_path = canonical_repo_path.clone();
+                    move |content| {
+                        let local = match content {
+                            repo_metadata::RepoContent::File(file) => {
+                                file.path.to_local_path_lossy()
+                            }
+                            repo_metadata::RepoContent::Directory(dir) => {
+                                dir.path.to_local_path_lossy()
+                            }
+                        };
+                        local
+                            .strip_prefix(&canonical_repo_path)
+                            .ok()
+                            .map(|relative| relative.to_string_lossy().to_string())
+                    }
+                });
+                // Truncated results (capped at the repo metadata budget) are
+                // intentionally used as-is to return partial matches rather
+                // than nothing.
+                let contents = match repo_metadata.get_repo_contents(&id, args, app) {
+                    Ok(repo_contents) => repo_contents.contents,
+                    Err(_) => return Vec::new(),
+                };
+                contents
+                    .iter()
+                    .filter_map(|content| match content {
+                        repo_metadata::RepoContent::File(file_metadata) => {
+                            let file_local = file_metadata.path.to_local_path_lossy();
+                            let relative_path =
+                                file_local.strip_prefix(&canonical_repo_path).ok()?;
+                            Some(FileSearchResult {
+                                path: relative_path.to_string_lossy().to_string(),
+                                project_directory: canonical_repo_path
+                                    .to_string_lossy()
+                                    .to_string(),
+                                is_directory: false,
+                            })
+                        }
+                        repo_metadata::RepoContent::Directory(dir_entry) => {
+                            let dir_local = dir_entry.path.to_local_path_lossy();
+                            let relative_path =
+                                dir_local.strip_prefix(&canonical_repo_path).ok()?;
+                            let mut path = relative_path.to_string_lossy().to_string();
+                            if !path.ends_with(std::path::MAIN_SEPARATOR) {
+                                path.push(std::path::MAIN_SEPARATOR);
+                            }
+                            Some(FileSearchResult {
+                                path,
+                                project_directory: canonical_repo_path
+                                    .to_string_lossy()
+                                    .to_string(),
+                                is_directory: true,
+                            })
+                        }
+                    })
+                    .collect()
+            }
+            LocalOrRemotePath::Remote(remote_path) => {
+                let id = RepositoryIdentifier::Remote(remote_path.clone());
+                let args = Self::contents_args(query, include_folders, {
+                    let root = remote_path.path.clone();
+                    move |content| {
+                        let path_std = match content {
+                            repo_metadata::RepoContent::File(file) => &*file.path,
+                            repo_metadata::RepoContent::Directory(dir) => &*dir.path,
+                        };
+                        path_std.strip_prefix(&root).map(str::to_owned)
+                    }
+                });
+                // Truncated results (capped at the repo metadata budget) are
+                // intentionally used as-is to return partial matches rather
+                // than nothing.
+                let contents = match repo_metadata.get_repo_contents(&id, args, app) {
+                    Ok(repo_contents) => repo_contents.contents,
+                    Err(_) => return Vec::new(),
+                };
+                let root_std_path = &remote_path.path;
+                contents
+                    .iter()
+                    .filter_map(|content| {
+                        let (path_std, is_directory) = match content {
+                            repo_metadata::RepoContent::File(file) => (&*file.path, false),
+                            repo_metadata::RepoContent::Directory(dir) => (&*dir.path, true),
+                        };
+                        let relative = path_std.strip_prefix(root_std_path)?;
+                        let mut path = relative.to_owned();
+                        if is_directory && !path.ends_with('/') {
+                            path.push('/');
+                        }
+                        Some(FileSearchResult {
+                            path,
+                            project_directory: root_std_path.to_string(),
+                            is_directory,
+                        })
+                    })
+                    .collect()
+            }
+        }
+    }
+
+    /// Performs a fuzzy search on the given path with the query
+    /// Prioritizes filename matches with 2x weight compared to path matches
+    /// Supports space-separated queries - all parts must match for a result
+    pub fn fuzzy_match_path(path: &str, query: &str) -> Option<FuzzyMatchResult> {
+        if query.is_empty() {
+            return Some(FuzzyMatchResult::no_match());
+        }
+
+        // Split query by spaces to support multi-term searches
+        let query_parts: Vec<&str> = query.split_whitespace().collect();
+
+        if query_parts.is_empty() {
+            return Some(FuzzyMatchResult::no_match());
+        }
+
+        // If there's only one query part, use the original logic
+        if query_parts.len() == 1 {
+            return Self::fuzzy_match_path_single(path, query_parts[0]);
+        }
+
+        // For multiple query parts, each part must match somewhere in the path
+        let mut combined_score = 0i64;
+        let mut all_matched_indices = Vec::new();
+
+        for query_part in &query_parts {
+            if let Some(part_result) = Self::fuzzy_match_path_single(path, query_part) {
+                combined_score += part_result.score;
+                all_matched_indices.extend(part_result.matched_indices);
+            } else {
+                // If any part doesn't match, the entire query fails
+                return None;
+            }
+        }
+
+        // Remove duplicates and sort indices
+        all_matched_indices.sort_unstable();
+        all_matched_indices.dedup();
+
+        Some(FuzzyMatchResult {
+            score: combined_score,
+            matched_indices: all_matched_indices,
+        })
+    }
+
+    /// Helper method for single-term fuzzy matching (supports wildcards)
+    pub fn fuzzy_match_path_single(path: &str, query: &str) -> Option<FuzzyMatchResult> {
+        if query.is_empty() {
+            return Some(FuzzyMatchResult::no_match());
+        }
+
+        // Check if query contains wildcards
+        if contains_wildcards(query) {
+            // Use wildcard matching for the entire path
+            return match_wildcard_pattern_case_insensitive(path, query);
+        }
+
+        // Split the path into directory and filename
+        let filename = path.split('/').next_back().unwrap_or("");
+
+        // Try to match the filename first
+        let filename_match = match_indices_case_insensitive(filename, query);
+
+        // Try to match the full path
+        let path_match = match_indices_case_insensitive(path, query).map(|mut result| {
+            result.score =
+                Self::apply_path_proximity_ranking(path, &result.matched_indices, result.score);
+            result
+        });
+
+        match (filename_match, path_match) {
+            (Some(filename_result), Some(path_result)) => {
+                // Calculate filename offset in the full path
+                let filename_start_offset = path.len() - filename.len();
+
+                // Check if filename had matches before consuming it
+                let filename_has_matches = !filename_result.matched_indices.is_empty();
+                let filename_score = filename_result.score;
+
+                // Check for exact filename match (without extension)
+                let filename_without_ext = filename.split('.').next().unwrap_or(filename);
+                let is_exact_filename_match = query.eq_ignore_ascii_case(filename_without_ext);
+
+                // Adjust filename match indices to be relative to the full path
+                let adjusted_filename_indices: Vec<usize> = filename_result
+                    .matched_indices
+                    .into_iter()
+                    .map(|idx| idx + filename_start_offset)
+                    .collect();
+
+                // Combine indices from both matches, removing duplicates
+                let mut combined_indices = path_result.matched_indices.clone();
+                for idx in adjusted_filename_indices {
+                    if !combined_indices.contains(&idx) {
+                        combined_indices.push(idx);
+                    }
+                }
+                combined_indices.sort_unstable();
+
+                // Calculate combined score with exact filename match boost
+                let mut combined_score = if filename_has_matches {
+                    filename_score * 2 + path_result.score
+                } else {
+                    path_result.score
+                };
+
+                // Apply extra boost for exact filename matches (without extension)
+                if is_exact_filename_match {
+                    combined_score += 5000; // Large boost to prioritize exact matches
+                }
+
+                Some(FuzzyMatchResult {
+                    score: combined_score,
+                    matched_indices: combined_indices,
+                })
+            }
+            (Some(mut filename_result), None) => {
+                // Only filename matched, adjust indices to full path
+                let filename_start_offset = path.len() - filename.len();
+                filename_result.matched_indices = filename_result
+                    .matched_indices
+                    .into_iter()
+                    .map(|idx| idx + filename_start_offset)
+                    .collect();
+
+                // Check for exact filename match (without extension)
+                let filename_without_ext = filename.split('.').next().unwrap_or(filename);
+                let is_exact_filename_match = query.eq_ignore_ascii_case(filename_without_ext);
+
+                // Apply 2x weight to filename-only matches
+                filename_result.score *= 2;
+
+                // Apply extra boost for exact filename matches (without extension)
+                if is_exact_filename_match {
+                    filename_result.score += 5000; // Large boost to prioritize exact matches
+                }
+
+                Some(filename_result)
+            }
+            (None, Some(path_result)) => {
+                // Only path matched (excluding filename)
+                Some(path_result)
+            }
+            (None, None) => None,
+        }
+    }
+
+    /// If `path` is absolute, strips the common prefix with `repo_root` (tried first)
+    /// or `working_dir` (tried second) and returns the remaining relative path string.
+    /// Returns `None` when the path is relative or neither prefix matches.
+    pub fn strip_absolute_path_prefix(
+        path: &str,
+        repo_root: Option<&Path>,
+        working_dir: Option<&Path>,
+    ) -> Option<String> {
+        let query_path = Path::new(path);
+        if !query_path.is_absolute() {
+            return None;
+        }
+        if let Some(root) = repo_root
+            && let Ok(rel) = query_path.strip_prefix(root)
+        {
+            let s = rel.to_string_lossy().to_string();
+            if !s.is_empty() {
+                return Some(s);
+            }
+        }
+        if let Some(cwd) = working_dir
+            && let Ok(rel) = query_path.strip_prefix(cwd)
+        {
+            let s = rel.to_string_lossy().to_string();
+            if !s.is_empty() {
+                return Some(s);
+            }
+        }
+        None
+    }
+
+    /// Determines if a query is too broad and would match too many files
+    /// causing performance issues. Returns true if we should skip the query.
+    pub fn should_skip_overly_broad_query(query: &str) -> bool {
+        let query = query.trim();
+
+        // Just a single wildcard
+        if query == "*" || query == "?" {
+            return true;
+        }
+
+        // Contains consecutive wildcards (very broad patterns)
+        if query.contains("**")
+            || query.contains("*?")
+            || query.contains("?*")
+            || query.contains("??")
+        {
+            return true;
+        }
+
+        false
+    }
+
+    /// Apply path proximity ranking to the score
+    /// Parts of the path closer to the filename get higher scores
+    pub fn apply_path_proximity_ranking(
+        path: &str,
+        matched_indices: &[usize],
+        original_score: i64,
+    ) -> i64 {
+        if matched_indices.is_empty() {
+            return original_score;
+        }
+
+        let path_chars: Vec<char> = path.chars().collect();
+        let total_chars = path_chars.len();
+
+        // Calculate weighted proximity score based on distance from end of path
+        let proximity_bonus: i64 = matched_indices
+            .iter()
+            .map(|&idx| {
+                // Distance from the end (closer to filename = smaller distance)
+                let distance_from_end = total_chars.saturating_sub(idx + 1);
+                // Convert to a bonus (closer = higher bonus)
+                let max_distance = total_chars;
+                if max_distance > 0 {
+                    ((max_distance - distance_from_end) as f64 / max_distance as f64 * 10.0) as i64
+                } else {
+                    0
+                }
+            })
+            .sum();
+
+        original_score + proximity_bonus
+    }
+
+    /// Get git changed files (modified, added, renamed, etc.) for prioritization
+    #[cfg(feature = "local_fs")]
+    pub fn get_git_changed_files(
+        &self,
+        repo_path: &Path,
+    ) -> Result<HashSet<String>, std::io::Error> {
+        let mut changed_files = HashSet::new();
+
+        log::debug!("[GIT OPERATION] model.rs get_git_changed_files git status --porcelain");
+        // Run `git status --porcelain` to get changed files
+        let output = Command::new("git")
+            .args(["status", "--porcelain"])
+            .current_dir(repo_path)
+            .output()?;
+
+        if !output.status.success() {
+            // Not a git repository or git command failed
+            return Ok(changed_files);
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+
+        for line in stdout.lines() {
+            if line.len() >= 3 {
+                // Git status --porcelain format: XY filename
+                // Where X is index status, Y is working tree status
+                let filename = &line[3..];
+
+                // Handle quoted filenames (for special characters)
+                let clean_filename = if filename.starts_with('"') && filename.ends_with('"') {
+                    // Basic unquoting - in practice git escapes special chars
+                    &filename[1..filename.len() - 1]
+                } else {
+                    filename
+                };
+
+                changed_files.insert(clean_filename.to_string());
+            }
+        }
+
+        Ok(changed_files)
+    }
+}
+
+impl SingletonEntity for FileSearchModel {}
+
+impl Entity for FileSearchModel {
+    type Event = ();
+}
+
+#[cfg(test)]
+#[path = "model_tests.rs"]
+mod tests;

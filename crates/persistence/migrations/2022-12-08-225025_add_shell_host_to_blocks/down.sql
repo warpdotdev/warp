@@ -1,0 +1,3 @@
+ALTER TABLE blocks DROP COLUMN shell;
+ALTER TABLE blocks DROP COLUMN user;
+ALTER TABLE blocks DROP COLUMN host;

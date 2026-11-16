@@ -1,0 +1,63 @@
+# Don't include the git repository.
+.git
+
+app/Carthage
+app/frameworks/default/Carthage
+app/frameworks/dev/Carthage
+/target
+/app/target
+/warp.xcworkspace
+.idea/
+.DS_Store
+*.icloud
+app/src/server/graphql/schema/generated
+crates/command-signatures-v2/js/build
+crates/command-signatures-v2/js/node_modules
+
+# For testing changes to the channel versions file
+channel_versions_test.json
+
+# Don't include any CPU profiling output by accident.
+profile.pb
+
+# Don't include any files that we write for testing purposes.
+crates/warp_files/test_data/test_write
+
+# Don't include fonts downloaded by the script used to generate font fallback code.
+script/font_fallback/downloaded_fonts
+
+# Don't include the generated Windows installer
+script/windows/Output
+.aider*
+
+# temporary vim files. Source: https://github.com/github/gitignore/blob/main/Global/Vim.gitignore
+*~
+[._]*.s[a-v][a-z]
+!*.svg # keep svg files
+[._]*.sw[a-p]
+[._]s[a-rt-v][a-z]
+[._]ss[a-gi-z]
+[._]sw[a-p]
+
+# Don't include the PTY recording.
+warp.pty.recording
+
+# Ignore all Dockerfiles. A change in the Dockerfile would otherwise be
+# considered a change in the source code requiring a rebuild.
+**/Dockerfile
+
+# Don't include CI configuration
+.github/
+
+# Don't include the warp-server checkout in SWE-bench runs.
+warp-server/
+
+# Ignore large directories that aren't required for any current Dockerfiles.
+app/assets/windows
+app/src/terminal/ref_tests
+
+# Ignore files only required for tests
+**/*.sqlite
+
+# Ignore yarn caches.
+**/.yarn

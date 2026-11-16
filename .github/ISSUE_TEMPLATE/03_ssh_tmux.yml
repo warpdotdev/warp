@@ -1,0 +1,73 @@
+name: SSH Warpify Issues? Use this template
+description: "Issue template specialized for the circumstances where SSH Warpification with tmux fails"
+labels: ["bug","area:ssh"]
+body:
+  - type: checkboxes
+    attributes:
+      label: "Pre-submit Checks"
+      options:
+        - label: "I have [searched Warp SSH issues](https://github.com/warpdotdev/Warp/issues?q=is%3Aissue+is%3Aopen+label%3ASSH-TMUX) and there are no duplicates"
+          required: true
+        - label: "I have [searched Warp known issues page](https://docs.warp.dev/help/known-issues) and my issue is not there"
+          required: true
+        - label: "I have technical issue and have included the logs (helps expedite the bug fix). [Log instructions](https://docs.warp.dev/support-and-community/troubleshooting-and-support/sending-us-feedback#gathering-warp-logs)"
+          required: false    
+  - type: textarea
+    id: "shell-output"
+    attributes:
+      label: "Include shell output"
+      description: "Click on the top right icon of your terminal block, select `Copy`, and paste the contents here. Please redact any personal details."
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: "screenshots-logs"
+    attributes:
+      label: "Screenshots, videos, and logs"
+      description: "If applicable, add screenshots/videos/logs to help us understand your problem. While optional, these help expedite the time in which your bug is addressed."
+    validations:
+      required: false      
+  - type: dropdown
+    id: "os"
+    attributes:
+      label: "Operating system (OS)"
+      multiple: false
+      options:
+        - "Select an OS"
+        - macOS
+        - Linux
+        - Windows
+    validations:
+      required: true
+  - type: input
+    id: "os-version"
+    attributes:
+      label: "Operating system and version"
+      description: "For example: Debian 11.2"
+    validations:
+      required: true
+  - type: input
+    id: "warp-version"
+    attributes:
+      label: "Warp Version"
+      description: "Warp Version"
+    validations:
+      required: false
+  - type: dropdown
+    id: "linear-label-ssh-tmux"
+    attributes:
+      label: "Warp Internal (ignore) - linear-label:7a739baa-09c3-499e-a0c9-a1a16c090597"
+      multiple: false
+      options:
+        - Ignore
+    validations:
+      required: false
+  - type: dropdown
+    id: "linear-label-bug"
+    attributes:
+      label: "Warp Internal (ignore): linear-label:b8107fdf-ba31-488d-b103-d271c89cac3e"
+      multiple: false
+      options:
+        - Ignore
+    validations:
+      required: false

@@ -1,0 +1,25 @@
+[env]
+# This is used to set the minimum deployment target for mac
+# https://cmake.org/cmake/help/latest/envvar/MACOSX_DEPLOYMENT_TARGET.html
+# If unset, it uses the system one, but we want to build for older versions
+# of mac os by default.
+#
+# This should be kept in sync with the definition of this variable in
+# `script/bundle`.
+MACOSX_DEPLOYMENT_TARGET = "10.14"
+
+[net]
+git-fetch-with-cli = true
+
+# Use the v0 symbol mangling scheme on every target. It encodes generic
+# instantiations (which the legacy scheme hashes away irreversibly), improving
+# demangled names in backtraces and Sentry symbolication. On wasm the shipped
+# bundle strips symbol names, so this only enriches the split-off debug artifact.
+[target.'cfg(all())']
+rustflags = ["-C", "symbol-mangling-version=v0"]
+
+[target.'cfg(target_os = "macos")']
+rustflags = ["-C", "link-args=-Wl,-headerpad_max_install_names"]
+
+[target.'cfg(target_family = "wasm")']
+rustflags = ["--cfg=web_sys_unstable_apis"]

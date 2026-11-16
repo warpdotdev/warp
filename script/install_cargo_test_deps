@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+#
+# Installs all cargo-managed dependencies required to build and test Warp.
+
+# This script should be platform-agnostic (eg. no unix-only references like /dev/null).
+
+"$PWD"/script/install_cargo_build_deps
+
+# note: keep this version in sync with wgslfmt in .github/workflows/ci.yml
+cargo install --git https://github.com/wgsl-analyzer/wgsl-analyzer --tag "2025-06-28" wgslfmt
+
+"$PWD"/script/install_cargo_binstall
+
+# Install nextest, which we use as our test execution harness.
+cargo binstall --secure --no-confirm --no-discover-github-token cargo-nextest

@@ -1,0 +1,6116 @@
+use core::slice;
+use std::any::Any;
+use std::cell::{Cell, Ref, RefCell};
+use std::collections::{HashMap, HashSet};
+use std::num::NonZeroU8;
+use std::ops::{Add, AddAssign, Range, Sub, SubAssign};
+use std::sync::Arc;
+use std::{fmt, mem};
+
+use float_cmp::ApproxEq;
+use itertools::Itertools;
+use markdown_parser::TableAlignment;
+use num_traits::SaturatingSub;
+use ordered_float::OrderedFloat;
+use parking_lot::Mutex;
+use rangemap::RangeSet;
+use serde::{Deserialize, Serialize};
+use serde_yaml::Mapping;
+use string_offset::{CharOffset, impl_offset};
+use sum_tree::{SeekBias, SumTree};
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
+use vec1::Vec1;
+use vim::vim::{MotionType, VimMode};
+use warp_core::channel::ChannelState;
+use warp_core::ui::Icon;
+use warp_core::ui::theme::Fill as ThemeFill;
+use warp_errors::report_error;
+use warpui_core::assets::asset_cache::AssetSource;
+use warpui_core::color::ColorU;
+use warpui_core::elements::{
+    Border, Fill, ListIndentLevel, ListNumbering, Margin, MouseStateHandle, Padding, ScrollData,
+};
+use warpui_core::fonts::{FamilyId, Properties, Weight};
+use warpui_core::geometry::rect::RectF;
+use warpui_core::geometry::vector::{Vector2F, vec2f};
+use warpui_core::platform::LineStyle;
+use warpui_core::text_layout::{CaretPosition, Line, TextFrame};
+use warpui_core::text_selection_utils::{
+    NewlineTickParams, calculate_tick_width, create_newline_tick_rect,
+    selection_crosses_newline_offset_based,
+};
+use warpui_core::units::{IntoPixels, Pixels};
+use warpui_core::{AppContext, Entity, EntityId, ModelContext, ModelHandle};
+
+pub use self::char_cell_display::{DisplayLattice, DisplayRow, DisplayRowKind};
+use self::location::WrapDirection;
+pub use self::location::{HitTestOptions, Location};
+pub use self::offset_map::{OffsetMap, SelectableTextRun};
+pub use self::positioned::Positioned;
+use self::positioned::PositionedCursor;
+use self::saved_positions::SavedPositions;
+use self::viewport::{
+    ScrollPositionSnapshot, SizeInfo, ViewportItem, ViewportIterator, ViewportState,
+};
+use super::BLOCK_FOOTER_HEIGHT;
+use super::element::broken_embedding::RenderableBrokenEmbedding;
+use super::element::{CursorData, RenderContext, RenderableBlock};
+use super::layout::{TextLayout, line_height};
+use crate::content::edit::{
+    EditDelta, LaidOutRenderDelta, ParsedUrl, TemporaryBlock, layout_temporary_blocks,
+};
+use crate::content::hidden_lines_model::HiddenLinesModel;
+use crate::content::markdown::MarkdownStyle;
+use crate::content::text::{BlockHeaderSize, BufferBlockStyle, CodeBlockType, FormattedTable};
+use crate::content::version::BufferVersion;
+use crate::editor::EmbeddedItemModel;
+use crate::render::model::debug::Describe;
+
+pub mod bounds;
+mod char_cell_display;
+pub(crate) mod debug;
+mod location;
+mod offset_map;
+mod positioned;
+pub mod saved_positions;
+pub mod table_offset_map;
+pub mod viewport;
+
+#[cfg(test)]
+#[path = "mod_tests.rs"]
+mod tests;
+
+#[cfg(test)]
+pub(crate) mod test_utils;
+
+/// Margin for comparing pixel or line values. This is fairly wide because
+/// scrolling can introduce a large amount of floating-point rounding error.
+pub const UNIT_MARGIN: (f32, i32) = (0.01, 2);
+const AUTO_SCROLL_MARGIN: f32 = 12.;
+const DEFAULT_CHAR_CELL_TAB_SIZE: NonZeroU8 = NonZeroU8::new(4).unwrap();
+
+/// The minimum height of a paragraph, not including padding or margins.
+pub const PARAGRAPH_MIN_HEIGHT: Pixels = Pixels::new(24.);
+const TABLE_SCROLL_REVEAL_MARGIN: Pixels = Pixels::new(8.);
+
+pub const EMBEDDED_ITEM_FIRST_LINE_HEIGHT: f32 = 24.;
+
+pub const TEXT_SPACING: BlockSpacing = BlockSpacing {
+    margin: Margin::uniform(0.).with_right(16.),
+    padding: Padding::uniform(0.),
+};
+
+pub const COMMAND_SPACING: BlockSpacing = BlockSpacing {
+    margin: Margin::uniform(0.)
+        .with_top(8.)
+        .with_left(4.)
+        .with_bottom(8.)
+        .with_right(16.),
+    padding: Padding::uniform(8.)
+        .with_left(16.)
+        .with_top(16.)
+        // Reserve space for the buttons.
+        .with_bottom(BLOCK_FOOTER_HEIGHT),
+};
+
+pub const BROKEN_LINK_SPACING: BlockSpacing = BlockSpacing {
+    margin: Margin::uniform(0.)
+        .with_top(8.)
+        .with_left(4.)
+        .with_bottom(8.)
+        .with_right(16.),
+    padding: Padding::uniform(0.)
+        .with_left(12.)
+        .with_top(18.)
+        .with_bottom(18.)
+        .with_right(8.),
+};
+
+pub const HEADER_SPACING: BlockSpacing = BlockSpacing {
+    margin: Margin::uniform(0.)
+        .with_top(4.)
+        .with_bottom(4.)
+        .with_right(16.),
+    padding: Padding::uniform(0.),
+};
+
+pub const UNORDERED_LIST_MARGIN: Margin = Margin::uniform(4.).with_right(16.);
+pub const UNIT_UNORDERED_LIST_PADDING: f32 = 20.;
+
+pub const ORDERED_LIST_MARGIN: Margin = Margin::uniform(4.).with_right(16.);
+pub const UNIT_ORDERED_LIST_PADDING: f32 = 20.;
+
+pub const TASK_LIST_MARGIN: Margin = Margin::uniform(4.).with_right(16.);
+pub const UNIT_TASK_LIST_PADDING: f32 = 20.;
+
+pub const DEFAULT_BLOCK_SPACINGS: BlockSpacings = BlockSpacings {
+    text: TEXT_SPACING,
+    header: HEADER_SPACING,
+    code_block: COMMAND_SPACING,
+    task_list: IndentableBlockSpacing {
+        margin: TASK_LIST_MARGIN,
+        unit_padding: UNIT_TASK_LIST_PADDING,
+    },
+    ordered_list: IndentableBlockSpacing {
+        margin: ORDERED_LIST_MARGIN,
+        unit_padding: UNIT_ORDERED_LIST_PADDING,
+    },
+    unordered_list: IndentableBlockSpacing {
+        margin: UNORDERED_LIST_MARGIN,
+        unit_padding: UNIT_UNORDERED_LIST_PADDING,
+    },
+};
+
+const MIN_HIDDEN_BLOCK_WIDTH: Pixels = Pixels::new(20.);
+const HIDDEN_BLOCK_HEIGHT: Pixels = Pixels::new(20.);
+pub const CODE_EDITOR_HIDDEN_SECTION_EXPANSION_LINES: usize = 25;
+
+/// Thickness of underline decorations in pixels.
+const UNDERLINE_THICKNESS: f32 = 2.;
+/// Length of dashes in dashed underline decorations in pixels.
+const DASHED_UNDERLINE_DASH_LENGTH: f32 = 4.;
+/// Length of gaps in dashed underline decorations in pixels.
+const DASHED_UNDERLINE_GAP_LENGTH: f32 = 4.;
+
+/// In the future, we should also support MinimumWidth(f32) setting so the content will
+/// be laid out with a minimum width that could be larger than the viewport.
+#[derive(Default)]
+pub enum WidthSetting {
+    #[default]
+    FitViewport,
+    InfiniteWidth,
+}
+
+/// Block types that support hit-testing on the block.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HitTestBlockType {
+    Code,
+    MermaidDiagram,
+    Embedding,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RenderLayoutOptions {
+    pub render_mermaid_diagrams: bool,
+    pub mermaid_render_offsets: HashSet<CharOffset>,
+}
+
+#[derive(Debug)]
+pub enum StyleUpdateAction {
+    Relayout,
+    Repaint,
+    None,
+}
+
+#[derive(Default)]
+struct RenderBufferVersion {
+    last_rendered_version: Option<BufferVersion>,
+    next_render_version: Option<BufferVersion>,
+}
+
+impl RenderBufferVersion {
+    fn start_layout(&mut self) -> Option<BufferVersion> {
+        // When layout starts, we eagerly set the last rendered version to the current version we are rendering.
+        self.last_rendered_version = self.next_render_version;
+        self.last_rendered_version
+    }
+}
+
+/// Render time decoration that should be applied on a specific range of text / lines.
+///
+/// Use decorations for transient styles that do not affect the buffer or require text layout.
+/// * Persistent styles should be applied as inline markers that are saved as part of the buffer.
+/// * Transient styles that affect layout, like syntax highlighting, can't be applied when
+///   rendering, so they need to be modeled in the buffer.
+#[derive(Default, Debug)]
+pub struct RenderDecoration {
+    text: Vec<Decoration>,
+    line: Vec<LineDecoration>,
+}
+
+impl RenderDecoration {
+    pub(super) fn text(&self) -> &[Decoration] {
+        &self.text
+    }
+
+    pub fn line_decoration_ranges(&self) -> &[LineDecoration] {
+        &self.line
+    }
+}
+
+/// Wrapper around a reference to the underlying render state sumtree.
+/// This is so we could define an interface that returns objects with the same lifetime as the inner
+/// reference with interior mutability.
+pub struct RenderContentTreeRef<'a>(Ref<'a, SumTree<BlockItem>>);
+
+impl<'a> RenderContentTreeRef<'a> {
+    pub fn block_items(&self) -> impl Iterator<Item = &BlockItem> {
+        let mut cursor = self.0.cursor::<(), ()>();
+        cursor.descend_to_first_item(&self.0, |_| true);
+        std::iter::from_fn(move || {
+            let item = cursor.item()?;
+            cursor.next();
+            Some(item)
+        })
+    }
+    /// Iterator over items visible in the current viewport.
+    ///
+    /// This returns both the `ViewportItem` and the backing `BlockItem`, for identifying what kind
+    /// of item it is. It does not directly return `RenderableBlock`s, as they may depend on
+    /// higher-level state.
+    pub fn viewport_items(
+        &self,
+        viewport_height: Pixels,
+        viewport_width: Pixels,
+        scroll_top: Pixels,
+    ) -> impl Iterator<Item = (ViewportItem, &BlockItem)> {
+        ViewportIterator::new(&self.0, scroll_top, viewport_height, viewport_width)
+    }
+
+    /// Describe only the content of the rendering model.
+    #[cfg(test)]
+    pub fn describe_content(&self) -> impl fmt::Display + '_ {
+        self.0.describe()
+    }
+
+    pub fn block_at_height(&self, height: f64) -> Option<Positioned<'_, BlockItem>> {
+        let height = Height(OrderedFloat(height));
+
+        let mut cursor = self.0.cursor::<Height, LayoutSummary>();
+        // For height, we don't need to seek to exactly the starting height of the block.
+        cursor.seek(&height, SeekBias::Right);
+        cursor.positioned_item()
+    }
+
+    /// Returns the 0-based index of the temporary block at the given content-
+    /// space height within its consecutive run of temporary blocks.
+    ///
+    /// Uses two O(log n) sumtree cursor seeks: one by height to locate the
+    /// target block, and one by character offset to find the start of the
+    /// temporary-block run. The index is the difference in cumulative item
+    /// counts between the two positions.
+    ///
+    /// Returns `None` if the block at that height is not a `TemporaryBlock`.
+    pub fn temp_block_hunk_index_at_height(&self, height: f64) -> Option<usize> {
+        let height = Height(OrderedFloat(height));
+
+        // Seek by height to find the target temporary block.
+        let mut height_cursor = self.0.cursor::<Height, LayoutSummary>();
+        height_cursor.seek(&height, SeekBias::Right);
+
+        // Verify we landed on a temporary block.
+        if !matches!(height_cursor.item()?, BlockItem::TemporaryBlock { .. }) {
+            return None;
+        }
+
+        let target_item_count = height_cursor.start().item_count;
+        let boundary_offset = height_cursor.start().content_length;
+
+        // Seek by CharOffset to the same content-length boundary. With Left
+        // bias this lands on the last non-temporary block before the run
+        // (temporary blocks have content_length == 0, so they don't advance
+        // the CharOffset dimension).
+        let mut offset_cursor = self.0.cursor::<CharOffset, LayoutSummary>();
+        offset_cursor.seek(&boundary_offset, SeekBias::Left);
+
+        // If the offset cursor itself landed on a temporary block, the run
+        // starts at the very beginning of the tree (no preceding regular
+        // block). Use start().item_count as the boundary.
+        let boundary_item_count =
+            if matches!(offset_cursor.item(), Some(BlockItem::TemporaryBlock { .. })) {
+                offset_cursor.start().item_count
+            } else {
+                offset_cursor.end().item_count
+            };
+
+        Some(target_item_count - boundary_item_count)
+    }
+
+    pub fn block_at_offset(&self, offset: CharOffset) -> Option<Positioned<'_, BlockItem>> {
+        let mut cursor = self.0.cursor::<CharOffset, LayoutSummary>();
+        if cursor.seek(&offset, SeekBias::Right) {
+            cursor.positioned_item()
+        } else {
+            // If we can't seek exactly to the starting CharOffset of the block, the render model
+            // has probably changed since this item was created. To be safe, fail the lookup.
+            log::trace!("ViewportItem invalidated: no block starting at {offset}");
+            None
+        }
+    }
+
+    /// The full line range of the first collapsed hidden section, or `None` if
+    /// there are none. Resolves the range the same way a hidden-section bar
+    /// does — the `Hidden` block's `start_line` plus its hidden line count —
+    /// so tests can fully expand the first section the bar would.
+    pub fn first_hidden_section_line_range(&self) -> Option<Range<LineCount>> {
+        let mut cursor = self.0.cursor::<CharOffset, LayoutSummary>();
+        cursor.descend_to_first_item(&self.0, |_| true);
+        loop {
+            let range = {
+                let positioned = cursor.positioned_item()?;
+                if matches!(positioned.item, BlockItem::Hidden(_)) {
+                    Some(positioned.start_line..positioned.start_line + positioned.item.lines())
+                } else {
+                    None
+                }
+            };
+            if let Some(range) = range {
+                return Some(range);
+            }
+            cursor.next();
+        }
+    }
+
+    pub fn is_entire_range_of_type(
+        &self,
+        range: &Range<CharOffset>,
+        mut matches_type: impl FnMut(&BlockItem) -> bool,
+    ) -> bool {
+        if range.start >= range.end {
+            return false;
+        }
+
+        let Some(block) = self.block_at_offset(range.start) else {
+            return false;
+        };
+
+        block.start_char_offset == range.start
+            && block.end_char_offset() == range.end
+            && matches_type(block.item)
+    }
+
+    pub fn mermaid_block_ranges(&self) -> Vec<Range<CharOffset>> {
+        let mut cursor = self.0.cursor::<(), LayoutSummary>();
+        cursor.descend_to_first_item(&self.0, |_| true);
+
+        let mut ranges = Vec::new();
+        while let Some(item) = cursor.item() {
+            if matches!(item, BlockItem::MermaidDiagram { .. }) {
+                let start = cursor.start().content_length;
+                let end = start + item.content_length();
+                ranges.push(start..end);
+            }
+            cursor.next();
+        }
+
+        ranges
+    }
+
+    /// Returns the cumulative Y offset (in content-space pixels) at the given line.
+    ///
+    /// When `line >= total_lines`, returns the total content height.
+    pub fn y_offset_at_line(&self, line: LineCount) -> Pixels {
+        let summary = self.0.summary();
+        if line >= summary.lines {
+            return (summary.height as f32).into_pixels();
+        }
+        let mut cursor = self.0.cursor::<LineCount, LayoutSummary>();
+        cursor.seek_clamped(&line, SeekBias::Right);
+        (cursor.start().height as f32).into_pixels()
+    }
+}
+
+/// A ghost line (deleted/replaced diff content) to interleave when rendering a
+/// diff in char-cell mode. The char-cell analogue of laying a [`TemporaryBlock`]
+/// into the GUI's block tree: GUI-only fill/decoration types are flattened down
+/// to the plain colors a TUI row renderer needs.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CharCellTemporaryBlock {
+    /// The ghost line's text. Not present in the buffer, so it has no char
+    /// offsets in `line_starts`/`char_widths`.
+    pub content: String,
+    /// The buffer line this block should be displayed before.
+    pub insert_before: LineCount,
+    /// Whole-line color.
+    pub line_decoration: Option<ColorU>,
+    /// Char-index sub-ranges of `content` with their own colors.
+    pub inline_decorations: Vec<(Range<usize>, ColorU)>,
+    /// Display widths for `content` without its conventional trailing newline.
+    char_widths: Vec<u8>,
+    /// Gap-indexed Unicode line-break opportunities for `char_widths`.
+    line_breaks: Vec<bool>,
+    /// Width-keyed wrapped rows, computed lazily and reused across lattices.
+    wrapped_row_starts: RefCell<Option<(u16, Vec<usize>)>>,
+}
+
+impl CharCellTemporaryBlock {
+    fn new(
+        content: String,
+        insert_before: LineCount,
+        line_decoration: Option<ColorU>,
+        inline_decorations: Vec<(Range<usize>, ColorU)>,
+        text_index: &CharCellTextIndex,
+    ) -> Self {
+        let layout_content = content.strip_suffix('\n').unwrap_or(&content);
+        let char_widths = text_index.display_widths(layout_content);
+        let line_breaks = char_cell_line_break_opportunities(layout_content);
+        Self {
+            content,
+            insert_before,
+            line_decoration,
+            inline_decorations,
+            char_widths,
+            line_breaks,
+            wrapped_row_starts: RefCell::new(None),
+        }
+    }
+
+    fn from_temporary_block(block: TemporaryBlock, text_index: &CharCellTextIndex) -> Self {
+        let inline_decorations = block
+            .inline_text_decorations
+            .into_iter()
+            .filter_map(|decoration| {
+                let color = decoration.background?.into_solid();
+                Some((
+                    decoration.start.as_usize()..decoration.end.as_usize(),
+                    color,
+                ))
+            })
+            .collect();
+        Self::new(
+            block.content,
+            block.insert_before,
+            block.line_decoration.map(|fill| fill.into_solid()),
+            inline_decorations,
+            text_index,
+        )
+    }
+}
+
+/// Compact char-cell metadata derived from the current buffer text.
+///
+/// Keeping the parallel vectors behind one `RefCell` makes their length and
+/// indexing invariants atomic without giving up their contiguous storage.
+#[derive(Debug)]
+pub(crate) struct CharCellTextIndex {
+    /// The 0-indexed character offset of each logical line start. Never empty.
+    line_starts: Vec<CharOffset>,
+    /// One terminal display width per buffer character, including newlines.
+    char_widths: Vec<u8>,
+    /// Gap-indexed Unicode line-break opportunities; one longer than widths.
+    line_breaks: Vec<bool>,
+    /// Index into `visual_row_char_starts` for each logical line, plus one
+    /// terminal entry. This is a prefix sum of visual rows per logical line.
+    line_visual_row_starts: Vec<usize>,
+    /// Global buffer character offset of every visual row start.
+    visual_row_char_starts: Vec<CharOffset>,
+    /// Distance between tab stops, structurally guaranteed to be nonzero.
+    tab_size: NonZeroU8,
+}
+
+impl Default for CharCellTextIndex {
+    fn default() -> Self {
+        Self::new(0)
+    }
+}
+
+impl CharCellTextIndex {
+    fn new(terminal_width: u16) -> Self {
+        Self::new_with_tab_size(terminal_width, DEFAULT_CHAR_CELL_TAB_SIZE)
+    }
+
+    fn new_with_styles(terminal_width: u16, styles: &RichTextStyles) -> Self {
+        let tab_size = styles
+            .base_text
+            .fixed_width_tab_size
+            .and_then(NonZeroU8::new)
+            .unwrap_or(DEFAULT_CHAR_CELL_TAB_SIZE);
+        Self::new_with_tab_size(terminal_width, tab_size)
+    }
+
+    fn new_with_tab_size(terminal_width: u16, tab_size: NonZeroU8) -> Self {
+        let mut index = Self {
+            tab_size,
+            line_starts: vec![CharOffset::zero()],
+            char_widths: Vec::new(),
+            line_breaks: vec![true],
+            line_visual_row_starts: Vec::new(),
+            visual_row_char_starts: Vec::new(),
+        };
+        index.rebuild_wrap_cache(terminal_width);
+        index
+    }
+
+    fn display_widths(&self, text: &str) -> Vec<u8> {
+        let mut widths = Vec::with_capacity(text.len());
+        Self::append_display_widths(self.tab_size, text, &mut widths, |_, _| {});
+        widths
+    }
+
+    fn append_display_widths(
+        tab_size: NonZeroU8,
+        text: &str,
+        widths: &mut Vec<u8>,
+        mut visit: impl FnMut(char, usize),
+    ) {
+        let tab_size = usize::from(tab_size.get());
+        let mut col: usize = 0;
+        for grapheme in text.graphemes(true) {
+            let width = if grapheme == "\t" {
+                let spaces = tab_size - (col % tab_size);
+                spaces.min(usize::from(u8::MAX)) as u8
+            } else {
+                grapheme.width().min(usize::from(u8::MAX)) as u8
+            };
+
+            let is_newline = grapheme == "\n";
+            for (index, ch) in grapheme.chars().enumerate() {
+                widths.push(if index == 0 { width } else { 0 });
+                visit(ch, widths.len());
+            }
+            if is_newline {
+                col = 0;
+            } else {
+                col += width as usize;
+            }
+        }
+    }
+
+    fn rebuild(&mut self, text: &str, terminal_width: u16) {
+        self.rebuild_text_metadata(text);
+        self.rebuild_wrap_cache(terminal_width);
+        self.debug_validate();
+    }
+
+    fn rebuild_text_metadata(&mut self, text: &str) {
+        self.line_starts.clear();
+        self.char_widths.clear();
+        self.line_breaks.clear();
+        self.line_starts.push(CharOffset::zero());
+        let line_starts = &mut self.line_starts;
+        Self::append_display_widths(
+            self.tab_size,
+            text,
+            &mut self.char_widths,
+            |ch, next_offset| {
+                if ch == '\n' {
+                    line_starts.push(CharOffset::from(next_offset));
+                }
+            },
+        );
+        self.line_breaks
+            .extend(char_cell_line_break_opportunities(text));
+    }
+
+    fn rebuild_wrap_cache(&mut self, terminal_width: u16) {
+        self.line_visual_row_starts.clear();
+        self.visual_row_char_starts.clear();
+        let mut local_row_starts = Vec::new();
+        for line_index in 0..self.line_starts.len() {
+            self.line_visual_row_starts
+                .push(self.visual_row_char_starts.len());
+            let line_start = self.line_starts[line_index].as_usize();
+            let line = char_cell_logical_line(&self.line_starts, &self.char_widths, line_index);
+            let line_breaks =
+                char_cell_logical_line_breaks(&self.line_starts, &self.line_breaks, line_index);
+            char_cell_line_row_starts_into(
+                line_breaks,
+                line,
+                terminal_width,
+                &mut local_row_starts,
+            );
+            self.visual_row_char_starts.extend(
+                local_row_starts
+                    .iter()
+                    .map(|&row_start| CharOffset::from(line_start + row_start)),
+            );
+        }
+        self.line_visual_row_starts
+            .push(self.visual_row_char_starts.len());
+    }
+
+    fn logical_line_for_offset(&self, offset: CharOffset) -> usize {
+        self.line_starts
+            .partition_point(|&start| start <= offset)
+            .saturating_sub(1)
+    }
+
+    fn logical_line_char_range(&self, line_index: usize) -> Range<usize> {
+        let start = self.line_starts[line_index]
+            .as_usize()
+            .min(self.char_widths.len());
+        let end = self
+            .line_starts
+            .get(line_index + 1)
+            .map(|next| next.as_usize().saturating_sub(1))
+            .unwrap_or(self.char_widths.len())
+            .min(self.char_widths.len())
+            .max(start);
+        start..end
+    }
+
+    fn logical_line_visual_rows(&self, line_index: usize) -> Range<usize> {
+        self.line_visual_row_starts[line_index]..self.line_visual_row_starts[line_index + 1]
+    }
+
+    fn visual_row_for_offset(&self, line_index: usize, offset: CharOffset) -> usize {
+        let rows = self.logical_line_visual_rows(line_index);
+        let row_in_line = self.visual_row_char_starts[rows.clone()]
+            .partition_point(|&start| start <= offset)
+            .saturating_sub(1);
+        rows.start + row_in_line
+    }
+
+    fn visual_row_char_range(&self, line_index: usize, visual_row: usize) -> Range<usize> {
+        let line_rows = self.logical_line_visual_rows(line_index);
+        let start = self.visual_row_char_starts[visual_row].as_usize();
+        let end = if visual_row + 1 < line_rows.end {
+            self.visual_row_char_starts[visual_row + 1].as_usize()
+        } else {
+            self.logical_line_char_range(line_index).end
+        };
+        start..end
+    }
+
+    fn debug_validate(&self) {
+        debug_assert_eq!(self.line_starts.first(), Some(&CharOffset::zero()));
+        debug_assert!(
+            self.line_starts
+                .windows(2)
+                .all(|starts| starts[0] < starts[1])
+        );
+        debug_assert!(
+            self.line_starts
+                .last()
+                .is_some_and(|start| start.as_usize() <= self.char_widths.len())
+        );
+        debug_assert_eq!(self.line_breaks.len(), self.char_widths.len() + 1);
+        debug_assert_eq!(
+            self.line_visual_row_starts.len(),
+            self.line_starts.len() + 1
+        );
+        debug_assert_eq!(
+            self.line_visual_row_starts.last(),
+            Some(&self.visual_row_char_starts.len())
+        );
+        debug_assert!(
+            self.line_visual_row_starts
+                .windows(2)
+                .all(|rows| rows[0] < rows[1])
+        );
+    }
+}
+/// All state specific to the TUI char-cell rendering path.
+///
+/// Bundled into a single struct so the [`LayoutMode`] enum cleanly separates
+/// mode-specific data; fields that are only meaningful in one mode are never
+/// scattered across the parent [`RenderState`].
+pub struct CharCellState {
+    /// Terminal width in character columns. Pushed from the element's layout
+    /// pass; interior-mutable so it can be set through a shared `&CharCellState`
+    /// (mirroring how the GUI submits viewport state during layout).
+    pub(crate) terminal_width: Cell<u16>,
+    /// Buffer-derived line starts, display widths, and line-break opportunities
+    /// borrowed and rebuilt as one coherent snapshot.
+    text_index: RefCell<CharCellTextIndex>,
+    /// Diff ghost lines (deleted/replaced content) to interleave at their
+    /// `insert_before` line positions when rendering. Replaced wholesale on
+    /// each diff refresh; empty when no diff is displayed. Deliberately not
+    /// part of the wrap tables above: ghost rows are interleaved by row
+    /// renderers at render time, so buffer offset math is unaffected.
+    temporary_blocks: RefCell<Vec<CharCellTemporaryBlock>>,
+    /// Hidden-line model projected into logical line ranges for char-cell
+    /// rendering. Absent only in unit tests that construct this state directly.
+    hidden_lines: Option<ModelHandle<HiddenLinesModel>>,
+    /// First visible display row (0-indexed) of a scroll-windowed viewport
+    /// (e.g. the TUI prompt input); stays 0 for consumers that render full
+    /// height. Lives here — with the display-row math it windows — mirroring
+    /// how the GUI keeps scroll state on `RenderState` rather than in views.
+    scroll_offset: Cell<u32>,
+}
+
+impl CharCellState {
+    pub fn new(terminal_width: u16, hidden_lines: Option<ModelHandle<HiddenLinesModel>>) -> Self {
+        Self {
+            terminal_width: Cell::new(terminal_width),
+            text_index: RefCell::new(CharCellTextIndex::new(terminal_width)),
+            temporary_blocks: RefCell::new(Vec::new()),
+            hidden_lines,
+            scroll_offset: Cell::new(0),
+        }
+    }
+
+    fn new_with_styles(
+        terminal_width: u16,
+        styles: &RichTextStyles,
+        hidden_lines: Option<ModelHandle<HiddenLinesModel>>,
+    ) -> Self {
+        let mut state = Self::new(terminal_width, hidden_lines);
+        *state.text_index.get_mut() = CharCellTextIndex::new_with_styles(terminal_width, styles);
+        state
+    }
+
+    /// Replace the stored ghost lines. Replace-all semantics, mirroring the
+    /// GUI path's `reset_temporary_block`, so stale ghosts never linger.
+    fn set_temporary_blocks(&self, mut blocks: Vec<CharCellTemporaryBlock>) {
+        blocks.sort_by_key(|block| block.insert_before);
+        *self.temporary_blocks.borrow_mut() = blocks;
+    }
+
+    /// The terminal width (in cells) used for char-cell wrapping.
+    pub fn terminal_width(&self) -> u16 {
+        self.terminal_width.get()
+    }
+
+    /// Update the terminal width used for char-cell wrapping. Interior-mutable so
+    /// it can be set through a shared `&CharCellState` during the element's layout
+    /// pass (which only has a shared `&AppContext`). Width-independent text
+    /// metadata is retained; only the compact visual-row cache is rebuilt.
+    pub fn set_terminal_width(&self, terminal_width: u16) {
+        if self.terminal_width.get() == terminal_width {
+            return;
+        }
+        self.terminal_width.set(terminal_width);
+        self.text_index
+            .borrow_mut()
+            .rebuild_wrap_cache(terminal_width);
+    }
+
+    /// The number of soft-wrapped buffer rows, excluding ghost and hidden-line
+    /// display overlays.
+    pub fn max_line(&self) -> LineCount {
+        let text_index = self.text_index.borrow();
+        LineCount(text_index.visual_row_char_starts.len())
+    }
+
+    pub fn offset_to_softwrap_point(&self, offset: CharOffset) -> SoftWrapPoint {
+        let text_index = self.text_index.borrow();
+        let line_index = text_index.logical_line_for_offset(offset);
+        let line_range = text_index.logical_line_char_range(line_index);
+        let char_index = offset.as_usize().min(line_range.end);
+        let visual_row = text_index.visual_row_for_offset(line_index, offset);
+        let visual_range = text_index.visual_row_char_range(line_index, visual_row);
+        let col = text_index.char_widths[visual_range.start..char_index]
+            .iter()
+            .map(|&width| width as usize)
+            .sum::<usize>();
+        if char_index == line_range.end
+            && self.terminal_width.get() > 0
+            && col == self.terminal_width.get() as usize
+        {
+            SoftWrapPoint::new((visual_row + 1) as u32, ColumnUnit::Chars(0))
+        } else {
+            SoftWrapPoint::new(visual_row as u32, ColumnUnit::Chars(col as u16))
+        }
+    }
+
+    pub fn softwrap_point_to_offset(&self, point: SoftWrapPoint) -> CharOffset {
+        let text_index = self.text_index.borrow();
+        if point.row() as usize >= text_index.visual_row_char_starts.len() {
+            return CharOffset::from(text_index.char_widths.len());
+        }
+        let visual_row =
+            (point.row() as usize).min(text_index.visual_row_char_starts.len().saturating_sub(1));
+        let line_index = text_index
+            .line_visual_row_starts
+            .partition_point(|&start| start <= visual_row)
+            .saturating_sub(1)
+            .min(text_index.line_starts.len() - 1);
+        let row_range = text_index.visual_row_char_range(line_index, visual_row);
+        let target_col = match point.column() {
+            ColumnUnit::Chars(col) => col as usize,
+            ColumnUnit::Pixels(_) => 0,
+        };
+        let mut col = 0usize;
+        let mut char_index = row_range.start;
+        while char_index < row_range.end {
+            let width = text_index.char_widths[char_index] as usize;
+            if col + width > target_col {
+                break;
+            }
+            col += width;
+            char_index += 1;
+        }
+        CharOffset::from(char_index)
+    }
+
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn set_test_temporary_blocks(&self, blocks: Vec<(String, usize)>) {
+        let blocks = {
+            let text_index = self.text_index.borrow();
+            blocks
+                .into_iter()
+                .map(|(content, insert_before)| {
+                    CharCellTemporaryBlock::new(
+                        content,
+                        LineCount::from(insert_before),
+                        None,
+                        Vec::new(),
+                        &text_index,
+                    )
+                })
+                .collect()
+        };
+        self.set_temporary_blocks(blocks);
+    }
+
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn text_index_retained_bytes(&self) -> usize {
+        let text_index = self.text_index.borrow();
+        std::mem::size_of::<CharCellTextIndex>()
+            + text_index.line_starts.capacity() * std::mem::size_of::<CharOffset>()
+            + text_index.char_widths.capacity() * std::mem::size_of::<u8>()
+            + text_index.line_breaks.capacity().div_ceil(8)
+            + text_index.line_visual_row_starts.capacity() * std::mem::size_of::<usize>()
+            + text_index.visual_row_char_starts.capacity() * std::mem::size_of::<CharOffset>()
+    }
+
+    /// The attached [`HiddenLinesModel`] projected to 0-based logical line
+    /// ranges using this state's char-cell line table.
+    pub fn hidden_line_ranges(&self, app: &AppContext) -> Vec<Range<usize>> {
+        let Some(hidden_lines) = self.hidden_lines.as_ref() else {
+            return Vec::new();
+        };
+        let text_index = self.text_index.borrow();
+        let line_starts = &text_index.line_starts;
+        hidden_lines
+            .as_ref(app)
+            .hidden_ranges_at_latest(app)
+            .iter()
+            .filter_map(|range| {
+                // Anchor offsets are 1-based gaps sitting at line starts;
+                // convert to 0-based char indices, then to line indices. The
+                // end offset is the start of the first line *after* the run.
+                let start_char = CharOffset::from(range.start.as_usize().saturating_sub(1));
+                let end_char = CharOffset::from(range.end.as_usize().saturating_sub(1));
+                let start_line = line_starts
+                    .partition_point(|&start| start <= start_char)
+                    .saturating_sub(1);
+                let end_line = line_starts.partition_point(|&start| start < end_char);
+                (start_line < end_line).then_some(start_line..end_line)
+            })
+            .collect()
+    }
+
+    /// Projects the current wrap tables, ghost blocks, and the given hidden
+    /// line ranges into a [`DisplayLattice`]: buffer rows soft-wrapped, ghosts
+    /// interleaved, hidden lines elided into gap rows. See
+    /// [`char_cell_display`] for the full semantics.
+    ///
+    /// The returned lattice owns the immutable borrow guards for its inputs,
+    /// so every query is answered against the same snapshot. The hidden ranges
+    /// are a parameter so consumers can append structural extras to the
+    /// model-derived set from [`CharCellState::hidden_line_ranges`].
+    pub fn display_lattice<'a>(
+        &'a self,
+        hidden_line_ranges: &[Range<usize>],
+    ) -> DisplayLattice<'a> {
+        let text_index = self.text_index.borrow();
+        let ghosts = self.temporary_blocks.borrow();
+        DisplayLattice::new(
+            text_index,
+            self.terminal_width.get(),
+            ghosts,
+            hidden_line_ranges,
+        )
+    }
+
+    /// The 0-based character range of the soft-wrapped visual row containing
+    /// the gap at `char_offset`, excluding any trailing newline.
+    ///
+    /// Buffer visual-row space (no ghosts/hidden ranges); the row boundaries
+    /// follow the same display-width wrapping as everything else in this
+    /// state, so e.g. kill-to-visual-line-end ranges match the rendered rows.
+    pub fn visual_row_char_range(&self, char_offset: CharOffset) -> Range<CharOffset> {
+        let text_index = self.text_index.borrow();
+        let line_index = text_index.logical_line_for_offset(char_offset);
+        let visual_row = text_index.visual_row_for_offset(line_index, char_offset);
+        let range = text_index.visual_row_char_range(line_index, visual_row);
+        CharOffset::range(range)
+    }
+
+    /// The first visible display row of the scroll-windowed viewport.
+    pub fn scroll_offset(&self) -> u32 {
+        self.scroll_offset.get()
+    }
+
+    /// Clamps the retained viewport offset to the current display-row count.
+    pub fn clamp_scroll_offset(
+        &self,
+        cursor_char_offset: CharOffset,
+        viewport_rows: u32,
+        hidden_line_ranges: &[Range<usize>],
+    ) {
+        let (_, total_rows) = self.display_geometry(cursor_char_offset, hidden_line_ranges);
+        let (offset, _) = self.clamped_scroll_window(total_rows, viewport_rows);
+        self.scroll_offset.set(offset);
+    }
+
+    /// Scrolls the viewport by `rows` display rows (negative scrolls toward
+    /// the top), clamped to `[0, total_rows - visible_rows]`. Independent of
+    /// the cursor: wheel scrolling must not snap the viewport back to it.
+    ///
+    /// `cursor_char_offset` (0-based) only sizes the row total — the cursor's
+    /// deferred-wrap phantom row is part of the scrollable layout.
+    pub fn scroll_by(
+        &self,
+        rows: isize,
+        viewport_rows: u32,
+        cursor_char_offset: CharOffset,
+        hidden_line_ranges: &[Range<usize>],
+    ) {
+        let (_, total_rows) = self.display_geometry(cursor_char_offset, hidden_line_ranges);
+        let visible_rows = total_rows.min(viewport_rows).max(1);
+        let max_scroll = total_rows.saturating_sub(visible_rows) as isize;
+        let offset = (self.scroll_offset.get() as isize + rows).clamp(0, max_scroll);
+        self.scroll_offset.set(offset as u32);
+    }
+
+    /// Clamps a stale scroll offset, then moves the viewport the minimal
+    /// amount needed to keep the display row of the cursor at 0-based
+    /// `cursor_char_offset` visible within `viewport_rows` rows. A cursor
+    /// inside a hidden line has no display row, so this only clamps stale
+    /// scroll state without moving the viewport toward the cursor.
+    pub fn follow_cursor(
+        &self,
+        cursor_char_offset: CharOffset,
+        viewport_rows: u32,
+        hidden_line_ranges: &[Range<usize>],
+    ) {
+        let (cursor_row, total_rows) =
+            self.display_geometry(cursor_char_offset, hidden_line_ranges);
+        let (mut offset, visible_rows) = self.clamped_scroll_window(total_rows, viewport_rows);
+        let Some(cursor_row) = cursor_row else {
+            self.scroll_offset.set(offset);
+            return;
+        };
+        if cursor_row < offset {
+            offset = cursor_row;
+        } else if cursor_row >= offset + visible_rows {
+            offset = cursor_row.saturating_sub(visible_rows - 1);
+        }
+        self.scroll_offset.set(offset);
+    }
+
+    /// Returns the clamped first row and visible-row count for a viewport.
+    fn clamped_scroll_window(&self, total_rows: u32, viewport_rows: u32) -> (u32, u32) {
+        let visible_rows = total_rows.min(viewport_rows).max(1);
+        let offset = self
+            .scroll_offset
+            .get()
+            .min(total_rows.saturating_sub(visible_rows));
+        (offset, visible_rows)
+    }
+
+    /// The cursor's display row and the total display-row count — including
+    /// the deferred-wrap phantom row the cursor sits on when a logical line
+    /// exactly fills the terminal width, which the lattice's rows never count
+    /// but sizing and scrolling must include.
+    fn display_geometry(
+        &self,
+        cursor_char_offset: CharOffset,
+        hidden_line_ranges: &[Range<usize>],
+    ) -> (Option<u32>, u32) {
+        let lattice = self.display_lattice(hidden_line_ranges);
+        let cursor_row = lattice
+            .offset_to_display_point(cursor_char_offset)
+            .map(|point| point.row.min(u32::MAX as usize) as u32);
+        let total_rows = cursor_row.map_or(lattice.rows().len() as u32, |cursor_row| {
+            (lattice.rows().len() as u32).max(cursor_row + 1)
+        });
+        (cursor_row, total_rows)
+    }
+
+    /// Rebuild the char-cell layout index — `line_starts`, per-character
+    /// display widths, and Unicode line-break opportunities — from the current
+    /// buffer `text` (O(n) scan).
+    ///
+    /// ## Why TUI needs this explicit call but GUI doesn't
+    ///
+    /// The GUI keeps layout in sync via an async font-shaping pipeline
+    /// (`update_content` → `ContentChanged` → `layout_tx` → `handle_layout_action`),
+    /// which `offset_to_softwrap_point` then reads. `LayoutMode::CharCell` skips that
+    /// channel (no font engine): the channel only carries an `EditDelta` (not the
+    /// full text this rebuild needs) and is async, whereas TUI cursor queries need
+    /// fresh `line_starts` synchronously within the same frame as the edit.
+    /// [`on_buffer_version_updated`](warp_editor::model::CoreEditorModel::on_buffer_version_updated)
+    /// is the guaranteed-synchronous post-edit hook that calls this.
+    ///
+    /// `text` should be the buffer's current plain text (without any trailing
+    /// sentinel newline injected by the buffer layer).
+    pub fn update_text(&self, text: &str) {
+        self.text_index
+            .borrow_mut()
+            .rebuild(text, self.terminal_width.get());
+    }
+}
+
+impl std::fmt::Debug for CharCellState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CharCellState")
+            .field("terminal_width", &self.terminal_width.get())
+            .field("text_index", &self.text_index.borrow())
+            .field(
+                "temporary_blocks_len",
+                &self.temporary_blocks.borrow().len(),
+            )
+            .field("scroll_offset", &self.scroll_offset.get())
+            .finish()
+    }
+}
+
+/// Determines which soft-wrap layout pipeline `RenderState` uses.
+///
+/// - [`LayoutMode::Pixels`]: font-aware pixel layout for the GPU-rendered GUI. Uses the
+///   `SumTree<BlockItem>` content tree and the async font-shaping channel.
+/// - [`LayoutMode::CharCell`]: monospace char-cell layout for the TUI. Skips font shaping;
+///   computes positions from [`CharCellState`] using character-count arithmetic.
+///
+/// This is always set explicitly at construction — there is no sensible default since
+/// the rendering path is determined by whether the client is a GUI or TUI.
+#[derive(Debug)]
+pub enum LayoutMode {
+    /// GPU-rendered GUI path: font-aware, pixel-based soft-wrap.
+    Pixels,
+    /// TUI path: monospace char-cell layout, no font engine required.
+    /// All TUI-specific state lives in [`CharCellState`].
+    CharCell(CharCellState),
+}
+
+/// Model for rendering rich text.
+pub struct RenderState {
+    /// Content is wrapped in a RefCell so we could mutate it when we are laying out the editor element.
+    /// We know this is safe because there is a one-to-one relationship between element and model.
+    content: RefCell<SumTree<BlockItem>>,
+
+    selections: RefCell<RenderedSelectionSet>,
+    decorations: RenderDecoration,
+    /// Pixel-mode hidden lines consumed by the font-layout pipeline.
+    hidden_lines: Option<ModelHandle<HiddenLinesModel>>,
+
+    /// Position IDs saved during paint.
+    saved_positions: SavedPositions,
+
+    /// State of the current viewport, which determines which items are visible.
+    viewport: ViewportState,
+
+    styles: RichTextStyles,
+
+    /// A terminal trailing newline is added after a styled block (for example, a code block)
+    /// so that the user can insert unstyled text after it.
+    /// This extra newline doesn't make sense in read-only rich text, so it can be disabled.
+    show_final_trailing_newline_when_non_empty: bool,
+    has_final_trailing_newline: Cell<bool>,
+
+    width_setting: WidthSetting,
+
+    /// Channel for propagating updates from [`super::element::RichTextElement`] such as the
+    /// viewport size.
+    element_tx: async_channel::Sender<ElementUpdate>,
+    /// Channel for laying out edits. Any model updates that require text layout are routed through
+    /// this channel, along with updates that must be ordered with respect to text layout (like
+    /// cursor movement).
+    layout_tx: async_channel::Sender<LayoutAction>,
+
+    /// A count of outstanding layouts.
+    #[cfg(any(test, feature = "test-util"))]
+    outstanding_layouts: Arc<std::sync::atomic::AtomicUsize>,
+
+    /// The render-related content version the model is managing.
+    buffer_version: RefCell<RenderBufferVersion>,
+
+    /// Whether we are performing a lazy layout.
+    lazy_layout: bool,
+
+    pending_edits: Mutex<Vec<PendingLayout>>,
+    pending_selection_change: Mutex<Option<PendingSelectionUpdate>>,
+    /// A scroll fraction awaiting layout. The content height isn't known until element layout
+    /// completes, so the fraction is applied only once content at or past its `minimum_version`
+    /// has been laid out — mirroring the code editor's `ScrollTrigger`.
+    pending_scroll_fraction: Option<PendingScrollFraction>,
+    layout_options: RenderLayoutOptions,
+
+    /// Optional path to the document being rendered, used for resolving relative paths
+    /// (e.g. relative image paths in markdown).
+    document_path: Option<std::path::PathBuf>,
+
+    /// The active layout mode for soft-wrap computation.
+    /// For the TUI path (`CharCell`), this also carries all char-cell-specific state.
+    layout_mode: LayoutMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RenderEvent {
+    /// The viewport size changed, and so the editor model must re-layout its contents accordingly.
+    NeedsResize,
+    /// New edits have been applied to the editor model.
+    LayoutUpdated,
+    /// Pending edits were flushed during lazy layout.
+    PendingEditsFlushed,
+    ViewportUpdated(Option<BufferVersion>),
+}
+
+/// Styles for rendering rich text. This fills a similar role to `UiComponentStyles`,
+/// but is specialized for text.
+#[derive(Clone, PartialEq, Debug)]
+pub struct RichTextStyles {
+    /// The text styles to use for regular body text.
+    pub base_text: ParagraphStyles,
+    /// The text styles to use for code.
+    pub code_text: ParagraphStyles,
+    /// The background fill to use for code blocks.
+    pub code_background: Fill,
+    /// The background fill to use for embeddings.
+    pub embedding_background: Fill,
+    /// The text styles to use for embeddings.
+    pub embedding_text: ParagraphStyles,
+    /// The border to use for code blocks.
+    pub code_border: Border,
+    /// The color to use for placeholder text.
+    pub placeholder_color: ColorU,
+    /// The fill to use for text selections.
+    pub selection_fill: Fill,
+    /// The fill to use for cursors.
+    pub cursor_fill: Fill,
+    /// Styling for inline code blocks.
+    pub inline_code_style: InlineCodeStyle,
+    /// Styling for inline checkbox.
+    pub check_box_style: CheckBoxStyle,
+    /// Styling for horizontal rules.
+    pub horizontal_rule_style: HorizontalRuleStyle,
+    /// Path to the broken link icon svg.
+    pub broken_link_style: BrokenLinkStyle,
+    /// Spacing configuration for blocks.
+    pub block_spacings: BlockSpacings,
+    /// Minimum height a paragraph will take. This currently
+    /// is only applied for some blocks like trailing cursor, text
+    /// and headers.
+    pub minimum_paragraph_height: Option<Pixels>,
+    /// Whether to show placeholder text on empty blocks.
+    pub show_placeholder_text_on_empty_block: bool,
+    /// Width of the cursor
+    pub cursor_width: f32,
+    /// Whether to highlight detected URLs.
+    pub highlight_urls: bool,
+    /// Styling for tables.
+    pub table_style: TableStyle,
+}
+
+#[derive(Clone, PartialEq, Debug)]
+pub struct IndentableBlockSpacing {
+    margin: Margin,
+    unit_padding: f32,
+}
+
+impl IndentableBlockSpacing {
+    pub fn to_spacing(&self, indent_level: ListIndentLevel) -> BlockSpacing {
+        BlockSpacing {
+            margin: self.margin,
+            padding: Padding::uniform(0.)
+                .with_left((indent_level.as_usize() as f32 + 1.) * self.unit_padding),
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Debug)]
+pub struct BlockSpacings {
+    pub text: BlockSpacing,
+    pub header: BlockSpacing,
+    pub code_block: BlockSpacing,
+    pub task_list: IndentableBlockSpacing,
+    pub ordered_list: IndentableBlockSpacing,
+    pub unordered_list: IndentableBlockSpacing,
+}
+
+impl Default for BlockSpacings {
+    fn default() -> Self {
+        DEFAULT_BLOCK_SPACINGS
+    }
+}
+
+impl BlockSpacings {
+    pub fn from_block_style(&self, block_type: &BufferBlockStyle) -> BlockSpacing {
+        match block_type {
+            BufferBlockStyle::Header { .. } => self.header,
+            BufferBlockStyle::OrderedList { indent_level, .. } => {
+                self.ordered_list.to_spacing(*indent_level)
+            }
+            BufferBlockStyle::UnorderedList { indent_level } => {
+                self.unordered_list.to_spacing(*indent_level)
+            }
+            BufferBlockStyle::TaskList { indent_level, .. } => {
+                self.task_list.to_spacing(*indent_level)
+            }
+            BufferBlockStyle::PlainText | BufferBlockStyle::Table { .. } => self.text,
+            BufferBlockStyle::CodeBlock { .. } => self.code_block,
+        }
+    }
+}
+
+/// Grouping of font-related styles for rendering a specific category of text
+/// (such as code or headings). In most word processors, these are referred to
+/// as paragraph styles, so we keep that naming here.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ParagraphStyles {
+    pub font_family: FamilyId,
+    pub font_size: f32,
+    pub font_weight: Weight,
+    pub line_height_ratio: f32,
+    pub text_color: ColorU,
+    pub baseline_ratio: f32,
+    /// Fixed-width tab stop size in spaces (intended only for fully monospace paragraphs).
+    pub fixed_width_tab_size: Option<u8>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CheckBoxStyle {
+    pub border_width: f32,
+    pub border_color: ColorU,
+    pub icon_path: &'static str,
+    pub background: ColorU,
+    pub hover_background: ColorU,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BrokenLinkStyle {
+    pub icon_path: &'static str,
+    pub icon_color: ColorU,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct HorizontalRuleStyle {
+    pub rule_height: f32,
+    pub color: ColorU,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TableStyle {
+    pub border_color: ColorU,
+    pub header_background: ColorU,
+    pub cell_background: ColorU,
+    pub alternate_row_background: Option<ColorU>,
+    pub text_color: ColorU,
+    pub header_text_color: ColorU,
+    pub scrollbar_nonactive_thumb_color: ColorU,
+    pub scrollbar_active_thumb_color: ColorU,
+    pub font_family: FamilyId,
+    pub font_size: f32,
+    pub cell_padding: f32,
+    pub outer_border: bool,
+    pub column_dividers: bool,
+    pub row_dividers: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct InlineCodeStyle {
+    pub font_family: FamilyId,
+    pub background: ColorU,
+    pub font_color: ColorU,
+}
+
+impl InlineCodeStyle {
+    pub fn requires_relayout(&self, new_styles: &InlineCodeStyle) -> bool {
+        self.font_family != new_styles.font_family
+    }
+}
+
+impl TableStyle {
+    pub fn requires_relayout(&self, new_styles: &TableStyle) -> bool {
+        self.font_family != new_styles.font_family
+            || self.font_size != new_styles.font_size
+            || self.cell_padding != new_styles.cell_padding
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct LayoutSummary {
+    content_length: CharOffset,
+    height: f64,
+    width: Pixels,
+    lines: LineCount,
+    item_count: usize,
+}
+
+/// Rich text height, in pixels. This wrapper makes the dimension clear (height,
+/// not width), and implements SumTree requirements.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Height(OrderedFloat<f64>);
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Width(OrderedFloat<Pixels>);
+
+#[derive(
+    Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
+pub struct LineCount(usize);
+
+impl_offset!(LineCount);
+
+impl LineCount {
+    pub fn as_u32(&self) -> u32 {
+        self.0 as u32
+    }
+}
+
+/// The unit used for the horizontal column component of a [`SoftWrapPoint`].
+///
+/// - [`ColumnUnit::Pixels`] is used by the GUI (font-aware, proportional) rendering path.
+/// - [`ColumnUnit::Chars`] is used by the TUI (monospace, char-cell) rendering path.
+///
+/// The two variants must never be mixed in a single comparison or arithmetic expression.
+/// Call sites that work in only one coordinate space should pattern-match and unwrap the
+/// expected variant; cross-variant operations panic.
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub enum ColumnUnit {
+    /// Horizontal offset in pixels, used by the GPU-rendered GUI path.
+    Pixels(Pixels),
+    /// Horizontal offset in terminal character columns, used by the TUI path.
+    Chars(u16),
+}
+
+impl ColumnUnit {
+    /// Zero column in pixel units (GUI path).
+    pub fn pixels_zero() -> Self {
+        ColumnUnit::Pixels(Pixels::zero())
+    }
+
+    /// Zero column in char units (TUI path).
+    pub fn chars_zero() -> Self {
+        ColumnUnit::Chars(0)
+    }
+
+    /// Returns the element-wise max of two same-variant values.
+    /// Variants must match; mixing Pixels and Chars is always a bug.
+    pub fn col_max(self, other: ColumnUnit) -> ColumnUnit {
+        match (self, other) {
+            (ColumnUnit::Pixels(a), ColumnUnit::Pixels(b)) => ColumnUnit::Pixels(a.max(b)),
+            (ColumnUnit::Chars(a), ColumnUnit::Chars(b)) => ColumnUnit::Chars(a.max(b)),
+            _ => {
+                debug_assert!(
+                    false,
+                    "ColumnUnit::col_max: mixed Pixels and Chars variants — this is a bug"
+                );
+                self // graceful fallback: keep self unchanged
+            }
+        }
+    }
+
+    /// Unwraps the pixel value.
+    /// Calling this on a `Chars` variant is always a bug; in debug builds it asserts,
+    /// in release builds it returns [`Pixels::zero()`] as a safe fallback.
+    pub fn as_pixels(self) -> Pixels {
+        match self {
+            ColumnUnit::Pixels(p) => p,
+            ColumnUnit::Chars(_) => {
+                debug_assert!(
+                    false,
+                    "ColumnUnit::as_pixels called on a Chars variant — this is a bug"
+                );
+                Pixels::zero()
+            }
+        }
+    }
+
+    /// Unwraps the char-column value.
+    /// Calling this on a `Pixels` variant is always a bug; in debug builds it asserts,
+    /// in release builds it returns `0` as a safe fallback.
+    pub fn as_chars(self) -> u16 {
+        match self {
+            ColumnUnit::Chars(c) => c,
+            ColumnUnit::Pixels(_) => {
+                debug_assert!(
+                    false,
+                    "ColumnUnit::as_chars called on a Pixels variant — this is a bug"
+                );
+                0
+            }
+        }
+    }
+}
+
+/// A character offset within a [`TextFrame`]. These offsets count characters in the Rust string
+/// passed to the text layout system.
+///
+/// Frame offsets often, but not always, correspond to glyph indices and caret positions. However,
+/// they do not line up 1:1 if a glyph or grapheme contains multiple characters
+///
+/// They often, but not always, line up with [`CharOffset`]s in the buffer. This is not the case
+/// for placeholder text (which occupies 1 character in the buffer, but several in the text frame).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct FrameOffset(usize);
+
+impl_offset!(FrameOffset);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum RenderLineLocation {
+    /// Referring to a temporary block in the render state.
+    Temporary {
+        at_line: LineCount,
+        /// Number of blocks from the at line.
+        index_from_at_line: usize,
+    },
+    /// Referring to a line that exists in the current buffer.
+    Current(LineCount),
+}
+
+impl RenderLineLocation {
+    pub fn line_count(&self) -> LineCount {
+        match self {
+            RenderLineLocation::Temporary { at_line, .. } => *at_line,
+            RenderLineLocation::Current(line_count) => *line_count,
+        }
+    }
+}
+
+/// A point within the editor. Unlike character and hard-wrap offsets/points, this accounts for
+/// soft-wrapping, the layout of different block types, and proportional fonts.
+///
+/// Because soft-wrapping depends on the fonts and viewport size, `SoftWrapPoint` is not stable
+/// across resizes or style changes.
+///
+/// The `column` field uses [`ColumnUnit`] to distinguish GUI (pixel) and TUI (char-cell)
+/// coordinate spaces. Callers must use the same variant consistently within a rendering path.
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub struct SoftWrapPoint {
+    /// A soft-wrapped line index within the laid-out document.
+    row: u32,
+    /// The point's horizontal position, in either pixels (GUI) or character columns (TUI).
+    /// See [`ColumnUnit`] for details.
+    column: ColumnUnit,
+}
+
+impl SoftWrapPoint {
+    pub fn new(row: u32, column: ColumnUnit) -> Self {
+        Self { row, column }
+    }
+
+    /// Move to the previous row with the same column.
+    pub fn previous_row(mut self) -> Option<Self> {
+        self.row = self.row.checked_sub(1)?;
+        Some(self)
+    }
+
+    /// Move to the next row with the same column. This is bound by the max row count.
+    pub fn next_row(mut self, max_row: LineCount) -> Option<Self> {
+        let next_row = self.row + 1;
+        if next_row > max_row.0 as u32 {
+            None
+        } else {
+            self.row = next_row;
+            Some(self)
+        }
+    }
+
+    pub fn row(&self) -> u32 {
+        self.row
+    }
+
+    pub fn column(&self) -> ColumnUnit {
+        self.column
+    }
+}
+
+/// A block of rich text, like a paragraph, runnable command, or list item.
+#[derive(Debug, Clone)]
+pub enum BlockItem {
+    Paragraph(Paragraph),
+    TextBlock {
+        paragraph_block: ParagraphBlock,
+    },
+    TemporaryBlock {
+        paragraph_block: ParagraphBlock,
+        text_decoration: Vec<Decoration>,
+        decoration: Option<ThemeFill>,
+    },
+    RunnableCodeBlock {
+        paragraph_block: ParagraphBlock,
+        code_block_type: CodeBlockType,
+        /// For Mermaid code blocks that are currently rendered in code-block view because the
+        /// Mermaid source is not yet available as a rendered diagram, this carries the asset
+        /// source that the view layer can watch. Once the asset transitions to a successful
+        /// load, the layout will re-run and emit [`BlockItem::MermaidDiagram`] instead.
+        pending_mermaid_asset: Option<AssetSource>,
+    },
+    MermaidDiagram {
+        content_length: CharOffset,
+        asset_source: AssetSource,
+        config: ImageBlockConfig,
+    },
+    TaskList {
+        indent_level: ListIndentLevel,
+        complete: bool,
+        paragraph: Paragraph,
+        mouse_state: MouseStateHandle,
+    },
+    UnorderedList {
+        indent_level: ListIndentLevel,
+        paragraph: Paragraph,
+    },
+    OrderedList {
+        indent_level: ListIndentLevel,
+        number: Option<usize>,
+        paragraph: Paragraph,
+    },
+    Header {
+        header_size: BlockHeaderSize,
+        paragraph: Paragraph,
+    },
+    Embedded(Arc<dyn LaidOutEmbeddedItem>),
+    HorizontalRule(HorizontalRuleConfig),
+    Image {
+        alt_text: String,
+        source: String,
+        asset_source: AssetSource,
+        config: ImageBlockConfig,
+    },
+    Table(Box<LaidOutTable>),
+    TrailingNewLine(Cursor),
+    Hidden(HiddenBlockConfig),
+}
+
+pub struct EmbeddedItemHTMLRepresentation<'a> {
+    pub element_name: &'a str,
+    pub content: String,
+    pub attributes: HashMap<&'a str, &'a str>,
+}
+
+pub struct EmbeddedItemRichFormat<'a> {
+    pub html: EmbeddedItemHTMLRepresentation<'a>,
+    pub plain_text: String,
+}
+
+pub trait EmbeddedItem: std::fmt::Debug + Send + Sync {
+    // Layout the embedded item with the current text layout context.
+    fn layout(&self, text_layout: &TextLayout, app: &AppContext) -> Box<dyn LaidOutEmbeddedItem>;
+    fn hashed_id(&self) -> &str;
+    /// Serializes this item as YAML.
+    fn to_mapping(&self, style: MarkdownStyle) -> Mapping;
+    // Returns the rich format of the embedded item used for copy & pasting.
+    fn to_rich_format(&self, app: &AppContext) -> EmbeddedItemRichFormat<'_>;
+}
+
+pub trait LaidOutEmbeddedItem: std::fmt::Debug + Send + Sync {
+    fn height(&self) -> Pixels;
+    fn size(&self) -> Vector2F;
+    fn first_line_bound(&self) -> Vector2F;
+    fn element(
+        &self,
+        state: &RenderState,
+        viewport_item: ViewportItem,
+        model: Option<&dyn EmbeddedItemModel>,
+        ctx: &AppContext,
+    ) -> Box<dyn RenderableBlock>;
+    fn spacing(&self) -> BlockSpacing;
+    /// Returns this object as a ref to the Any type.  Needed for typecasts.
+    fn as_any(&self) -> &dyn Any;
+}
+
+#[derive(Default, Debug, Clone, Copy, PartialEq)]
+pub struct BlockSpacing {
+    pub margin: Margin,
+    pub padding: Padding,
+}
+
+impl BlockSpacing {
+    // Total additional offset on the x-axis with padding and margin combined.
+    pub fn x_axis_offset(&self) -> Pixels {
+        (self.margin.left() + self.margin.right() + self.padding.left() + self.padding.right())
+            .into_pixels()
+    }
+
+    // Total additional offset on the y-axis with padding and margin combined.
+    pub fn y_axis_offset(&self) -> Pixels {
+        (self.margin.top() + self.margin.bottom() + self.padding.top() + self.padding.bottom())
+            .into_pixels()
+    }
+
+    pub fn top_offset(&self) -> Pixels {
+        (self.margin.top() + self.padding.top()).into_pixels()
+    }
+
+    pub fn left_offset(&self) -> Pixels {
+        (self.margin.left() + self.padding.left()).into_pixels()
+    }
+
+    fn without_y_axis_offsets(mut self) -> Self {
+        self.margin = Margin::default()
+            .with_left(self.margin.left())
+            .with_right(self.margin.right());
+        self.padding = Padding::default()
+            .with_left(self.padding.left())
+            .with_right(self.padding.right());
+        self
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ParagraphBlock {
+    paragraphs: Vec1<Paragraph>,
+}
+
+impl ParagraphBlock {
+    pub fn new(paragraphs: Vec1<Paragraph>) -> Self {
+        Self { paragraphs }
+    }
+
+    pub fn spacing(&self) -> BlockSpacing {
+        // In the future, we should support two separate level of spacing in a
+        // ParagraphBlock: 1) the internal spacing between paragraphs 2) the overall
+        // spacing of the block.
+        self.paragraphs.first().spacing()
+    }
+
+    pub fn first_line_height(&self) -> f32 {
+        self.paragraphs.first().first_line_height()
+    }
+
+    pub fn paragraphs(&self) -> &[Paragraph] {
+        &self.paragraphs
+    }
+
+    fn content_length(&self) -> CharOffset {
+        self.paragraphs
+            .iter()
+            .fold(CharOffset::zero(), |sum, paragraph| {
+                sum + paragraph.content_length
+            })
+    }
+
+    pub fn width(&self) -> Pixels {
+        self.paragraphs
+            .iter()
+            .map(|paragraph| paragraph.width().as_f32())
+            .max_by(|a, b| a.partial_cmp(b).expect("Tried to compare a NaN"))
+            .unwrap_or(0.)
+            .into_pixels()
+    }
+
+    pub fn height(&self) -> Pixels {
+        self.paragraphs
+            .iter()
+            .map(|paragraph| paragraph.height.as_f32())
+            .sum::<f32>()
+            .into_pixels()
+    }
+
+    /// The size of this paragraph block's content, as currently laid out.
+    pub fn content_size(&self) -> Vector2F {
+        let width = self
+            .paragraphs
+            .iter()
+            .map(|paragraph| paragraph.frame.max_width())
+            .reduce(f32::max)
+            .unwrap_or(0.);
+        vec2f(width, self.height().as_f32())
+    }
+
+    fn lines(&self) -> LineCount {
+        self.paragraphs
+            .iter()
+            .fold(LineCount(0), |sum, paragraph| sum + paragraph.lines())
+    }
+
+    /// Returns `true` if this paragraph block is effectively empty.
+    fn is_empty(&self) -> bool {
+        // If there are multiple empty paragraphs, consider the paragraph non-empty, since that
+        // implies the user added at least one line. If there are no paragraphs, or a single empty
+        // paragraph (more likely, given our layout logic), consider the whole block empty.
+        match self.paragraphs.iter().at_most_one() {
+            Ok(None) => true,
+            Ok(Some(paragraph)) => paragraph.is_empty(),
+            Err(_) => false,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct Paragraph {
+    /// Laid-out text content of this paragraph.
+    frame: Arc<TextFrame>,
+    /// Mapping between [`TextFrame`] characters and content characters.
+    offsets: OffsetMap,
+    /// Cached height of this paragraph's text frame.
+    height: Pixels,
+    width: Pixels,
+    /// Content length of this paragraph, in `char`s.
+    content_length: CharOffset,
+    detected_url: Vec<ParsedUrl>,
+    spacing: BlockSpacing,
+    minimum_height: Option<Pixels>,
+}
+
+impl Paragraph {
+    pub fn new(
+        frame: Arc<TextFrame>,
+        offsets: OffsetMap,
+        content_length: CharOffset,
+        active_url: Vec<ParsedUrl>,
+        spacing: BlockSpacing,
+        minimum_height: Option<Pixels>,
+    ) -> Self {
+        let height = frame
+            .lines()
+            .iter()
+            .fold(0f32, |acc, line| acc + line_height(line))
+            .into_pixels();
+
+        let width = frame.max_width().into_pixels();
+        Self {
+            frame,
+            offsets,
+            height,
+            width,
+            content_length,
+            detected_url: active_url,
+            spacing,
+            minimum_height,
+        }
+    }
+
+    pub fn first_line_height(&self) -> f32 {
+        self.frame
+            .lines()
+            .first()
+            .map(line_height)
+            .unwrap_or(self.height.as_f32())
+    }
+
+    pub fn spacing(&self) -> BlockSpacing {
+        self.spacing
+    }
+
+    pub(super) fn frame(&self) -> &TextFrame {
+        &self.frame
+    }
+
+    /// Whether or not this paragraph is effectively empty.
+    pub(super) fn is_empty(&self) -> bool {
+        let lines = self.frame.lines();
+        lines.is_empty() || lines.iter().all(|line| line.runs.is_empty())
+    }
+
+    /// The height of this paragraph.
+    pub fn height(&self) -> Pixels {
+        self.height
+    }
+
+    pub fn width(&self) -> Pixels {
+        self.width
+    }
+
+    fn lines(&self) -> LineCount {
+        LineCount(self.frame.lines().len())
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct HorizontalRuleConfig {
+    pub line_height: Pixels,
+    pub width: Pixels,
+    pub spacing: BlockSpacing,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ImageBlockConfig {
+    pub width: Pixels,
+    pub height: Pixels,
+    pub spacing: BlockSpacing,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct TableBlockConfig {
+    pub width: Pixels,
+    pub spacing: BlockSpacing,
+    pub style: TableStyle,
+}
+
+/// Layout information for a single table cell, including line-level details
+/// for proper text selection rendering in cells with wrapped text.
+#[derive(Debug, Clone, Default)]
+pub struct CellLayout {
+    pub line_heights: Vec<f32>,
+    pub line_y_offsets: Vec<f32>,
+    pub line_char_ranges: Vec<Range<CharOffset>>,
+    pub line_widths: Vec<f32>,
+    pub line_caret_positions: Vec<Vec<CaretPosition>>,
+}
+
+impl CellLayout {
+    pub fn from_text_frame(frame: &TextFrame) -> Self {
+        let lines = frame.lines();
+        let mut line_heights = Vec::with_capacity(lines.len());
+        let mut line_y_offsets = Vec::with_capacity(lines.len());
+        let mut line_char_ranges = Vec::with_capacity(lines.len());
+        let mut line_widths = Vec::with_capacity(lines.len());
+        let mut line_caret_positions = Vec::with_capacity(lines.len());
+        let mut y_offset = 0.0;
+
+        for line in lines.iter() {
+            let height = line.font_size * line.line_height_ratio;
+            line_heights.push(height);
+            line_y_offsets.push(y_offset);
+            line_widths.push(line.width);
+            line_caret_positions.push(line.caret_positions.clone());
+            y_offset += height;
+
+            let char_start = line
+                .caret_positions
+                .first()
+                .map(|cp| cp.start_offset)
+                .unwrap_or(0);
+            let char_end = line
+                .caret_positions
+                .last()
+                .map(|cp| cp.last_offset + 1)
+                .unwrap_or(char_start);
+            line_char_ranges.push(CharOffset::from(char_start)..CharOffset::from(char_end));
+        }
+
+        Self {
+            line_heights,
+            line_y_offsets,
+            line_char_ranges,
+            line_widths,
+            line_caret_positions,
+        }
+    }
+
+    pub fn line_at_char_offset(&self, char_offset: CharOffset) -> Option<usize> {
+        for (i, range) in self.line_char_ranges.iter().enumerate() {
+            if char_offset < range.end {
+                return Some(i);
+            }
+        }
+        if !self.line_char_ranges.is_empty() {
+            Some(self.line_char_ranges.len() - 1)
+        } else {
+            None
+        }
+    }
+
+    pub fn x_for_char_in_line(&self, line_idx: usize, char_offset: usize) -> f32 {
+        let Some(carets) = self.line_caret_positions.get(line_idx) else {
+            return 0.0;
+        };
+        let width = self.line_widths.get(line_idx).copied().unwrap_or(0.0);
+        for caret in carets {
+            if caret.contains_index(char_offset) {
+                return caret.position_in_line;
+            }
+        }
+        if carets
+            .first()
+            .is_some_and(|caret| char_offset < caret.start_offset)
+        {
+            0.0
+        } else {
+            width
+        }
+    }
+
+    pub fn line_at_y_offset(&self, y: f32) -> usize {
+        for i in 0..self.line_y_offsets.len() {
+            let line_top = self.line_y_offsets[i];
+            let line_bottom = line_top + self.line_heights.get(i).copied().unwrap_or(0.0);
+            if y >= line_top && y < line_bottom {
+                return i;
+            }
+        }
+        self.line_y_offsets.len().saturating_sub(1)
+    }
+
+    /// Returns the nearest character offset for a horizontal hit-test within a line.
+    ///
+    /// The explicit caret list does not include the insertion point at the visual end of the
+    /// line, so we compare against both the stored caret positions and the implicit line-end
+    /// caret at `line_width`. That keeps table hit-testing from snapping to the last glyph when a
+    /// click near the right edge is visually closer to the position after it.
+    pub fn char_at_x_in_line(&self, line_idx: usize, x: f32) -> CharOffset {
+        let Some(range) = self.line_char_ranges.get(line_idx) else {
+            return CharOffset::zero();
+        };
+        if range.start >= range.end {
+            return range.start;
+        }
+
+        let Some(carets) = self.line_caret_positions.get(line_idx) else {
+            return range.start;
+        };
+        if carets.is_empty() || x <= 0.0 {
+            return range.start;
+        }
+
+        let line_width = self.line_widths.get(line_idx).copied().unwrap_or(0.0);
+        if x >= line_width {
+            return range.end;
+        }
+        let mut closest = range.start;
+        let mut closest_distance = f32::INFINITY;
+
+        for caret in carets {
+            let distance = (caret.position_in_line - x).abs();
+            if distance <= closest_distance {
+                closest = CharOffset::from(caret.start_offset).clamp(range.start, range.end);
+                closest_distance = distance;
+            }
+        }
+
+        if (line_width - x).abs() <= closest_distance {
+            range.end
+        } else {
+            closest
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct LaidOutTable {
+    pub table: FormattedTable,
+    pub config: TableBlockConfig,
+    pub row_heights: Vec<Pixels>,
+    pub column_widths: Vec<Pixels>,
+    pub total_height: Pixels,
+    pub offset_map: table_offset_map::TableOffsetMap,
+    pub content_length: CharOffset,
+    pub cell_offset_maps: Vec<Vec<table_offset_map::TableCellOffsetMap>>,
+    pub row_y_offsets: Vec<f32>,
+    pub col_x_offsets: Vec<f32>,
+    pub cell_text_frames: Vec<Vec<Arc<TextFrame>>>,
+    pub cell_layouts: Vec<Vec<CellLayout>>,
+    pub cell_links: Vec<Vec<Vec<ParsedUrl>>>,
+    pub scroll_left: Cell<Pixels>,
+    pub(crate) scrollbar_interaction_state: TableScrollbarInteractionState,
+    /// When `false`, the surrounding container already owns horizontal scrolling, so this table
+    /// should render at full intrinsic width without introducing its own clip, scrollbar, or
+    /// scroll event handling.
+    pub horizontal_scroll_allowed: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct TableScrollbarDragState {
+    pub start_position_x: Pixels,
+    pub start_scroll_left: Pixels,
+    pub scroll_data: ScrollData,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct TableScrollbarInteractionState {
+    drag_state: Cell<Option<TableScrollbarDragState>>,
+    hovered: Cell<bool>,
+}
+
+impl LaidOutTable {
+    pub fn height(&self) -> Pixels {
+        self.total_height
+    }
+
+    pub fn width(&self) -> Pixels {
+        self.config.width
+    }
+
+    pub fn spacing(&self) -> BlockSpacing {
+        self.config.spacing
+    }
+
+    pub fn content_length(&self) -> CharOffset {
+        self.content_length
+    }
+
+    pub fn viewport_width(&self, viewport_width: Pixels) -> Pixels {
+        if !self.horizontal_scroll_allowed {
+            return self.width();
+        }
+        viewport_width.min(self.width())
+    }
+
+    pub fn max_scroll_left(&self, viewport_width: Pixels) -> Pixels {
+        if !self.horizontal_scroll_allowed {
+            return Pixels::zero();
+        }
+        (self.width() - self.viewport_width(viewport_width)).max(Pixels::zero())
+    }
+
+    pub fn scroll_left(&self) -> Pixels {
+        if !self.horizontal_scroll_allowed {
+            return Pixels::zero();
+        }
+        self.scroll_left.get()
+    }
+
+    pub fn set_scroll_left(&self, scroll_left: Pixels, viewport_width: Pixels) -> bool {
+        if !self.horizontal_scroll_allowed {
+            return false;
+        }
+        let clamped = scroll_left
+            .max(Pixels::zero())
+            .min(self.max_scroll_left(viewport_width));
+        if clamped.approx_eq(self.scroll_left.get(), UNIT_MARGIN) {
+            false
+        } else {
+            self.scroll_left.set(clamped);
+            true
+        }
+    }
+
+    pub fn scroll_horizontally(&self, delta: Pixels, viewport_width: Pixels) -> bool {
+        if !self.horizontal_scroll_allowed {
+            return false;
+        }
+        self.set_scroll_left(self.scroll_left.get() - delta, viewport_width)
+    }
+
+    pub(crate) fn start_scrollbar_drag(&self, start_position_x: Pixels, scroll_data: ScrollData) {
+        self.scrollbar_interaction_state
+            .drag_state
+            .set(Some(TableScrollbarDragState {
+                start_position_x,
+                start_scroll_left: self.scroll_left(),
+                scroll_data,
+            }));
+    }
+
+    pub(crate) fn end_scrollbar_drag(&self) -> bool {
+        self.scrollbar_interaction_state.drag_state.take().is_some()
+    }
+
+    pub(crate) fn scrollbar_drag_state(&self) -> Option<TableScrollbarDragState> {
+        self.scrollbar_interaction_state.drag_state.get()
+    }
+
+    pub(crate) fn scrollbar_hovered(&self) -> bool {
+        self.scrollbar_interaction_state.hovered.get()
+    }
+
+    pub(crate) fn set_scrollbar_hovered(&self, hovered: bool) -> bool {
+        self.scrollbar_interaction_state.hovered.replace(hovered) != hovered
+    }
+
+    pub(crate) fn clear_scrollbar_interaction_state(&self) {
+        self.scrollbar_interaction_state.drag_state.set(None);
+        self.scrollbar_interaction_state.hovered.set(false);
+    }
+
+    pub fn reveal_offset(&self, offset: CharOffset, viewport_width: Pixels) -> bool {
+        if !self.horizontal_scroll_allowed {
+            return false;
+        }
+        let Some(bounds) = self.relative_character_bounds(offset) else {
+            return false;
+        };
+        let viewport_width = self.viewport_width(viewport_width);
+        let mut new_scroll_left = self.scroll_left.get();
+        let visible_start = self.scroll_left.get();
+        let visible_end = visible_start + viewport_width;
+        let character_start = Pixels::new(bounds.origin_x());
+        let character_end = Pixels::new(bounds.origin_x() + bounds.width());
+
+        if character_start - TABLE_SCROLL_REVEAL_MARGIN < visible_start {
+            new_scroll_left = (character_start - TABLE_SCROLL_REVEAL_MARGIN).max(Pixels::zero());
+        } else if character_end + TABLE_SCROLL_REVEAL_MARGIN > visible_end {
+            new_scroll_left =
+                (character_end + TABLE_SCROLL_REVEAL_MARGIN - viewport_width).max(Pixels::zero());
+        }
+
+        self.set_scroll_left(new_scroll_left, viewport_width)
+    }
+
+    pub fn character_bounds(&self, offset: CharOffset, table_origin: Vector2F) -> Option<RectF> {
+        let bounds = self.relative_character_bounds(offset)?;
+        Some(RectF::new(
+            table_origin + bounds.origin() - vec2f(self.scroll_left.get().as_f32(), 0.0),
+            bounds.size(),
+        ))
+    }
+
+    pub fn lines(&self) -> LineCount {
+        LineCount(1 + self.table.rows.len())
+    }
+
+    /// Maps an x/y coordinate within the table content bounds to the nearest
+    /// character offset in the table's flattened content stream.
+    pub fn coordinate_to_offset(&self, x: f32, y: f32) -> CharOffset {
+        let row = self.row_at_y(y);
+        let col = self.col_at_x(x);
+
+        let Some(cell_range) = self.offset_map.cell_range(row, col) else {
+            return CharOffset::zero();
+        };
+        let Some(cell_offset_map) = self.cell_offset_maps.get(row).and_then(|r| r.get(col)) else {
+            return cell_range.start;
+        };
+        let cell_start = cell_range.start;
+        if cell_offset_map.rendered_length() == CharOffset::zero() {
+            return cell_start
+                + cell_offset_map
+                    .rendered_to_source(CharOffset::zero())
+                    .as_usize();
+        }
+
+        let row_y_start = self.row_y_offsets.get(row).copied().unwrap_or(0.0);
+        let col_start_x = self.col_x_offsets.get(col).copied().unwrap_or(0.0);
+        let col_width = self
+            .column_widths
+            .get(col)
+            .map(|w| w.as_f32())
+            .unwrap_or(0.0);
+
+        let cell_content_start_x = col_start_x + self.config.style.cell_padding;
+        let cell_content_start_y = row_y_start + self.config.style.cell_padding;
+        let cell_content_width = (col_width - self.config.style.cell_padding * 2.0).max(0.0);
+
+        let x_in_cell = (x - cell_content_start_x).max(0.0);
+        let y_in_cell = (y - cell_content_start_y).max(0.0);
+
+        if let Some(cell_layout) = self.cell_layouts.get(row).and_then(|r| r.get(col)) {
+            let line_idx = cell_layout.line_at_y_offset(y_in_cell);
+            let rendered_offset = cell_layout.char_at_x_in_line(line_idx, x_in_cell);
+            return cell_start
+                + cell_offset_map
+                    .rendered_to_source(rendered_offset)
+                    .as_usize();
+        }
+        if x_in_cell <= 0.0 {
+            return cell_start
+                + cell_offset_map
+                    .rendered_to_source(CharOffset::zero())
+                    .as_usize();
+        }
+        if x_in_cell >= cell_content_width {
+            return cell_start
+                + cell_offset_map
+                    .rendered_to_source(cell_offset_map.rendered_length())
+                    .as_usize();
+        }
+        cell_start
+            + cell_offset_map
+                .rendered_to_source(CharOffset::zero())
+                .as_usize()
+    }
+
+    /// Returns the row index containing the provided y coordinate.
+    fn row_at_y(&self, y: f32) -> usize {
+        let num_rows = self.row_y_offsets.len().saturating_sub(1);
+        let idx = self.row_y_offsets.partition_point(|&offset| offset <= y);
+        idx.saturating_sub(1).min(num_rows.saturating_sub(1))
+    }
+
+    /// Returns the column index containing the provided x coordinate.
+    fn col_at_x(&self, x: f32) -> usize {
+        let num_cols = self.col_x_offsets.len().saturating_sub(1);
+        let idx = self.col_x_offsets.partition_point(|&offset| offset <= x);
+        idx.saturating_sub(1).min(num_cols.saturating_sub(1))
+    }
+
+    /// Returns the hyperlink URL at the given character offset within the table,
+    /// if the offset falls within a linked fragment.
+    pub fn link_at_offset(&self, offset: CharOffset) -> Option<String> {
+        let cell_at = self.offset_map.cell_at_offset(offset)?;
+        let target = self
+            .cell_offset_maps
+            .get(cell_at.row)?
+            .get(cell_at.col)?
+            .source_to_rendered(cell_at.offset_in_cell)
+            .as_usize();
+        self.cell_links
+            .get(cell_at.row)?
+            .get(cell_at.col)?
+            .iter()
+            .find(|link| link.url_range().contains(&target))
+            .map(ParsedUrl::link)
+    }
+
+    fn relative_character_bounds(&self, offset: CharOffset) -> Option<RectF> {
+        let cell = self.offset_map.cell_at_offset(offset)?;
+        let rendered_offset = self
+            .cell_offset_maps
+            .get(cell.row)?
+            .get(cell.col)?
+            .source_to_rendered(cell.offset_in_cell);
+        let cell_layout = self.cell_layouts.get(cell.row)?.get(cell.col)?;
+        let line_idx = cell_layout
+            .line_at_char_offset(rendered_offset)
+            .unwrap_or(0);
+        let line_y = cell_layout
+            .line_y_offsets
+            .get(line_idx)
+            .copied()
+            .unwrap_or(0.0);
+        let line_height = cell_layout
+            .line_heights
+            .get(line_idx)
+            .copied()
+            .unwrap_or(20.0);
+        let start_x = cell_layout.x_for_char_in_line(line_idx, rendered_offset.as_usize());
+        let end_x = cell_layout.x_for_char_in_line(line_idx, rendered_offset.as_usize() + 1);
+        Some(RectF::new(
+            self.cell_content_origin(cell.row, cell.col) + vec2f(start_x, line_y),
+            vec2f((end_x - start_x).max(1.0), line_height),
+        ))
+    }
+
+    pub(crate) fn cell_content_origin(&self, row: usize, col: usize) -> Vector2F {
+        let col_start_x = self.col_x_offsets.get(col).copied().unwrap_or(0.0);
+        let row_start_y = self.row_y_offsets.get(row).copied().unwrap_or(0.0);
+        vec2f(
+            col_start_x + self.config.style.cell_padding + self.cell_alignment_x_offset(row, col),
+            row_start_y + self.config.style.cell_padding,
+        )
+    }
+
+    fn cell_alignment_x_offset(&self, row: usize, col: usize) -> f32 {
+        let cell_content_width = self
+            .column_widths
+            .get(col)
+            .map(|width| width.as_f32())
+            .unwrap_or(0.0)
+            - self.config.style.cell_padding * 2.0;
+        let cell_content_width = cell_content_width.max(0.0);
+        let frame_width = self
+            .cell_text_frames
+            .get(row)
+            .and_then(|row_frames| row_frames.get(col))
+            .map(|frame| frame.max_width())
+            .unwrap_or(0.0);
+
+        match self.table.alignments.get(col).copied().unwrap_or_default() {
+            TableAlignment::Left => 0.0,
+            TableAlignment::Center => (cell_content_width - frame_width).max(0.0) / 2.0,
+            TableAlignment::Right => (cell_content_width - frame_width).max(0.0),
+        }
+    }
+}
+
+impl HorizontalRuleConfig {
+    pub fn line_size(&self) -> Vector2F {
+        vec2f(self.width.as_f32(), self.line_height.as_f32())
+    }
+}
+
+/// A block's position within a code editor.
+#[derive(Debug, Clone, Copy)]
+pub enum BlockLocation {
+    Start,
+    Middle,
+    End,
+}
+
+impl Add for BlockLocation {
+    type Output = Self;
+
+    /// Combine two BlockLocations. This operation is non-commutative; the left-hand side should
+    /// come before the right-hand side. Precedence order is `Start` > `End` > `Middle`
+    fn add(self, rhs: Self) -> Self::Output {
+        match (self, rhs) {
+            (Self::Start, _) => Self::Start,
+            (_, Self::End) => Self::End,
+            (Self::Middle, Self::Middle) => Self::Middle,
+            _ => {
+                // Out-of-order block locations should not be added together.
+                if ChannelState::enable_debug_features() {
+                    report_error!(
+                        "Tried to combine block location with later location",
+                        extra: { "location" => ?self, "later_location" => ?rhs }
+                    );
+                }
+                Self::Middle
+            }
+        }
+    }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExpansionType {
+    /// Expand the visible section down.
+    /// Unhide the top of the hidden section.
+    ExpandDown,
+    /// Expand the visible section up.
+    /// Unhide the bottom of the hidden section.
+    ExpandUp,
+    /// Unhide the entire hidden section.
+    Both,
+}
+
+impl ExpansionType {
+    pub fn icon(&self) -> Icon {
+        match self {
+            Self::ExpandDown => Icon::ExpandDown,
+            Self::ExpandUp => Icon::ExpandUp,
+            Self::Both => Icon::ExpandUpAndDown,
+        }
+    }
+}
+
+/// Get the gutter buttons that will be displayed for a hidden section
+/// based on the hidden section's location and the number of lines it covers.
+/// Hidden sections at the start and end of a file have one directional button.
+/// Large hidden sections in the middle of a file get two buttons to
+/// expand in either direction.
+/// Small hidden sections in the middle of a file get a single button to
+/// expand the entire hidden section at once.
+pub fn gutter_expansion_button_types(
+    block_location: &BlockLocation,
+    hidden_range_line_count: usize,
+) -> Vec<ExpansionType> {
+    match block_location {
+        BlockLocation::Start => vec![ExpansionType::ExpandUp],
+        BlockLocation::End => vec![ExpansionType::ExpandDown],
+        BlockLocation::Middle => {
+            if hidden_range_line_count >= CODE_EDITOR_HIDDEN_SECTION_EXPANSION_LINES {
+                vec![ExpansionType::ExpandDown, ExpansionType::ExpandUp]
+            } else {
+                vec![ExpansionType::Both]
+            }
+        }
+    }
+}
+// `Clone`, not `Copy`: holds a `MouseStateHandle` (`Arc`-backed), like
+// `BlockItem::TaskList`. The hidden-range dedupe paths clone configs accordingly.
+#[derive(Debug, Clone)]
+pub struct HiddenBlockConfig {
+    line_count: LineCount,
+    content_length: CharOffset,
+    // The location of the block is set when the hidden section is first laid out,
+    // and updated in RenderState.dedupe_hidden_ranges.
+    block_location: BlockLocation,
+    // Persistent hover state for the full-width bar, so it can show a hover
+    // highlight and respond to a double-click. Created once per section and
+    // carried across re-layouts (including range dedupe, which preserves the
+    // accumulating range's handle).
+    mouse_state: MouseStateHandle,
+}
+
+impl HiddenBlockConfig {
+    pub fn new(
+        line_count: LineCount,
+        content_length: CharOffset,
+        block_location: BlockLocation,
+    ) -> Self {
+        Self {
+            line_count,
+            content_length,
+            block_location,
+            mouse_state: MouseStateHandle::default(),
+        }
+    }
+
+    pub fn mouse_state(&self) -> MouseStateHandle {
+        self.mouse_state.clone()
+    }
+
+    pub fn height(&self) -> Pixels {
+        let base_height = HIDDEN_BLOCK_HEIGHT.as_f32();
+        (self.display_line_count() as f32 * base_height).into_pixels()
+    }
+
+    fn display_line_count(&self) -> usize {
+        self.gutter_button_types().len()
+    }
+
+    fn gutter_button_types(&self) -> Vec<ExpansionType> {
+        gutter_expansion_button_types(&self.block_location, self.line_count.as_usize())
+    }
+
+    pub fn line_count(&self) -> LineCount {
+        self.line_count
+    }
+
+    pub fn content_length(&self) -> CharOffset {
+        self.content_length
+    }
+}
+
+impl AddAssign for HiddenBlockConfig {
+    fn add_assign(&mut self, other: Self) {
+        self.line_count += other.line_count;
+        self.content_length += other.content_length;
+        self.block_location = self.block_location + other.block_location;
+    }
+}
+
+/// A placeholder element for a cursor that is at the end of the buffer and on a newline.
+/// In this case, we won't have a TextFrame because the new paragraph is empty. But we should
+/// still render the cursor.
+#[derive(Debug, Clone)]
+pub struct Cursor {
+    height: Pixels,
+    width: Pixels,
+    minimum_height: Option<Pixels>,
+    spacing: BlockSpacing,
+}
+
+impl Cursor {
+    pub fn new(
+        height: Pixels,
+        width: Pixels,
+        spacing: BlockSpacing,
+        minimum_height: Option<Pixels>,
+    ) -> Self {
+        Self {
+            height,
+            width,
+            spacing,
+            minimum_height,
+        }
+    }
+
+    pub fn spacing(&self) -> BlockSpacing {
+        self.spacing
+    }
+
+    /// The size of this cursor, in pixels.
+    pub fn size(&self) -> Vector2F {
+        vec2f(self.width.as_f32(), self.height.as_f32())
+    }
+}
+
+impl RenderState {
+    /// Create a new `RenderState` model (Pixels/GUI mode).
+    /// The initial content will be a single **trailing newline**.
+    pub fn new(
+        styles: RichTextStyles,
+        lazy_layout: bool,
+        hidden_lines: Option<ModelHandle<HiddenLinesModel>>,
+        ctx: &mut ModelContext<Self>,
+    ) -> Self {
+        let (element_tx, element_rx) = async_channel::unbounded();
+        ctx.spawn_stream_local(element_rx, Self::apply_element_update, |_, _| {});
+
+        let (layout_tx, layout_rx) = async_channel::unbounded();
+        ctx.spawn_stream_local(layout_rx, Self::handle_layout_action, |_, _| {});
+
+        Self::new_internal(
+            ctx.model_id(),
+            element_tx,
+            layout_tx,
+            styles,
+            lazy_layout,
+            Pixels::zero(),
+            Pixels::zero(),
+            hidden_lines,
+            LayoutMode::Pixels,
+        )
+    }
+
+    /// Create a new `RenderState` in TUI char-cell mode.
+    ///
+    /// In this mode, soft-wrap layout uses character-count arithmetic instead of font shaping.
+    /// The async font pipeline is still wired up (so `LayoutAction` messages sent by other code
+    /// don't cause panics), but `BufferEdit` actions are no-ops — the caller must drive layout
+    /// updates via [`Self::update_char_cell_text`].
+    ///
+    /// `hidden_lines` backs [`CharCellState::hidden_line_ranges`]; pass the owning
+    /// editor's [`HiddenLinesModel`] so char-cell consumers see model-driven line hiding.
+    /// Required (unlike [`Self::new`]'s optional handle): every char-cell editor is
+    /// built through `CodeEditorModel::new_tui`, which always has one.
+    ///
+    /// CharCell mode consumes `styles.base_text.fixed_width_tab_size` for tab
+    /// geometry. Other style fields are retained for API compatibility but are
+    /// unused; callers (e.g. `warp_tui`) may supply a minimal stub.
+    pub fn new_tui(
+        terminal_width: u16,
+        styles: RichTextStyles,
+        hidden_lines: ModelHandle<HiddenLinesModel>,
+        ctx: &mut ModelContext<Self>,
+    ) -> Self {
+        let char_cell = CharCellState::new_with_styles(terminal_width, &styles, Some(hidden_lines));
+        let (element_tx, element_rx) = async_channel::unbounded();
+        ctx.spawn_stream_local(element_rx, Self::apply_element_update, |_, _| {});
+
+        let (layout_tx, layout_rx) = async_channel::unbounded();
+        ctx.spawn_stream_local(layout_rx, Self::handle_layout_action, |_, _| {});
+
+        // In CharCell mode the SumTree<BlockItem> is never queried for layout, so
+        // we create an empty tree rather than the usual style-dependent trailing newline.
+        let entity_id = ctx.model_id();
+        let (viewport_width, viewport_height) = (Pixels::zero(), Pixels::zero());
+        Self {
+            styles,
+            show_final_trailing_newline_when_non_empty: false,
+            has_final_trailing_newline: Cell::new(false),
+            viewport: ViewportState::new(viewport_width, viewport_height),
+            selections: Default::default(),
+            decorations: Default::default(),
+            content: RefCell::new(SumTree::new()),
+            element_tx,
+            layout_tx,
+            width_setting: Default::default(),
+            saved_positions: SavedPositions::new(entity_id),
+            buffer_version: RefCell::new(Default::default()),
+            lazy_layout: false,
+            pending_edits: Mutex::new(Vec::new()),
+            #[cfg(any(test, feature = "test-util"))]
+            outstanding_layouts: Default::default(),
+            pending_selection_change: Mutex::new(None),
+            layout_options: Default::default(),
+            document_path: None,
+            pending_scroll_fraction: None,
+            hidden_lines: None,
+            layout_mode: LayoutMode::CharCell(char_cell),
+        }
+    }
+
+    /// Create a new `RenderState` with the given configuration.
+    /// The initial content will be a single **trailing newline**.
+    #[cfg(test)]
+    pub fn new_for_test(
+        styles: RichTextStyles,
+        viewport_width: Pixels,
+        viewport_height: Pixels,
+    ) -> Self {
+        let (element_tx, _) = async_channel::unbounded();
+        let (layout_tx, _) = async_channel::unbounded();
+        Self::new_internal(
+            EntityId::new(),
+            element_tx,
+            layout_tx,
+            styles,
+            false,
+            viewport_width,
+            viewport_height,
+            None,
+            LayoutMode::Pixels,
+        )
+    }
+
+    /// Create a new `RenderState` with the given configuration.
+    /// The initial content will be a single **trailing newline**.
+    #[allow(clippy::too_many_arguments)]
+    fn new_internal(
+        entity_id: EntityId,
+        element_tx: async_channel::Sender<ElementUpdate>,
+        layout_tx: async_channel::Sender<LayoutAction>,
+        styles: RichTextStyles,
+        lazy_layout: bool,
+        viewport_width: Pixels,
+        viewport_height: Pixels,
+        hidden_lines: Option<ModelHandle<HiddenLinesModel>>,
+        layout_mode: LayoutMode,
+    ) -> Self {
+        let content = SumTree::from_item(Self::final_trailing_newline_cursor(&styles));
+        Self {
+            styles,
+            show_final_trailing_newline_when_non_empty: true,
+            has_final_trailing_newline: Cell::new(true),
+            viewport: ViewportState::new(viewport_width, viewport_height),
+            selections: Default::default(),
+            decorations: Default::default(),
+            content: RefCell::new(content),
+            element_tx,
+            layout_tx,
+            width_setting: Default::default(),
+            saved_positions: SavedPositions::new(entity_id),
+            buffer_version: RefCell::new(Default::default()),
+            lazy_layout,
+            pending_edits: Mutex::new(Vec::new()),
+            #[cfg(any(test, feature = "test-util"))]
+            outstanding_layouts: Default::default(),
+            pending_selection_change: Mutex::new(None),
+            pending_scroll_fraction: None,
+            layout_options: Default::default(),
+            document_path: None,
+            hidden_lines,
+            layout_mode,
+        }
+    }
+
+    /// Returns the char-cell layout state, or `None` in pixel (GUI) mode.
+    ///
+    /// All char-cell queries and mutations go through this accessor and the
+    /// methods on [`CharCellState`], so they are only reachable when the model is
+    /// actually in char-cell mode — there is no implicit "CharCell-only" contract
+    /// on `RenderState` for callers to violate. The width stored there is the
+    /// single source of truth for the TUI input's width: navigation and scroll
+    /// read it at event time, so callers should read it via
+    /// [`CharCellState::terminal_width`] rather than caching a copy.
+    pub fn char_cell(&self) -> Option<&CharCellState> {
+        match &self.layout_mode {
+            LayoutMode::CharCell(cc) => Some(cc),
+            LayoutMode::Pixels => None,
+        }
+    }
+
+    fn final_trailing_newline_cursor(styles: &RichTextStyles) -> BlockItem {
+        BlockItem::TrailingNewLine(Cursor::new(
+            styles.base_line_height(),
+            styles.cursor_width.into_pixels(),
+            styles
+                .block_spacings
+                .from_block_style(&BufferBlockStyle::PlainText),
+            styles.minimum_paragraph_height,
+        ))
+    }
+
+    fn should_show_final_trailing_newline(&self, tree_is_empty: bool) -> bool {
+        self.show_final_trailing_newline_when_non_empty || tree_is_empty
+    }
+
+    fn tree_ends_with_trailing_newline(tree: &SumTree<BlockItem>) -> bool {
+        let mut cursor = tree.cursor::<(), ()>();
+        cursor.descend_to_last_item(tree);
+        cursor.item().is_some_and(|item| item.is_trailing_newline())
+    }
+
+    fn remove_final_trailing_newline_if_present(&mut self) {
+        if !self.has_final_trailing_newline.get() {
+            return;
+        }
+
+        let content = self.content.get_mut();
+        let new_tree = {
+            let mut cursor = content.cursor::<CharOffset, ()>();
+            cursor.descend_to_last_item(content);
+
+            if !cursor.item().is_some_and(BlockItem::is_trailing_newline)
+                || cursor.prev_item().is_none()
+            {
+                return;
+            }
+
+            let last_item_start = *cursor.seek_position();
+            let mut slice_cursor = content.cursor::<CharOffset, ()>();
+            slice_cursor.slice(&last_item_start, SeekBias::Left)
+        };
+
+        *content = new_tree;
+        self.has_final_trailing_newline.set(false);
+    }
+
+    fn add_final_trailing_newline_if_missing(&mut self) {
+        if self.has_final_trailing_newline.get() {
+            return;
+        }
+
+        self.content
+            .get_mut()
+            .push(Self::final_trailing_newline_cursor(&self.styles));
+        self.has_final_trailing_newline.set(true);
+    }
+
+    /// Returns reference to the underlying content tree.
+    pub fn content(&self) -> RenderContentTreeRef<'_> {
+        RenderContentTreeRef(self.content.borrow())
+    }
+
+    pub fn with_width_setting(mut self, setting: WidthSetting) -> Self {
+        self.width_setting = setting;
+        self
+    }
+
+    /// Whether the surrounding container for this render state already provides horizontal
+    /// scrolling over its full content area. Blocks that would otherwise introduce a nested
+    /// horizontal scroll (for example, wide Markdown tables) should render at full intrinsic
+    /// width in that case.
+    pub fn container_scrolls_horizontally(&self) -> bool {
+        matches!(self.width_setting, WidthSetting::InfiniteWidth)
+    }
+
+    pub fn layout_options(&self) -> RenderLayoutOptions {
+        self.layout_options.clone()
+    }
+
+    pub fn set_render_mermaid_diagrams(&mut self, render_mermaid_diagrams: bool) -> bool {
+        if self.layout_options.render_mermaid_diagrams == render_mermaid_diagrams {
+            return false;
+        }
+
+        self.layout_options.render_mermaid_diagrams = render_mermaid_diagrams;
+        true
+    }
+
+    pub fn set_mermaid_render_offsets(&mut self, offsets: HashSet<CharOffset>) -> bool {
+        if self.layout_options.mermaid_render_offsets == offsets {
+            return false;
+        }
+        self.layout_options.mermaid_render_offsets = offsets;
+        true
+    }
+
+    pub fn set_show_final_trailing_newline_when_non_empty(&mut self, show: bool) {
+        if self.show_final_trailing_newline_when_non_empty == show {
+            return;
+        }
+
+        self.show_final_trailing_newline_when_non_empty = show;
+
+        if show {
+            self.add_final_trailing_newline_if_missing();
+        } else {
+            self.remove_final_trailing_newline_if_present();
+        }
+
+        self.update_content_sizing();
+    }
+
+    pub fn max_line(&self) -> LineCount {
+        if let LayoutMode::CharCell(ref cc) = self.layout_mode {
+            return cc.max_line();
+        }
+        self.content.borrow().summary().lines
+    }
+
+    /// The complete height of all laid-out content.
+    pub fn height(&self) -> Pixels {
+        (self.content.borrow().summary().height as f32).into_pixels()
+    }
+
+    pub fn width(&self) -> Pixels {
+        self.content.borrow().summary().width
+    }
+
+    pub fn next_render_buffer_version(&self) -> Option<BufferVersion> {
+        self.buffer_version.borrow().next_render_version
+    }
+
+    /// The number of blocks in the render model.
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn blocks(&self) -> usize {
+        self.content().block_items().count()
+    }
+
+    pub fn markdown_table_count(&self) -> usize {
+        self.content()
+            .block_items()
+            .filter(|item| matches!(item, BlockItem::Table(_)))
+            .count()
+    }
+
+    pub fn is_entire_range_of_type(
+        &self,
+        range: &Range<CharOffset>,
+        matches_type: impl FnMut(&BlockItem) -> bool,
+    ) -> bool {
+        self.content().is_entire_range_of_type(range, matches_type)
+    }
+
+    /// The max offset in the laid out content. Note that we minus one in the end
+    /// here because have a dummy placeholder offset for the end of the buffer.
+    pub fn max_offset(&self) -> CharOffset {
+        self.content
+            .borrow()
+            .summary()
+            .content_length
+            .saturating_sub(&CharOffset::from(1))
+    }
+
+    /// Returns the vertical viewport offset of the location.
+    pub fn vertical_offset_at_render_location(
+        &self,
+        location: RenderLineLocation,
+    ) -> Option<Pixels> {
+        let content = self.content.borrow();
+        let mut cursor = content.cursor::<LineCount, LayoutSummary>();
+
+        Self::move_cursor_to_location(&mut cursor, location);
+
+        Some(cursor.positioned_item()?.start_y_offset - self.viewport().scroll_top())
+    }
+
+    fn move_cursor_to_location<'a>(
+        cursor: &mut sum_tree::Cursor<'a, BlockItem, LineCount, LayoutSummary>,
+        location: RenderLineLocation,
+    ) {
+        match location {
+            RenderLineLocation::Current(_) => {
+                cursor.seek_clamped(&location.line_count(), SeekBias::Right)
+            }
+            RenderLineLocation::Temporary {
+                index_from_at_line, ..
+            } => {
+                cursor.seek_clamped(&location.line_count(), SeekBias::Left);
+                if location.line_count() > LineCount(0) {
+                    cursor.next();
+                }
+                // Temporary blocks are 0 indexed.
+                for _ in 0..index_from_at_line {
+                    cursor.next();
+                }
+            }
+        }
+    }
+
+    /// Given a line range and the viewport max width, returns the viewport item and block for that range.
+    pub fn blocks_in_line_range(
+        &self,
+        line_range: Range<RenderLineLocation>,
+        max_width: Pixels,
+    ) -> Vec<(ViewportItem, BlockItem)> {
+        let content = self.content.borrow();
+        let mut cursor = content.cursor::<LineCount, LayoutSummary>();
+        Self::move_cursor_to_location(&mut cursor, line_range.start);
+
+        let mut blocks = Vec::new();
+        let mut previous_line = line_range.start.line_count();
+        let mut index_within_line = if let RenderLineLocation::Temporary {
+            index_from_at_line,
+            ..
+        } = line_range.start
+        {
+            index_from_at_line
+        } else {
+            0
+        };
+        loop {
+            let Some(item) = cursor.positioned_item() else {
+                break;
+            };
+            if item.start_line != previous_line {
+                index_within_line = 0;
+            } else {
+                index_within_line += 1;
+            }
+
+            previous_line = item.start_line;
+
+            let spacing = item.item.spacing();
+            let content_width = max_width - spacing.x_axis_offset();
+            let viewport_item = ViewportItem {
+                viewport_offset: Pixels::zero(),
+                content_offset: item.start_y_offset,
+                content_size: vec2f(content_width.as_f32(), item.item.content_height().as_f32()),
+                spacing,
+                block_offset: item.start_char_offset,
+            };
+            blocks.push((viewport_item, item.item.clone()));
+
+            // For iterating on current line ranges, once we detect that the current item matches / or exceeds the end line,
+            // we can break out of the loop. For temporary line ranges, we should check if 1) the current item hasn't past the at line
+            // temporary block is anchored to 2) we haven't exceeded the index.
+            match line_range.end {
+                RenderLineLocation::Current(end_line) => {
+                    if item.end_line() >= end_line {
+                        break;
+                    }
+                }
+                RenderLineLocation::Temporary {
+                    index_from_at_line: index,
+                    at_line,
+                } => {
+                    if item.start_line > at_line
+                        || (item.start_line == at_line && index_within_line >= index)
+                    {
+                        break;
+                    }
+                }
+            }
+            cursor.next();
+        }
+
+        blocks
+    }
+
+    /// Baseline styles applied to rich text when rendering.
+    pub fn styles(&self) -> &RichTextStyles {
+        &self.styles
+    }
+
+    /// Get the document path for resolving relative paths (e.g. images).
+    pub fn document_path(&self) -> Option<&std::path::Path> {
+        self.document_path.as_deref()
+    }
+
+    /// Set the document path for resolving relative paths (e.g. images).
+    pub fn set_document_path(&mut self, path: Option<std::path::PathBuf>) {
+        self.document_path = path;
+    }
+
+    /// Update the styles used to render text. Because the render model does not directly reference
+    /// the content model, the caller is responsible for updating the layout with the new styles.
+    ///
+    /// This returns whether a new layout is needed.
+    pub fn update_styles(&mut self, new_styles: RichTextStyles) -> StyleUpdateAction {
+        let styles_changed = new_styles != self.styles;
+        if styles_changed {
+            let action = if self.styles.requires_relayout(&new_styles) {
+                StyleUpdateAction::Relayout
+            } else {
+                StyleUpdateAction::Repaint
+            };
+
+            self.styles = new_styles;
+            return action;
+        }
+        StyleUpdateAction::None
+    }
+
+    /// Handle to obtain saved position IDs within the rendered text.
+    pub fn saved_positions(&self) -> &SavedPositions {
+        &self.saved_positions
+    }
+
+    /// Returns the current viewport state.
+    pub fn viewport(&self) -> &ViewportState {
+        &self.viewport
+    }
+
+    /// Return the character offset ranges of items in the viewport. Note that the start / end offset
+    /// could be out of the viewport if the item is only partially visible.
+    pub fn viewport_charoffset_range(&self) -> RangeSet<CharOffset> {
+        let mut range_set = RangeSet::new();
+        let content = self.content.borrow();
+        let mut cursor = content.cursor::<Height, LayoutSummary>();
+        cursor.seek_clamped(&self.viewport.scroll_top().into(), SeekBias::Left);
+
+        let viewport_end_height = self.viewport.scroll_top() + self.viewport().height();
+
+        // Track the current range being built
+        let mut current_range_start: Option<CharOffset> = None;
+
+        // Iterate through all items in the viewport
+        loop {
+            let item = cursor.positioned_item();
+            if let Some(positioned_item) = item {
+                // Stop if we've gone past the viewport
+                if positioned_item.start_y_offset > viewport_end_height {
+                    break;
+                }
+
+                let item_start = positioned_item.start_char_offset;
+
+                if positioned_item.item.is_hidden() {
+                    // This is a hidden item and we're not including hidden items
+                    if let Some(range_start) = current_range_start.take() {
+                        // Close the current range before this hidden item
+                        if range_start < item_start {
+                            range_set.insert(range_start..item_start);
+                        }
+                    }
+                } else {
+                    // If we don't have a current range, start one
+                    if current_range_start.is_none() {
+                        current_range_start = Some(item_start);
+                    }
+                }
+
+                // Move to the next item
+                cursor.next();
+            } else {
+                // No more items
+                break;
+            }
+        }
+
+        // If we ended with an open range, close it
+        if let Some(range_start) = current_range_start
+            && range_start < self.max_offset()
+        {
+            range_set.insert(range_start..self.max_offset());
+        }
+
+        range_set
+    }
+
+    /// Stores the viewport size that was calculated during layout back into
+    /// the model.
+    ///
+    /// See [`ViewportState::set_size`].
+    pub fn set_viewport_size(&mut self, size_info: SizeInfo, ctx: &mut ModelContext<Self>) {
+        let height_changed = size_info
+            .viewport_size
+            .y()
+            .approx_ne(self.viewport.height().as_f32(), UNIT_MARGIN);
+
+        self.viewport
+            .set_size(size_info.viewport_size, self.width(), self.height());
+
+        // TODO(CLD-85): re-layout according to the high-level design (async, debounced, avoid
+        // where possible).
+        // In order to do this, we need to:
+        // - Extract debouncing logic from the main app crate
+        // - Support text layout outside the Element lifecycle
+        if size_info.needs_layout {
+            ctx.emit(RenderEvent::NeedsResize);
+        }
+
+        // Autoscroll when viewport height changes on mobile (e.g., keyboard appears)
+        if cfg!(target_family = "wasm") && height_changed {
+            self.request_autoscroll();
+        }
+    }
+
+    /// Scroll the viewport by the given number of lines. Even with precise
+    /// trackpad scrolling, all scroll events are reported in lines.
+    pub fn scroll(&mut self, delta: Pixels, ctx: &mut ModelContext<Self>) {
+        if self.viewport.scroll(delta, self.height()) {
+            ctx.notify();
+        }
+    }
+
+    pub fn scroll_horizontal(&mut self, delta: Pixels, ctx: &mut ModelContext<Self>) {
+        if self.viewport.scroll_horizontally(delta, self.width()) {
+            ctx.notify();
+        }
+    }
+
+    /// Scroll to a normalized position, as returned by [`Self::snapshot_scroll_position`].
+    ///
+    /// This will be serialized with respect to layout changes.
+    pub fn scroll_to(&mut self, position: ScrollPositionSnapshot) {
+        self.submit_layout_action(LayoutAction::ScrollTo(position))
+    }
+
+    /// Snapshot the current scroll position.
+    pub fn snapshot_scroll_position(&self) -> ScrollPositionSnapshot {
+        ScrollPositionSnapshot::from_scroll_top(self)
+    }
+
+    /// The current vertical scroll position as a fraction of the scrollable range, in `0..=1`.
+    ///
+    /// Unlike [`Self::snapshot_scroll_position`], this is document-independent, so it can be used
+    /// to preserve scroll position across a document swap (e.g. toggling markdown between raw and
+    /// rendered), where a char-offset snapshot cannot map between the two different documents.
+    pub fn scroll_fraction(&self) -> f32 {
+        self.viewport.scroll_fraction(self.height())
+    }
+
+    /// Scroll to the given `fraction` (clamped to `0..=1`) of the scrollable range, applied after
+    /// content at or past `minimum_version` has been laid out so the content height is known.
+    ///
+    /// `minimum_version` must be captured by the caller at submit time (typically the content
+    /// buffer's version right after the edit that produced the content to scroll). It cannot be
+    /// captured when the action is dequeued: the edit's `BufferEdit` may reach the layout channel
+    /// via a deferred subscription and arrive *after* this action, so the render model's own
+    /// version bookkeeping isn't reliable at dequeue time.
+    pub fn scroll_to_fraction(&mut self, fraction: f32, minimum_version: BufferVersion) {
+        self.submit_layout_action(LayoutAction::ScrollToFraction {
+            fraction,
+            minimum_version,
+        })
+    }
+
+    pub fn scroll_data_horizontal(&self) -> ScrollData {
+        let mut visible_px = self.viewport.width();
+        let total_size = self.width();
+        if visible_px.approx_eq(total_size, UNIT_MARGIN) {
+            // This is a hack copied from the BlockListElement. Due to floating-point
+            // errors, total_size and visible_px may be slightly different,
+            // even if they should be the same. In that case, set them to be
+            // equal so that a useless scroll bar isn't shown.
+            visible_px = total_size;
+        }
+
+        ScrollData {
+            scroll_start: self.viewport.scroll_left(),
+            visible_px,
+            total_size,
+        }
+    }
+
+    pub fn set_decorations_after_layout(
+        &mut self,
+        mut decoration_update: UpdateDecorationAfterLayout,
+    ) {
+        decoration_update.sort();
+        self.submit_layout_action(LayoutAction::DecorationChanged(decoration_update));
+    }
+
+    pub fn set_text_decorations(
+        &mut self,
+        decorations: impl Into<Vec<Decoration>>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.decorations.text = decorations.into();
+        // Generally, callers will provide already-sorted decorations, in which case the current
+        // Rust sorting algorithm aims for linear time.
+        self.decorations
+            .text
+            .sort_unstable_by_key(|decoration| decoration.end);
+        ctx.notify();
+    }
+
+    /// The current render-time decorations, sorted by end offset.
+    pub fn decorations(&self) -> &RenderDecoration {
+        &self.decorations
+    }
+
+    /// Update the render model's selection. To avoid flicker, this will not be rendered until the
+    /// next round of layout completes.
+    pub fn update_selection(
+        &mut self,
+        new_selection: RenderedSelectionSet,
+        buffer_version: BufferVersion,
+    ) {
+        self.submit_layout_action(LayoutAction::SelectionChanged {
+            selections: new_selection,
+            buffer_version,
+        });
+    }
+
+    /// The current rendered selection state. This should track the content-level
+    /// selection.
+    pub fn selections<'a>(&'a self) -> Ref<'a, RenderedSelectionSet> {
+        self.selections.borrow()
+    }
+
+    /// Check if the given offset is within any of the current selections.
+    pub fn offset_in_active_selection(&self, offset: CharOffset) -> bool {
+        self.selections()
+            .iter()
+            .any(|selection| offset > selection.start() && selection.end() + 1 > offset)
+    }
+
+    /// Check if the given offset any of the current selection heads.
+    pub fn is_selection_head(&self, offset: CharOffset) -> bool {
+        self.selections()
+            .iter()
+            .any(|selection| selection.head == offset)
+    }
+
+    /// Request an autoscroll using the given mode after text layout completes.
+    pub fn request_autoscroll_to(&mut self, mode: AutoScrollMode) {
+        self.submit_layout_action(LayoutAction::Autoscroll { mode });
+    }
+
+    /// Request an autoscroll to position the selection head within the viewport
+    /// after text layout completes.
+    pub fn request_autoscroll(&mut self) {
+        self.submit_layout_action(LayoutAction::Autoscroll {
+            mode: AutoScrollMode::ScrollToActiveSelections {
+                vertical_only: false,
+            },
+        });
+    }
+
+    /// Request an autoscroll to position the selection head within the viewport
+    /// after text layout completes, but only vertically (no horizontal autoscroll).
+    pub fn request_vertical_autoscroll(&mut self) {
+        self.submit_layout_action(LayoutAction::Autoscroll {
+            mode: AutoScrollMode::ScrollToActiveSelections {
+                vertical_only: true,
+            },
+        });
+    }
+
+    /// Request to autoscroll to a scroll top of exact character offset with a pixel delta.
+    pub fn request_autoscroll_to_exact_vertical(
+        &mut self,
+        character_offset: CharOffset,
+        pixel_delta: Pixels,
+    ) {
+        self.submit_layout_action(LayoutAction::Autoscroll {
+            mode: AutoScrollMode::ScrollToExactVertical {
+                character_offset,
+                pixel_delta,
+            },
+        });
+    }
+
+    /// Submit a layout update to be processed asynchronously. This avoids mutable-borrow issues.
+    pub(crate) fn submit_element_update(&self, update: ElementUpdate) {
+        if let Err(err) = self.element_tx.try_send(update) {
+            // We know the RenderState model still exists at this point, so it _should_ still be
+            // processing updates.
+            log::debug!("Error submitting layout update: {err}");
+        }
+    }
+
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn layout_complete(&self) -> impl std::future::Future<Output = ()> + use<> {
+        let outstanding_layouts = self.outstanding_layouts.clone();
+        async move {
+            while outstanding_layouts.load(std::sync::atomic::Ordering::SeqCst) > 0 {
+                futures_lite::future::yield_now().await;
+            }
+        }
+    }
+
+    fn handle_layout_action(&mut self, action: LayoutAction, ctx: &mut ModelContext<Self>) {
+        match action {
+            LayoutAction::SelectionChanged {
+                selections,
+                buffer_version,
+            } => {
+                if selections != *self.selections() {
+                    // If the version for the selection is newer than the last version we've rendered, then mark it as pending and apply it on our next layout
+                    // Otherwise immediately apply it.
+                    let active_version = self.buffer_version.borrow().last_rendered_version;
+                    if active_version.is_some_and(|v| v < buffer_version) {
+                        *self.pending_selection_change.lock() = Some(PendingSelectionUpdate {
+                            selection: selections,
+                            buffer_version,
+                        });
+                    } else {
+                        *self.selections.borrow_mut() = selections;
+                        ctx.notify();
+                    }
+                }
+            }
+            LayoutAction::DecorationChanged(decoration) => match decoration {
+                UpdateDecorationAfterLayout::Line(decoration) => {
+                    if decoration != self.decorations.line {
+                        self.decorations.line = decoration;
+                        ctx.notify();
+                    }
+                }
+                UpdateDecorationAfterLayout::LineAndText { line, text } => {
+                    let mut changed = false;
+
+                    if line != self.decorations.line {
+                        self.decorations.line = line;
+                        changed = true;
+                    }
+
+                    if text != self.decorations.text {
+                        self.decorations.text = text;
+                        changed = true;
+                    }
+
+                    if changed {
+                        ctx.notify();
+                    }
+                }
+            },
+            LayoutAction::Autoscroll { mode } => {
+                self.autoscroll(mode, ctx);
+            }
+            LayoutAction::ScrollTo(position) => {
+                if self
+                    .viewport
+                    .scroll_to(position.to_scroll_top(self), self.height())
+                {
+                    ctx.notify();
+                }
+            }
+            LayoutAction::ScrollToFraction {
+                fraction,
+                minimum_version,
+            } => {
+                // Always defer to `apply_element_update`, which runs after the element has been
+                // laid out — applying here would read a stale (often ~0) content height on an
+                // editor that has never rendered (a fresh pane has no viewport size yet) and clamp
+                // to the top. `minimum_version` comes from the submit site rather than the render
+                // model's own bookkeeping, because the edit that produced the content may reach the
+                // layout channel *after* this action. This mirrors the code editor's `ScrollTrigger`.
+                self.pending_scroll_fraction = Some(PendingScrollFraction {
+                    fraction,
+                    minimum_version,
+                });
+                // Trigger a re-render so a subsequent element layout applies the pending
+                // fraction even when the content is already quiescent — without this the
+                // restore would wait for an unrelated re-render.
+                ctx.notify();
+            }
+            LayoutAction::LayoutTemporaryBlock(blocks) => {
+                // Temporary blocks are interleaved deleted/replaced lines in diff
+                // views (only created by `CodeEditorModel::refresh_diff_state`).
+                //
+                // CharCell mode skips font layout: the blocks are stored on
+                // `CharCellState` (flattened to plain colors) for the display-row
+                // projection to interleave at their `insert_before` positions.
+                // No early return: the outstanding-layouts bookkeeping below the
+                // match must run for every action.
+                if let LayoutMode::CharCell(char_cell) = &self.layout_mode {
+                    let blocks = {
+                        let text_index = char_cell.text_index.borrow();
+                        blocks
+                            .into_iter()
+                            .map(|block| {
+                                CharCellTemporaryBlock::from_temporary_block(block, &text_index)
+                            })
+                            .collect()
+                    };
+                    char_cell.set_temporary_blocks(blocks);
+                } else if self.lazy_layout {
+                    // If we are performing layout lazily, push the temporary
+                    // blocks to the pending edits queue which is flushed at
+                    // editor element layout time.
+                    self.pending_edits
+                        .lock()
+                        .push(PendingLayout::TemporaryBlocks(blocks));
+                } else {
+                    self.layout_temporary_blocks(blocks, ctx);
+                    self.update_content_sizing();
+                }
+
+                ctx.emit(RenderEvent::LayoutUpdated);
+                ctx.notify();
+            }
+            LayoutAction::BufferEdit {
+                delta: _,
+                buffer_version,
+            } if matches!(self.layout_mode, LayoutMode::CharCell(_)) => {
+                // CharCell mode skips font shaping. CodeEditorModel drives char-cell layout
+                // synchronously via CharCellState::update_text after each buffer edit.
+                self.buffer_version.borrow_mut().next_render_version = Some(buffer_version);
+                ctx.emit(RenderEvent::LayoutUpdated);
+                ctx.notify();
+            }
+            LayoutAction::BufferEdit {
+                delta,
+                buffer_version,
+            } => {
+                // Materialize the hidden ranges based on the version.
+                let hidden_ranges = self
+                    .hidden_lines
+                    .as_ref()
+                    .map(|hl| hl.as_ref(ctx).hidden_ranges_at_version(buffer_version));
+
+                // If we are performing layout lazily, push the delta to the pending edits queue which is flushed
+                // at editor element layout time.
+                if self.lazy_layout {
+                    self.pending_edits.lock().push(PendingLayout::Edit {
+                        delta,
+                        hidden_ranges,
+                    });
+                } else {
+                    // If there were pending edits, we need to re-render so that RenderableBlocks
+                    // are properly laid out with the new set of BlockItems.
+                    self.layout_edit_delta(delta, hidden_ranges, ctx);
+                    self.update_content_sizing();
+
+                    self.flush_pending_selection_update(Some(buffer_version));
+                }
+                self.buffer_version.borrow_mut().next_render_version = Some(buffer_version);
+                ctx.emit(RenderEvent::LayoutUpdated);
+                ctx.notify();
+            }
+        }
+
+        #[cfg(any(test, feature = "test-util"))]
+        self.outstanding_layouts
+            .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Given the content version that we've just laid out and rendered, flush any pending selection for that content version
+    fn flush_pending_selection_update(&self, incoming_buffer_version: Option<BufferVersion>) {
+        let mut pending_selection = self.pending_selection_change.lock();
+        if let Some(selection) = &*pending_selection
+            && incoming_buffer_version
+                .map(|v| v >= selection.buffer_version)
+                .unwrap_or(true)
+        {
+            *self.selections.borrow_mut() = selection.selection.clone();
+            pending_selection.take();
+        }
+    }
+
+    fn layout_temporary_blocks(&self, blocks: Vec<TemporaryBlock>, app: &AppContext) {
+        let layout_context = self.layout_context(app);
+        let laid_out_blocks = layout_temporary_blocks(blocks, &layout_context);
+        self.reset_temporary_block(laid_out_blocks);
+    }
+
+    pub fn layout_edit_delta(
+        &self,
+        delta: EditDelta,
+        hidden_ranges: Option<RangeSet<CharOffset>>,
+        app: &AppContext,
+    ) {
+        let layout_context = self.layout_context(app);
+        let laid_out_edit = delta.layout_delta(
+            &layout_context,
+            self.document_path.as_deref(),
+            &self.layout_options,
+            hidden_ranges.clone(),
+            app,
+        );
+        self.layout_pending_edit(laid_out_edit, hidden_ranges);
+    }
+
+    fn layout_context<'a>(&'a self, ctx: &'a AppContext) -> TextLayout<'a> {
+        TextLayout::new(
+            ctx.font_cache().text_layout_system(),
+            &self.styles,
+            match self.width_setting {
+                WidthSetting::FitViewport => self.viewport.width().as_f32(),
+                WidthSetting::InfiniteWidth => f32::MAX,
+            },
+        )
+        .with_container_scrolls_horizontally(self.container_scrolls_horizontally())
+    }
+
+    /// If we are performing layout lazily, call this to flush the pending edits and selection changes
+    /// at layout time in the UI framework element cycle.
+    pub fn try_layout_pending_edits(&self, app: &AppContext) -> bool {
+        let mut pending_edits = self.pending_edits.lock();
+        let last_rendered_version = self.buffer_version.borrow_mut().start_layout();
+        let pending_edits_flushed = self.lazy_layout && !pending_edits.is_empty();
+
+        if pending_edits_flushed {
+            for edit in mem::take(&mut *pending_edits) {
+                match edit {
+                    PendingLayout::Edit {
+                        delta,
+                        hidden_ranges,
+                    } => {
+                        self.layout_edit_delta(delta, hidden_ranges, app);
+                    }
+                    PendingLayout::TemporaryBlocks(blocks) => {
+                        self.layout_temporary_blocks(blocks, app);
+                    }
+                };
+            }
+        }
+
+        // Flush the pending selection changes.
+        self.flush_pending_selection_update(last_rendered_version);
+        pending_edits_flushed
+    }
+
+    /// Updates the model with the results of laying out its element.
+    fn apply_element_update(&mut self, update: ElementUpdate, ctx: &mut ModelContext<Self>) {
+        // Clear up the remaining pending edits state after layout is completed. Also make sure we have the updated
+        // content sizing.
+        if self.lazy_layout {
+            self.update_content_sizing();
+        }
+        if update.pending_edits_flushed {
+            ctx.emit(RenderEvent::PendingEditsFlushed);
+        }
+
+        if let Some(viewport_size) = update.viewport_size {
+            self.set_viewport_size(viewport_size, ctx);
+            if self.element_tx.is_empty() {
+                // Don't emit this event when the channel has more current updates
+                // to process. This is to avoid emitting events when the viewport info is stale.
+                ctx.emit(RenderEvent::ViewportUpdated(update.buffer_version));
+            }
+        }
+
+        // Apply a deferred scroll fraction now that content has been laid out and both the content
+        // height and viewport size are current. Gated on the laid-out version so we don't apply
+        // against content that predates the reset that requested the scroll.
+        if let Some(pending) = self.pending_scroll_fraction.take() {
+            // A zero-height viewport means the element has never been laid out, so the content
+            // height is meaningless regardless of buffer versions. An update without a laid-out
+            // version (or one older than the reset) hasn't rendered the target content yet, so we
+            // retain the pending fraction rather than apply it against stale content.
+            let version_ready = self.viewport.height() > Pixels::zero()
+                && update
+                    .buffer_version
+                    .is_some_and(|laid_out| laid_out >= pending.minimum_version);
+            if version_ready {
+                if self
+                    .viewport
+                    .scroll_to_fraction(pending.fraction, self.height())
+                {
+                    ctx.notify();
+                }
+            } else {
+                self.pending_scroll_fraction = Some(pending);
+            }
+        }
+    }
+
+    /// Submit a layout action.
+    fn submit_layout_action(&mut self, action: LayoutAction) {
+        #[cfg(any(test, feature = "test-util"))]
+        self.outstanding_layouts
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+
+        let result = self.layout_tx.try_send(action);
+        debug_assert!(result.is_ok(), "Could not submit layout action: {result:?}");
+    }
+
+    /// Push a pending edit to the queue.
+    pub fn add_pending_edit(&mut self, pending_edit: EditDelta, buffer_version: BufferVersion) {
+        self.submit_layout_action(LayoutAction::BufferEdit {
+            delta: pending_edit,
+            buffer_version,
+        });
+    }
+
+    pub fn add_temporary_blocks(&mut self, temporary_blocks: Vec<TemporaryBlock>) {
+        self.submit_layout_action(LayoutAction::LayoutTemporaryBlock(temporary_blocks));
+    }
+
+    /// Replace all temporary blocks in the BlockItem cache with a new set of temporary
+    fn reset_temporary_block(&self, mut blocks: HashMap<LineCount, Vec<BlockItem>>) {
+        let mut new_tree = SumTree::new();
+        {
+            let content = self.content.borrow();
+            let mut cursor = content.cursor::<LineCount, CharOffset>();
+
+            if let Some(items) = blocks.remove(&LineCount::zero()) {
+                for item in items {
+                    new_tree.push(item);
+                }
+            }
+
+            cursor.descend_to_first_item(&content, |_| true);
+            while let Some(item) = cursor.item() {
+                if !matches!(item, BlockItem::TemporaryBlock { .. }) {
+                    new_tree.push(item.clone());
+                }
+
+                if let Some(items) = blocks.remove(&cursor.end_seek_position()) {
+                    for item in items {
+                        new_tree.push(item);
+                    }
+                }
+
+                cursor.next();
+            }
+        }
+        self.has_final_trailing_newline
+            .set(Self::tree_ends_with_trailing_newline(&new_tree));
+        *self.content.borrow_mut() = new_tree;
+    }
+
+    /// Update the render state with laid out new edits.
+    fn layout_pending_edit(
+        &self,
+        pending_edit: LaidOutRenderDelta,
+        hidden_ranges: Option<RangeSet<CharOffset>>,
+    ) {
+        log::trace!(
+            "Applying {}-line pending edit to {}..{}",
+            pending_edit.laid_out_line.len(),
+            pending_edit.old_offset.start,
+            pending_edit.old_offset.end
+        );
+
+        log::trace!(
+            "Incoming block replacements {:?}",
+            &pending_edit.laid_out_line
+        );
+
+        let hidden_range_clone = hidden_ranges.clone();
+        let mut new_tree = SumTree::new();
+        {
+            let content = self.content.borrow();
+
+            log::trace!("Initial blocks:\n{}", content.describe());
+            let mut cursor = content.cursor::<CharOffset, CharOffset>();
+
+            // TODO(CLD-558): Ideally, we'd use the content-level offset as is.
+            let effective_start = pending_edit
+                .old_offset
+                .start
+                .saturating_sub(&CharOffset::from(1));
+
+            // Push blocks that are not affected by the change. We don't need to recompute them.
+            new_tree.push_tree(cursor.slice(&effective_start, SeekBias::Right));
+            log::trace!(
+                "Keeping blocks up to {} ({}):\n{}",
+                pending_edit.old_offset.start,
+                effective_start,
+                new_tree.describe()
+            );
+
+            for item in pending_edit.laid_out_line {
+                let offset = new_tree.extent::<CharOffset>() + 1;
+                // If the item should be hidden (but it's not labelled as hidden), don't push it to the sumtree.
+                if !matches!(item, BlockItem::Hidden(_))
+                    && hidden_range_clone
+                        .as_ref()
+                        .map(|hr| hr.contains(&offset))
+                        .unwrap_or(false)
+                {
+                    continue;
+                }
+                new_tree.push(item);
+            }
+
+            // TODO(CLD-558): Ideally, we'd use the content-level offset as is.
+            let effective_end = pending_edit
+                .old_offset
+                .end
+                .saturating_sub(&CharOffset::from(1));
+
+            let sub_tree_start = *cursor.start();
+            let sub_tree = cursor.slice(&effective_end, SeekBias::Left);
+            let mut sub_tree_cursor = sub_tree.cursor::<CharOffset, CharOffset>();
+            sub_tree_cursor.descend_to_first_item(&sub_tree, |_| true);
+
+            while let Some(item) = sub_tree_cursor.item() {
+                // Do not remove the temporary blocks within the replaced range.
+                if matches!(item, BlockItem::TemporaryBlock { .. }) {
+                    new_tree.push(item.clone());
+                }
+
+                // If there is a hidden range that overlaps the current replacement range, push it to the sumtree for now.
+                // This will be handled in the deduping logic below.
+                let offset_end = sub_tree_start + sub_tree_cursor.end();
+                let offset_start = sub_tree_start + *sub_tree_cursor.start();
+                if (offset_end > effective_end || offset_start < effective_start)
+                    && matches!(item, BlockItem::Hidden(_))
+                {
+                    new_tree.push(item.clone());
+                }
+                sub_tree_cursor.next()
+            }
+
+            // We are replacing the last element of the buffer. We should add a trailing
+            // newline if there is one from the pending edit. Note we are replacing the last element
+            // iff: 1) pending edit's replacement end is not zero (we are moving cursor past the next item) 2)
+            // the end of cursor is past max offset of the sumtree.
+            if effective_end != CharOffset::zero() && cursor.end() >= self.max_offset() {
+                log::debug!("Adding trailing newline");
+                if let Some(cursor) = pending_edit.trailing_newline
+                    && self.should_show_final_trailing_newline(new_tree.is_empty())
+                {
+                    new_tree.push(BlockItem::TrailingNewLine(cursor));
+                }
+            } else {
+                // Generally, we seek left and skip past the last block in the invalidated range.
+                // However, if we're inserting before the first block in the buffer, we want to
+                // keep it - since CharOffsets are non-negative and the end offset of the range is
+                // exclusive, we can't otherwise represent "before the first block".
+                if effective_end > CharOffset::zero() {
+                    if let Some(item) = cursor.item() {
+                        // Do not remove the temporary blocks within the replaced range.
+                        if matches!(item, BlockItem::TemporaryBlock { .. })
+                            || (cursor.end() > effective_end
+                                && matches!(item, BlockItem::Hidden(_)))
+                        {
+                            new_tree.push(item.clone());
+                        }
+                    }
+                    cursor.next();
+                } else if !new_tree.is_empty()
+                    && cursor.item().is_some_and(|item| item.is_trailing_newline())
+                    && (pending_edit.trailing_newline.is_none()
+                        || !self.show_final_trailing_newline_when_non_empty)
+                {
+                    // Remove the trailing newline when the tree is non-empty and the
+                    // render configuration suppresses it, or the pending edit omits one.
+                    cursor.next();
+                }
+
+                let suffix = cursor.suffix();
+                log::trace!(
+                    "Keeping blocks after {} ({}):\n{}",
+                    pending_edit.old_offset.end,
+                    effective_end,
+                    suffix.describe()
+                );
+                new_tree.push_tree(suffix);
+            }
+        }
+
+        // Hidden range updates could be incremental. This means we might end with duplicate adjacent hidden blocks.
+        // This step ensures these are merged into one.
+        if let Some(hidden_ranges) = hidden_ranges {
+            new_tree = Self::dedupe_hidden_ranges(new_tree, hidden_ranges);
+        }
+        log::trace!("Resulting blocks:\n{}", new_tree.describe());
+        self.has_final_trailing_newline
+            .set(Self::tree_ends_with_trailing_newline(&new_tree));
+        let mut content_mut = self.content.borrow_mut();
+        *content_mut = new_tree;
+    }
+
+    /// Dedupe adjacent hidden ranges into one.
+    fn dedupe_hidden_ranges(
+        tree: SumTree<BlockItem>,
+        hidden_ranges: RangeSet<CharOffset>,
+    ) -> SumTree<BlockItem> {
+        log::trace!("Initial tree:\n{}", tree.describe());
+        let mut new_tree = SumTree::new();
+        let mut cursor = tree.cursor::<CharOffset, CharOffset>();
+
+        let max_char_offset = tree.extent::<CharOffset>() + 1;
+
+        // Note that it's deliberate we minus one from start and keep the end as is.
+        // This expands our search to capture hidden ranges that are inserted prior / after the canonical range.
+        let ranges = hidden_ranges
+            .into_iter()
+            .sorted_by(|a, b| Ord::cmp(&a.start, &b.start))
+            .map(|range| range.start.saturating_sub(&CharOffset::from(1))..range.end)
+            .collect_vec();
+
+        for range in ranges {
+            let hidden_range_size = range.end - range.start - 1;
+            log::trace!("==== Processing range: {:?} ====", &range);
+            new_tree.push_tree(cursor.slice(&range.start, SeekBias::Left));
+            log::trace!("After pushing prefix tree:\n {}", new_tree.describe());
+            let sub_tree = cursor.slice(&range.end, SeekBias::Right);
+
+            log::trace!("Processing sub_tree:\n {}", sub_tree.describe());
+            let mut hidden_config: Option<HiddenBlockConfig> = None;
+            let mut staging = Vec::new();
+
+            // We want to always preserve 1) the non-hidden items 2) in the same order as they are inserted.
+            for item in sub_tree.cursor::<CharOffset, CharOffset>() {
+                if let BlockItem::Hidden(config) = item {
+                    if let Some(prev) = &mut hidden_config {
+                        *prev += config.clone();
+                    } else {
+                        hidden_config = Some(config.clone())
+                    }
+                } else if hidden_config.is_none() {
+                    new_tree.push(item.clone());
+                } else {
+                    staging.push(item.clone())
+                }
+            }
+
+            if let Some(mut config) = hidden_config {
+                // Always resize the hidden range to its expected size.
+                config.content_length = hidden_range_size;
+                config.block_location = if range.start <= CharOffset::from(1) {
+                    BlockLocation::Start
+                } else if range.end == max_char_offset {
+                    BlockLocation::End
+                } else {
+                    BlockLocation::Middle
+                };
+                new_tree.push(BlockItem::Hidden(config));
+            }
+
+            new_tree.extend(staging);
+            log::trace!("==== Finished processing range ====");
+        }
+
+        let suffix = cursor.suffix();
+        new_tree.push_tree(suffix);
+
+        log::trace!("Resulting tree:\n{}", new_tree.describe());
+        new_tree
+    }
+
+    fn update_content_sizing(&mut self) {
+        self.viewport.update_content_height(self.height());
+        self.viewport.update_content_width(self.width());
+    }
+
+    /// Perform an autoscroll action based on the mode.
+    pub fn autoscroll(&mut self, mode: AutoScrollMode, ctx: &mut ModelContext<Self>) {
+        let table_scroll_changed = self.reveal_autoscroll_offsets_in_tables(&mode);
+        let ((in_line_selection_start, in_line_selection_end), vertical_autoscroll_only) =
+            match mode {
+                AutoScrollMode::ScrollOffsetsIntoViewport(offsets) => {
+                    let (override_start, _) = self.character_width_height_range(offsets.start);
+                    let (_, override_end) = self.character_width_height_range(offsets.end);
+                    ((override_start, override_end), false)
+                }
+                AutoScrollMode::ScrollToExactVertical {
+                    character_offset,
+                    pixel_delta,
+                } => {
+                    let (start, _) = self.character_width_height_range(character_offset);
+                    if self
+                        .viewport
+                        .scroll_to(start.y().into_pixels() + pixel_delta, self.height())
+                        || table_scroll_changed
+                    {
+                        ctx.notify();
+                    }
+                    return;
+                }
+                AutoScrollMode::ScrollToActiveSelections { vertical_only } => {
+                    let cursor_positions = self.selections().selection_map(|selection| {
+                        self.character_width_height_range(selection.head)
+                    });
+                    (
+                        Self::multiselect_autoscroll_bounding_box(
+                            cursor_positions,
+                            self.viewport.height(),
+                            self.viewport.scroll_top(),
+                        ),
+                        vertical_only,
+                    )
+                }
+                AutoScrollMode::PositionOffsetInViewportCenter(offset) => {
+                    let (char_start, char_end) = self.character_width_height_range(offset);
+
+                    // Calculate half the viewport dimensions
+                    let half_viewport_width = self.viewport.width().as_f32() / 2.0;
+                    let half_viewport_height = self.viewport.height().as_f32() / 2.0;
+
+                    // Compute the bounding box centered on the character position
+                    // Start = character position - half viewport
+                    // End = character position + half viewport
+                    let in_line_start = vec2f(
+                        (char_start.x() - half_viewport_width).max(0.0),
+                        (char_start.y() - half_viewport_height).max(0.0),
+                    );
+                    let in_line_end = vec2f(
+                        (char_end.x() + half_viewport_width).min(self.width().as_f32()),
+                        (char_end.y() + half_viewport_height).min(self.height().as_f32()),
+                    );
+
+                    ((in_line_start, in_line_end), false)
+                }
+            };
+
+        // We should not autoscroll if the width is fitting viewport.
+        let should_autoscroll_horizontally =
+            !matches!(self.width_setting, WidthSetting::FitViewport) && !vertical_autoscroll_only;
+        if self.viewport.autoscroll(
+            in_line_selection_start,
+            in_line_selection_end,
+            self.height(),
+            self.width(),
+            should_autoscroll_horizontally,
+        ) || table_scroll_changed
+        {
+            ctx.notify();
+        }
+    }
+
+    fn reveal_autoscroll_offsets_in_tables(&self, mode: &AutoScrollMode) -> bool {
+        match mode {
+            AutoScrollMode::ScrollOffsetsIntoViewport(offsets) => {
+                let mut changed = self.reveal_offset_in_table(offsets.start);
+                if offsets.end > offsets.start {
+                    changed |= self
+                        .reveal_offset_in_table(offsets.end.saturating_sub(&CharOffset::from(1)));
+                }
+                changed
+            }
+            AutoScrollMode::ScrollToExactVertical {
+                character_offset, ..
+            }
+            | AutoScrollMode::PositionOffsetInViewportCenter(character_offset) => {
+                self.reveal_offset_in_table(*character_offset)
+            }
+            AutoScrollMode::ScrollToActiveSelections { .. } => {
+                self.selections().iter().fold(false, |changed, selection| {
+                    self.reveal_offset_in_table(selection.head) || changed
+                })
+            }
+        }
+    }
+
+    fn reveal_offset_in_table(&self, offset: CharOffset) -> bool {
+        let content = self.content.borrow();
+        let mut cursor = content.cursor::<CharOffset, LayoutSummary>();
+        cursor.seek(&offset, SeekBias::Right);
+
+        let Some(block) = cursor.positioned_item() else {
+            return false;
+        };
+        let BlockItem::Table(laid_out_table) = block.item else {
+            return false;
+        };
+        if offset < block.start_char_offset || offset >= block.end_char_offset() {
+            return false;
+        }
+
+        let viewport_width =
+            (self.viewport.width() - block.item.spacing().x_axis_offset()).max(Pixels::zero());
+        laid_out_table.reveal_offset(offset - block.start_char_offset, viewport_width)
+    }
+
+    /// Given the coordinates of all selections, determine what is the bounding box that we want to autoscroll to.
+    ///
+    /// Cases:
+    /// - There are selections on the screen: Autoscroll to the bounding box of the selections currently on screen.
+    ///     - Note: Do not try to get all selections on screen.  This is jarring to the user.
+    /// - All selections are scrolled off the bottom of the screen.
+    ///     - Find all selections from top to bottom that would fit into one viewport, and autoscroll to that.
+    /// - All selections are scrolled off the top of the screen.
+    ///    - Find all selections from bottom to top that would fit into one viewport, and autoscroll to that.
+    /// - There are selections above and below the viewport, but none on it.
+    ///   - Find all selections below the viewport from top to bottom that would fit into one viewport, and autoscroll to that.
+    ///   - Choosing to scroll down is arbitrary.
+    fn multiselect_autoscroll_bounding_box(
+        heads: Vec1<(Vector2F, Vector2F)>,
+        view_height: Pixels,
+        scroll_top: Pixels,
+    ) -> (Vector2F, Vector2F) {
+        // Find selections above, below, and in the viewport.
+        let mut above = Vec::new();
+        let mut inside = Vec::new();
+        let mut below = Vec::new();
+
+        for head in heads {
+            if head.0.y().into_pixels() < scroll_top {
+                above.push(head);
+            } else if head.1.y().into_pixels() > scroll_top + view_height {
+                below.push(head);
+            } else {
+                inside.push(head);
+            };
+        }
+
+        let heads = if !inside.is_empty() {
+            // If there are any cursors showing on the screen, set those cursors as the bounding box.
+            //  Which shouldn't scroll the screen vertically.
+            inside.sort_by(|(first, _), (second, _)| {
+                first
+                    .y()
+                    .partial_cmp(&second.y())
+                    .expect("Cursor positions should be well behaved floats.")
+            });
+            inside
+        } else if !below.is_empty() {
+            // Either there are only selections below the viewport, or there are selections above and below the viewport.
+            // Sort from top to bottom.
+            below.sort_by(|(first, _), (second, _)| {
+                first
+                    .y()
+                    .partial_cmp(&second.y())
+                    .expect("Cursor positions should be well behaved floats.")
+            });
+            below
+        } else if !above.is_empty() {
+            // There are only selections above the viewport.
+            // Note that above must not be empty
+            // Sort from bottom to top.
+            above.sort_by(|(first, _), (second, _)| {
+                first
+                    .y()
+                    .partial_cmp(&second.y())
+                    .expect("Cursor positions should be well behaved floats.")
+            });
+            above.reverse();
+            above
+        } else {
+            // We started with a Vec1, so we should never get here.
+            panic!("There should be at least one selection.");
+        };
+
+        let (first, rest) = heads.split_first().expect("Vec1 will have at least one.");
+        let mut min = first.0;
+        let mut max = first.1;
+
+        if min.y() > max.y() || (min.y() == max.y() && min.x() > max.x()) {
+            mem::swap(&mut min, &mut max)
+        }
+
+        for (start_head, end_head) in rest {
+            // This is all we can fit into the viewport.
+            if end_head.y() - min.y() > view_height.as_f32()
+                || max.y() - start_head.y() > view_height.as_f32()
+            {
+                break;
+            }
+            // If we have found a new min or max, set it.
+            if min.y() > start_head.y() {
+                min.set_y(start_head.y());
+            }
+            if max.x() < end_head.x() {
+                max.set_x(end_head.x());
+            }
+            if max.y() < end_head.y() {
+                max.set_y(end_head.y());
+            }
+            if min.x() > start_head.x() {
+                min.set_x(start_head.x());
+            }
+        }
+        (min, max)
+    }
+
+    fn character_width_height_range(&self, offset: CharOffset) -> (Vector2F, Vector2F) {
+        let content = self.content.borrow();
+        match self.character_bounds(offset) {
+            Some(bound) => (bound.origin(), bound.lower_right()),
+            None => {
+                let mut height_cursor = content.cursor::<CharOffset, LayoutSummary>();
+                height_cursor.seek(&offset, SeekBias::Right);
+
+                // If we are at the very end of the content tree, treat the last item's bound as (0, 0) on the last line.
+                (
+                    vec2f(0., height_cursor.start().height as f32),
+                    vec2f(0., height_cursor.end().height as f32),
+                )
+            }
+        }
+    }
+
+    pub fn offset_to_softwrap_point(&self, offset: CharOffset) -> SoftWrapPoint {
+        // CharCell path: compute visual row/col from char-cell display-width arithmetic.
+        if let LayoutMode::CharCell(ref cc) = self.layout_mode {
+            return cc.offset_to_softwrap_point(offset);
+        }
+
+        // Pixels path: use the font-laid-out SumTree<BlockItem>.
+        let content = self.content.borrow();
+        let mut cursor = content.cursor::<CharOffset, LayoutSummary>();
+
+        cursor.seek(&offset, SeekBias::Right);
+        match cursor.positioned_item() {
+            Some(item) => item.offset_to_softwrap_point(offset),
+            None => SoftWrapPoint::new(self.max_line().as_u32(), ColumnUnit::pixels_zero()),
+        }
+    }
+
+    pub fn softwrap_point_to_offset(&self, point: SoftWrapPoint) -> CharOffset {
+        // CharCell path.
+        if let LayoutMode::CharCell(ref cc) = self.layout_mode {
+            return cc.softwrap_point_to_offset(point);
+        }
+
+        // Pixels path.
+        let content = self.content.borrow();
+        let mut cursor = content.cursor::<LineCount, LayoutSummary>();
+
+        let line = LineCount(point.row() as usize);
+        cursor.seek(&line, SeekBias::Right);
+        match cursor.positioned_item() {
+            Some(item) => item.softwrap_point_to_offset(point),
+            None => self.max_offset(),
+        }
+    }
+
+    /// Converts a line number to the character offset range (start, end) for that line.
+    /// Line numbers are 1-indexed (LineCount).
+    /// Returns the start offset of the line and the end offset (exclusive).
+    pub fn line_number_to_offset_range(&self, line_number: LineCount) -> (CharOffset, CharOffset) {
+        // Convert LineCount (1-indexed) to SoftWrapPoint row (0-indexed)
+        let line_row = line_number.as_u32().saturating_sub(1);
+
+        let start_offset =
+            self.softwrap_point_to_offset(SoftWrapPoint::new(line_row, ColumnUnit::pixels_zero()));
+        let end_offset = self
+            .softwrap_point_to_offset(SoftWrapPoint::new(line_row + 1, ColumnUnit::pixels_zero()));
+
+        (start_offset, end_offset)
+    }
+
+    /// The bounding box of the character at `offset`.
+    fn character_bounds(&self, offset: CharOffset) -> Option<RectF> {
+        let content = self.content.borrow();
+        let mut cursor = content.cursor::<CharOffset, LayoutSummary>();
+        cursor.seek(&offset, SeekBias::Right);
+        cursor
+            .positioned_item()
+            .and_then(|item| item.character_bounds(offset))
+    }
+
+    pub fn character_vertical_bounds(&self, offset: CharOffset) -> Option<(Pixels, Pixels)> {
+        self.character_bounds(offset).map(|bounds| {
+            (
+                Pixels::new(bounds.origin_y()),
+                Pixels::new(bounds.origin_y() + bounds.height()),
+            )
+        })
+    }
+
+    /// Returns the bounding box of the character at `offset` in viewport-relative coordinates.
+    /// This can be used to position UI elements relative to text without waiting for the paint phase.
+    /// Returns None if the offset is out of bounds or not laid out yet.
+    pub fn character_bounds_in_viewport(&self, offset: CharOffset) -> Option<RectF> {
+        let bounds = self.character_bounds(offset)?;
+
+        // Convert from content coordinates to viewport coordinates
+        let scroll_top = self.viewport.scroll_top().as_f32();
+        let scroll_left = self.viewport.scroll_left().as_f32();
+
+        let viewport_origin = vec2f(
+            bounds.origin_x() - scroll_left,
+            bounds.origin_y() - scroll_top,
+        );
+
+        Some(RectF::new(viewport_origin, bounds.size()))
+    }
+
+    /// Saves the text selection bounding box into the position cache.
+    pub(super) fn record_text_selection(&self, ctx: &mut RenderContext) {
+        // Todo (kc CLD-1018): Save all positions, and not just one.
+        let selection = self.selections().first().clone();
+
+        let Some(start) = self.character_bounds(selection.start()) else {
+            return;
+        };
+        let Some(end) = self.character_bounds(selection.end()) else {
+            return;
+        };
+        let origin = start.origin().min(end.origin());
+        let lower_right = start.lower_right().max(end.lower_right());
+
+        // Bound the origin of the text selection cached position by the viewport (CLD-1220).
+        let mut screen_origin = ctx.content_to_screen(origin);
+        let mut screen_lower_right = ctx.content_to_screen(lower_right);
+
+        screen_origin.set_y(screen_origin.y().max(ctx.visible_bound().origin_y()));
+        screen_lower_right.set_y(screen_lower_right.y().max(ctx.visible_bound().origin_y()));
+
+        let bounding_box = RectF::from_points(screen_origin, screen_lower_right);
+
+        if ctx.is_visible(bounding_box) {
+            ctx.paint.position_cache.cache_position_for_one_frame(
+                self.saved_positions.text_selection_id(),
+                bounding_box,
+            );
+        }
+    }
+
+    /// Initializes the ordered list numbering state at the start of the viewport.
+    pub(super) fn viewport_list_numbering(&self) -> ListNumbering {
+        let content = self.content.borrow();
+        let mut cursor = content.cursor::<Height, ()>();
+        cursor.seek_clamped(&self.viewport.scroll_top().into(), SeekBias::Left);
+
+        // If the viewport starts with an ordered list item, we need to know its initial numbering.
+        // This only depends on the ordered list items immediately above the viewport. To find them,
+        // we need a linear scan, but it's bounded by the size of the ordered list above the
+        // viewport, which will generally be small. If the top of the viewport isn't an ordered
+        // list, we can skip this altogether.
+        if !matches!(cursor.item(), Some(BlockItem::OrderedList { .. })) {
+            return ListNumbering::new();
+        }
+
+        // ListNumbering can only advance forwards, so we first seek back to the start of the list
+        // at the viewport location.
+        let mut list_length = 0;
+        while let Some(BlockItem::OrderedList { .. }) = cursor.prev_item() {
+            cursor.prev();
+            list_length += 1;
+        }
+
+        let mut numbering = ListNumbering::new();
+
+        for _ in 0..list_length {
+            match cursor.item() {
+                Some(BlockItem::OrderedList {
+                    indent_level,
+                    number,
+                    ..
+                }) => {
+                    numbering.advance(indent_level.as_usize(), *number);
+                }
+                other => {
+                    if cfg!(debug_assertions) {
+                        panic!("Should have an OrderedList item, got {other:?}");
+                    }
+                    // In production, silently skip over unexpected items.
+                }
+            }
+            cursor.next();
+        }
+
+        numbering
+    }
+
+    /// Log the current render state for debugging.
+    pub fn log_state(&self) {
+        log::info!("RENDER STATE:\n{}", self.describe());
+    }
+
+    #[cfg(test)]
+    pub fn set_content(&mut self, mut content: SumTree<BlockItem>) {
+        if self.should_show_final_trailing_newline(content.is_empty()) {
+            content.push(Self::final_trailing_newline_cursor(&self.styles));
+        }
+        self.has_final_trailing_newline
+            .set(Self::tree_ends_with_trailing_newline(&content));
+        self.content = content.into();
+    }
+
+    /// Scroll to the start of a given block, possibly adjusted.
+    #[cfg(test)]
+    fn scroll_near_block(&mut self, offset: CharOffset, adjustment: impl IntoPixels) {
+        let content = self.content.borrow();
+        let mut cursor = content.cursor::<CharOffset, Height>();
+        cursor.seek(&offset, SeekBias::Right);
+        self.viewport
+            .set_scroll_top(cursor.start().into_pixels() + adjustment.into_pixels());
+    }
+
+    /// Line number of the first line in the block.
+    pub fn start_line_index(&self, block: &dyn RenderableBlock) -> Option<LineCount> {
+        let content = self.content();
+        let offset = block.viewport_item().block_offset();
+        Some(content.block_at_offset(offset)?.start_line)
+    }
+
+    /// The line height of the first line. Different from `first_line_bounds`, this does not
+    /// return the viewport origin.
+    pub fn first_line_height(&self, block: &dyn RenderableBlock) -> Option<f32> {
+        let content = self.content();
+        let block = content.block_at_height(block.viewport_item().height())?;
+        Some(block.item.first_line_height())
+    }
+
+    /// The bounding box of the first line of this block, based on its viewport location.
+    pub fn first_line_bounds(
+        &self,
+        block: &dyn RenderableBlock,
+        ctx: &RenderContext,
+    ) -> Option<RectF> {
+        let content = self.content();
+        let offset = block.viewport_item().block_offset();
+        let block = content.block_at_offset(offset)?;
+        Some(ctx.content_rect_to_screen(block.first_line_bounds()?))
+    }
+
+    pub fn line_range(&self, block: &dyn RenderableBlock) -> Option<Range<LineCount>> {
+        let start = self.start_line_index(block)?;
+        let content = self.content();
+        let offset = block.viewport_item().block_offset();
+        Some(start..start + content.block_at_offset(offset)?.item.lines())
+    }
+
+    /// The full line range of the block starting at `offset`, resolved without a
+    /// `RenderableBlock`. Used to compute a hidden section's complete range for
+    /// double-click full expansion.
+    pub fn line_range_at_offset(&self, offset: CharOffset) -> Option<Range<LineCount>> {
+        let content = self.content();
+        let block = content.block_at_offset(offset)?;
+        Some(block.start_line..block.start_line + block.item.lines())
+    }
+}
+
+impl Entity for RenderState {
+    type Event = RenderEvent;
+}
+
+/// A bundle of information computed by the element during layout, which is used to update the
+/// render model.
+///
+/// This is how [`RenderState`] knows the viewport size.
+pub(crate) struct ElementUpdate {
+    pub viewport_size: Option<SizeInfo>,
+    pub buffer_version: Option<BufferVersion>,
+    pub pending_edits_flushed: bool,
+}
+
+/// The mode of a requested autoscroll action.
+#[derive(Debug, Clone)]
+pub enum AutoScrollMode {
+    /// Scroll the range of offset into the viewport.
+    ScrollOffsetsIntoViewport(Range<CharOffset>),
+    /// Set scroll top to the exact vertical position of a character offset
+    /// with an optional pixel delta.
+    ScrollToExactVertical {
+        character_offset: CharOffset,
+        pixel_delta: Pixels,
+    },
+    /// Scroll to the active selections / cursors.
+    ScrollToActiveSelections { vertical_only: bool },
+    /// Scroll to position the given character offset at the center of the viewport.
+    /// The bounding box is computed as the character position ± half the viewport dimensions,
+    /// clamped to the content bounds.
+    PositionOffsetInViewportCenter(CharOffset),
+}
+
+#[derive(Clone, Debug)]
+enum PendingLayout {
+    Edit {
+        delta: EditDelta,
+        hidden_ranges: Option<RangeSet<CharOffset>>,
+    },
+    TemporaryBlocks(Vec<TemporaryBlock>),
+}
+
+struct PendingSelectionUpdate {
+    selection: RenderedSelectionSet,
+    buffer_version: BufferVersion,
+}
+
+/// A scroll fraction deferred until the content it targets has been laid out.
+struct PendingScrollFraction {
+    fraction: f32,
+    /// Apply only once content at or past this version has been laid out.
+    minimum_version: BufferVersion,
+}
+
+/// A change to the rendering state that's processed by the background layout task.
+#[derive(Debug, Clone)]
+enum LayoutAction {
+    /// The selection state has changed. We dispatch this through the layout pipeline so that
+    /// the on-screen cursor position only changes _after_ any relevant text is laid out.
+    SelectionChanged {
+        selections: RenderedSelectionSet,
+        buffer_version: BufferVersion,
+    },
+    DecorationChanged(UpdateDecorationAfterLayout),
+    /// The buffer was edited.
+    BufferEdit {
+        delta: EditDelta,
+        buffer_version: BufferVersion,
+    },
+    LayoutTemporaryBlock(Vec<TemporaryBlock>),
+    /// Autoscroll, to the specified range if `Some` or to the cursor location if `None`.
+    Autoscroll {
+        mode: AutoScrollMode,
+    },
+    /// Scroll to a snapshotted scroll position.
+    ScrollTo(ScrollPositionSnapshot),
+    /// Scroll to a fraction of the scrollable range, in `0..=1`, once content at or past
+    /// `minimum_version` has been laid out.
+    ScrollToFraction {
+        fraction: f32,
+        minimum_version: BufferVersion,
+    },
+}
+
+impl From<Pixels> for Height {
+    fn from(value: Pixels) -> Self {
+        Self(OrderedFloat(value.as_f32().into()))
+    }
+}
+
+impl From<f32> for Height {
+    fn from(value: f32) -> Self {
+        value.into_pixels().into()
+    }
+}
+
+impl From<Height> for Pixels {
+    fn from(value: Height) -> Self {
+        (value.0.0 as f32).into_pixels()
+    }
+}
+
+impl IntoPixels for Height {
+    fn into_pixels(self) -> Pixels {
+        (self.0.0 as f32).into_pixels()
+    }
+}
+
+impl RichTextStyles {
+    /// The base line height for plain text. For consistency, this is the line
+    /// height used for scrolling - otherwise, the user would scroll faster past
+    /// items with a larger font size.
+    pub fn base_line_height(&self) -> Pixels {
+        self.base_text.line_height()
+    }
+
+    /// Selects the paragraph styles that apply to a block style.
+    pub fn paragraph_styles(&self, block_style: &BufferBlockStyle) -> ParagraphStyles {
+        match block_style {
+            BufferBlockStyle::PlainText
+            | BufferBlockStyle::UnorderedList { .. }
+            | BufferBlockStyle::OrderedList { .. }
+            | BufferBlockStyle::TaskList { .. } => self.base_text,
+            BufferBlockStyle::Table { .. } => {
+                let mut style = self.base_text;
+                style.font_family = self.table_style.font_family;
+                style.font_size = self.table_style.font_size;
+                style
+            }
+            BufferBlockStyle::CodeBlock { .. } => self.code_text,
+            BufferBlockStyle::Header { header_size } => {
+                let mut base_text_style = self.base_text;
+                base_text_style.font_size *= header_size.font_size_multiplication_ratio();
+                base_text_style.font_weight = Weight::from_custom_weight(header_size.font_weight());
+                base_text_style
+            }
+        }
+    }
+
+    pub fn requires_relayout(&self, new_styles: &RichTextStyles) -> bool {
+        if self == new_styles {
+            return false;
+        }
+
+        self.base_text.requires_relayout(&new_styles.base_text)
+            || self.code_text.requires_relayout(&new_styles.code_text)
+            || self
+                .embedding_text
+                .requires_relayout(&new_styles.embedding_text)
+            || self
+                .inline_code_style
+                .requires_relayout(&new_styles.inline_code_style)
+            || self.table_style.requires_relayout(&new_styles.table_style)
+            || self.minimum_paragraph_height != new_styles.minimum_paragraph_height
+    }
+}
+
+impl ParagraphStyles {
+    pub fn line_style(&self) -> LineStyle {
+        LineStyle {
+            font_size: self.font_size,
+            line_height_ratio: self.line_height_ratio,
+            baseline_ratio: self.baseline_ratio,
+            fixed_width_tab_size: self.fixed_width_tab_size,
+        }
+    }
+
+    pub fn line_height(&self) -> Pixels {
+        (self.font_size * self.line_height_ratio).into_pixels()
+    }
+
+    /// Default font properties for paragraphs of this style. They may be overridden by inline
+    /// styles.
+    pub fn properties(&self) -> Properties {
+        Properties::default().weight(self.font_weight)
+    }
+
+    fn requires_relayout(&self, new_styles: &ParagraphStyles) -> bool {
+        self.font_size != new_styles.font_size
+            || self.line_height_ratio != new_styles.line_height_ratio
+            || self.baseline_ratio != new_styles.baseline_ratio
+            || self.font_weight != new_styles.font_weight
+            || self.font_family != new_styles.font_family
+            || self.fixed_width_tab_size != new_styles.fixed_width_tab_size
+    }
+}
+
+impl AddAssign<&LayoutSummary> for LayoutSummary {
+    fn add_assign(&mut self, rhs: &LayoutSummary) {
+        self.height += rhs.height;
+        self.content_length += rhs.content_length;
+        self.width = self.width.max(rhs.width);
+        self.lines += rhs.lines;
+        self.item_count += rhs.item_count;
+    }
+}
+
+impl BlockItem {
+    pub fn paragraph(
+        frame: Arc<TextFrame>,
+        offsets: OffsetMap,
+        content_length: CharOffset,
+        spacing: BlockSpacing,
+        minimum_height: Option<Pixels>,
+    ) -> BlockItem {
+        BlockItem::Paragraph(Paragraph::new(
+            frame,
+            offsets,
+            content_length,
+            vec![],
+            spacing,
+            minimum_height,
+        ))
+    }
+
+    pub fn first_line_height(&self) -> f32 {
+        match self {
+            BlockItem::Paragraph(paragraph)
+            | BlockItem::Header { paragraph, .. }
+            | BlockItem::TaskList { paragraph, .. }
+            | BlockItem::UnorderedList { paragraph, .. }
+            | BlockItem::OrderedList { paragraph, .. } => paragraph.first_line_height(),
+            BlockItem::TextBlock { paragraph_block } => paragraph_block.first_line_height(),
+            BlockItem::RunnableCodeBlock {
+                paragraph_block, ..
+            }
+            | BlockItem::TemporaryBlock {
+                paragraph_block, ..
+            } => paragraph_block.first_line_height(),
+            BlockItem::MermaidDiagram { config, .. } => config.height.as_f32(),
+            BlockItem::TrailingNewLine(cursor) => cursor.height.as_f32(),
+            BlockItem::HorizontalRule(config) => config.line_height.as_f32(),
+            BlockItem::Image { config, .. } => config.height.as_f32(),
+            BlockItem::Table(laid_out_table) => laid_out_table.height().as_f32(),
+            BlockItem::Embedded(embedded_item) => embedded_item.height().as_f32(),
+            BlockItem::Hidden(config) => config.height().as_f32(),
+        }
+    }
+
+    pub fn spacing(&self) -> BlockSpacing {
+        match self {
+            BlockItem::Paragraph(paragraph)
+            | BlockItem::Header { paragraph, .. }
+            | BlockItem::TaskList { paragraph, .. }
+            | BlockItem::UnorderedList { paragraph, .. }
+            | BlockItem::OrderedList { paragraph, .. } => paragraph.spacing(),
+            BlockItem::TextBlock { paragraph_block } => paragraph_block.spacing(),
+            BlockItem::RunnableCodeBlock {
+                paragraph_block, ..
+            }
+            | BlockItem::TemporaryBlock {
+                paragraph_block, ..
+            } => paragraph_block.spacing(),
+            BlockItem::MermaidDiagram { config, .. } => config.spacing,
+            BlockItem::TrailingNewLine(cursor) => cursor.spacing(),
+            BlockItem::HorizontalRule(config) => config.spacing,
+            BlockItem::Image { config, .. } => config.spacing,
+            BlockItem::Table(laid_out_table) => laid_out_table.spacing(),
+            BlockItem::Embedded(embedded_item) => embedded_item.spacing(),
+            BlockItem::Hidden { .. } => BlockSpacing::default(),
+        }
+    }
+
+    /// The height of this item's content, without any padding or margins.
+    pub fn content_height(&self) -> Pixels {
+        match self {
+            BlockItem::Paragraph(paragraph) | BlockItem::Header { paragraph, .. } => {
+                let mut height = paragraph.height;
+                if let Some(minimum_height) = paragraph.minimum_height {
+                    height = height.max(minimum_height);
+                }
+                height
+            }
+            BlockItem::TextBlock { paragraph_block } => paragraph_block.height(),
+            BlockItem::UnorderedList { paragraph, .. }
+            | BlockItem::OrderedList { paragraph, .. }
+            | BlockItem::TaskList { paragraph, .. } => paragraph.height(),
+            BlockItem::RunnableCodeBlock {
+                paragraph_block, ..
+            }
+            | BlockItem::TemporaryBlock {
+                paragraph_block, ..
+            } => paragraph_block.height(),
+            BlockItem::MermaidDiagram { config, .. } => config.height,
+            BlockItem::TrailingNewLine(cursor) => {
+                let mut height = cursor.height;
+                if let Some(minimum_height) = cursor.minimum_height {
+                    height = height.max(minimum_height);
+                }
+                height
+            }
+            BlockItem::Embedded(embedded_item) => embedded_item.height(),
+            BlockItem::HorizontalRule(rule) => rule.line_height,
+            BlockItem::Image { config, .. } => config.height,
+            BlockItem::Table(laid_out_table) => laid_out_table.height(),
+            BlockItem::Hidden(config) => config.height(),
+        }
+    }
+
+    pub fn content_width(&self) -> Pixels {
+        match self {
+            BlockItem::Paragraph(paragraph)
+            | BlockItem::Header { paragraph, .. }
+            | BlockItem::UnorderedList { paragraph, .. }
+            | BlockItem::OrderedList { paragraph, .. }
+            | BlockItem::TaskList { paragraph, .. } => paragraph.width(),
+            BlockItem::TextBlock { paragraph_block } => paragraph_block.width(),
+            BlockItem::RunnableCodeBlock {
+                paragraph_block, ..
+            }
+            | BlockItem::TemporaryBlock {
+                paragraph_block, ..
+            } => paragraph_block.width(),
+            BlockItem::MermaidDiagram { config, .. } => config.width,
+            BlockItem::TrailingNewLine(cursor) => cursor.width,
+            BlockItem::Embedded(object) => object.size().x().into_pixels(),
+            BlockItem::HorizontalRule(rule) => rule.width,
+            BlockItem::Image { config, .. } => config.width,
+            BlockItem::Table(laid_out_table) => laid_out_table.width(),
+            BlockItem::Hidden(_) => MIN_HIDDEN_BLOCK_WIDTH,
+        }
+    }
+
+    /// The total height of this item, including content, padding, and margins.
+    pub fn height(&self) -> Pixels {
+        self.content_height() + self.spacing().y_axis_offset()
+    }
+
+    pub fn width(&self) -> Pixels {
+        self.content_width() + self.spacing().x_axis_offset()
+    }
+
+    pub fn content_length(&self) -> CharOffset {
+        match self {
+            BlockItem::Paragraph(paragraph)
+            | BlockItem::Header { paragraph, .. }
+            | BlockItem::UnorderedList { paragraph, .. }
+            | BlockItem::OrderedList { paragraph, .. }
+            | BlockItem::TaskList { paragraph, .. } => paragraph.content_length,
+            BlockItem::TextBlock { paragraph_block } => paragraph_block.content_length(),
+            BlockItem::RunnableCodeBlock {
+                paragraph_block, ..
+            } => paragraph_block.content_length(),
+            BlockItem::TemporaryBlock { .. } => CharOffset::zero(),
+            BlockItem::MermaidDiagram { content_length, .. } => *content_length,
+            BlockItem::TrailingNewLine(_)
+            | BlockItem::Embedded(_)
+            | BlockItem::HorizontalRule(_)
+            | BlockItem::Image { .. } => CharOffset::from(1),
+            BlockItem::Table(laid_out_table) => laid_out_table.content_length(),
+            BlockItem::Hidden(config) => config.content_length(),
+        }
+    }
+
+    pub fn lines(&self) -> LineCount {
+        match self {
+            BlockItem::Paragraph(paragraph)
+            | BlockItem::Header { paragraph, .. }
+            | BlockItem::UnorderedList { paragraph, .. }
+            | BlockItem::OrderedList { paragraph, .. }
+            | BlockItem::TaskList { paragraph, .. } => paragraph.lines(),
+            BlockItem::TextBlock { paragraph_block } => paragraph_block.lines(),
+            BlockItem::RunnableCodeBlock {
+                paragraph_block, ..
+            } => paragraph_block.lines(),
+            BlockItem::TemporaryBlock { .. } => LineCount(0),
+            BlockItem::MermaidDiagram { .. } => LineCount(1),
+            BlockItem::TrailingNewLine(_)
+            | BlockItem::Embedded(_)
+            | BlockItem::HorizontalRule(_)
+            | BlockItem::Image { .. } => LineCount(1),
+            BlockItem::Table(laid_out_table) => laid_out_table.lines(),
+            BlockItem::Hidden(config) => config.line_count(),
+        }
+    }
+
+    /// Returns `true` if this item is effectively empty. A newline-only block would be considered
+    /// empty, despite having a content length of 1.
+    pub fn is_empty(&self) -> bool {
+        match self {
+            BlockItem::Paragraph(paragraph)
+            | BlockItem::Header { paragraph, .. }
+            | BlockItem::UnorderedList { paragraph, .. }
+            | BlockItem::OrderedList { paragraph, .. }
+            | BlockItem::TaskList { paragraph, .. } => paragraph.is_empty(),
+            BlockItem::TextBlock { paragraph_block } => paragraph_block.is_empty(),
+            BlockItem::RunnableCodeBlock {
+                paragraph_block, ..
+            } => paragraph_block.is_empty(),
+            BlockItem::MermaidDiagram { .. } => false,
+            // Embeds, images, tables, and horizontal rules are never empty.
+            BlockItem::Embedded(_)
+            | BlockItem::HorizontalRule(_)
+            | BlockItem::Image { .. }
+            | BlockItem::Table(_)
+            | BlockItem::TemporaryBlock { .. } => false,
+            // The trailing newline placeholder and hidden blocks are always considered empty.
+            BlockItem::TrailingNewLine(_) | BlockItem::Hidden { .. } => true,
+        }
+    }
+
+    pub fn is_hidden(&self) -> bool {
+        matches!(self, BlockItem::Hidden { .. })
+    }
+
+    pub fn is_trailing_newline(&self) -> bool {
+        matches!(self, BlockItem::TrailingNewLine(_))
+    }
+}
+
+impl Positioned<'_, BlockItem> {
+    fn softwrap_point_to_offset(&self, point: SoftWrapPoint) -> CharOffset {
+        match self.item {
+            BlockItem::Paragraph(inner) => self.paragraph(inner).softwrap_point_to_offset(point),
+            BlockItem::TextBlock { paragraph_block } => {
+                let text_block = self.text_block(paragraph_block);
+
+                let mut paragraphs = text_block.paragraphs();
+                paragraphs
+                    .find(|paragraph| paragraph.end_line().as_u32() > point.row())
+                    .map_or(self.end_char_offset(), |paragraph| {
+                        paragraph.softwrap_point_to_offset(point)
+                    })
+            }
+            BlockItem::UnorderedList { paragraph, .. } => self
+                .unordered_list(paragraph)
+                .softwrap_point_to_offset(point),
+            BlockItem::OrderedList { paragraph, .. } => {
+                self.ordered_list(paragraph).softwrap_point_to_offset(point)
+            }
+            BlockItem::TaskList { paragraph, .. } => {
+                self.task_list(paragraph).softwrap_point_to_offset(point)
+            }
+            BlockItem::Header {
+                paragraph: inner, ..
+            } => self.header(inner).softwrap_point_to_offset(point),
+            BlockItem::RunnableCodeBlock {
+                paragraph_block, ..
+            } => {
+                let code_block = self.code_block(paragraph_block);
+
+                let mut paragraphs = code_block.paragraphs();
+                paragraphs
+                    .find(|paragraph| paragraph.end_line().as_u32() > point.row())
+                    .map_or(self.end_char_offset(), |paragraph| {
+                        paragraph.softwrap_point_to_offset(point)
+                    })
+            }
+            BlockItem::MermaidDiagram { .. } => self.start_char_offset,
+            BlockItem::TrailingNewLine(_)
+            | BlockItem::Embedded(_)
+            | BlockItem::HorizontalRule(_)
+            | BlockItem::Image { .. }
+            | BlockItem::TemporaryBlock { .. }
+            | BlockItem::Hidden { .. } => self.start_char_offset,
+            BlockItem::Table(laid_out_table) => {
+                let row_in_table = point.row().saturating_sub(self.start_line.as_u32()) as usize;
+                if let Some(cell_range) = laid_out_table.offset_map.cell_range(row_in_table, 0) {
+                    let visible_cell_start = laid_out_table
+                        .cell_offset_maps
+                        .get(row_in_table)
+                        .and_then(|row| row.first())
+                        .map(|cell| cell.rendered_to_source(CharOffset::zero()))
+                        .unwrap_or(CharOffset::zero());
+                    self.start_char_offset + cell_range.start + visible_cell_start.as_usize()
+                } else {
+                    self.start_char_offset
+                }
+            }
+        }
+    }
+
+    fn offset_to_softwrap_point(&self, offset: CharOffset) -> SoftWrapPoint {
+        match self.item {
+            BlockItem::Paragraph(inner) => self.paragraph(inner).offset_to_softwrap_point(offset),
+            BlockItem::TextBlock { paragraph_block } => {
+                let text_block = self.text_block(paragraph_block);
+
+                let mut paragraphs = text_block.paragraphs();
+                paragraphs
+                    .find(|paragraph| paragraph.end_char_offset() > offset)
+                    .map_or(
+                        SoftWrapPoint::new(self.end_line().as_u32(), ColumnUnit::pixels_zero()),
+                        |paragraph| paragraph.offset_to_softwrap_point(offset),
+                    )
+            }
+            BlockItem::UnorderedList { paragraph, .. } => self
+                .unordered_list(paragraph)
+                .offset_to_softwrap_point(offset),
+            BlockItem::OrderedList { paragraph, .. } => self
+                .ordered_list(paragraph)
+                .offset_to_softwrap_point(offset),
+            BlockItem::Header { paragraph, .. } => {
+                self.header(paragraph).offset_to_softwrap_point(offset)
+            }
+            BlockItem::TaskList { paragraph, .. } => {
+                self.task_list(paragraph).offset_to_softwrap_point(offset)
+            }
+            BlockItem::RunnableCodeBlock {
+                paragraph_block, ..
+            } => {
+                let code_block = self.code_block(paragraph_block);
+
+                let mut paragraphs = code_block.paragraphs();
+                paragraphs
+                    .find(|paragraph| paragraph.end_char_offset() > offset)
+                    .map_or(
+                        SoftWrapPoint::new(self.end_line().as_u32(), ColumnUnit::pixels_zero()),
+                        |paragraph| paragraph.offset_to_softwrap_point(offset),
+                    )
+            }
+            BlockItem::MermaidDiagram { .. } => {
+                SoftWrapPoint::new(self.start_line.as_u32(), ColumnUnit::pixels_zero())
+            }
+            BlockItem::TrailingNewLine(_)
+            | BlockItem::Embedded(_)
+            | BlockItem::HorizontalRule(_)
+            | BlockItem::Image { .. }
+            | BlockItem::TemporaryBlock { .. }
+            | BlockItem::Hidden { .. } => {
+                SoftWrapPoint::new(self.start_line.as_u32(), ColumnUnit::pixels_zero())
+            }
+            BlockItem::Table(laid_out_table) => {
+                let relative_offset = offset.saturating_sub(&self.start_char_offset);
+                let row = laid_out_table
+                    .offset_map
+                    .cell_at_offset(relative_offset)
+                    .map(|c| c.row)
+                    .unwrap_or(0);
+                SoftWrapPoint::new(
+                    self.start_line.as_u32() + row as u32,
+                    ColumnUnit::pixels_zero(),
+                )
+            }
+        }
+    }
+
+    /// Given a [`CharOffset`], finds the bounding box of the character at that offset (to the extent possible).
+    /// The bounding box is relative to the buffer origin.
+    fn character_bounds(&self, offset: CharOffset) -> Option<RectF> {
+        match self.item {
+            BlockItem::Paragraph(inner) => self.paragraph(inner).character_bounds(offset),
+            BlockItem::TextBlock { paragraph_block } => {
+                let text_block = self.text_block(paragraph_block);
+                text_block
+                    .paragraphs()
+                    .find_or_last(|paragraph| paragraph.end_char_offset() > offset)
+                    .and_then(|paragraph| paragraph.character_bounds(offset))
+            }
+            BlockItem::UnorderedList { paragraph, .. } => {
+                self.unordered_list(paragraph).character_bounds(offset)
+            }
+            BlockItem::OrderedList { paragraph, .. } => {
+                self.ordered_list(paragraph).character_bounds(offset)
+            }
+            BlockItem::TaskList { paragraph, .. } => {
+                self.task_list(paragraph).character_bounds(offset)
+            }
+            BlockItem::Header { paragraph, .. } => self.header(paragraph).character_bounds(offset),
+            BlockItem::RunnableCodeBlock {
+                paragraph_block, ..
+            } => {
+                let code_block = self.code_block(paragraph_block);
+                code_block
+                    .paragraphs()
+                    .find_or_last(|paragraph| paragraph.end_char_offset() > offset)
+                    .and_then(|paragraph| paragraph.character_bounds(offset))
+            }
+            BlockItem::MermaidDiagram { config, .. } => {
+                let origin = self.content_origin();
+                Some(RectF::new(
+                    origin,
+                    vec2f(config.width.as_f32(), config.height.as_f32()),
+                ))
+            }
+            BlockItem::TrailingNewLine(cursor) => {
+                let origin = self.content_origin();
+                Some(RectF::new(origin, cursor.size()))
+            }
+            BlockItem::HorizontalRule(rule) => {
+                let origin = self.content_origin();
+                Some(RectF::new(origin, rule.line_size()))
+            }
+            BlockItem::Image { config, .. } => {
+                let origin = self.content_origin();
+                Some(RectF::new(
+                    origin,
+                    vec2f(config.width.as_f32(), config.height.as_f32()),
+                ))
+            }
+            BlockItem::Table(laid_out_table) => {
+                if offset < self.start_char_offset || offset >= self.end_char_offset() {
+                    None
+                } else {
+                    laid_out_table
+                        .character_bounds(offset - self.start_char_offset, self.content_origin())
+                }
+            }
+            BlockItem::Embedded(embedded_item) => {
+                let origin = self.content_origin();
+                Some(RectF::new(origin, embedded_item.size()))
+            }
+            BlockItem::TemporaryBlock { .. } | BlockItem::Hidden { .. } => None,
+        }
+    }
+
+    /// The bounds of the first line of this item, relative to the buffer origin.
+    pub fn first_line_bounds(&self) -> Option<RectF> {
+        let line_bounds = match self.item {
+            BlockItem::Paragraph(inner) => self.paragraph(inner).first_line_bounds()?,
+            BlockItem::TextBlock { paragraph_block } => {
+                self.text_block(paragraph_block).first_line_bounds()?
+            }
+            BlockItem::UnorderedList { paragraph, .. } => {
+                self.unordered_list(paragraph).first_line_bounds()?
+            }
+            BlockItem::TaskList { paragraph, .. } => {
+                self.task_list(paragraph).first_line_bounds()?
+            }
+            BlockItem::OrderedList { paragraph, .. } => {
+                self.ordered_list(paragraph).first_line_bounds()?
+            }
+            BlockItem::Header { paragraph, .. } => self.header(paragraph).first_line_bounds()?,
+            BlockItem::RunnableCodeBlock {
+                paragraph_block, ..
+            } => {
+                // For code blocks, we treat the top padding as the first line.
+                let first_line = self.code_block(paragraph_block).first_line_bounds()?;
+                RectF::from_points(self.visible_origin(), first_line.upper_right())
+            }
+            BlockItem::MermaidDiagram { config, .. } => {
+                let origin = self.visible_origin();
+                RectF::new(origin, vec2f(config.width.as_f32(), config.height.as_f32()))
+            }
+            BlockItem::TrailingNewLine(cursor) => {
+                let origin = self.trailing_newline(cursor).content_origin();
+                RectF::new(origin, cursor.size())
+            }
+            BlockItem::HorizontalRule(rule) => {
+                let origin = self.content_origin();
+                RectF::new(origin, rule.line_size())
+            }
+            BlockItem::Image { config, .. } => {
+                let origin = self.content_origin();
+                RectF::new(origin, vec2f(config.width.as_f32(), config.height.as_f32()))
+            }
+            BlockItem::Table(laid_out_table) => {
+                let origin = self.content_origin();
+                RectF::new(
+                    origin,
+                    vec2f(
+                        laid_out_table.width().as_f32(),
+                        laid_out_table.height().as_f32(),
+                    ),
+                )
+            }
+            BlockItem::Embedded(embedded_item) => {
+                let origin = self.visible_origin();
+                RectF::new(origin, embedded_item.first_line_bound())
+            }
+            BlockItem::TemporaryBlock { .. } | BlockItem::Hidden { .. } => return None,
+        };
+
+        // At the block level, we want to include any space for list bullets and other
+        // decorations/padding in the first line.
+        let flush_origin = vec2f(self.reserved_origin().x(), line_bounds.origin_y());
+        Some(RectF::from_points(flush_origin, line_bounds.lower_right()))
+    }
+}
+
+impl sum_tree::Item for BlockItem {
+    type Summary = LayoutSummary;
+
+    fn summary(&self) -> Self::Summary {
+        LayoutSummary {
+            content_length: self.content_length(),
+            // We use f64 to represent heights to avoid cumulative precision error from iteratively adding
+            // block heights when querying / constructing the tree. In rendering, we don't actually need
+            // high decimal point precisions so it's fine to cast from f32 to f64 here.
+            height: self.height().as_f32() as f64,
+            width: self.width(),
+            lines: self.lines(),
+            item_count: 1,
+        }
+    }
+}
+
+impl<'a> Positioned<'a, Paragraph> {
+    /// Iterator over the lines of a paragraph, along with positioning information.
+    fn lines(&self) -> impl Iterator<Item = Positioned<'a, Line>> + '_ {
+        self.item.frame.lines().iter().scan(
+            (
+                self.start_y_offset + self.style.top_offset(),
+                self.start_line,
+            ),
+            |(y_offset_acc, line_acc), line| {
+                let positioned = Some(Positioned {
+                    start_y_offset: *y_offset_acc,
+                    // Lines record their character index relative to the TextFrame start,
+                    // so we can keep its starting offset for each.
+                    start_char_offset: self.start_char_offset,
+                    start_line: *line_acc,
+                    // Remove y axis offset here because the paragraph level styling should
+                    // not apply to each text frame line.
+                    style: self.style.without_y_axis_offsets(),
+                    item: line,
+                });
+                *y_offset_acc += line_height(line).into_pixels();
+                *line_acc += LineCount(1);
+                positioned
+            },
+        )
+    }
+
+    /// The bounds of the first line of this paragraph, relative to the content origin. This is
+    /// useful for UI elements positioned alongside the start of the paragraph.
+    fn first_line_bounds(&self) -> Option<RectF> {
+        let first_line = self.lines().next()?;
+        let size = vec2f(first_line.item.width, self.item.first_line_height());
+        Some(RectF::new(first_line.content_origin(), size))
+    }
+
+    pub fn end_char_offset(&self) -> CharOffset {
+        self.start_char_offset + self.item.content_length
+    }
+
+    pub fn end_line(&self) -> LineCount {
+        self.start_line + self.item.lines()
+    }
+
+    // Maximum softwrap point in the paragraph on the last line.
+    pub fn max_softwrap_point(&self) -> SoftWrapPoint {
+        match self.lines().last() {
+            Some(line) => SoftWrapPoint::new(
+                line.start_line.as_u32(),
+                ColumnUnit::Pixels(line.item.width.into_pixels() + self.style.left_offset()),
+            ),
+            None => SoftWrapPoint::new(self.start_line.as_u32(), ColumnUnit::pixels_zero()),
+        }
+    }
+
+    pub fn end_y_offset(&self) -> Pixels {
+        self.start_y_offset + self.item.height + self.style.top_offset()
+    }
+
+    /// The bounding box of the character at `offset`, if within this paragraph.
+    fn character_bounds(&self, offset: CharOffset) -> Option<RectF> {
+        let (line, frame_offset) = self.offset_to_frame_location(offset)?;
+        let x_offset = line.item.caret_position_for_index(frame_offset.as_usize());
+        // We don't have easy access to the width of a given glyph, so use the next caret position
+        // instead. This will clamp to the end of the line if needed.
+        let next_x_offset = line
+            .item
+            .caret_position_for_index(frame_offset.as_usize() + 1);
+        let origin = line.content_origin() + vec2f(x_offset, 0.);
+        let size = vec2f(next_x_offset - x_offset, line_height(line.item));
+        Some(RectF::new(origin, size))
+    }
+
+    /// Resolves a content `CharOffset` to the corresponding frame offset and containing line, if
+    /// it's in bounds for this paragraph.
+    fn offset_to_frame_location(
+        &self,
+        offset: CharOffset,
+    ) -> Option<(Positioned<'_, Line>, FrameOffset)> {
+        if offset < self.start_char_offset || offset >= self.end_char_offset() {
+            return None;
+        }
+        let offset_within_frame = self.frame_index(offset);
+
+        // We've already checked that `offset` is in bounds. In that case,
+        // if no line contains the offset, it's probably at the newline
+        // ending the paragraph (which doesn't have a caret position of
+        // its own). If we're at the newline, then use the end of the
+        // paragraph as the pixel position.
+        let line = self.lines().find_or_last(|line| {
+            // TODO(ben): handle clamping above/below
+            line.item.last_index() >= offset_within_frame.as_usize()
+        })?;
+
+        Some((line, offset_within_frame))
+    }
+
+    /// Draws any selection highlights and cursors that are within this paragraph.
+    pub(super) fn draw_selection(&self, model: &RenderState, ctx: &mut RenderContext) {
+        let styles = &model.styles;
+        for (i, selection) in model.selections().iter().enumerate() {
+            let start = selection.start();
+            let end = selection.end();
+            let bias = selection.cursor_bias();
+            // Where we should paint the cursor. This is not always the same as `start`.
+            let cursor_offset = selection.head;
+
+            // If the selection is a cursor, don't also draw a selection highlight.
+            if start != end {
+                self.draw_highlight(start, end, styles.selection_fill, ctx, model.max_line());
+            } else if let Some(VimMode::Visual(_)) = ctx.vim_mode {
+                // If we're in Vim visual mode, render the visual mode selection.
+                let Some(visual_tail) = ctx.vim_visual_tails.get(i) else {
+                    continue;
+                };
+
+                let visual_start = *visual_tail;
+                let visual_end = selection.head;
+                let (visual_start, visual_end) = if visual_start > visual_end {
+                    (visual_end, visual_start)
+                } else {
+                    (visual_start, visual_end)
+                };
+
+                self.draw_highlight(
+                    visual_start,
+                    visual_end,
+                    styles.selection_fill,
+                    ctx,
+                    model.max_line(),
+                );
+            }
+
+            if cursor_offset >= self.start_char_offset && cursor_offset < self.end_char_offset() {
+                self.draw_cursor(cursor_offset, bias, styles, ctx);
+            }
+        }
+    }
+
+    fn draw_cursor(
+        &self,
+        offset: CharOffset,
+        bias: Option<RenderedSelectionBias>,
+        styles: &RichTextStyles,
+        ctx: &mut RenderContext,
+    ) {
+        let Some((line, frame_offset)) = self.offset_to_frame_location(offset) else {
+            // The cursor isn't within this paragraph.
+            return;
+        };
+
+        let delta = match bias {
+            Some(RenderedSelectionBias::Left) => -line.item.font_size / 8.,
+            Some(RenderedSelectionBias::Right) => line.item.font_size / 8.,
+            None => 0.,
+        };
+
+        // TODO: Instead of tracking content_origin and text_origin separately, it might be
+        // simpler to track a start_position (rather than start_y_offset) in Positioned. Then,
+        // blocks with padding (like a code block) could position their children with both
+        // horizontal and vertical offsets.
+        let cursor_position = line.content_origin()
+            + vec2f(
+                line.item.caret_position_for_index(frame_offset.as_usize()) + delta,
+                0.,
+            );
+
+        let cursor_type = ctx.cursor_type;
+        let block_width = line
+            .item
+            .width_for_index(frame_offset.as_usize())
+            .filter(|width| *width > 0.0);
+
+        let cursor_data = CursorData {
+            block_width,
+            font_size: Some(line.item.font_size),
+        };
+
+        ctx.draw_and_save_cursor(
+            cursor_type,
+            cursor_position,
+            vec2f(styles.cursor_width, line_height(line.item)),
+            cursor_data,
+            styles,
+        );
+    }
+
+    /// Draws a background highlight over the portion of this block that overlaps with the given
+    /// range.
+    pub(super) fn draw_highlight(
+        &self,
+        start: CharOffset,
+        end: CharOffset,
+        fill: Fill,
+        ctx: &mut RenderContext,
+        buffer_max_line: LineCount,
+    ) {
+        match ctx.vim_mode {
+            Some(VimMode::Visual(MotionType::Linewise)) => {
+                // For linewise visual mode, we want to highlight entire lines from the starting row to ending row.
+                self.draw_linewise_highlight(start, end, fill, ctx, buffer_max_line)
+            }
+            Some(VimMode::Visual(MotionType::Charwise)) => {
+                // Charwise visual mode should include the character under the block cursor.
+                self.draw_charwise_highlight(start, end + 1, fill, ctx, buffer_max_line)
+            }
+            _ => self.draw_charwise_highlight(start, end, fill, ctx, buffer_max_line),
+        }
+    }
+
+    /// Draws linewise visual selection highlighting - highlights complete lines from start row to end row
+    fn draw_linewise_highlight(
+        &self,
+        start: CharOffset,
+        end: CharOffset,
+        fill: Fill,
+        ctx: &mut RenderContext,
+        _buffer_max_line: LineCount,
+    ) {
+        for line in self.lines() {
+            let line_start_within_buffer = self.buffer_index(line.item.first_index().into());
+            let line_end_within_buffer = self.buffer_index(line.item.end_index().into());
+
+            // Check if this line intersects with the selection range.
+            if line_end_within_buffer >= start && line_start_within_buffer <= end {
+                // Start at beginning of line, go to last char in line
+                let start_x = 0.0;
+                let end_x = line.item.width;
+
+                ctx.paint
+                    .scene
+                    .draw_rect_with_hit_recording(RectF::new(
+                        ctx.content_to_screen(line.content_origin()) + vec2f(start_x, 0.),
+                        vec2f(end_x - start_x, line_height(line.item)),
+                    ))
+                    .with_background(fill);
+            }
+        }
+    }
+
+    /// Computes the x positions for a given character offset range within a line.
+    ///
+    /// Returns `Some((start_x, end_x))` if the line intersects with the range,
+    /// or `None` if:
+    /// - The line starts after the end of the range (signals iteration should stop)
+    /// - The line doesn't intersect the range (signals this line should be skipped)
+    ///
+    /// The second return value indicates whether iteration should stop entirely.
+    fn offsets_to_line_x_position(
+        &self,
+        line: &Positioned<'_, Line>,
+        start: CharOffset,
+        end: CharOffset,
+    ) -> Option<(f32, f32)> {
+        let line_start_within_buffer = self.buffer_index(line.item.first_index().into());
+        let line_end_within_buffer = self.buffer_index(line.item.end_index().into());
+
+        // If the line starts after the end of the range, this and all
+        // following lines of the paragraph are not part of the range.
+        if line_start_within_buffer >= end {
+            return None;
+        }
+
+        // Skip lines that don't intersect the range
+        if line_end_within_buffer <= start {
+            return None;
+        }
+
+        // Clamp the start and end positions to the bounds of this specific line
+        let start_x = line.item.caret_position_for_index(
+            self.frame_index(start.max(line_start_within_buffer))
+                .as_usize(),
+        );
+        let end_x = line
+            .item
+            .caret_position_for_index(self.frame_index(end.min(line_end_within_buffer)).as_usize());
+
+        Some((start_x, end_x))
+    }
+
+    /// Draws highlighting for typical selections going charwise from start to end.
+    fn draw_charwise_highlight(
+        &self,
+        start: CharOffset,
+        end: CharOffset,
+        fill: Fill,
+        ctx: &mut RenderContext,
+        buffer_max_line: LineCount,
+    ) {
+        for line in self.lines() {
+            let Some((start_x, end_x)) = self.offsets_to_line_x_position(&line, start, end) else {
+                let line_start_within_buffer = self.buffer_index(line.item.first_index().into());
+                // If line starts after range end, stop iteration
+                if line_start_within_buffer >= end {
+                    break;
+                }
+                // Otherwise, skip this line
+                continue;
+            };
+
+            ctx.paint
+                .scene
+                .draw_rect_with_hit_recording(RectF::new(
+                    ctx.content_to_screen(line.content_origin()) + vec2f(start_x, 0.),
+                    vec2f(end_x - start_x, line_height(line.item)),
+                ))
+                .with_background(fill);
+
+            let line_start_within_buffer = self.buffer_index(line.item.first_index().into());
+            let line_end_within_buffer = self.buffer_index(line.item.end_index().into());
+            let is_last_line_of_buffer =
+                line.start_line == buffer_max_line.saturating_sub(&LineCount(1));
+            let selection_crosses_newline = selection_crosses_newline_offset_based(
+                is_last_line_of_buffer,
+                start.as_usize(),
+                end.as_usize(),
+                line_start_within_buffer.as_usize(),
+                line_end_within_buffer.as_usize(),
+            );
+            if selection_crosses_newline {
+                let tick_width = calculate_tick_width(line.item.font_size);
+                let tick_origin =
+                    ctx.content_to_screen(line.content_origin()) + vec2f(line.item.width, 0.);
+                ctx.paint
+                    .scene
+                    .draw_rect_with_hit_recording(create_newline_tick_rect(NewlineTickParams {
+                        tick_origin,
+                        tick_width,
+                        tick_height: line_height(line.item),
+                    }))
+                    .with_background(fill);
+            }
+        }
+    }
+
+    /// Draws a dashed underline decoration over the portion of this block that overlaps with the
+    /// given range. Used for diagnostics.
+    pub(super) fn draw_dashed_underline(
+        &self,
+        start: CharOffset,
+        end: CharOffset,
+        color: ColorU,
+        ctx: &mut RenderContext,
+    ) {
+        for line in self.lines() {
+            let Some((start_x, end_x)) = self.offsets_to_line_x_position(&line, start, end) else {
+                let line_start_within_buffer = self.buffer_index(line.item.first_index().into());
+                // If line starts after range end, stop iteration
+                if line_start_within_buffer >= end {
+                    break;
+                }
+                // Otherwise, skip this line
+                continue;
+            };
+
+            let underline_width = end_x - start_x;
+            if underline_width <= 0. {
+                continue;
+            }
+
+            // Position underline at the baseline of the text
+            let underline_origin = ctx.content_to_screen(line.content_origin())
+                + vec2f(start_x, line_height(line.item) - UNDERLINE_THICKNESS);
+
+            let underline_rect = RectF::new(
+                underline_origin,
+                vec2f(underline_width, UNDERLINE_THICKNESS),
+            );
+
+            let dash = warpui_core::scene::Dash {
+                dash_length: DASHED_UNDERLINE_DASH_LENGTH,
+                gap_length: DASHED_UNDERLINE_GAP_LENGTH,
+                force_consistent_gap_length: true,
+            };
+            ctx.paint
+                .scene
+                .draw_rect_without_hit_recording(underline_rect)
+                .with_border(
+                    warpui_core::scene::Border::bottom(UNDERLINE_THICKNESS)
+                        .with_dashed_border(dash)
+                        .with_border_color(color),
+                );
+        }
+    }
+
+    fn coordinate_to_location(&self, x: Pixels, y: Pixels) -> Location {
+        let (line, clamped_on_y) = match (
+            self.lines().find(|line| line.end_y_offset() > y),
+            self.lines().last(),
+        ) {
+            (Some(line), _) => (line.item, false),
+            // When the location is below the paragraph, clamp to the character matching its
+            // x-axis pixel position on the last line.
+            (None, Some(last_line)) => (last_line.item, true),
+            (None, None) => {
+                // If the paragraph is empty, clamp to the end of the paragraph.
+                return Location::Text {
+                    char_offset: self.end_char_offset().saturating_sub(&1.into()),
+                    clamped: true,
+                    wrap_direction: WrapDirection::Up,
+                    block_start: self.start_char_offset,
+                    link: None,
+                };
+            }
+        };
+
+        let (frame_index, clamped_on_x, wrap_direction) = match line.caret_index_for_x(x.as_f32()) {
+            Some(index) => (FrameOffset::from(index), false, WrapDirection::Down),
+            None => {
+                // If a line contained `y`, but it does not contain `x`, clamp to
+                // the extremes of the line.
+                let frame_offset = FrameOffset::from(if x <= Pixels::zero() {
+                    0
+                } else {
+                    line.end_index()
+                });
+                (frame_offset, true, WrapDirection::Up)
+            }
+        };
+
+        // Clamp to the last character within this block (which may not be within the line).
+        // This prevents an issue with hit-testing on empty blocks where we would instead return
+        // the start of the next block.
+        let buffer_index = self.buffer_index(frame_index);
+        let end = self.end_char_offset().saturating_sub(&CharOffset::from(1));
+
+        Location::Text {
+            char_offset: buffer_index.min(end),
+            clamped: clamped_on_x || clamped_on_y,
+            wrap_direction,
+            block_start: self.start_char_offset,
+            link: self.link(frame_index),
+        }
+    }
+
+    fn offset_to_softwrap_point(&self, offset: CharOffset) -> SoftWrapPoint {
+        let Some(line) = self
+            .lines()
+            .find(|line| self.buffer_index(line.item.end_index().into()) > offset)
+        else {
+            return self.max_softwrap_point();
+        };
+
+        SoftWrapPoint::new(
+            line.start_line.as_u32(),
+            ColumnUnit::Pixels(
+                line.item
+                    .caret_position_for_index(self.frame_index(offset).as_usize())
+                    .into_pixels()
+                    + self.style.left_offset(),
+            ),
+        )
+    }
+
+    fn softwrap_point_to_offset(&self, point: SoftWrapPoint) -> CharOffset {
+        let line = match self
+            .lines()
+            .find(|line| line.start_line.as_u32() >= point.row)
+        {
+            Some(line) => line.item,
+            None => return self.end_char_offset(),
+        };
+
+        let line_end = self.buffer_index(line.end_index().into());
+        let paragraph_last_char = self.end_char_offset().saturating_sub(&1.into());
+
+        let adjusted_x = point.column().as_pixels() - self.style.left_offset();
+        let frame_index = match line.caret_index_for_x(adjusted_x.as_f32()) {
+            Some(caret) => FrameOffset::from(caret),
+            None => {
+                // caret_index_for_x returns None if the position is out of bounds. Check which side
+                // it's out of bounds on to decide how to clamp.
+                if adjusted_x <= Pixels::zero() {
+                    FrameOffset::from(line.first_index())
+                } else {
+                    FrameOffset::from(line.end_index())
+                }
+                // Note: adjusted_x is always Pixels here because softwrap_point_to_offset
+                // on Positioned<Paragraph> is only called from the Pixels layout path.
+            }
+        };
+
+        let offset = self.buffer_index(frame_index);
+
+        // The upper bound on the offset depends on whether the line is soft-wrapped or hard-wrapped:
+        // - If soft-wrapped, it's the index just after the last character on the line
+        // - If hard-wrapped, it's the last non-newline character in the paragraph
+        // In both cases, visually this is the caret position just after the last glyph in the line.
+        offset.min(line_end).min(paragraph_last_char)
+    }
+
+    /// Converts a `CharOffset` to the corresponding character index in the text frame.
+    fn frame_index(&self, offset: CharOffset) -> FrameOffset {
+        self.item
+            .offsets
+            .to_frame(offset.saturating_sub(&self.start_char_offset))
+    }
+
+    /// Converts a text frame character index to the corresponding content `CharOffset`.
+    fn buffer_index(&self, offset: FrameOffset) -> CharOffset {
+        self.item.offsets.to_content(offset) + self.start_char_offset
+    }
+
+    fn link(&self, offset: FrameOffset) -> Option<String> {
+        self.item.detected_url.iter().find_map(|url| {
+            if url.url_range().contains(&offset.as_usize()) {
+                Some(url.link())
+            } else {
+                None
+            }
+        })
+    }
+}
+
+impl<'a> Positioned<'a, ParagraphBlock> {
+    pub(super) fn paragraphs(&self) -> impl Iterator<Item = Positioned<'a, Paragraph>> + '_ {
+        self.item.paragraphs.iter().scan(
+            (
+                self.start_char_offset,
+                self.start_y_offset + self.style.top_offset(),
+                self.start_line,
+            ),
+            |(char_offset_acc, y_offset_acc, line_acc), paragraph| {
+                let positioned = Some(Positioned {
+                    start_y_offset: *y_offset_acc,
+                    // Lines record their character index relative to the TextFrame start,
+                    // so we can keep its starting offset for each.
+                    start_char_offset: *char_offset_acc,
+                    start_line: *line_acc,
+                    style: self.style.without_y_axis_offsets(),
+                    item: paragraph,
+                });
+                *char_offset_acc += paragraph.content_length;
+                *y_offset_acc += paragraph.height;
+                *line_acc += paragraph.lines();
+                positioned
+            },
+        )
+    }
+
+    /// The bounds of the first line of the first paragraph. See [`Positioned::<Paragraph>::first_line_bounds`].
+    fn first_line_bounds(&self) -> Option<RectF> {
+        self.paragraphs().next()?.first_line_bounds()
+    }
+}
+
+impl<'a> sum_tree::Dimension<'a, LayoutSummary> for CharOffset {
+    fn add_summary(&mut self, summary: &'a LayoutSummary) {
+        *self += summary.content_length;
+    }
+}
+
+impl<'a> sum_tree::Dimension<'a, LayoutSummary> for Height {
+    fn add_summary(&mut self, summary: &'a LayoutSummary) {
+        self.0 += summary.height
+    }
+}
+
+impl<'a> sum_tree::Dimension<'a, LayoutSummary> for Width {
+    fn add_summary(&mut self, summary: &'a LayoutSummary) {
+        *self.0 = self.0.0.max(summary.width);
+    }
+}
+
+impl<'a> sum_tree::Dimension<'a, LayoutSummary> for LayoutSummary {
+    fn add_summary(&mut self, summary: &'a LayoutSummary) {
+        *self += summary
+    }
+}
+
+impl<'a> sum_tree::Dimension<'a, LayoutSummary> for LineCount {
+    fn add_summary(&mut self, summary: &'a LayoutSummary) {
+        *self += summary.lines;
+    }
+}
+
+impl fmt::Debug for Paragraph {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("Paragraph")
+            .field("lines", &self.frame.lines().len())
+            .field("offsets", &self.offsets)
+            .field("max_width", &self.frame.max_width())
+            .field("height", &self.height)
+            .field("content_length", &self.content_length)
+            .finish()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RenderedSelectionBias {
+    Left,
+    Right,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RenderedSelection {
+    /// Head is the position of the cursor.
+    pub head: CharOffset,
+    pub tail: CharOffset,
+    pub cursor_bias: Option<RenderedSelectionBias>,
+}
+
+impl RenderedSelection {
+    pub fn new(head: CharOffset, tail: CharOffset) -> Self {
+        Self {
+            head,
+            tail,
+            cursor_bias: None,
+        }
+    }
+
+    pub fn new_with_cursor_bias(
+        head: CharOffset,
+        tail: CharOffset,
+        bias: RenderedSelectionBias,
+    ) -> Self {
+        Self {
+            head,
+            tail,
+            cursor_bias: Some(bias),
+        }
+    }
+
+    // Starting offset of the selection. Note that start is different from head because
+    // the cursor could be at either the start or end of the selection.
+    pub fn start(&self) -> CharOffset {
+        if self.head > self.tail {
+            self.tail
+        } else {
+            self.head
+        }
+    }
+
+    // Ending offset of the selection.
+    pub fn end(&self) -> CharOffset {
+        if self.head > self.tail {
+            self.head
+        } else {
+            self.tail
+        }
+    }
+
+    pub fn is_cursor(&self) -> bool {
+        self.head == self.tail
+    }
+
+    pub fn cursor_bias(&self) -> Option<RenderedSelectionBias> {
+        self.cursor_bias
+    }
+
+    // The cursor position, if this selection is a single cursor.
+    pub fn single_cursor(&self) -> Option<CharOffset> {
+        self.is_cursor().then_some(self.head)
+    }
+}
+
+impl Default for RenderedSelection {
+    fn default() -> Self {
+        Self {
+            head: CharOffset::zero(),
+            tail: CharOffset::zero(),
+            cursor_bias: None,
+        }
+    }
+}
+
+impl fmt::Display for RenderedSelection {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}..{}", self.start(), self.end())?;
+        if let Some(bias) = self.cursor_bias {
+            write!(f, " ({bias:?})")?;
+        }
+        Ok(())
+    }
+}
+
+/// A set of all selections in the buffer.  There must be at least
+/// one selection at all times.
+#[derive(Eq, PartialEq, Debug, Clone, Default)]
+pub struct RenderedSelectionSet {
+    selections: Vec1<RenderedSelection>,
+}
+
+// Vec1 can never be empty, so we can ignore the warning to add an is_empty method.
+#[allow(clippy::len_without_is_empty)]
+impl RenderedSelectionSet {
+    pub fn iter(&self) -> impl Iterator<Item = &RenderedSelection> {
+        self.selections.iter()
+    }
+
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut RenderedSelection> {
+        self.selections.iter_mut()
+    }
+
+    pub fn new(selection: RenderedSelection) -> Self {
+        Self {
+            selections: Vec1::new(selection),
+        }
+    }
+
+    pub fn first(&self) -> &RenderedSelection {
+        self.selections.first()
+    }
+
+    pub fn selection_map<T, F>(&self, f: F) -> Vec1<T>
+    where
+        F: Fn(&RenderedSelection) -> T,
+    {
+        self.selections.mapped_ref(f)
+    }
+
+    pub fn len(&self) -> usize {
+        self.selections.len()
+    }
+}
+
+impl From<Vec1<RenderedSelection>> for RenderedSelectionSet {
+    fn from(selections: Vec1<RenderedSelection>) -> RenderedSelectionSet {
+        RenderedSelectionSet { selections }
+    }
+}
+
+impl fmt::Display for RenderedSelectionSet {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "[")?;
+        for (i, selection) in self.selections.iter().enumerate() {
+            if i > 0 {
+                write!(f, ", ")?;
+            }
+            write!(f, "{selection}")?;
+        }
+        write!(f, "]")
+    }
+}
+
+impl IntoIterator for RenderedSelectionSet {
+    type Item = RenderedSelection;
+    type IntoIter = std::vec::IntoIter<RenderedSelection>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.selections.into_iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a RenderedSelectionSet {
+    type Item = &'a RenderedSelection;
+    type IntoIter = slice::Iter<'a, RenderedSelection>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.selections.iter()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum UpdateDecorationAfterLayout {
+    Line(Vec<LineDecoration>),
+    LineAndText {
+        line: Vec<LineDecoration>,
+        text: Vec<Decoration>,
+    },
+}
+
+impl UpdateDecorationAfterLayout {
+    pub fn sort(&mut self) {
+        match self {
+            Self::Line(decorations) => {
+                decorations.sort_unstable_by_key(|decoration| decoration.end)
+            }
+            Self::LineAndText { line, text } => {
+                line.sort_unstable_by_key(|decoration| decoration.end);
+                text.sort_unstable_by_key(|decoration| decoration.end);
+            }
+        }
+    }
+}
+
+/// A render-time line decoration, such as highlighting the line with active cursor.
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub struct LineDecoration {
+    /// Start of the decorated range (inclusive).
+    pub start: LineCount,
+    /// End of the decorated range (exclusive).
+    pub end: LineCount,
+    pub overlay: ThemeFill,
+}
+
+impl LineDecoration {
+    pub fn new(start: LineCount, end: LineCount, overlay: ThemeFill) -> Self {
+        debug_assert!(start <= end);
+        Self {
+            start,
+            end,
+            overlay,
+        }
+    }
+}
+
+/// A render-time text decoration, such as a highlighted search result.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Decoration {
+    /// Start of the decorated range (inclusive).
+    pub start: CharOffset,
+    /// End of the decorated range (exclusive).
+    pub end: CharOffset,
+    pub background: Option<ThemeFill>,
+    /// Color for a dashed underline (used for diagnostics).
+    pub dashed_underline: Option<ColorU>,
+}
+
+impl Decoration {
+    pub fn new(start: CharOffset, end: CharOffset) -> Self {
+        debug_assert!(start <= end);
+        Self {
+            start,
+            end,
+            background: None,
+            dashed_underline: None,
+        }
+    }
+
+    pub fn with_background(mut self, background: ThemeFill) -> Self {
+        self.background = Some(background);
+        self
+    }
+
+    pub fn with_dashed_underline(mut self, color: ColorU) -> Self {
+        self.dashed_underline = Some(color);
+        self
+    }
+}
+
+#[derive(Debug)]
+pub struct BrokenBlockEmbedding {
+    width: Pixels,
+    height: Pixels,
+}
+
+impl BrokenBlockEmbedding {
+    pub fn new(width: Pixels, font_size: f32) -> Self {
+        Self {
+            width,
+            height: (font_size + 2.).into_pixels(),
+        }
+    }
+}
+
+impl LaidOutEmbeddedItem for BrokenBlockEmbedding {
+    fn height(&self) -> Pixels {
+        self.height
+    }
+
+    fn size(&self) -> Vector2F {
+        vec2f(self.width.as_f32(), self.height().as_f32())
+    }
+
+    fn first_line_bound(&self) -> Vector2F {
+        vec2f(self.width.as_f32(), EMBEDDED_ITEM_FIRST_LINE_HEIGHT)
+    }
+
+    fn element(
+        &self,
+        state: &RenderState,
+        viewport_item: ViewportItem,
+        model: Option<&dyn EmbeddedItemModel>,
+        ctx: &AppContext,
+    ) -> Box<dyn RenderableBlock> {
+        Box::new(RenderableBrokenEmbedding::new(
+            viewport_item,
+            state.styles(),
+            model,
+            ctx,
+        ))
+    }
+
+    fn spacing(&self) -> BlockSpacing {
+        BROKEN_LINK_SPACING
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Char-cell (TUI) layout helpers
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// Returns Unicode line-break opportunities as 0-based character gaps.
+///
+/// The GUI editor delegates soft wrapping to the platform text layout engine.
+/// Precomputing these opportunities keeps char-cell layout independent of a
+/// font engine while mirroring the GUI's word-or-glyph policy; on platforms
+/// backed by cosmic-text, both paths use this same crate.
+pub(crate) fn char_cell_line_break_opportunities(text: &str) -> Vec<bool> {
+    let mut opportunities = vec![false; text.chars().count() + 1];
+    let mut char_boundaries = text
+        .char_indices()
+        .map(|(byte_offset, _)| byte_offset)
+        .chain(std::iter::once(text.len()))
+        .enumerate()
+        .peekable();
+
+    for (break_byte_offset, _) in unicode_linebreak::linebreaks(text) {
+        while char_boundaries
+            .peek()
+            .is_some_and(|(_, byte_offset)| *byte_offset < break_byte_offset)
+        {
+            char_boundaries.next();
+        }
+        if let Some(&(char_offset, byte_offset)) = char_boundaries.peek() {
+            debug_assert_eq!(byte_offset, break_byte_offset);
+            if byte_offset == break_byte_offset {
+                opportunities[char_offset] = true;
+            }
+        }
+    }
+
+    // The end of a logical line is always a valid fallback, including for an
+    // empty string.
+    *opportunities.last_mut().unwrap() = true;
+    opportunities
+}
+
+/// For one logical line, given its Unicode line-break opportunities and
+/// character display widths (in cells), returns the 0-based character index at
+/// which each visual row begins.
+/// Always returns at least `[0]`.
+///
+/// When a character overflows the current row, the algorithm first tries the
+/// last Unicode line-break opportunity on that row. If none exists (for
+/// example, in a very long word), it falls back to a hard wrap at the overflow
+/// position. With `terminal_width == 0`, wrapping is disabled (a single row).
+pub fn char_cell_line_row_starts(
+    line_breaks: &[bool],
+    char_widths: &[u8],
+    terminal_width: u16,
+) -> Vec<usize> {
+    let mut starts = Vec::new();
+    char_cell_line_row_starts_into(line_breaks, char_widths, terminal_width, &mut starts);
+    starts
+}
+
+fn char_cell_line_row_starts_into(
+    line_breaks: &[bool],
+    char_widths: &[u8],
+    terminal_width: u16,
+    starts: &mut Vec<usize>,
+) {
+    debug_assert_eq!(line_breaks.len(), char_widths.len() + 1);
+    let w = terminal_width as usize;
+    starts.clear();
+    starts.push(0);
+    if w == 0 {
+        return;
+    }
+    let mut col = 0usize;
+    let mut row_start = 0usize;
+    let mut last_break: Option<usize> = None;
+    for (i, &cw) in char_widths.iter().enumerate() {
+        if line_breaks[i] && i > row_start {
+            last_break = Some(i);
+        }
+        let cw = cw as usize;
+        if cw > 0 && col > 0 && col + cw > w {
+            if let Some(new_row_start) = last_break {
+                starts.push(new_row_start);
+                row_start = new_row_start;
+                col = char_widths[new_row_start..i]
+                    .iter()
+                    .map(|&w| w as usize)
+                    .sum();
+                last_break = None;
+                // If the current character still doesn't fit after the line
+                // break (word longer than terminal width), hard-wrap here.
+                if col > 0 && col + cw > w {
+                    starts.push(i);
+                    row_start = i;
+                    col = 0;
+                }
+            } else {
+                // No line-break opportunity on the current row: hard wrap.
+                starts.push(i);
+                row_start = i;
+                col = 0;
+            }
+        }
+        col += cw;
+    }
+}
+
+/// The `(row_within_line, display_col)` of the gap before char `char_in_line`
+/// (or the end of the line when `char_in_line == char_widths.len()`), using the
+/// same Unicode-aware wrapping as [`char_cell_line_row_starts`]. A cursor
+/// at the end of a row that exactly fills the width wraps to the start of the
+/// next row.
+#[cfg(test)]
+pub fn char_cell_line_gap_position(
+    line_breaks: &[bool],
+    char_widths: &[u8],
+    terminal_width: u16,
+    char_in_line: usize,
+) -> (u32, u16) {
+    let w = terminal_width as usize;
+    let n = char_in_line.min(char_widths.len());
+    // Derive row boundaries from the shared wrapping algorithm so that cursor
+    // positions always agree with the rendered row layout.
+    let row_starts = char_cell_line_row_starts(line_breaks, char_widths, terminal_width);
+    // The gap before char `n` sits on the last row whose start is <= n.
+    let row_within_line = row_starts.partition_point(|&s| s <= n).saturating_sub(1);
+    let row_start = row_starts[row_within_line];
+    let col: usize = char_widths[row_start..n]
+        .iter()
+        .map(|&cw| cw as usize)
+        .sum();
+    // Special case: cursor at the end of content on a row that exactly fills
+    // the terminal width wraps to the phantom start of the next row, matching
+    // plain monospace terminal behavior.
+    if char_in_line >= char_widths.len() && w > 0 && col == w {
+        return ((row_within_line + 1) as u32, 0);
+    }
+    (row_within_line as u32, col as u16)
+}
+
+/// The number of visual rows occupied by a single logical line (always >= 1).
+#[cfg(test)]
+fn char_cell_line_rows(line_breaks: &[bool], char_widths: &[u8], terminal_width: u16) -> u32 {
+    char_cell_line_row_starts(line_breaks, char_widths, terminal_width).len() as u32
+}
+
+/// The `\n`-free slice of per-char display widths for logical line `i`, given
+/// the line-start indices and the full per-char width buffer.
+pub(crate) fn char_cell_logical_line<'a>(
+    line_starts: &[CharOffset],
+    char_widths: &'a [u8],
+    i: usize,
+) -> &'a [u8] {
+    let start = line_starts[i].as_usize().min(char_widths.len());
+    // The next line starts just after this line's '\n'; exclude that newline.
+    let end = line_starts
+        .get(i + 1)
+        .map(|&next| next.as_usize().saturating_sub(1))
+        .unwrap_or(char_widths.len())
+        .min(char_widths.len());
+    &char_widths[start..end.max(start)]
+}
+
+/// The slice of gap-indexed Unicode line-break opportunities for logical line
+/// `i`, including the gap at the end of the line.
+pub(crate) fn char_cell_logical_line_breaks<'a>(
+    line_starts: &[CharOffset],
+    line_breaks: &'a [bool],
+    i: usize,
+) -> &'a [bool] {
+    let char_len = line_breaks.len().saturating_sub(1);
+    let start = line_starts[i].as_usize().min(char_len);
+    // The next line starts just after this line's '\n'; exclude that newline.
+    let end = line_starts
+        .get(i + 1)
+        .map(|&next| next.as_usize().saturating_sub(1))
+        .unwrap_or(char_len)
+        .min(char_len)
+        .max(start);
+    &line_breaks[start..=end]
+}
+
+/// Returns the total number of visual rows across all logical lines.
+/// Used by [`RenderState::max_line`] in `CharCell` mode.
+#[cfg(test)]
+pub(crate) fn char_cell_max_line(
+    line_starts: &[CharOffset],
+    line_breaks: &[bool],
+    char_widths: &[u8],
+    terminal_width: u16,
+) -> LineCount {
+    if line_starts.is_empty() {
+        return LineCount(1);
+    }
+    let mut total: usize = 0;
+    for i in 0..line_starts.len() {
+        let line = char_cell_logical_line(line_starts, char_widths, i);
+        let line_breaks = char_cell_logical_line_breaks(line_starts, line_breaks, i);
+        total += char_cell_line_rows(line_breaks, line, terminal_width) as usize;
+    }
+    LineCount(total)
+}
+
+/// Converts a 0-based character index to a [`SoftWrapPoint`] in char-cell coordinates.
+///
+/// This softwrap API is 0-based — index 0 is the first character — matching the
+/// convention the navigation callers already use for both layout modes: they pass
+/// `cursor_offset - 1` here and re-add 1 to [`char_cell_softwrap_point_to_offset`]
+/// results to convert back to the buffer's 1-based [`CharOffset`]. Keeping both modes
+/// on the same contract is what lets `navigate_line` stay layout-mode-agnostic.
+#[cfg(test)]
+pub(crate) fn char_cell_offset_to_softwrap_point(
+    offset: CharOffset,
+    line_starts: &[CharOffset],
+    line_breaks: &[bool],
+    char_widths: &[u8],
+    terminal_width: u16,
+) -> SoftWrapPoint {
+    // Find the logical line by binary-searching line_starts.
+    let logical_line = line_starts
+        .partition_point(|&start| start <= offset)
+        .saturating_sub(1);
+    let line_start = line_starts
+        .get(logical_line)
+        .copied()
+        .unwrap_or_else(CharOffset::zero);
+    let char_in_line = offset.as_usize().saturating_sub(line_start.as_usize());
+
+    // Count visual rows from all preceding logical lines.
+    let mut preceding_rows: u32 = 0;
+    for i in 0..logical_line {
+        let line = char_cell_logical_line(line_starts, char_widths, i);
+        let line_breaks = char_cell_logical_line_breaks(line_starts, line_breaks, i);
+        preceding_rows += char_cell_line_rows(line_breaks, line, terminal_width);
+    }
+
+    let line = char_cell_logical_line(line_starts, char_widths, logical_line);
+    let line_breaks = char_cell_logical_line_breaks(line_starts, line_breaks, logical_line);
+    let (row_within_line, col) =
+        char_cell_line_gap_position(line_breaks, line, terminal_width, char_in_line);
+    SoftWrapPoint::new(preceding_rows + row_within_line, ColumnUnit::Chars(col))
+}
+
+/// Converts a [`SoftWrapPoint`] in char-cell coordinates back to a 0-based character
+/// index — the inverse of [`char_cell_offset_to_softwrap_point`]. Callers re-add 1 to
+/// recover the buffer's 1-based [`CharOffset`].
+///
+/// The result is always clamped to the end of the logical line it lands in (the
+/// final line is bounded by the buffer length), so it never returns an offset
+/// past the end of the buffer even when the target column is beyond a shorter
+/// final line.
+#[cfg(test)]
+pub(crate) fn char_cell_softwrap_point_to_offset(
+    point: SoftWrapPoint,
+    line_starts: &[CharOffset],
+    line_breaks: &[bool],
+    char_widths: &[u8],
+    terminal_width: u16,
+) -> CharOffset {
+    let target_row = point.row();
+    // Accept either variant: Chars is the normal CharCell column; Pixels is produced
+    // by GUI-path navigation helpers (e.g. navigate_line_boundary) that hard-code
+    // ColumnUnit::pixels_zero() to mean "start of row". Treat any Pixels value as 0.
+    let target_col = match point.column() {
+        ColumnUnit::Chars(c) => c as usize,
+        ColumnUnit::Pixels(_) => 0,
+    };
+
+    if line_starts.is_empty() {
+        return CharOffset::from(0);
+    }
+    if target_row
+        >= char_cell_max_line(line_starts, line_breaks, char_widths, terminal_width).as_u32()
+    {
+        return CharOffset::from(char_widths.len());
+    }
+
+    let mut acc_rows: u32 = 0;
+    for i in 0..line_starts.len() {
+        let line_start = line_starts[i];
+        let line = char_cell_logical_line(line_starts, char_widths, i);
+        let line_breaks = char_cell_logical_line_breaks(line_starts, line_breaks, i);
+        let row_starts = char_cell_line_row_starts(line_breaks, line, terminal_width);
+        let line_rows = row_starts.len() as u32;
+        let is_last = i + 1 == line_starts.len();
+
+        // The target row falls in this line, or this is the last line (which
+        // absorbs any overshoot so the result never exceeds the buffer).
+        if acc_rows + line_rows > target_row || is_last {
+            let row_within =
+                (target_row.saturating_sub(acc_rows) as usize).min(row_starts.len() - 1);
+            let row_start_char = row_starts[row_within];
+            let row_end_char = row_starts
+                .get(row_within + 1)
+                .copied()
+                .unwrap_or(line.len());
+
+            // Walk the row's per-char widths to find the gap at or just before
+            // `target_col`, clamped to the row's end (which never spills past
+            // the logical line, and for the final line, past the buffer).
+            let mut col = 0usize;
+            let mut idx = row_start_char;
+            while idx < row_end_char {
+                let cw = line[idx] as usize;
+                if col + cw > target_col {
+                    break;
+                }
+                col += cw;
+                idx += 1;
+            }
+            return line_start + idx;
+        }
+
+        acc_rows += line_rows;
+    }
+
+    // Unreachable given the `is_last` branch always returns; fall back to the
+    // start of the last logical line.
+    line_starts.last().copied().unwrap_or_else(CharOffset::zero)
+}

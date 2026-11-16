@@ -1,0 +1,75 @@
+#!/bin/bash
+
+PARAMS=""
+while (( "$#" )); do
+  case "$1" in
+    --branch-name)
+      if [ -n "$2" ] && [ "${2:0:1}" != "-" ]; then
+        GIT_BRANCH_NAME=$2
+        shift 2
+      else
+        echo >&2 "Error: Argument for $1 is missing" >&2
+        exit 1
+      fi
+      ;;
+    --channel)
+      if [ -n "$2" ] && [ "${2:0:1}" != "-" ]; then
+        CHANNEL=$2
+        shift 2
+      else
+        echo >&2  "Error: Argument for $1 is missing" >&2
+        exit 1
+      fi
+      ;;
+    *) # preserve positional arguments
+      PARAMS="$PARAMS $1"
+      shift
+      ;;
+  esac
+done
+# set positional arguments in their proper place
+eval set -- "$PARAMS"
+
+RELEASE_BRANCH_PREFIX="${CHANNEL}_release"
+
+git fetch --all --tags
+
+if [[ "$GIT_BRANCH_NAME" == "$RELEASE_BRANCH_PREFIX/"* ]]; then
+    echo >&2  "Already on release branch $GIT_BRANCH_NAME, not creating new one."
+    tag=$(git tag | grep "${GIT_BRANCH_NAME#"$RELEASE_BRANCH_PREFIX/"}" | sort -r --version-sort | head -n1)
+    echo >&2 "Current tag on branch is $tag"
+    if git rev-parse "$tag" >/dev/null 2>&1; then
+        # Tag already exists, increase the RC number
+        suffix=${tag: -2}
+        suffix=$((10#$suffix+1))
+        suffix=$(printf '%02d' $suffix)
+
+        tag_length=${#tag}
+        non_rc=${tag:0:$(($tag_length - 3))}
+        tag="${non_rc}_$suffix"
+
+        echo >&2 "Creating tag $tag"
+        git tag "$tag"
+        git push origin "$tag"
+        echo "$tag"
+    else
+        echo >&2 "No tag found on release branch, something is wrong"
+        exit 1
+    fi
+else
+    # Creating release branch and new tag and version _00
+    date_formatted=$(date +'%Y.%m.%d.%H.%M')
+
+    release_branch_name="v0.$date_formatted.${CHANNEL}"
+    echo >&2 "Creating release branch $RELEASE_BRANCH_PREFIX/$release_branch_name"
+    git checkout -b "$RELEASE_BRANCH_PREFIX/$release_branch_name"
+    git push -u origin "$RELEASE_BRANCH_PREFIX/$release_branch_name"
+
+    tag="v0.$date_formatted.${CHANNEL}_00"
+    echo >&2 "Creating tag $tag"
+    git tag "$tag"
+    git push origin "$tag"
+    echo "$tag"
+fi
+
+export tag

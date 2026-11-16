@@ -1,0 +1,7 @@
+[
+  (block)
+] @indent
+
+[
+ "}"
+] @outdent

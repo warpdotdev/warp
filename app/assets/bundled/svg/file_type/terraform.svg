@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Terraform logo icon -->
+<svg width="800px" height="800px" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg">
+  <title>file_type_terraform</title>
+  <g fill="#5C4EE5">
+    <polygon points="12.042 6.858 20.071 11.448 20.071 20.462 12.042 15.872 12.042 6.858"/>
+    <polygon points="20.5 20.415 28.459 15.872 28.459 6.858 20.5 11.402 20.5 20.415"/>
+    <polygon points="3.541 11.996 11.571 16.539 11.571 7.572 3.541 3.029 3.541 11.996"/>
+    <polygon points="12.042 17.089 20.071 21.679 20.071 30.646 12.042 26.103 12.042 17.089"/>
+  </g>
+</svg>

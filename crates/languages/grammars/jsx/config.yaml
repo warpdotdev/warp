@@ -1,0 +1,14 @@
+display_name: "JSX"
+indent_unit:
+  space: 2
+comment_prefix: "//"
+brackets:
+  - start: "{"
+    end: "}"
+  - start: "("
+    end: ")"
+  - start: "["
+    end: "]"
+  - start: "<"
+    end: ">"
+

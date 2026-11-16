@@ -1,0 +1,29 @@
+[package]
+name = "prevent_sleep"
+edition = "2024"
+authors.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+cfg-if.workspace = true
+futures.workspace = true
+log.workspace = true
+pin-project.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+itertools.workspace = true
+parking_lot.workspace = true
+windows = { workspace = true, features = [
+    "Win32_System_Power",
+] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2.workspace = true
+objc2-foundation = { workspace = true, features = [
+    "NSProcessInfo",
+    "NSString",
+] }
+
+[build-dependencies]
+cfg_aliases.workspace = true

@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+
+# Create a symlink from /usr/bin to our binary under /opt.
+rm -f /usr/bin/@@BINARY_NAME@@
+ln -s @@OPTDIR@@/@@BINARY_NAME@@ /usr/bin/@@BINARY_NAME@@
+

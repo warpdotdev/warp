@@ -1,0 +1,273 @@
+#!/bin/bash
+#
+# Updates the Info.plist file for a macOS app bundle to register supported file types and URL schemes.
+# This only applies the updates common to `script/bundle` and `script/run`.
+# Must be called from the root directory of the warp repo.
+
+set -e
+
+if [[ ! -d "script" ]]; then
+    echo "Run this script from the root of your warp repo."
+    exit 1
+fi
+
+if [[ -z "$WARP_PLIST_PATH" ]]; then
+  echo 'Must set $WARP_PLIST_PATH'
+  exit 1
+fi
+
+if [[ -n "$GIT_RELEASE_TAG" ]]; then
+  echo "Updating plist Warp version to $GIT_RELEASE_TAG"
+  plutil -insert WarpVersion -string "$GIT_RELEASE_TAG" "$WARP_PLIST_PATH"
+
+  # We convert our version format to be period-separated integers only to align better with
+  # Apple's guidance on values for `CFBundleVersion` / `CFBundleShortVersionString`.
+  # (They technically only allow [major].[minor].[patch], but it's not enforced.)
+  # This allows IT admins to work with a more stable version of our internal versioning scheme.
+  # A tag like `v0.2025.01.07.08.02.stable_02` would be converted to `0.2025.01.07.08.02.02`.
+  if [[ $GIT_RELEASE_TAG =~ ^v([0-9]+)\.([0-9]{4})\.([0-9]{2})\.([0-9]{2})\.([0-9]{2})\.([0-9]{2})\.[a-z]+_([0-9]{2})$ ]]; then
+    MAJOR="${BASH_REMATCH[1]}"
+    YEAR="${BASH_REMATCH[2]}"
+    MONTH="${BASH_REMATCH[3]}"
+    DAY="${BASH_REMATCH[4]}"
+    HOUR="${BASH_REMATCH[5]}"
+    MINUTE="${BASH_REMATCH[6]}"
+    BUILD="${BASH_REMATCH[7]}"
+    
+    FORMATTED_VERSION="${MAJOR}.${YEAR}.${MONTH}.${DAY}.${HOUR}.${MINUTE}.${BUILD}"
+    
+    echo "Updating plist version to $FORMATTED_VERSION"
+    plutil -replace CFBundleShortVersionString -string "$FORMATTED_VERSION" "$WARP_PLIST_PATH"
+    plutil -replace CFBundleVersion -string "$FORMATTED_VERSION" "$WARP_PLIST_PATH"
+  else
+    echo "Warning: GIT_RELEASE_TAG '$GIT_RELEASE_TAG' does not match expected format vN.YYYY.MM.DD.HH.MM.channel_NN"
+  fi
+fi
+
+if [[ -n "$WARP_SCHEME_NAME" ]]; then
+  echo "Updating plist to support a custom url scheme"
+  # Update the plist that cargo bundle creates to add support for custom URL schemes. Unfortunately, cargo bundle does not support
+  # setting arbitrary plist fields, so we must do this after the fact.
+  plutil -insert CFBundleURLTypes -xml "<array><dict><key>CFBundleURLName</key><string>Custom App</string><key>CFBundleURLSchemes</key><array><string>$WARP_SCHEME_NAME</string></array></dict></array>" "$WARP_PLIST_PATH"
+fi
+
+if [[ -z "$WARP_PLIST_NO_FILE_TYPES" ]]; then
+  echo "Updating plist with supported file types"
+  plutil -insert CFBundleDocumentTypes -xml "
+  <array>
+    <dict>
+      <key>CFBundleTypeName</key><string>Folder</string>
+      <key>CFBundleTypeRole</key><string>Editor</string>
+      <key>LSHandlerRank</key><string>Alternate</string>
+      <key>LSItemContentTypes</key>
+      <array>
+        <string>public.folder</string>
+      </array>
+    </dict>
+    <dict>
+      <key>CFBundleTypeName</key><string>Terminal shell script</string>
+      <key>CFBundleTypeRole</key><string>Shell</string>
+      <key>LSItemContentTypes</key>
+      <array>
+        <string>com.apple.terminal.shell-script</string>
+      </array>
+    </dict>
+    <dict>
+      <key>CFBundleTypeName</key><string>Unix Executable File</string>
+      <key>CFBundleTypeRole</key><string>Shell</string>
+      <key>LSItemContentTypes</key>
+      <array>
+        <string>public.unix-executable</string>
+      </array>
+    </dict>
+    <dict>
+      <key>CFBundleTypeName</key><string>Markdown File</string>
+      <key>CFBundleTypeRole</key><string>Editor</string>
+      <key>LSHandlerRank</key><string>Alternate</string>
+      <key>LSItemContentTypes</key>
+      <array>
+        <string>net.daringfireball.markdown</string>
+        <string>com.unknown.md</string>
+        <string>net.ia.markdown</string>
+        <string>public.markdown</string>
+      </array>
+    </dict>
+    <dict>
+      <key>CFBundleTypeName</key><string>Plain Text File</string>
+      <key>CFBundleTypeRole</key><string>Editor</string>
+      <key>LSHandlerRank</key><string>Alternate</string>
+      <key>LSItemContentTypes</key>
+      <array>
+        <string>public.plain-text</string>
+      </array>
+    </dict>
+    <dict>
+      <key>CFBundleTypeName</key><string>Source Code File</string>
+      <key>CFBundleTypeRole</key><string>Editor</string>
+      <key>LSHandlerRank</key><string>Alternate</string>
+      <key>LSItemContentTypes</key>
+      <array>
+        <string>public.source-code</string>
+      </array>
+    </dict>
+    <dict>
+      <key>CFBundleTypeName</key><string>Source Code</string>
+      <key>CFBundleTypeRole</key><string>Editor</string>
+      <key>LSHandlerRank</key><string>Alternate</string>
+      <key>CFBundleTypeExtensions</key>
+      <array>
+        <string>c</string>
+        <string>h</string>
+        <string>cc</string>
+        <string>cpp</string>
+        <string>cxx</string>
+        <string>c++</string>
+        <string>hpp</string>
+        <string>hxx</string>
+        <string>hh</string>
+        <string>h++</string>
+        <string>m</string>
+        <string>mm</string>
+        <string>cs</string>
+        <string>csx</string>
+        <string>css</string>
+        <string>dart</string>
+        <string>dockerfile</string>
+        <string>containerfile</string>
+        <string>go</string>
+        <string>htm</string>
+        <string>html</string>
+        <string>xhtml</string>
+        <string>java</string>
+        <string>jav</string>
+        <string>js</string>
+        <string>mjs</string>
+        <string>cjs</string>
+        <string>json</string>
+        <string>jsx</string>
+        <string>less</string>
+        <string>lua</string>
+        <string>makefile</string>
+        <string>mk</string>
+        <string>cmake</string>
+        <string>php</string>
+        <string>pl</string>
+        <string>pm</string>
+        <string>py</string>
+        <string>pyi</string>
+        <string>r</string>
+        <string>rb</string>
+        <string>gemspec</string>
+        <string>rs</string>
+        <string>rst</string>
+        <string>sass</string>
+        <string>scss</string>
+        <string>sql</string>
+        <string>swift</string>
+        <string>ts</string>
+        <string>tsx</string>
+        <string>txt</string>
+        <string>vue</string>
+        <string>xml</string>
+        <string>xaml</string>
+        <string>dtd</string>
+        <string>plist</string>
+        <string>yaml</string>
+        <string>yml</string>
+        <string>eyaml</string>
+        <string>eyml</string>
+        <string>toml</string>
+        <string>cfg</string>
+        <string>conf</string>
+        <string>config</string>
+        <string>csv</string>
+        <string>diff</string>
+        <string>env</string>
+        <string>gradle</string>
+        <string>groovy</string>
+        <string>ini</string>
+        <string>log</string>
+        <string>properties</string>
+        <string>svg</string>
+        <string>tex</string>
+        <string>cls</string>
+        <string>lock</string>
+        <string>bat</string>
+        <string>cmd</string>
+        <string>ps1</string>
+        <string>psd1</string>
+        <string>psm1</string>
+        <string>sh</string>
+        <string>bash</string>
+        <string>zsh</string>
+        <string>fish</string>
+        <string>bashrc</string>
+        <string>bash_profile</string>
+        <string>zshrc</string>
+        <string>zshenv</string>
+        <string>profile</string>
+        <string>gitignore</string>
+        <string>gitconfig</string>
+        <string>gitattributes</string>
+        <string>editorconfig</string>
+        <string>hbs</string>
+        <string>handlebars</string>
+        <string>erb</string>
+        <string>tf</string>
+        <string>tfvars</string>
+        <string>proto</string>
+        <string>graphql</string>
+        <string>gql</string>
+        <string>wgsl</string>
+        <string>zig</string>
+        <string>kt</string>
+        <string>kts</string>
+        <string>scala</string>
+        <string>ex</string>
+        <string>exs</string>
+        <string>erl</string>
+        <string>clj</string>
+        <string>cljs</string>
+        <string>coffee</string>
+        <string>fs</string>
+        <string>fsi</string>
+        <string>fsx</string>
+        <string>ml</string>
+        <string>mli</string>
+        <string>vb</string>
+        <string>pug</string>
+        <string>jade</string>
+        <string>ipynb</string>
+      </array>
+    </dict>
+    <dict>
+      <key>CFBundleTypeName</key><string>All Documents</string>
+      <key>CFBundleTypeRole</key><string>Editor</string>
+      <key>LSHandlerRank</key><string>Alternate</string>
+      <key>LSItemContentTypes</key>
+      <array>
+        <string>public.data</string>
+      </array>
+    </dict>
+  </array>" "$WARP_PLIST_PATH"
+fi
+
+# Unfortunately, there isn't a single standard UTI (what goes in LSItemContentTypes) for Markdown
+# files. Instead, we list all the common ones - see these for more info:
+# https://github.com/sbarex/QLMarkdown#installation
+# https://blog.smittytone.net/2021/01/19/how-tools-try-to-own-markdown/
+
+echo "Updating plist with permissions descriptions"
+plutil -insert NSAppleEventsUsageDescription -string "A program in Warp wants to use AppleScript." "$WARP_PLIST_PATH"
+plutil -insert NSCameraUsageDescription -string "A program in Warp wants to use the camera." "$WARP_PLIST_PATH"
+plutil -insert NSMicrophoneUsageDescription -string "A program in Warp wants to use your microphone." "$WARP_PLIST_PATH"
+plutil -insert NSContactsUsageDescription -string "A program in Warp wants to use your contacts." "$WARP_PLIST_PATH"
+plutil -insert NSCalendarsUsageDescription -string "A program in Warp wants to use your calendar." "$WARP_PLIST_PATH"
+plutil -insert NSCalendarsFullAccessUsageDescription -string "A program in Warp wants full access to your calendar." "$WARP_PLIST_PATH"
+plutil -insert NSRemindersUsageDescription -string "A program in Warp wants to use your reminders." "$WARP_PLIST_PATH"
+plutil -insert NSRemindersFullAccessUsageDescription -string "A program in Warp wants full access to your reminders." "$WARP_PLIST_PATH"
+plutil -insert NSLocationUsageDescription -string "A program in Warp wants to use your location information." "$WARP_PLIST_PATH"
+plutil -insert NSPhotoLibraryUsageDescription -string "A program in Warp wants to use your photo library." "$WARP_PLIST_PATH"
+
+echo "Disabling use of Liquid Glass on macOS Tahoe"
+plutil -insert UIDesignRequiresCompatibility -bool true "$WARP_PLIST_PATH"

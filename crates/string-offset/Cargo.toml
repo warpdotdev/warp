@@ -1,0 +1,11 @@
+[package]
+authors = ["Warp Team <dev@warp.dev>"]
+edition = "2024"
+name = "string-offset"
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+get-size.workspace = true
+num-traits.workspace = true
+serde.workspace = true

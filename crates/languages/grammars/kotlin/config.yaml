@@ -1,0 +1,13 @@
+display_name: "Kotlin"
+indent_unit:
+  space: 4
+comment_prefix: "//"
+brackets:
+  - start: "{"
+    end: "}"
+  - start: "("
+    end: ")"
+  - start: "["
+    end: "]"
+  - start: "<"
+    end: ">"

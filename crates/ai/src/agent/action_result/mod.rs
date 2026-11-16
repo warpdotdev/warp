@@ -1,0 +1,1722 @@
+mod convert;
+
+use std::fmt::Display;
+use std::ops::Range;
+use std::time::{Duration, SystemTime};
+
+use chrono::{DateTime, Local};
+use itertools::Itertools as _;
+use serde::{Deserialize, Serialize};
+use warp_core::command::ExitCode;
+use warp_multi_agent_api::StoredScreenshotRef;
+use warp_multi_agent_api::apply_file_diffs_result::success::UpdatedFileContent;
+use warp_terminal::event::ObservedExitStatus;
+use warp_terminal::model::BlockId;
+
+use crate::agent::FileLocations;
+use crate::document::{AIDocumentId, AIDocumentVersion};
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum AIAgentActionResultType {
+    /// The output of a requested command.
+    RequestCommandOutput(RequestCommandOutputResult),
+
+    /// The result of sending some input to a long-running command.
+    WriteToLongRunningShellCommand(WriteToLongRunningShellCommandResult),
+
+    /// The output of a requested file edits.
+    RequestFileEdits(RequestFileEditsResult),
+
+    /// The output of a read files action.
+    ReadFiles(ReadFilesResult),
+
+    /// The output of an upload artifact action.
+    UploadArtifact(UploadArtifactResult),
+
+    /// The output of a search codebase action.
+    SearchCodebase(SearchCodebaseResult),
+
+    /// The output of a grep action.
+    Grep(GrepResult),
+
+    /// The output of a file glob action.
+    FileGlob(FileGlobResult),
+
+    /// The output of a file glob V2 action.
+    FileGlobV2(FileGlobV2Result),
+
+    /// The output of reading an MCP resource.
+    ReadMCPResource(ReadMCPResourceResult),
+
+    /// The output of calling an MCP tool.
+    CallMCPTool(CallMCPToolResult),
+
+    /// The output of reading a skill.
+    ReadSkill(ReadSkillResult),
+
+    /// The output of suggesting a new conversation.
+    SuggestNewConversation(SuggestNewConversationResult),
+
+    /// The result of suggesting a prompt.
+    SuggestPrompt(SuggestPromptResult),
+
+    OpenCodeReview,
+
+    InitProject,
+
+    /// The output of a read documents action.
+    ReadDocuments(ReadDocumentsResult),
+
+    /// The output of an edit documents action.
+    EditDocuments(EditDocumentsResult),
+
+    /// The output of a create documents action.
+    CreateDocuments(CreateDocumentsResult),
+
+    /// The output of reading shell command output.
+    ReadShellCommandOutput(ReadShellCommandOutputResult),
+
+    /// The output of using computer.
+    UseComputer(UseComputerResult),
+
+    /// The result of inserting code review comments.
+    InsertReviewComments(InsertReviewCommentsResult),
+
+    /// The output of requesting computer use.
+    RequestComputerUse(RequestComputerUseResult),
+
+    /// The result of starting a video recording.
+    StartRecording(StartRecordingResult),
+
+    /// The result of stopping a video recording.
+    StopRecording(StopRecordingResult),
+
+    /// The result of fetching a conversation's tasks.
+    FetchConversation(FetchConversationResult),
+
+    /// The result of sending a message to another agent.
+    SendMessageToAgent(SendMessageToAgentResult),
+
+    /// The output of transferring shell command control to the user.
+    TransferShellCommandControlToUser(TransferShellCommandControlToUserResult),
+    /// The result of asking the user a question.
+    AskUserQuestion(AskUserQuestionResult),
+
+    /// The result of an orchestrate tool call: launched (with per-agent
+    /// outcomes), launch denied (Stage 2), failure, or cancelled.
+    RunAgents(RunAgentsResult),
+
+    /// Result of the client-side wait_for_events watchdog or inbound
+    /// resume.
+    WaitForEvents(WaitForEventsResult),
+
+    /// An agent hook denied the action before it ran. Unlike the other variants this is not tied
+    /// to one tool: any action can finish with it. `reason` is shown to the model.
+    DeniedByHook {
+        reason: String,
+    },
+}
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+pub struct ReadFilesFailedFile {
+    pub path: String,
+    pub message: String,
+}
+
+impl Display for ReadFilesFailedFile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.path, self.message)
+    }
+}
+
+impl AIAgentActionResultType {
+    /// Returns the effective command string for command-related results, if any.
+    ///
+    /// This is used by UIs (e.g. requested command views) that want to display the
+    /// final executed command rather than the original suggestion.
+    pub fn command_str(&self) -> Option<&str> {
+        match self {
+            AIAgentActionResultType::RequestCommandOutput(
+                RequestCommandOutputResult::Completed { command, .. },
+            )
+            | AIAgentActionResultType::RequestCommandOutput(
+                RequestCommandOutputResult::ShellRecovered { command, .. },
+            )
+            | AIAgentActionResultType::RequestCommandOutput(
+                RequestCommandOutputResult::LongRunningCommandSnapshot { command, .. },
+            )
+            | AIAgentActionResultType::ReadShellCommandOutput(
+                ReadShellCommandOutputResult::CommandFinished { command, .. },
+            )
+            | AIAgentActionResultType::ReadShellCommandOutput(
+                ReadShellCommandOutputResult::ShellRecovered { command, .. },
+            )
+            | AIAgentActionResultType::ReadShellCommandOutput(
+                ReadShellCommandOutputResult::LongRunningCommandSnapshot { command, .. },
+            ) => Some(command.as_str()),
+            _ => None,
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "mod_tests.rs"]
+mod tests;
+
+impl Display for AIAgentActionResultType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AIAgentActionResultType::RequestCommandOutput(result) => result.fmt(f),
+            AIAgentActionResultType::WriteToLongRunningShellCommand(result) => result.fmt(f),
+            AIAgentActionResultType::RequestFileEdits(result) => result.fmt(f),
+            AIAgentActionResultType::ReadFiles(result) => result.fmt(f),
+            AIAgentActionResultType::UploadArtifact(result) => result.fmt(f),
+            AIAgentActionResultType::SearchCodebase(result) => result.fmt(f),
+            AIAgentActionResultType::Grep(result) => result.fmt(f),
+            AIAgentActionResultType::FileGlob(result) => result.fmt(f),
+            AIAgentActionResultType::FileGlobV2(result) => result.fmt(f),
+            AIAgentActionResultType::ReadMCPResource(result) => result.fmt(f),
+            AIAgentActionResultType::CallMCPTool(result) => result.fmt(f),
+            AIAgentActionResultType::ReadSkill(result) => result.fmt(f),
+            AIAgentActionResultType::SuggestNewConversation(result) => result.fmt(f),
+            AIAgentActionResultType::SuggestPrompt(result) => result.fmt(f),
+            AIAgentActionResultType::ReadDocuments(result) => result.fmt(f),
+            AIAgentActionResultType::EditDocuments(result) => result.fmt(f),
+            AIAgentActionResultType::CreateDocuments(result) => result.fmt(f),
+            AIAgentActionResultType::ReadShellCommandOutput(result) => result.fmt(f),
+            AIAgentActionResultType::UseComputer(result) => result.fmt(f),
+            AIAgentActionResultType::InsertReviewComments(result) => result.fmt(f),
+            AIAgentActionResultType::RequestComputerUse(result) => result.fmt(f),
+            AIAgentActionResultType::StartRecording(result) => result.fmt(f),
+            AIAgentActionResultType::StopRecording(result) => result.fmt(f),
+            AIAgentActionResultType::FetchConversation(result) => result.fmt(f),
+            AIAgentActionResultType::SendMessageToAgent(result) => result.fmt(f),
+            AIAgentActionResultType::TransferShellCommandControlToUser(result) => result.fmt(f),
+            AIAgentActionResultType::AskUserQuestion(result) => result.fmt(f),
+            AIAgentActionResultType::RunAgents(result) => result.fmt(f),
+            AIAgentActionResultType::WaitForEvents(result) => result.fmt(f),
+            AIAgentActionResultType::DeniedByHook { reason } => {
+                write!(f, "Denied by an agent hook: {reason}")
+            }
+            AIAgentActionResultType::OpenCodeReview | AIAgentActionResultType::InitProject => {
+                Ok(())
+            }
+        }
+    }
+}
+
+/// Evidence, collected by the client while an agent monitors a long-running
+/// command, that the command is still doing work.
+///
+/// A command that redirects its output to a file, suppresses it entirely, or
+/// computes silently is indistinguishable from a hung one when judged from the
+/// terminal grid alone. Process-tree activity gives the agent something to look
+/// at besides the grid before deciding to cancel.
+///
+/// Best-effort: built only when the sampler actually took a reading, so every
+/// value carried here is a real measurement, including zeros. When nothing was
+/// collected, no `LrcActivity` exists at all — there is no in-band "signals
+/// unavailable" marker.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+pub struct LrcActivity {
+    /// Time since the process tree last showed activity — CPU accrual, I/O
+    /// writes, or a change in the set of live processes.
+    ///
+    /// This is derived from a fixed-rate sampler rather than from the interval
+    /// between agent polls, so it stays accurate no matter how far apart the
+    /// agent's reads are.
+    pub since_last_activity: Option<Duration>,
+
+    /// Present whenever the process tree was actually inspected, including when
+    /// every reading in it is zero: an exited tree is a real answer. Optional
+    /// only for restoring conversations recorded by other client versions;
+    /// reports built by this client always populate it.
+    pub process: Option<LrcProcessActivity>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+pub struct LrcProcessActivity {
+    /// CPU time consumed across the command's process tree since the previous
+    /// snapshot.
+    pub cpu_time_delta: Duration,
+
+    /// Coarse aggregate state of the process tree.
+    pub state: LrcProcessState,
+
+    pub live_process_count: u32,
+
+    /// Bytes written by the process tree since the previous snapshot, where the
+    /// OS reports it.
+    pub io_write_bytes_delta: u64,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, Eq, PartialEq)]
+pub enum LrcProcessState {
+    Running,
+    Sleeping,
+    /// Blocked in uninterruptible I/O, which is real progress rather than a hang.
+    DiskWait,
+    Stopped,
+    Zombie,
+    #[default]
+    Unknown,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum RequestCommandOutputResult {
+    Completed {
+        block_id: BlockId,
+        command: String,
+        output: String,
+        exit_code: ExitCode,
+        start_ts: Option<DateTime<Local>>,
+        completed_ts: Option<DateTime<Local>>,
+    },
+    LongRunningCommandSnapshot {
+        block_id: BlockId,
+        command: String,
+        grid_contents: String,
+        cursor: String,
+        is_alt_screen_active: bool,
+        activity: Option<LrcActivity>,
+    },
+    ShellRecovered {
+        block_id: BlockId,
+        command: String,
+        output: String,
+        status: ObservedExitStatus,
+        restored_working_directory: String,
+        used_fallback_directory: bool,
+        start_ts: Option<DateTime<Local>>,
+        completed_ts: Option<DateTime<Local>>,
+    },
+    /// A running command canceled via ctrl-c
+    /// would have Completed result with exit code 130.
+    CancelledBeforeExecution,
+    /// The command was denied because it was present on the denylist.
+    Denylisted { command: String },
+    /// The requested command was not started because another command owns the terminal.
+    TerminalBusy { command: String, block_id: BlockId },
+}
+
+impl RequestCommandOutputResult {
+    pub fn is_successful(&self) -> bool {
+        match self {
+            Self::Completed { exit_code, .. } => exit_code.was_successful(),
+            Self::LongRunningCommandSnapshot { .. } => true,
+            Self::ShellRecovered { .. }
+            | Self::CancelledBeforeExecution
+            | Self::Denylisted { .. }
+            | Self::TerminalBusy { .. } => false,
+        }
+    }
+
+    pub fn failed(&self) -> bool {
+        match self {
+            Self::Completed { exit_code, .. } => !exit_code.was_successful(),
+            Self::ShellRecovered { .. } | Self::Denylisted { .. } | Self::TerminalBusy { .. } => {
+                true
+            }
+            Self::CancelledBeforeExecution | Self::LongRunningCommandSnapshot { .. } => false,
+        }
+    }
+}
+
+impl Display for RequestCommandOutputResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RequestCommandOutputResult::Completed {
+                command,
+                output,
+                exit_code,
+                ..
+            } => {
+                write!(
+                    f,
+                    "Command '{}' completed with exit code {}:\n{}",
+                    command,
+                    exit_code.value(),
+                    output
+                )
+            }
+            RequestCommandOutputResult::LongRunningCommandSnapshot { command, .. } => {
+                write!(f, "Command '{command}' is long-running")
+            }
+            RequestCommandOutputResult::ShellRecovered {
+                command, status, ..
+            } => write!(
+                f,
+                "Command '{command}' terminated the persistent cloud shell ({status})"
+            ),
+            RequestCommandOutputResult::CancelledBeforeExecution => {
+                write!(f, "Command output cancelled")
+            }
+            RequestCommandOutputResult::Denylisted { .. } => {
+                write!(f, "Command output was on denylist")
+            }
+            RequestCommandOutputResult::TerminalBusy { block_id, .. } => {
+                write!(
+                    f,
+                    "Command was not started: terminal is busy running command {block_id}"
+                )
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+pub enum ShellCommandError {
+    BlockNotFound,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+pub enum WriteToLongRunningShellCommandResult {
+    Snapshot {
+        block_id: BlockId,
+        grid_contents: String,
+        cursor: String,
+        is_alt_screen_active: bool,
+        is_preempted: bool,
+        activity: Option<LrcActivity>,
+    },
+    CommandFinished {
+        block_id: BlockId,
+        output: String,
+        exit_code: ExitCode,
+        start_ts: Option<DateTime<Local>>,
+        completed_ts: Option<DateTime<Local>>,
+    },
+    Cancelled,
+    Error(ShellCommandError),
+}
+
+impl Display for WriteToLongRunningShellCommandResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Snapshot { .. } => {
+                write!(f, "Sent snapshot of long-running shell command to agent")
+            }
+            Self::CommandFinished {
+                output, exit_code, ..
+            } => write!(
+                f,
+                "Long-running shell command finished with exit code {}:\n{output}",
+                exit_code.value()
+            ),
+            Self::Cancelled => write!(f, "Writing to long-running shell command cancelled"),
+            Self::Error(e) => write!(f, "Write to long-running shell command failed: {e:?}"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+pub enum SuggestNewConversationResult {
+    Accepted { message_id: String },
+    Rejected,
+    Cancelled,
+}
+
+impl Display for SuggestNewConversationResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Accepted { message_id } => {
+                write!(
+                    f,
+                    "Suggest new conversation accepted for message {message_id}"
+                )
+            }
+            Self::Rejected => {
+                write!(f, "Suggest new conversation rejected for message")
+            }
+            Self::Cancelled => write!(f, "Suggest new conversation cancelled"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+pub enum AnyFileContent {
+    StringContent(String),
+    BinaryContent(Vec<u8>),
+}
+
+impl AnyFileContent {
+    pub fn len(&self) -> usize {
+        match self {
+            Self::StringContent(content) => content.len(),
+            Self::BinaryContent(content) => content.len(),
+        }
+    }
+
+    pub fn line_count(&self) -> usize {
+        match self {
+            Self::StringContent(content) => content.lines().count(),
+            Self::BinaryContent(_) => 0,
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        match self {
+            Self::StringContent(content) => content.is_empty(),
+            Self::BinaryContent(content) => content.is_empty(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+pub struct FileContext {
+    pub file_name: String,
+    pub content: AnyFileContent,
+    pub line_range: Option<Range<usize>>,
+    pub last_modified: Option<SystemTime>,
+    pub line_count: usize,
+}
+
+impl FileContext {
+    // create a new FileContext and autocalculate number of lines in the given file
+    pub fn new(
+        file_name: String,
+        content: AnyFileContent,
+        line_range: Option<Range<usize>>,
+        last_modified: Option<SystemTime>,
+    ) -> Self {
+        let string_content = if let AnyFileContent::StringContent(content) = content.clone() {
+            content
+        } else {
+            return Self {
+                file_name,
+                content,
+                line_range,
+                last_modified,
+                line_count: 0,
+            };
+        };
+
+        let line_count = string_content.lines().count();
+
+        Self {
+            file_name,
+            content: AnyFileContent::StringContent(string_content),
+            line_range,
+            last_modified,
+            line_count,
+        }
+    }
+}
+
+impl Display for FileContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.line_range {
+            None => write!(f, "{}", self.file_name),
+            Some(range) => write!(f, "{} ({}-{})", self.file_name, range.start, range.end),
+        }
+    }
+}
+
+impl From<&FileContext> for FileLocations {
+    fn from(context: &FileContext) -> Self {
+        FileLocations {
+            name: context.file_name.clone(),
+            lines: context.line_range.clone().into_iter().collect(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum ReadFilesResult {
+    Success {
+        files: Vec<FileContext>,
+        failed_files: Vec<ReadFilesFailedFile>,
+    },
+    Error(String),
+    Cancelled,
+}
+
+impl Display for ReadFilesResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ReadFilesResult::Success {
+                files,
+                failed_files,
+            } => {
+                write!(f, "Read files: {}", files.iter().format(", "))?;
+                if !failed_files.is_empty() {
+                    write!(f, " (failed: {})", failed_files.iter().format(", "))?;
+                }
+                Ok(())
+            }
+            ReadFilesResult::Error(error) => write!(f, "Read files error: {error}"),
+            ReadFilesResult::Cancelled => write!(f, "Read files cancelled"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum UploadArtifactResult {
+    Success {
+        artifact_uid: String,
+        filepath: Option<String>,
+        mime_type: String,
+        description: Option<String>,
+        size_bytes: i64,
+    },
+    Error(String),
+    Cancelled,
+}
+
+impl Display for UploadArtifactResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            UploadArtifactResult::Success {
+                artifact_uid,
+                filepath,
+                ..
+            } => match filepath {
+                Some(filepath) => write!(f, "Uploaded artifact {artifact_uid} from {filepath}"),
+                None => write!(f, "Uploaded artifact {artifact_uid}"),
+            },
+            UploadArtifactResult::Error(error) => write!(f, "Upload artifact error: {error}"),
+            UploadArtifactResult::Cancelled => write!(f, "Upload artifact cancelled"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct DocumentContext {
+    pub document_id: AIDocumentId,
+    pub document_version: AIDocumentVersion,
+    pub content: String,
+    pub line_ranges: Vec<Range<usize>>,
+}
+
+impl Display for DocumentContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.line_ranges.is_empty() {
+            return write!(f, "Document {}", self.document_id);
+        }
+
+        let line_ranges = self
+            .line_ranges
+            .iter()
+            .map(|range| format!("{}-{}", range.start, range.end))
+            .collect_vec();
+        write!(
+            f,
+            "Document {} ({})",
+            self.document_id,
+            line_ranges.join(", ")
+        )
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum ReadDocumentsResult {
+    Success { documents: Vec<DocumentContext> },
+    Error(String),
+    Cancelled,
+}
+
+impl Display for ReadDocumentsResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ReadDocumentsResult::Success { documents } => {
+                write!(f, "Read documents: {}", documents.iter().format(", "))
+            }
+            ReadDocumentsResult::Error(error) => write!(f, "Read documents error: {error}"),
+            ReadDocumentsResult::Cancelled => write!(f, "Read documents cancelled"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum EditDocumentsResult {
+    Success {
+        updated_documents: Vec<DocumentContext>,
+    },
+    Error(String),
+    Cancelled,
+}
+
+impl Display for EditDocumentsResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            EditDocumentsResult::Success { updated_documents } => {
+                write!(
+                    f,
+                    "Edited documents: {}",
+                    updated_documents.iter().format(", ")
+                )
+            }
+            EditDocumentsResult::Error(error) => write!(f, "Edit documents error: {error}"),
+            EditDocumentsResult::Cancelled => write!(f, "Edit documents cancelled"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum CreateDocumentsResult {
+    Success {
+        created_documents: Vec<DocumentContext>,
+    },
+    Error(String),
+    Cancelled,
+}
+
+impl Display for CreateDocumentsResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CreateDocumentsResult::Success { created_documents } => {
+                write!(
+                    f,
+                    "Created documents: {}",
+                    created_documents.iter().format(", ")
+                )
+            }
+            CreateDocumentsResult::Error(error) => write!(f, "Create documents error: {error}"),
+            CreateDocumentsResult::Cancelled => write!(f, "Create documents cancelled"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum ReadShellCommandOutputResult {
+    CommandFinished {
+        command: String,
+        block_id: BlockId,
+        output: String,
+        exit_code: ExitCode,
+        start_ts: Option<DateTime<Local>>,
+        completed_ts: Option<DateTime<Local>>,
+    },
+    LongRunningCommandSnapshot {
+        command: String,
+        block_id: BlockId,
+        grid_contents: String,
+        cursor: String,
+        is_alt_screen_active: bool,
+        is_preempted: bool,
+        activity: Option<LrcActivity>,
+    },
+    ShellRecovered {
+        command: String,
+        block_id: BlockId,
+        output: String,
+        status: ObservedExitStatus,
+        start_ts: Option<DateTime<Local>>,
+        completed_ts: Option<DateTime<Local>>,
+    },
+    Cancelled,
+    Error(ShellCommandError),
+}
+
+impl Display for ReadShellCommandOutputResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ReadShellCommandOutputResult::CommandFinished {
+                output, exit_code, ..
+            } => {
+                write!(
+                    f,
+                    "Shell command output finished with exit code{}:\n{output}",
+                    exit_code.value()
+                )
+            }
+            ReadShellCommandOutputResult::LongRunningCommandSnapshot { .. } => {
+                write!(f, "Sent snapshot of long-running shell command to agent")
+            }
+            ReadShellCommandOutputResult::ShellRecovered { output, status, .. } => {
+                write!(
+                    f,
+                    "Shell command terminated the persistent shell ({status}):\n{output}"
+                )
+            }
+            ReadShellCommandOutputResult::Cancelled => {
+                write!(f, "Read shell command output cancelled")
+            }
+            ReadShellCommandOutputResult::Error(e) => {
+                write!(f, "Read shell command output failed: {e:?}")
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum SearchCodebaseFailureReason {
+    CodebaseNotIndexed,
+    InvalidFilePaths,
+    GetRelevantFilesError,
+    ClientError,
+    MissingCurrentWorkingDirectory,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum SearchCodebaseResult {
+    Success {
+        files: Vec<FileContext>,
+    },
+    Failed {
+        reason: SearchCodebaseFailureReason,
+
+        /// The message to be sent back to the LLM to inform it why the search failed.
+        message: String,
+    },
+    Cancelled,
+}
+
+impl Display for SearchCodebaseResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SearchCodebaseResult::Success { files } => {
+                write!(f, "Codebase search found: {}", files.iter().format(", "))
+            }
+            SearchCodebaseResult::Failed { reason, message } => {
+                write!(f, "Codebase search failed ({reason:?}): {message}")
+            }
+            SearchCodebaseResult::Cancelled => write!(f, "Codebase search cancelled"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum RequestFileEditsResult {
+    Success {
+        diff: String,
+        updated_files: Vec<UpdatedFileContext>,
+        deleted_files: Vec<String>,
+        lines_added: usize,
+        lines_removed: usize,
+    },
+    Cancelled,
+    /// Diff application failed.
+    DiffApplicationFailed {
+        error: String,
+    },
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct UpdatedFileContext {
+    pub was_edited_by_user: bool,
+    pub file_context: FileContext,
+}
+
+impl Display for UpdatedFileContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "user_edited {}, file {}",
+            self.was_edited_by_user, self.file_context
+        )
+    }
+}
+
+impl From<UpdatedFileContext> for Vec<UpdatedFileContent> {
+    fn from(value: UpdatedFileContext) -> Self {
+        // Note: This method only makes sense for FileContexts that have a string content.
+        // TODO: How do we gracefully fail binary files here?
+        let file_content: Vec<warp_multi_agent_api::FileContent> = value.file_context.into();
+
+        file_content
+            .into_iter()
+            .map(|content| UpdatedFileContent {
+                was_edited_by_user: value.was_edited_by_user,
+                file: Some(content),
+            })
+            .collect()
+    }
+}
+
+impl Display for RequestFileEditsResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RequestFileEditsResult::Success {
+                diff,
+                updated_files,
+                ..
+            } => {
+                write!(
+                    f,
+                    "File edits completed:\n\tDiff:\n{diff}\n\tUpdatedFiles: [{}]",
+                    updated_files.iter().format(", ")
+                )
+            }
+            RequestFileEditsResult::Cancelled => write!(f, "File edits cancelled"),
+            RequestFileEditsResult::DiffApplicationFailed { error } => {
+                write!(f, "File edits failed: {error}")
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum SuggestPromptResult {
+    Accepted { query: String },
+    Cancelled,
+}
+
+impl Display for SuggestPromptResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SuggestPromptResult::Accepted { query } => {
+                write!(f, "Suggest prompt accepted: {query}")
+            }
+            SuggestPromptResult::Cancelled => write!(f, "Suggest prompt cancelled"),
+        }
+    }
+}
+
+impl AIAgentActionResultType {
+    /// A user visible description of what the result contains.
+    /// Used to display error messages when the content is too large for
+    /// the LLM context window.
+    pub fn description(&self) -> &str {
+        match self {
+            AIAgentActionResultType::RequestCommandOutput(_) => {
+                "The output of your last command executed by Agent Mode"
+            }
+            AIAgentActionResultType::WriteToLongRunningShellCommand(_) => {
+                "A snapshot of the command currently being executed by Agent Mode"
+            }
+            AIAgentActionResultType::RequestFileEdits(_) => {
+                "The diff from editing the last file in Agent Mode"
+            }
+            AIAgentActionResultType::ReadFiles(_) => "The requested file content",
+            AIAgentActionResultType::UploadArtifact(_) => "The uploaded artifact metadata",
+            AIAgentActionResultType::SearchCodebase(_) => "The codebase search results",
+            AIAgentActionResultType::Grep(_) => "The results of the grep operation",
+            AIAgentActionResultType::FileGlob(_) => "The results of the file glob operation",
+            AIAgentActionResultType::FileGlobV2(_) => "The results of the file glob operation",
+            AIAgentActionResultType::CallMCPTool(_) => "The MCP tool call",
+            AIAgentActionResultType::ReadSkill(_) => "The results of reading a skill from file",
+            AIAgentActionResultType::ReadMCPResource(_) => "The MCP resource",
+            AIAgentActionResultType::SuggestNewConversation(_) => {
+                "Your decision on whether to start a new conversation"
+            }
+            AIAgentActionResultType::SuggestPrompt(_) => "The suggested prompt",
+            AIAgentActionResultType::OpenCodeReview => "Open code review",
+            AIAgentActionResultType::InsertReviewComments(_) => "Insert code review comments",
+            AIAgentActionResultType::InitProject => "Initialize project",
+            AIAgentActionResultType::ReadDocuments(_) => "The requested document content",
+            AIAgentActionResultType::EditDocuments(_) => "The edited document content",
+            AIAgentActionResultType::CreateDocuments(_) => "The newly created documents",
+            AIAgentActionResultType::ReadShellCommandOutput(_) => "The shell command output",
+            AIAgentActionResultType::UseComputer(_) => "The computer use result",
+            AIAgentActionResultType::RequestComputerUse(_) => "The computer use request result",
+            AIAgentActionResultType::StartRecording(_) => "The result of starting a recording",
+            AIAgentActionResultType::StopRecording(_) => "The result of stopping a recording",
+            AIAgentActionResultType::FetchConversation(_) => "The fetched conversation tasks",
+            AIAgentActionResultType::SendMessageToAgent(_) => "The result of sending a message",
+            AIAgentActionResultType::TransferShellCommandControlToUser(_) => {
+                "The result of transferring shell command control to user"
+            }
+            AIAgentActionResultType::AskUserQuestion(_) => {
+                "The user's answers to clarifying questions"
+            }
+            AIAgentActionResultType::RunAgents(_) => {
+                "The result of an orchestrate batch of child agents"
+            }
+            AIAgentActionResultType::WaitForEvents(_) => {
+                "The local watchdog timed out while waiting for inbound events"
+            }
+            AIAgentActionResultType::DeniedByHook { .. } => {
+                "The reason an agent hook denied the action"
+            }
+        }
+    }
+
+    pub fn is_successful(&self) -> bool {
+        match self {
+            Self::RequestCommandOutput(r) => r.is_successful(),
+            Self::RequestFileEdits(RequestFileEditsResult::Success { .. })
+            | Self::ReadFiles(ReadFilesResult::Success { .. })
+            | Self::UploadArtifact(UploadArtifactResult::Success { .. })
+            | Self::SearchCodebase(SearchCodebaseResult::Success { .. })
+            | Self::Grep(GrepResult::Success { .. })
+            | Self::FileGlob(FileGlobResult::Success { .. })
+            | Self::FileGlobV2(FileGlobV2Result::Success { .. })
+            | Self::ReadMCPResource(ReadMCPResourceResult::Success { .. })
+            | Self::CallMCPTool(CallMCPToolResult::Success { .. })
+            | Self::SuggestNewConversation(SuggestNewConversationResult::Accepted { .. })
+            | Self::SuggestPrompt(SuggestPromptResult::Accepted { .. })
+            | Self::ReadDocuments(ReadDocumentsResult::Success { .. })
+            | Self::EditDocuments(EditDocumentsResult::Success { .. })
+            | Self::CreateDocuments(CreateDocumentsResult::Success { .. })
+            | Self::ReadShellCommandOutput(
+                ReadShellCommandOutputResult::CommandFinished { .. }
+                | ReadShellCommandOutputResult::LongRunningCommandSnapshot { .. },
+            )
+            | Self::UseComputer(UseComputerResult::Success { .. })
+            | Self::InsertReviewComments(InsertReviewCommentsResult::Success { .. })
+            | Self::RequestComputerUse(RequestComputerUseResult::Approved { .. })
+            | Self::StartRecording(StartRecordingResult::Success(_))
+            | Self::StopRecording(
+                StopRecordingResult::Success(_) | StopRecordingResult::Discarded,
+            )
+            | Self::OpenCodeReview
+            | Self::ReadSkill(ReadSkillResult::Success { .. })
+            | Self::FetchConversation(FetchConversationResult::Success { .. })
+            | Self::SendMessageToAgent(SendMessageToAgentResult::Success { .. })
+            | Self::TransferShellCommandControlToUser(
+                TransferShellCommandControlToUserResult::Snapshot { .. }
+                | TransferShellCommandControlToUserResult::CommandFinished { .. },
+            ) => true,
+            Self::AskUserQuestion(AskUserQuestionResult::Success { .. }) => true,
+            Self::RunAgents(RunAgentsResult::Launched { agents, .. }) => agents
+                .iter()
+                .any(|agent| matches!(agent.kind, RunAgentsAgentOutcomeKind::Launched { .. })),
+            Self::WaitForEvents(WaitForEventsResult::Completed) => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_failed(&self) -> bool {
+        match self {
+            Self::RequestCommandOutput(r) => r.failed(),
+            Self::RequestFileEdits(RequestFileEditsResult::DiffApplicationFailed { .. })
+            | Self::ReadFiles(ReadFilesResult::Error(_))
+            | Self::UploadArtifact(UploadArtifactResult::Error(_))
+            | Self::SearchCodebase(SearchCodebaseResult::Failed { .. })
+            | Self::Grep(GrepResult::Error(_))
+            | Self::FileGlob(FileGlobResult::Error(_))
+            | Self::FileGlobV2(FileGlobV2Result::Error(_))
+            | Self::ReadMCPResource(ReadMCPResourceResult::Error(_))
+            | Self::CallMCPTool(CallMCPToolResult::Error(_))
+            | Self::ReadDocuments(ReadDocumentsResult::Error(_))
+            | Self::EditDocuments(EditDocumentsResult::Error(_))
+            | Self::CreateDocuments(CreateDocumentsResult::Error(_))
+            | Self::ReadShellCommandOutput(ReadShellCommandOutputResult::ShellRecovered {
+                ..
+            })
+            | Self::UseComputer(UseComputerResult::Error(_))
+            | Self::InsertReviewComments(InsertReviewCommentsResult::Error { .. })
+            | Self::RequestComputerUse(RequestComputerUseResult::Error(_))
+            | Self::StartRecording(StartRecordingResult::Error(_))
+            | Self::StopRecording(StopRecordingResult::Error(_))
+            | Self::FetchConversation(FetchConversationResult::Error(_))
+            | Self::SendMessageToAgent(SendMessageToAgentResult::Error(_))
+            | Self::AskUserQuestion(AskUserQuestionResult::Error(_))
+            | Self::TransferShellCommandControlToUser(
+                TransferShellCommandControlToUserResult::Error(_),
+            )
+            | Self::RunAgents(RunAgentsResult::Failure { .. } | RunAgentsResult::Denied { .. })
+            | Self::DeniedByHook { .. } => true,
+            Self::RunAgents(RunAgentsResult::Launched { agents, .. }) => agents
+                .iter()
+                .all(|agent| matches!(agent.kind, RunAgentsAgentOutcomeKind::Failed { .. })),
+            _ => false,
+        }
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        match self {
+            Self::RequestCommandOutput(RequestCommandOutputResult::CancelledBeforeExecution) => {
+                true
+            }
+            Self::RequestCommandOutput(RequestCommandOutputResult::Completed {
+                exit_code, ..
+            }) if exit_code.value() == 130 => true,
+            Self::RequestFileEdits(RequestFileEditsResult::Cancelled)
+            | Self::ReadFiles(ReadFilesResult::Cancelled)
+            | Self::UploadArtifact(UploadArtifactResult::Cancelled)
+            | Self::SearchCodebase(SearchCodebaseResult::Cancelled)
+            | Self::Grep(GrepResult::Cancelled)
+            | Self::FileGlob(FileGlobResult::Cancelled)
+            | Self::FileGlobV2(FileGlobV2Result::Cancelled)
+            | Self::ReadMCPResource(ReadMCPResourceResult::Cancelled)
+            | Self::CallMCPTool(CallMCPToolResult::Cancelled)
+            | Self::SuggestNewConversation(SuggestNewConversationResult::Cancelled)
+            | Self::SuggestPrompt(SuggestPromptResult::Cancelled)
+            | Self::ReadDocuments(ReadDocumentsResult::Cancelled)
+            | Self::EditDocuments(EditDocumentsResult::Cancelled)
+            | Self::CreateDocuments(CreateDocumentsResult::Cancelled)
+            | Self::ReadShellCommandOutput(ReadShellCommandOutputResult::Cancelled)
+            | Self::UseComputer(UseComputerResult::Cancelled)
+            | Self::InsertReviewComments(InsertReviewCommentsResult::Cancelled)
+            | Self::RequestComputerUse(RequestComputerUseResult::Cancelled)
+            | Self::StartRecording(StartRecordingResult::Cancelled)
+            | Self::StopRecording(StopRecordingResult::Cancelled)
+            | Self::TransferShellCommandControlToUser(
+                TransferShellCommandControlToUserResult::Cancelled,
+            )
+            | Self::WriteToLongRunningShellCommand(
+                WriteToLongRunningShellCommandResult::Cancelled,
+            )
+            | Self::ReadSkill(ReadSkillResult::Cancelled)
+            | Self::FetchConversation(FetchConversationResult::Cancelled)
+            | Self::SendMessageToAgent(SendMessageToAgentResult::Cancelled)
+            // SkippedByAutoApprove is intentionally excluded: the agent should continue.
+            | Self::AskUserQuestion(AskUserQuestionResult::Cancelled)
+            | Self::RunAgents(RunAgentsResult::Cancelled)
+            | Self::WaitForEvents(WaitForEventsResult::Cancelled) => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_cancelled_during_requested_command_execution(&self) -> bool {
+        matches!(self, Self::RequestCommandOutput(RequestCommandOutputResult::Completed {
+            exit_code, ..
+        }) if exit_code.value() == 130)
+    }
+
+    /// Returns `true` if this completion of this action result should trigger a follow-up request.
+    pub fn should_trigger_request_upon_completion(&self) -> bool {
+        !self.is_cancelled()
+    }
+
+    pub fn is_requested_command(&self) -> bool {
+        matches!(self, AIAgentActionResultType::RequestCommandOutput(_))
+    }
+
+    pub fn is_call_mcp_tool(&self) -> bool {
+        matches!(self, AIAgentActionResultType::CallMCPTool(_))
+    }
+
+    /// Returns `true` if this result will cause the server to route the next
+    /// turn to a subagent (e.g. the CLI subagent) rather than the orchestrator.
+    /// LRC snapshot variants are the current indicators of this.
+    pub fn triggers_server_subagent(&self) -> bool {
+        matches!(
+            self,
+            Self::RequestCommandOutput(
+                RequestCommandOutputResult::LongRunningCommandSnapshot { .. }
+            ) | Self::WriteToLongRunningShellCommand(
+                WriteToLongRunningShellCommandResult::Snapshot { .. }
+            ) | Self::ReadShellCommandOutput(
+                ReadShellCommandOutputResult::LongRunningCommandSnapshot { .. }
+            ) | Self::TransferShellCommandControlToUser(
+                TransferShellCommandControlToUserResult::Snapshot { .. }
+            )
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GrepResult {
+    Success { matched_files: Vec<GrepFileMatch> },
+    Error(String),
+    Cancelled,
+}
+
+impl Display for GrepResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            GrepResult::Success { matched_files } => {
+                write!(
+                    f,
+                    "Grep found matches in: [{}]",
+                    matched_files.iter().format(", ")
+                )
+            }
+            GrepResult::Error(error) => write!(f, "Grep error: {error}"),
+            GrepResult::Cancelled => write!(f, "Grep cancelled"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GrepFileMatch {
+    /// The absolute path to the file that was matched.
+    pub file_path: String,
+    /// The lines that matched the query.
+    pub matched_lines: Vec<GrepLineMatch>,
+}
+
+impl Display for GrepFileMatch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} on lines [{}]",
+            self.file_path,
+            self.matched_lines.iter().format(", ")
+        )
+    }
+}
+
+/// Info about a line that matched the grep query. This only contains the line
+/// number for now, but can be extended in the future to include more info, e.g.
+/// line contents.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GrepLineMatch {
+    /// The line number of the line that matched the query.
+    pub line_number: usize,
+}
+
+impl Display for GrepLineMatch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.line_number)
+    }
+}
+
+/// The result of a file globbing operation
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FileGlobResult {
+    Success { matched_files: String },
+    Error(String),
+    Cancelled,
+}
+
+impl Display for FileGlobResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FileGlobResult::Success { matched_files } => {
+                write!(f, "File glob completed: {matched_files}")
+            }
+            FileGlobResult::Error(error) => write!(f, "File glob error: {error}"),
+            FileGlobResult::Cancelled => write!(f, "File glob cancelled"),
+        }
+    }
+}
+
+// The result of a v2 file globbing operation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FileGlobV2Result {
+    Success {
+        matched_files: Vec<FileGlobV2Match>,
+        warnings: Option<String>,
+    },
+    Error(String),
+    Cancelled,
+}
+
+impl Display for FileGlobV2Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FileGlobV2Result::Success {
+                matched_files,
+                warnings,
+            } => {
+                write!(
+                    f,
+                    "File glob V2 completed: [{}] warnings: {:?}",
+                    matched_files.iter().format(", "),
+                    warnings
+                )
+            }
+            FileGlobV2Result::Error(error) => write!(f, "File glob V2 error: {error}"),
+            FileGlobV2Result::Cancelled => write!(f, "File glob V2 cancelled"),
+        }
+    }
+}
+
+// A match of a single file.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileGlobV2Match {
+    pub file_path: String,
+}
+
+impl Display for FileGlobV2Match {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.file_path)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum CallMCPToolResult {
+    Success { result: rmcp::model::CallToolResult },
+    Error(String),
+    Cancelled,
+}
+
+impl Display for CallMCPToolResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CallMCPToolResult::Success { result } => {
+                write!(
+                    f,
+                    "MCP tool call completed: [{result:?}]",
+                    // results.iter().format(", ")
+                )
+            }
+            CallMCPToolResult::Error(error) => write!(f, "MCP tool call error: {error}"),
+            CallMCPToolResult::Cancelled => write!(f, "MCP tool call cancelled"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ReadMCPResourceResult {
+    Success {
+        resource_contents: Vec<rmcp::model::ResourceContents>,
+    },
+    Error(String),
+    Cancelled,
+}
+
+impl Display for ReadMCPResourceResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ReadMCPResourceResult::Success { resource_contents } => {
+                write!(f, "MCP resource read completed: [{resource_contents:?}]",)
+            }
+            ReadMCPResourceResult::Error(error) => write!(f, "MCP resource error: {error}"),
+            ReadMCPResourceResult::Cancelled => write!(f, "MCP resource read cancelled"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ReadSkillResult {
+    Success { content: FileContext },
+    Error(String),
+    Cancelled,
+}
+
+impl Display for ReadSkillResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ReadSkillResult::Success { content } => {
+                write!(f, "Skill read successfully: {}", content.file_name)
+            }
+            ReadSkillResult::Error(error) => write!(f, "Skill read error: {error}"),
+            ReadSkillResult::Cancelled => write!(f, "Skill read cancelled"),
+        }
+    }
+}
+#[derive(Debug, Clone, PartialEq)]
+pub enum UseComputerResult {
+    /// Computer use succeeded. Mirrors the wire `Success` message.
+    Success {
+        screenshot: Option<ScreenshotSource>,
+        cursor_position: Option<computer_use::Vector2I>,
+        /// The on-screen windows, refreshed after the actions ran, so the caller always has a
+        /// fresh list to target next. Empty on platforms without window enumeration.
+        windows: Vec<computer_use::WindowInfo>,
+        /// Metadata about the captured window, populated only when a window target was
+        /// screenshotted, so window-local coordinates map onto the screenshot image.
+        captured_window: Option<computer_use::CapturedWindow>,
+    },
+    Error(String),
+    Cancelled,
+}
+
+/// Where a computer-use screenshot's bytes live, mirroring the wire's
+/// `RawImage.source` oneof.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ScreenshotSource {
+    /// The bytes are inline on the client.
+    Inline(computer_use::Screenshot),
+    /// The bytes live in Warp-managed object storage and must be fetched via a
+    /// signed URL.
+    Stored {
+        stored_ref: StoredScreenshotRef,
+        /// MIME type of the stored image (e.g. "image/png").
+        mime_type: String,
+        /// The width of the stored image, in pixels.
+        width: i32,
+        /// The height of the stored image, in pixels.
+        height: i32,
+    },
+}
+
+impl UseComputerResult {
+    /// Builds a success result from a locally captured action result, whose
+    /// screenshot bytes (if any) are inline.
+    pub fn success(result: computer_use::ActionResult) -> Self {
+        Self::Success {
+            screenshot: result.screenshot.map(ScreenshotSource::Inline),
+            cursor_position: result.cursor_position,
+            windows: result.windows,
+            captured_window: result.captured_window,
+        }
+    }
+}
+
+impl Display for UseComputerResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            UseComputerResult::Success { .. } => write!(f, "Use computer completed"),
+            UseComputerResult::Error(error) => write!(f, "Use computer error: {error}"),
+            UseComputerResult::Cancelled => write!(f, "Use computer cancelled"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InsertReviewCommentsResult {
+    Success { repo_path: String },
+    Error { repo_path: String, message: String },
+    Cancelled,
+}
+
+impl Display for InsertReviewCommentsResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            InsertReviewCommentsResult::Success { repo_path } => {
+                write!(f, "Inserted code review comments for {repo_path}")
+            }
+            InsertReviewCommentsResult::Error { repo_path, message } => {
+                write!(
+                    f,
+                    "Error inserting code review comments for {repo_path}: {message}"
+                )
+            }
+            InsertReviewCommentsResult::Cancelled => {
+                write!(f, "Cancelled inserting code review comments")
+            }
+        }
+    }
+}
+
+/// Screen dimensions for computer use.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScreenDimensions {
+    pub width_px: i32,
+    pub height_px: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RequestComputerUseResult {
+    /// Request was accepted, with the screen dimensions.
+    Approved {
+        screenshot: computer_use::Screenshot,
+        platform: computer_use::Platform,
+        /// The on-screen windows the agent may target.
+        windows: Vec<computer_use::WindowInfo>,
+    },
+    /// Request errored.
+    Error(String),
+    /// Request was cancelled or rejected by the user.
+    Cancelled,
+}
+
+impl Display for RequestComputerUseResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RequestComputerUseResult::Approved { screenshot, .. } => {
+                write!(
+                    f,
+                    "Request computer use accepted ({}x{})",
+                    screenshot.original_width, screenshot.original_height
+                )
+            }
+            RequestComputerUseResult::Error(error) => {
+                write!(f, "Request computer use error: {error}")
+            }
+            RequestComputerUseResult::Cancelled => write!(f, "Request computer use cancelled"),
+        }
+    }
+}
+
+/// The result of a `StartRecording` tool call. Carries the resolved capture
+/// dimensions; frame rate and limits are server-owned and not echoed back.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StartRecordingResult {
+    Success(RecordingStarted),
+    Error(String),
+    Cancelled,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecordingStarted {
+    pub recording_id: String,
+    pub started_at: SystemTime,
+    pub width_px: i32,
+    pub height_px: i32,
+}
+
+impl Display for StartRecordingResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StartRecordingResult::Success(started) => write!(
+                f,
+                "Recording started ({}x{})",
+                started.width_px, started.height_px
+            ),
+            StartRecordingResult::Error(error) => write!(f, "Start recording error: {error}"),
+            StartRecordingResult::Cancelled => write!(f, "Start recording cancelled"),
+        }
+    }
+}
+
+/// The result of a `StopRecording` tool call. Carries the published artifact
+/// reference and video metadata; never the file path or bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StopRecordingResult {
+    Success(RecordingStopped),
+    Error(String),
+    Cancelled,
+    /// The agent opted not to persist the recording (`should_persist=false`), so
+    /// it was discarded without uploading. Distinct from `Cancelled` so the
+    /// agent's turn continues.
+    Discarded,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecordingStopped {
+    pub artifact_uid: String,
+    pub duration: Duration,
+    pub width_px: i32,
+    pub height_px: i32,
+    pub size_bytes: i64,
+    pub completion_status: computer_use::RecordingCompletionStatus,
+    pub termination_reason: String,
+}
+
+impl Display for StopRecordingResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StopRecordingResult::Success(stopped) => write!(
+                f,
+                "Recording stopped (artifact {}, {} bytes)",
+                stopped.artifact_uid, stopped.size_bytes
+            ),
+            StopRecordingResult::Error(error) => write!(f, "Stop recording error: {error}"),
+            StopRecordingResult::Cancelled => write!(f, "Stop recording cancelled"),
+            StopRecordingResult::Discarded => write!(f, "Recording discarded"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FetchConversationResult {
+    Success { directory_path: String },
+    Error(String),
+    Cancelled,
+}
+
+impl Display for FetchConversationResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FetchConversationResult::Success { directory_path } => {
+                write!(f, "Fetched conversation to {directory_path}")
+            }
+            FetchConversationResult::Error(error) => {
+                write!(f, "Fetch conversation error: {error}")
+            }
+            FetchConversationResult::Cancelled => write!(f, "Fetch conversation cancelled"),
+        }
+    }
+}
+
+/// The terminal outcome of an orchestrate tool call.
+///
+/// Mirrors the proto `RunAgentsResult` oneof, with an additional
+/// `Cancelled` variant used internally by the action machinery when the
+/// user clicks Reject. The proto wire form for cancellation is the
+/// generic `ToolCallResult.Cancel` marker; the conversion code emits
+/// `ConvertToAPITypeError::Ignore` for `Cancelled` so the input
+/// interceptor can synthesize the marker on the next outbound input.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum RunAgentsResult {
+    /// Orchestration launched. Carries the resolved configuration and one
+    /// `AgentOutcome` per `agent_run_configs[]` entry, in input order.
+    Launched {
+        model_id: String,
+        harness_type: String,
+        execution_mode: RunAgentsLaunchedExecutionMode,
+        agents: Vec<RunAgentsAgentOutcome>,
+    },
+    /// Declined for a non-error reason (currently disapproval).
+    Denied { reason: String },
+    /// Actual error path: server-side validation rejected the call, or the
+    /// client could not begin the launch sequence at all.
+    Failure { error: String },
+    /// User rejected via the Reject button. Wire form is the generic
+    /// `ToolCallResult.Cancel` marker, synthesized by the server's input
+    /// interceptor on the next user input.
+    Cancelled,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum RunAgentsLaunchedExecutionMode {
+    Local,
+    Remote {
+        environment_id: String,
+        worker_host: String,
+        computer_use_enabled: bool,
+        /// Resolved runner UID the batch committed to; empty when none.
+        #[serde(default)]
+        runner_id: String,
+    },
+}
+
+/// Per-agent outcome reported in `RunAgentsResult::Launched.agents`.
+/// Order mirrors the input order of `RunAgents.agent_run_configs[]`,
+/// regardless of which `CreateAgentTask` call returned first.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RunAgentsAgentOutcome {
+    pub name: String,
+    pub kind: RunAgentsAgentOutcomeKind,
+    /// The model that was actually used for this child agent. Set from the
+    /// per-agent `model_id` override when present; otherwise from the
+    /// batch-level resolved model. Empty when the server did not populate it.
+    #[serde(default)]
+    pub resolved_model_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum RunAgentsAgentOutcomeKind {
+    Launched { agent_id: String },
+    Failed { error: String },
+}
+
+impl Display for RunAgentsResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RunAgentsResult::Launched { agents, .. } => {
+                let launched = agents
+                    .iter()
+                    .filter(|a| matches!(a.kind, RunAgentsAgentOutcomeKind::Launched { .. }))
+                    .count();
+                write!(
+                    f,
+                    "Orchestrate launched ({launched}/{} agents started)",
+                    agents.len()
+                )
+            }
+            RunAgentsResult::Denied { reason } => {
+                write!(f, "Orchestrate launch denied: {reason}")
+            }
+            RunAgentsResult::Failure { error } => write!(f, "Orchestrate failure: {error}"),
+            RunAgentsResult::Cancelled => write!(f, "Orchestrate cancelled"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum SendMessageToAgentResult {
+    Success { message_id: String },
+    Error(String),
+    Cancelled,
+}
+
+impl Display for SendMessageToAgentResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SendMessageToAgentResult::Success { message_id } => {
+                write!(f, "Sent message with id {message_id}")
+            }
+            SendMessageToAgentResult::Error(error) => write!(f, "Send message error: {error}"),
+            SendMessageToAgentResult::Cancelled => write!(f, "Send message cancelled"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+pub enum TransferShellCommandControlToUserResult {
+    Snapshot {
+        block_id: BlockId,
+        grid_contents: String,
+        cursor: String,
+        is_alt_screen_active: bool,
+        is_preempted: bool,
+        activity: Option<LrcActivity>,
+    },
+    CommandFinished {
+        block_id: BlockId,
+        output: String,
+        exit_code: ExitCode,
+        start_ts: Option<DateTime<Local>>,
+        completed_ts: Option<DateTime<Local>>,
+    },
+    Cancelled,
+    Error(ShellCommandError),
+}
+
+impl Display for TransferShellCommandControlToUserResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Snapshot { .. } => {
+                write!(f, "Transferred control to user, sent snapshot")
+            }
+            Self::CommandFinished {
+                output, exit_code, ..
+            } => write!(
+                f,
+                "Command finished while user had control, exit code {}:\n{output}",
+                exit_code.value()
+            ),
+            Self::Cancelled => write!(f, "Transfer shell command control to user cancelled"),
+            Self::Error(e) => write!(f, "Transfer shell command control to user failed: {e:?}"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AskUserQuestionAnswerItem {
+    Answered {
+        question_id: String,
+        selected_options: Vec<String>,
+        other_text: String,
+    },
+    Skipped {
+        question_id: String,
+    },
+}
+
+impl AskUserQuestionAnswerItem {
+    pub fn is_skipped(&self) -> bool {
+        matches!(self, Self::Skipped { .. })
+    }
+
+    pub fn display_text(&self) -> String {
+        match self {
+            Self::Answered {
+                selected_options,
+                other_text,
+                ..
+            } => {
+                let mut parts = selected_options.clone();
+                if !other_text.is_empty() {
+                    parts.push(format!("Other: {other_text}"));
+                }
+                parts.join(", ")
+            }
+            Self::Skipped { .. } => "Skipped".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AskUserQuestionResult {
+    Success {
+        answers: Vec<AskUserQuestionAnswerItem>,
+    },
+    Error(String),
+    Cancelled,
+    /// The question was skipped automatically because the conversation is in auto-approve mode.
+    SkippedByAutoApprove {
+        question_ids: Vec<String>,
+    },
+}
+
+impl Display for AskUserQuestionResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AskUserQuestionResult::Success { answers } => {
+                write!(
+                    f,
+                    "Ask user question completed with {} answer(s)",
+                    answers.len()
+                )
+            }
+            AskUserQuestionResult::Error(msg) => write!(f, "Ask user question error: {msg}"),
+            AskUserQuestionResult::Cancelled => write!(f, "Ask user question cancelled"),
+            AskUserQuestionResult::SkippedByAutoApprove { question_ids } => {
+                write!(
+                    f,
+                    "Ask user question skipped (auto-approve) with {} skipped question(s)",
+                    question_ids.len()
+                )
+            }
+        }
+    }
+}
+
+/// Result of a client-side wait_for_events action.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum WaitForEventsResult {
+    /// Watchdog fired or an inbound resume signal closed the wait. The
+    /// agent's next turn observes an empty WaitForEvents result on the
+    /// wire and decides how to proceed.
+    Completed,
+    /// User cancelled the conversation while waiting. Mirrors
+    /// RunAgents::Cancelled: no tool-call result is sent on the wire.
+    Cancelled,
+}
+
+impl Display for WaitForEventsResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Completed => write!(f, "Wait for events completed"),
+            Self::Cancelled => write!(f, "Wait for events cancelled"),
+        }
+    }
+}

@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+
+OS_TYPE="$(uname -s)"
+
+if [[ "$OS_TYPE" = "Darwin" ]]; then
+  ./script/macos/bundle "$@"
+elif [[ "$OS_TYPE" = "Linux" ]]; then
+  ./script/linux/bundle "$@"
+elif [[ "$OS_TYPE" =~ ^[MINGW64_NT|MSYS_NT] ]]; then
+  while (( "$#" )); do
+    # Turn double hyphens into single hyphens.
+    PROCESSED_PARAM=$( echo $1 | sed -e "s/^--/-/" )
+    case "$PROCESSED_PARAM" in
+      # Powershell has a built-in argument called `debug`,
+      # so we must pass that argument under a different name.
+      -debug)
+        # rename debug --> debug_build
+        PARAMS="$PARAMS -debug_build"
+        shift
+        ;;
+      *)
+        # preserve other arguments as-is
+        PARAMS="$PARAMS $PROCESSED_PARAM"
+        shift
+        ;;
+    esac
+  done
+
+  ./script/windows/bundle.ps1 "$PARAMS"
+else
+  echo "No bundle script defined for the current platform ($OS_TYPE)!"
+  exit 1
+fi

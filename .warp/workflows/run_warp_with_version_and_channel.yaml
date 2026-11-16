@@ -1,0 +1,11 @@
+name: "Run Warp locally with version and channel"
+command: "GIT_RELEASE_TAG={{version}} cargo run --bin {{channel}}"
+description: "Runs Warp locally with a particular version and channel for development purposes"
+arguments:
+  - name: version
+    description: version number to use, e.g. 1.2.3.4
+  - name: channel
+    description: channel type, e.g. dev or stable
+    default_value: dev
+author: Warp Team
+shells: []

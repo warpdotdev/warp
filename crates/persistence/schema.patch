@@ -1,0 +1,17 @@
+--- a/crates/persistence/src/schema.rs
++++ b/crates/persistence/src/schema.rs
+@@ -245,13 +245,13 @@
+ 
+ diesel::table! {
+     object_metadata (id) {
+         id -> Integer,
+         is_pending -> Bool,
+         object_type -> Text,
+-        revision_ts -> Nullable<Integer>,
++        revision_ts -> Nullable<BigInt>,
+         server_id -> Nullable<Text>,
+         client_id -> Nullable<Text>,
+         shareable_object_id -> Integer,
+         author_id -> Nullable<Integer>,
+         retry_count -> Integer,
+         metadata_last_updated_ts -> Nullable<BigInt>,

@@ -1,0 +1,30 @@
+[package]
+name = "warp_files"
+version = "0.1.0"
+edition = "2024"
+authors = ["Warp Team <dev@warp.dev>"]
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow = "1.0"
+async-channel.workspace = true
+async-fs.workspace = true
+futures.workspace = true
+thiserror.workspace = true
+warpui_core.workspace = true
+remote_server.workspace = true
+warp_core.workspace = true
+warp_util.workspace = true
+watcher.workspace = true
+notify-debouncer-full.workspace = true
+repo_metadata.workspace = true
+log.workspace = true
+same-file = "1.0"
+
+[features]
+test-util = []
+
+[dev-dependencies]
+async-channel.workspace = true
+tempfile.workspace = true

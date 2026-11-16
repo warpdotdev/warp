@@ -1,0 +1,13 @@
+{
+  "servers": {
+    "destination-conflict": {
+      "url": "https://destination.invalid/mcp"
+    },
+    "destination-only": {
+      "command": "destination-command"
+    }
+  },
+  "destinationMetadata": {
+    "preserve": true
+  }
+}

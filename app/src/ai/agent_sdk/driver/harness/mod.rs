@@ -1,0 +1,1031 @@
+use std::borrow::Cow;
+use std::collections::HashMap;
+use std::ffi::{OsStr, OsString};
+use std::fmt;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use anyhow::{Context, Result};
+use async_trait::async_trait;
+use tempfile::{NamedTempFile, TempDir};
+use uuid::Uuid;
+use warp_cli::agent::{Harness, HarnessTransport};
+use warp_cli::{
+    OZ_CLI_ENV, OZ_HARNESS_ENV, OZ_PARENT_RUN_ID_ENV, OZ_RUN_ID_ENV, SERVER_ROOT_URL_OVERRIDE_ENV,
+    SESSION_SHARING_SERVER_URL_OVERRIDE_ENV, WARP_CLI_ENV, WARP_HARNESS_ENV,
+    WARP_PARENT_RUN_ID_ENV, WARP_RUN_ID_ENV, WS_SERVER_URL_OVERRIDE_ENV,
+};
+use warp_core::channel::ChannelState;
+use warp_managed_secrets::ManagedSecretValue;
+use warpui::{ModelHandle, ModelSpawner, SingletonEntity};
+
+use super::terminal::{CommandHandle, TerminalDriver};
+use super::{
+    AgentDriver, AgentDriverError, HarnessSetupStage,
+    LEGACY_OZ_PARENT_LISTENER_MANAGED_EXTERNALLY_ENV, LEGACY_OZ_PARENT_STATE_ROOT_ENV,
+    OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV, OZ_MESSAGE_LISTENER_STATE_ROOT_ENV,
+    WARP_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV, WARP_MESSAGE_LISTENER_STATE_ROOT_ENV,
+};
+use crate::ai::agent::BaseUserQuery;
+use crate::ai::agent::api::ServerConversationToken;
+use crate::ai::agent_sdk::setup_observability::SetupClientEventReporter;
+use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::ambient_agents::task::HarnessModelConfig;
+use crate::ai::attachment_utils::DownloadedAttachment;
+use crate::ai::mcp::JSONMCPServer;
+use crate::server::server_api::ServerApi;
+use crate::server::server_api::harness_support::{HarnessSupportClient, upload_to_target};
+use crate::terminal::CLIAgent;
+use crate::terminal::cli_agent_sessions::{CLIAgentSessionStatus, CLIAgentSessionsModel};
+use crate::terminal::model::block::{BlockId, SerializedBlock};
+use crate::util::path::resolve_executable;
+
+pub(crate) mod acp;
+pub(crate) mod claude_code;
+pub(crate) mod claude_transcript;
+mod claude_usage;
+mod codex;
+pub(crate) mod codex_transcript;
+mod codex_usage;
+pub(crate) mod exit_escalation;
+mod gemini;
+mod harness_persistence;
+mod json_utils;
+pub(crate) mod launch_warmup;
+mod pi;
+mod pi_transcript;
+mod pi_usage;
+pub(crate) mod process_control;
+mod save_coordinator;
+mod skill_dirs_publish;
+mod telemetry;
+mod transcript_persistence;
+mod usage_reporting;
+use acp::AcpHarness;
+pub(crate) use claude_code::ClaudeHarness;
+use claude_transcript::ClaudeResumeInfo;
+use codex::CodexHarness;
+use codex_transcript::CodexResumeInfo;
+use gemini::GeminiHarness;
+use harness_persistence::{HarnessPersistence, PersistenceOutcome};
+use pi::pi_env_vars;
+pub(crate) use skill_dirs_publish::{HarnessSupportSkills, create_symlink};
+pub(crate) use telemetry::ThirdPartyHarnessTelemetryEvent;
+
+const HARNESS_FAILURE_OUTPUT_TRUNCATION_MARKER: &str = "\n… harness output truncated …\n";
+
+pub(super) fn prepare_harness_failure_output(output: &str) -> String {
+    super::failure_output::prepare_failure_output(output, HARNESS_FAILURE_OUTPUT_TRUNCATION_MARKER)
+}
+
+/// Harness-agnostic payload describing how to resume an existing conversation.
+///
+/// Each variant carries the data a specific harness needs to rehydrate state before its CLI
+/// launches. Harnesses match on the variant they produce and ignore others; new CLIs that
+/// want resume support add a new variant and override [`ThirdPartyHarness::fetch_resume_payload`].
+#[derive(Debug)]
+pub(crate) enum ResumePayload {
+    /// Claude Code session state fetched from the server's transcript endpoint.
+    Claude(ClaudeResumeInfo),
+    /// Codex session state fetched from the server's transcript endpoint.
+    Codex(CodexResumeInfo),
+}
+
+impl TryFrom<ResumePayload> for ClaudeResumeInfo {
+    type Error = AgentDriverError;
+
+    fn try_from(payload: ResumePayload) -> Result<Self, Self::Error> {
+        match payload {
+            ResumePayload::Claude(info) => Ok(info),
+            _ => {
+                log::error!("ClaudeHarness given non-Claude ResumePayload variant");
+                Err(AgentDriverError::InvalidRuntimeState)
+            }
+        }
+    }
+}
+
+impl TryFrom<ResumePayload> for CodexResumeInfo {
+    type Error = AgentDriverError;
+
+    fn try_from(payload: ResumePayload) -> Result<Self, Self::Error> {
+        match payload {
+            ResumePayload::Codex(info) => Ok(info),
+            _ => {
+                log::error!("CodexHarness given non-Codex ResumePayload variant");
+                Err(AgentDriverError::InvalidRuntimeState)
+            }
+        }
+    }
+}
+
+/// Fetch the harness transcript for `conversation_id` and deserialize it into `E`.
+pub(super) async fn fetch_transcript_envelope<E: serde::de::DeserializeOwned>(
+    harness_label: &str,
+    conversation_id: &ServerConversationToken,
+    client: Arc<dyn HarnessSupportClient>,
+) -> Result<E, AgentDriverError> {
+    let bytes = client.fetch_transcript().await.map_err(|err| {
+        // A 404 from the server maps to "no stored transcript" so the CLI can tell
+        // the user the prior run never saved state.
+        let message = format!("{err:#}").to_lowercase();
+        if message.contains("status 404") {
+            AgentDriverError::ConversationResumeStateMissing {
+                harness: harness_label.to_string(),
+                conversation_id: conversation_id.to_string(),
+            }
+        } else {
+            AgentDriverError::ConversationLoadFailed(format!("{err:#}"))
+        }
+    })?;
+    serde_json::from_slice(&bytes).map_err(|err| {
+        AgentDriverError::ConversationLoadFailed(format!(
+            "Failed to deserialize {harness_label} transcript for {conversation_id}: {err:#}"
+        ))
+    })
+}
+
+/// The MCP servers resolved for a third-party harness run, keyed by server name.
+#[derive(Debug, Default)]
+pub(crate) struct ResolvedMCPServers {
+    /// The config each harness writes into its native format.
+    pub(crate) configs: HashMap<String, JSONMCPServer>,
+    /// The `warp_id` of each server resolved from a managed MCP server or a well-known
+    /// integration, with the semantics of `MCPServerConfig.warp_id`.
+    pub(crate) warp_ids: HashMap<String, String>,
+    /// The installation id of each server, which the native conversation records as
+    /// `CallMCPTool.server_id`.
+    pub(crate) installation_ids: HashMap<String, Uuid>,
+}
+
+/// Trait for third-party agent harnesses that execute prompts via their own CLIs.
+///
+/// Each new external harness (e.g. Claude, Codex) implements this to be used with cloud agents.
+#[cfg_attr(not(target_family = "wasm"), async_trait)]
+#[cfg_attr(target_family = "wasm", async_trait(?Send))]
+pub(crate) trait ThirdPartyHarness: Send + Sync {
+    /// Returns the [`Harness`] variant this implementation corresponds to.
+    fn harness(&self) -> Harness;
+
+    /// Returns the CLIAgent type associated with this harness.
+    fn cli_agent(&self) -> CLIAgent;
+
+    /// URL to install instructions for this harness's CLI, surfaced in the
+    /// default [`validate`] impl when the CLI is not on `PATH`.
+    fn install_docs_url(&self) -> Option<&'static str> {
+        None
+    }
+
+    /// Validate that the harness is ready to run. Default impl checks that the
+    /// CLI is installed on `PATH`; override for additional checks.
+    fn validate(&self) -> Result<(), AgentDriverError> {
+        validate_cli_installed(
+            self.cli_agent().command_prefix(),
+            self.install_docs_url(),
+            None,
+        )
+    }
+
+    /// Shell command to verify authentication credentials are valid.
+    /// Exit code 0 = pass; non-zero = fail.
+    fn auth_check_command(&self) -> Option<String> {
+        None
+    }
+
+    /// Substrings to scan for in the running harness block's output. A hit
+    /// indicates the harness can't make a successful API request (e.g.
+    /// invalid key, no billing, quota exhausted). The driver matches
+    /// case-insensitively against the block's plaintext via the same DFA
+    /// machinery used by the find feature.
+    fn runtime_error_patterns(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    fn runtime_error_patterns_for_run(&self) -> Vec<String> {
+        self.runtime_error_patterns()
+            .iter()
+            .map(|pattern| (*pattern).to_owned())
+            .collect()
+    }
+
+    /// Whether this harness must verify its Oz platform plugin before launch.
+    /// Codex opts into this because its unattended launch command bypasses hook
+    /// trust globally, so we should fail setup instead of running without the
+    /// Warp-installed orchestration hooks at the required version.
+    fn requires_verified_platform_plugin(&self) -> bool {
+        false
+    }
+
+    /// Whether the ACP adapter this harness would launch is present in the sandbox: a sidecar
+    /// manifest, or any of the default adapter's names on the oz process PATH. `None` for a
+    /// harness that is not driven over ACP, which never falls back.
+    fn acp_adapter(&self) -> Option<AcpAdapter> {
+        None
+    }
+
+    /// Directories holding the files this harness loads when it launches, for reading ahead of
+    /// the launch. Empty when they are not known.
+    fn launch_file_roots(&self) -> Vec<PathBuf> {
+        Vec::new()
+    }
+
+    /// Whether the harness runs as an interactive CLI agent in the terminal whose progress is
+    /// observed through CLI agent session events and hook plugins. Harnesses that drive a native
+    /// conversation directly return `false`.
+    fn drives_cli_agent_session(&self) -> bool {
+        true
+    }
+
+    /// Sets structured initial-prompt files; text-only harnesses ignore them.
+    fn set_initial_attachments(&mut self, _: Vec<DownloadedAttachment>) {}
+
+    /// Fetch the harness-specific resume payload for an existing conversation.
+    ///
+    /// The driver calls this when the user passes `--conversation <id>` and the harness
+    /// matches the stored conversation's harness. Harnesses that don't support resume
+    /// use the default impl, which returns `Ok(None)` and causes the run to start fresh.
+    ///
+    /// Implementations download the raw transcript via [`HarnessSupportClient::fetch_transcript`]
+    /// (which derives the conversation from the current task's `agent_conversation_id`) and
+    /// own all harness-specific deserialization and error mapping (e.g. a 404 maps to
+    /// [`AgentDriverError::ConversationResumeStateMissing`] tagged with the harness label).
+    async fn fetch_resume_payload(
+        &self,
+        _conversation_id: &ServerConversationToken,
+        _harness_support_client: Arc<dyn HarnessSupportClient>,
+    ) -> Result<Option<ResumePayload>, AgentDriverError> {
+        Ok(None)
+    }
+
+    /// Build a runner for executing this harness with the given prompt.
+    ///
+    /// Responsible for all harness-specific setup: writing config files (auth,
+    /// trust, system prompt, MCP, etc.) and constructing the runner that will
+    /// execute the CLI command.
+    ///
+    /// `resolved_env_vars` contains already-resolved secret env vars (worker
+    /// env > typed secrets > raw values precedence already applied).
+    ///
+    /// `resolved_secrets` provides the raw typed managed secrets so harnesses
+    /// can read structured fields (e.g. `base_url`) without relying on env vars.
+    ///
+    /// `prompt_attribution` is the attribution (origin, author, source message) of the query
+    /// that opens this execution, for a harness that echoes `prompt` into the conversation
+    /// itself rather than relaying the server's echo.
+    ///
+    /// `skill_dirs` lists the workspace's skill source directories in precedence order.
+    ///
+    /// `workspace_root` is the root used for workspace-level inputs, while
+    /// `harness_working_dir` is the directory from which the CLI starts.
+    ///
+    /// If `resume` is `Some`, the harness matches on its own [`ResumePayload`]
+    /// variant and reuses stored session/conversation ids.
+    #[allow(clippy::too_many_arguments)]
+    fn build_runner(
+        &self,
+        prompt: &str,
+        system_prompt: Option<&str>,
+        resumption_prompt: Option<&str>,
+        context: Option<&str>,
+        prompt_attribution: Option<&BaseUserQuery>,
+        workspace_root: &Path,
+        harness_working_dir: &Path,
+        task_id: Option<AmbientAgentTaskId>,
+        server_api: Arc<ServerApi>,
+        terminal_driver: ModelHandle<TerminalDriver>,
+        resume: Option<ResumePayload>,
+        resolved_env_vars: &HashMap<OsString, OsString>,
+        skill_dirs: &[PathBuf],
+        factory_repository_contract: bool,
+        resolved_secrets: &HashMap<String, ManagedSecretValue>,
+        resolved_mcp_servers: &ResolvedMCPServers,
+        third_party_harness_model_config: Option<&HarnessModelConfig>,
+    ) -> Result<Box<dyn HarnessRunner>, AgentDriverError>;
+}
+
+/// Harness type for driver dispatch.
+pub(crate) enum HarnessKind {
+    Oz,
+    /// Third-party CLI-backed harness (e.g. Claude, Gemini).
+    ThirdParty(Box<dyn ThirdPartyHarness>),
+    /// Harnesses that exist in the shared CLI enum but are not supported by the
+    /// standalone agent driver.
+    Unsupported(Harness),
+}
+
+impl HarnessKind {
+    pub(crate) fn set_initial_attachments(&mut self, downloaded: Vec<DownloadedAttachment>) {
+        if let Self::ThirdParty(harness) = self {
+            harness.set_initial_attachments(downloaded);
+        }
+    }
+    /// Corresponding [`Harness`] enum value.
+    pub(crate) fn harness(&self) -> Harness {
+        match self {
+            HarnessKind::Oz => Harness::Oz,
+            HarnessKind::ThirdParty(h) => h.harness(),
+            HarnessKind::Unsupported(harness) => *harness,
+        }
+    }
+
+    /// Whether the run tells the server which transport this harness is driven over. Only a
+    /// third-party harness whose transport the client chooses does: the server fixes the
+    /// transport of the others (see [`fixed_transport`]) and rejects a report for them, and
+    /// the transport option it would report is not what drives them anyway.
+    pub(crate) fn reports_transport(&self) -> bool {
+        match self {
+            HarnessKind::ThirdParty(harness) => fixed_transport(harness.harness()).is_none(),
+            HarnessKind::Oz | HarnessKind::Unsupported(_) => false,
+        }
+    }
+}
+
+impl fmt::Debug for HarnessKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Use the `Display` method on the [`Harness`] enum.
+        write!(f, "{}", self.harness())
+    }
+}
+
+/// Whether a run renders through a native `AIConversation` on the sharer rather than through
+/// a CLI agent block in the terminal.
+pub(crate) fn renders_natively(harness: Harness, transport: HarnessTransport) -> bool {
+    match (harness, transport) {
+        (Harness::Oz | Harness::Pi, _) => true,
+        (
+            Harness::Claude
+            | Harness::Codex
+            | Harness::Gemini
+            | Harness::OpenCode
+            | Harness::Unknown,
+            HarnessTransport::Acp,
+        ) => true,
+        (
+            Harness::Claude
+            | Harness::Codex
+            | Harness::Gemini
+            | Harness::OpenCode
+            | Harness::Unknown,
+            HarnessTransport::Pty,
+        ) => false,
+    }
+}
+
+/// The transport a third-party harness is always driven over, regardless of the transport
+/// option a run was dispatched with: Pi has no interactive CLI mode, so it only runs over ACP.
+/// `None` for a harness whose transport the option selects. Oz is Warp's own loop and has no
+/// transport at all, so it is `None` too; [`harness_kind`] never consults the option for it.
+pub(crate) fn fixed_transport(harness: Harness) -> Option<HarnessTransport> {
+    match harness {
+        Harness::Pi => Some(HarnessTransport::Acp),
+        Harness::Oz
+        | Harness::Claude
+        | Harness::Codex
+        | Harness::OpenCode
+        | Harness::Gemini
+        | Harness::Unknown => None,
+    }
+}
+
+/// Build a [`HarnessKind`] for the given [`Harness`] and transport.
+///
+/// We shouldn't ever get a `--harness unknown` here because clap should handle
+/// it.
+pub(crate) fn harness_kind(
+    harness: Harness,
+    transport: HarnessTransport,
+) -> Result<HarnessKind, AgentDriverError> {
+    // The transport only selects how a third-party harness is driven; Oz is Warp's own loop,
+    // so it does not consult it, and a harness with a fixed transport ignores it.
+    if harness == Harness::Oz {
+        return Ok(HarnessKind::Oz);
+    }
+    let transport = fixed_transport(harness).unwrap_or(transport);
+    match transport {
+        HarnessTransport::Pty => match harness {
+            Harness::Claude => Ok(HarnessKind::ThirdParty(Box::new(ClaudeHarness))),
+            Harness::Codex => Ok(HarnessKind::ThirdParty(Box::new(CodexHarness))),
+            Harness::OpenCode => Ok(HarnessKind::Unsupported(Harness::OpenCode)),
+            Harness::Gemini => Ok(HarnessKind::ThirdParty(Box::new(GeminiHarness))),
+            Harness::Oz | Harness::Pi | Harness::Unknown => {
+                Err(AgentDriverError::InvalidRuntimeState)
+            }
+        },
+        HarnessTransport::Acp => acp_harness_kind(harness),
+    }
+}
+
+/// Whether the ACP adapter a harness would launch is in the sandbox.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AcpAdapter {
+    /// A sidecar manifest names it, or one of the default adapter's names is on the oz process
+    /// PATH.
+    Available,
+    /// Neither, for the given reason.
+    Missing(TransportFallbackReason),
+}
+
+/// Why a run the server requested over ACP is driven over a PTY instead: no sidecar manifest
+/// and no adapter on PATH, told apart by whether a sidecar was mounted at all. Reported to the
+/// server as a bounded reason, so keep the set small.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TransportFallbackReason {
+    /// No coding CLI sidecar is mounted for the harness. Expected on a self-hosted Direct
+    /// backend; elsewhere, such as on a native macOS or Windows image, the image lacks the
+    /// adapter.
+    NoSidecar,
+    /// A sidecar directory is mounted for the harness but has no ACP manifest: the worker
+    /// mounted the terminal CLI image for an ACP run, which is a misconfiguration.
+    SidecarWithoutAdapter,
+}
+
+impl TransportFallbackReason {
+    /// The value reported to the server and in telemetry.
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::NoSidecar => "no_sidecar",
+            Self::SidecarWithoutAdapter => "sidecar_without_adapter",
+        }
+    }
+
+    /// What the sandbox lacks, as the notice in the session puts it.
+    fn cause(self) -> &'static str {
+        match self {
+            Self::NoSidecar => "no ACP sidecar is mounted",
+            Self::SidecarWithoutAdapter => "the mounted sidecar has no ACP adapter",
+        }
+    }
+}
+
+impl fmt::Display for TransportFallbackReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Decides whether a run of `harness` over `transport` falls back to a PTY given whether the
+/// ACP adapter is present. Only Claude Code and Codex have a PTY to fall back to: Pi has no
+/// interactive CLI, and Gemini over ACP is not driven in the cloud.
+pub(crate) fn transport_fallback_reason(
+    harness: Harness,
+    transport: HarnessTransport,
+    adapter: AcpAdapter,
+) -> Option<TransportFallbackReason> {
+    match (transport, harness, adapter) {
+        (HarnessTransport::Acp, Harness::Claude | Harness::Codex, AcpAdapter::Missing(reason)) => {
+            Some(reason)
+        }
+        _ => None,
+    }
+}
+
+/// The line the session shows when a run of `harness` falls back to a PTY, so whoever watches
+/// it knows why the run renders in the terminal and what it cannot do. It names the cause in
+/// the words the self-hosting troubleshooting docs look for.
+pub(crate) fn transport_fallback_notice(
+    harness: Harness,
+    reason: TransportFallbackReason,
+) -> String {
+    format!(
+        "oz: {} and no ACP adapter is on PATH, so {} runs in the terminal instead of over ACP. \
+         Follow-ups to this run cannot carry file attachments.",
+        reason.cause(),
+        harness.display_name(),
+    )
+}
+
+/// A command that prints [`transport_fallback_notice`] in the session. The notice is single
+/// quoted, which every shell the driver runs (POSIX shells, fish, PowerShell) prints verbatim,
+/// so any single quote is dropped from it first.
+pub(crate) fn transport_fallback_notice_command(
+    harness: Harness,
+    reason: TransportFallbackReason,
+) -> String {
+    let notice = transport_fallback_notice(harness, reason).replace('\'', "");
+    format!("echo '{notice}'")
+}
+
+/// Replaces an ACP harness whose adapter is absent with the PTY harness for the same CLI, and
+/// records the PTY transport in `transport` so everything that reads it afterwards (the native
+/// prompt queue, the harness environment, the terminal launch, the resume path) follows the
+/// fallback. Returns the reason when a fallback happened.
+pub(crate) fn apply_transport_fallback(
+    kind: &mut HarnessKind,
+    transport: &mut HarnessTransport,
+) -> Result<Option<TransportFallbackReason>, AgentDriverError> {
+    let HarnessKind::ThirdParty(harness) = &*kind else {
+        return Ok(None);
+    };
+    let Some(adapter) = harness.acp_adapter() else {
+        return Ok(None);
+    };
+    let reason = transport_fallback_reason(harness.harness(), *transport, adapter);
+    if reason.is_some() {
+        *kind = harness_kind(harness.harness(), HarnessTransport::Pty)?;
+        *transport = HarnessTransport::Pty;
+    }
+    Ok(reason)
+}
+
+fn acp_harness_kind(harness: Harness) -> Result<HarnessKind, AgentDriverError> {
+    match harness {
+        Harness::Claude | Harness::Codex | Harness::Gemini | Harness::Pi => {
+            Ok(HarnessKind::ThirdParty(Box::new(AcpHarness::new(harness)?)))
+        }
+        Harness::Oz | Harness::OpenCode | Harness::Unknown => {
+            Err(AgentDriverError::HarnessSetupFailed {
+                harness: harness.to_string(),
+                stage: Some(HarnessSetupStage::Manifest),
+                reason: format!("The {harness} harness cannot be driven over ACP."),
+            })
+        }
+    }
+}
+
+/// URL to install instructions for the harness's CLI.
+fn install_docs_url(harness: Harness) -> Option<&'static str> {
+    match harness {
+        Harness::Claude => Some("https://code.claude.com/docs/en/quickstart"),
+        Harness::Codex => Some("https://developers.openai.com/codex/cli"),
+        Harness::Gemini => Some("https://geminicli.com/"),
+        Harness::Pi => Some("https://github.com/svkozak/pi-acp#install"),
+        Harness::Oz | Harness::OpenCode | Harness::Unknown => None,
+    }
+}
+
+/// Returns the harness's auth-check preflight command, if any.
+///
+/// The viewer uses this to recognize preflight blocks via exact string
+/// equality (so they stay grouped under "Set up environment commands"
+/// rather than being mistaken for the main harness invocation, which
+/// shares the same CLI prefix).
+///
+/// Returns `None` for [`Harness::Oz`], for unsupported harnesses, and
+/// for any third-party harness whose `auth_check_command` returns `None`
+/// (e.g. Gemini today).
+pub(crate) fn auth_check_command_for(harness: Harness) -> Option<String> {
+    let HarnessKind::ThirdParty(third_party) = harness_kind(harness, HarnessTransport::Pty).ok()?
+    else {
+        return None;
+    };
+    third_party.auth_check_command()
+}
+
+/// Check that `cli` is installed and on PATH, returning a `HarnessSetupFailed`
+/// error with an optional install-docs link when it isn't. `stage` is the ACP setup stage the
+/// check belongs to, or `None` for a harness driven in the terminal.
+pub(crate) fn validate_cli_installed(
+    cli: &str,
+    install_docs_url: Option<&str>,
+    stage: Option<HarnessSetupStage>,
+) -> Result<(), AgentDriverError> {
+    if resolve_executable(cli).is_none() {
+        let mut reason = format!("'{cli}' CLI not found on your machine.");
+        if let Some(url) = install_docs_url {
+            reason.push_str(&format!(" Install it first: {url}"));
+        }
+        return Err(AgentDriverError::HarnessSetupFailed {
+            harness: cli.into(),
+            stage,
+            reason,
+        });
+    }
+    Ok(())
+}
+
+fn insert_non_empty_task_env_var(
+    env_vars: &mut HashMap<OsString, OsString>,
+    key: &'static str,
+    value: String,
+) {
+    if value.is_empty() {
+        return;
+    }
+
+    env_vars.insert(OsString::from(key), OsString::from(value));
+}
+
+/// Writes `value` under every name in `keys`.
+///
+/// Gives a variable both its `OZ_` and its `WARP_` name from a single value, so the two cannot
+/// carry different ones. `task_env_vars_mirror_every_oz_var_to_a_warp_name` fails if a name is
+/// listed here under only one of the two spellings.
+///
+/// Takes `AsRef<OsStr>` rather than `&str` so a path-valued variable stays byte-exact: `OZ_CLI`
+/// holds an executable path that agents exec, and a lossy conversion would replace non-UTF-8
+/// bytes and leave them unable to launch it.
+fn insert_task_env_var_names(
+    env_vars: &mut HashMap<OsString, OsString>,
+    keys: &[&'static str],
+    value: impl AsRef<OsStr>,
+) {
+    let value = value.as_ref();
+    for key in keys {
+        env_vars.insert(OsString::from(key), value.to_os_string());
+    }
+}
+
+fn message_listener_state_root() -> Option<String> {
+    [
+        OZ_MESSAGE_LISTENER_STATE_ROOT_ENV,
+        LEGACY_OZ_PARENT_STATE_ROOT_ENV,
+    ]
+    .into_iter()
+    .find_map(|key| std::env::var(key).ok().filter(|value| !value.is_empty()))
+}
+
+fn task_env_vars_for_harness_name(
+    task_id: Option<&AmbientAgentTaskId>,
+    parent_run_id: Option<&str>,
+    selected_harness: Harness,
+) -> HashMap<OsString, OsString> {
+    // Sized for the OZ_/WARP_ pairs written below.
+    let mut env_vars = HashMap::with_capacity(14);
+
+    if let Some(id) = task_id {
+        insert_task_env_var_names(
+            &mut env_vars,
+            &[OZ_RUN_ID_ENV, WARP_RUN_ID_ENV],
+            id.to_string(),
+        );
+    }
+
+    if let Some(parent_run_id) = parent_run_id.filter(|id| !id.is_empty()) {
+        insert_task_env_var_names(
+            &mut env_vars,
+            &[OZ_PARENT_RUN_ID_ENV, WARP_PARENT_RUN_ID_ENV],
+            parent_run_id,
+        );
+    }
+
+    let cli_path = std::env::current_exe()
+        .unwrap_or_else(|_| ChannelState::channel().cli_command_name().into());
+    insert_task_env_var_names(&mut env_vars, &[OZ_CLI_ENV, WARP_CLI_ENV], &cli_path);
+    // The harness name is only consumed by child orchestration telemetry when the child
+    // CLI emits `run message *` events.
+    insert_task_env_var_names(
+        &mut env_vars,
+        &[OZ_HARNESS_ENV, WARP_HARNESS_ENV],
+        selected_harness.to_string(),
+    );
+    if selected_harness == Harness::Claude && task_id.is_some() {
+        insert_task_env_var_names(
+            &mut env_vars,
+            &[
+                OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV,
+                WARP_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV,
+                LEGACY_OZ_PARENT_LISTENER_MANAGED_EXTERNALLY_ENV,
+            ],
+            "1",
+        );
+        if let Some(state_root) = message_listener_state_root() {
+            insert_task_env_var_names(
+                &mut env_vars,
+                &[
+                    OZ_MESSAGE_LISTENER_STATE_ROOT_ENV,
+                    WARP_MESSAGE_LISTENER_STATE_ROOT_ENV,
+                    LEGACY_OZ_PARENT_STATE_ROOT_ENV,
+                ],
+                &state_root,
+            );
+        }
+    }
+    // Server URL overrides are disabled on release channels, so there's no
+    // override to propagate to child processes there.
+    if ChannelState::channel().allows_server_url_overrides() {
+        insert_non_empty_task_env_var(
+            &mut env_vars,
+            SERVER_ROOT_URL_OVERRIDE_ENV,
+            ChannelState::server_root_url().into_owned(),
+        );
+        insert_non_empty_task_env_var(
+            &mut env_vars,
+            WS_SERVER_URL_OVERRIDE_ENV,
+            ChannelState::ws_server_url().into_owned(),
+        );
+        if let Some(url) = ChannelState::session_sharing_server_url()
+            .map(Cow::into_owned)
+            .filter(|url| !url.is_empty())
+        {
+            env_vars.insert(
+                OsString::from(SESSION_SHARING_SERVER_URL_OVERRIDE_ENV),
+                OsString::from(url),
+            );
+        }
+    }
+
+    env_vars
+}
+
+/// Drops every name under which the externally-managed-listener signal is injected.
+///
+/// The list must stay in step with the one `task_env_vars_for_harness_name` writes: leaving
+/// one name behind would tell the Claude plugin that Warp owns the listener when it does not.
+/// `prepare_local_wake_command_rehydrates_transcript_with_self_managed_listener` asserts none
+/// of them survive.
+pub(crate) fn remove_claude_externally_managed_listener_env_vars(
+    env_vars: &mut HashMap<OsString, OsString>,
+) {
+    for env_name in [
+        OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV,
+        WARP_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV,
+        LEGACY_OZ_PARENT_LISTENER_MANAGED_EXTERNALLY_ENV,
+    ] {
+        env_vars.remove(OsStr::new(env_name));
+    }
+}
+
+pub(crate) fn task_env_vars(
+    task_id: Option<&AmbientAgentTaskId>,
+    parent_run_id: Option<&str>,
+    selected_harness: Harness,
+) -> HashMap<OsString, OsString> {
+    task_env_vars_for_harness_name(task_id, parent_run_id, selected_harness)
+}
+
+/// Returns the per-run environment for a third-party harness.
+///
+/// Claude Code reads its model from `ANTHROPIC_MODEL` on both transports. We use the env var
+/// rather than the `--model` CLI flag because the env var is the most reliable mechanism and
+/// avoids precedence conflicts with Claude Code's `settings.json`.
+///
+/// An ACP session additionally selects the model through the protocol, which only accepts
+/// values the adapter advertises from Claude Code's model picker. The picker lists aliases
+/// such as `opus` and `sonnet`, so `ANTHROPIC_CUSTOM_MODEL_OPTION` adds the requested id as a
+/// picker entry and lets the protocol selection match it verbatim.
+pub(crate) fn harness_env_vars(
+    selected_harness: Harness,
+    transport: HarnessTransport,
+    third_party_harness_model_config: Option<&HarnessModelConfig>,
+) -> Result<(HashMap<OsString, OsString>, Option<TempDir>)> {
+    let mut env_vars = HashMap::new();
+
+    match (selected_harness, transport) {
+        (Harness::Claude, transport) => {
+            if let Some(model_id) = third_party_harness_model_config
+                .map(|config| config.model_id.as_str())
+                .filter(|id| !id.is_empty())
+            {
+                env_vars.insert(OsString::from("ANTHROPIC_MODEL"), OsString::from(model_id));
+                match transport {
+                    HarnessTransport::Acp if model_id != "default" => {
+                        env_vars.insert(
+                            OsString::from("ANTHROPIC_CUSTOM_MODEL_OPTION"),
+                            OsString::from(model_id),
+                        );
+                    }
+                    HarnessTransport::Acp | HarnessTransport::Pty => {}
+                }
+            }
+        }
+        (Harness::Codex, HarnessTransport::Acp) => {
+            // The runner already provides isolation; nested bwrap cannot start in its sandbox.
+            env_vars.insert(
+                OsString::from("INITIAL_AGENT_MODE"),
+                OsString::from("agent-full-access"),
+            );
+        }
+        (Harness::Pi, _) => {
+            let (env_vars, dir) = pi_env_vars()?;
+            return Ok((env_vars, Some(dir)));
+        }
+        (
+            Harness::Oz | Harness::OpenCode | Harness::Gemini | Harness::Codex | Harness::Unknown,
+            _,
+        ) => {}
+    }
+
+    Ok((env_vars, None))
+}
+
+/// Indicates when the harness conversation is being saved.
+/// Implementations may use this to customize the saved data, such as
+/// recording additional metadata on completion.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SavePoint {
+    /// A periodic auto-save to minimize data loss.
+    Periodic,
+    /// The closing save after graceful or forced harness termination.
+    Final,
+    /// A save after a completed, failed, or cancelled turn.
+    PostTurn,
+}
+
+/// Controls how much harness-owned state should survive cleanup after the CLI
+/// exits.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum HarnessCleanupDisposition {
+    /// Tear down all harness-owned resume and wake state.
+    DropResumptionState,
+    /// The harness exited cleanly and its final save completed, so wake/resume
+    /// state may be preserved if the harness-specific runtime also considers
+    /// the run complete.
+    PreserveResumptionStateIfSupported,
+}
+
+/// Stateful per-run representation of an external harness produced
+/// by [`ThirdPartyHarness::build_runner`].
+///
+/// Methods share runner ownership but may mutate internal state. There are no `&mut self` methods,
+/// as this would require that the `AgentDriver` store the runner in a mutex across `await` points.
+///
+/// The driver uses this to manage the lifecycle of a particular third-party harness.
+#[cfg_attr(not(target_family = "wasm"), async_trait)]
+#[cfg_attr(target_family = "wasm", async_trait(?Send))]
+pub(crate) trait HarnessRunner: Send + Sync + 'static {
+    fn harness_name(&self) -> &str;
+    #[cfg(test)]
+    fn prompt_text_for_test(&self) -> Option<&str> {
+        None
+    }
+
+    /// Create the external conversation on the server and start the harness
+    /// command in the terminal.
+    ///
+    /// Returns a [`CommandHandle`] that resolves to the exit code. The runner
+    /// stores the conversation ID and block ID internally for use in
+    /// [`save_conversation`].
+    async fn start(
+        &self,
+        foreground: &ModelSpawner<AgentDriver>,
+        setup_events: &SetupClientEventReporter,
+    ) -> Result<CommandHandle, AgentDriverError>;
+
+    /// Save the current conversation state (transcript upload, etc.).
+    async fn save_conversation(
+        &self,
+        save_point: SavePoint,
+        foreground: &ModelSpawner<AgentDriver>,
+    ) -> PersistenceOutcome;
+    fn persistence(&self) -> &HarnessPersistence;
+
+    /// Save points the runner raises on its own while the harness is running, which the driver
+    /// forwards to [`Self::enqueue_save`].
+    fn save_requests(&self) -> Option<async_channel::Receiver<SavePoint>> {
+        None
+    }
+
+    /// Queues a save without waiting for persistence; overlapping requests are coalesced.
+    async fn enqueue_save(
+        self: Arc<Self>,
+        save_point: SavePoint,
+        foreground: &ModelSpawner<AgentDriver>,
+    ) -> Result<()> {
+        let background = foreground.spawn(|_, ctx| ctx.background_executor()).await?;
+        self.persistence().enqueue(
+            Arc::downgrade(&self),
+            save_point,
+            foreground.clone(),
+            background,
+        );
+        Ok(())
+    }
+
+    /// Finalizes persistence within one deadline; staged usage does not determine its result.
+    async fn finalize_saves(&self, foreground: &ModelSpawner<AgentDriver>) -> Result<()> {
+        let background = foreground.spawn(|_, ctx| ctx.background_executor()).await?;
+        self.persistence()
+            .finalize(self, foreground, &background)
+            .await
+    }
+
+    /// Gracefully ask the harness to exit.
+    async fn exit(&self, foreground: &ModelSpawner<AgentDriver>) -> Result<()>;
+
+    /// Sends a follow-up input shortly after [`Self::exit`], without waiting
+    /// to see whether it's needed, to retry a dropped write or dismiss a
+    /// confirmation the harness may have opened (e.g. Claude Code's
+    /// background-task exit confirmation). No-op by default; override for
+    /// harnesses with a known follow-up worth sending blind.
+    async fn exit_followup(&self, _foreground: &ModelSpawner<AgentDriver>) -> Result<()> {
+        Ok(())
+    }
+
+    /// Handle a CLI session update such as a prompt submit or completed tool use.
+    async fn handle_session_update(&self, _foreground: &ModelSpawner<AgentDriver>) -> Result<()> {
+        Ok(())
+    }
+
+    /// Whether the harness is between a turn it has cut short and the follow-up that caused it,
+    /// or still settling an interrupt. A status change observed in that window is not the run
+    /// settling, so the driver must not schedule its exit on it.
+    fn is_settling_turn(&self) -> bool {
+        false
+    }
+
+    /// Clean up any harness-owned background state after the harness exits.
+    async fn cleanup(
+        &self,
+        _cleanup_disposition: HarnessCleanupDisposition,
+        _foreground: &ModelSpawner<AgentDriver>,
+    ) -> Result<()> {
+        Ok(())
+    }
+}
+
+/// Returns `true` if the terminal tracked by `terminal_driver` has a CLI agent session
+/// that is currently in progress.
+pub(crate) async fn has_running_cli_agent(
+    terminal_driver: &ModelHandle<TerminalDriver>,
+    foreground: &ModelSpawner<AgentDriver>,
+) -> bool {
+    matches!(
+        cli_agent_session_status(terminal_driver, foreground).await,
+        Some(CLIAgentSessionStatus::InProgress)
+    )
+}
+
+/// Returns the tracked CLI agent session status for the terminal, if any.
+pub(crate) async fn cli_agent_session_status(
+    terminal_driver: &ModelHandle<TerminalDriver>,
+    foreground: &ModelSpawner<AgentDriver>,
+) -> Option<CLIAgentSessionStatus> {
+    let driver = terminal_driver.clone();
+    foreground
+        .spawn(move |_, ctx| {
+            let terminal_view_id = driver.as_ref(ctx).terminal_view().id();
+            CLIAgentSessionsModel::handle(ctx)
+                .as_ref(ctx)
+                .session(terminal_view_id)
+                .map(|session| session.status.clone())
+        })
+        .await
+        .ok()
+        .flatten()
+}
+
+/// Create a [`NamedTempFile`] with the given prefix and write `content` into it.
+///
+/// Used by third-party harnesses to stage prompts / system prompts on disk
+/// before launching the CLI, avoiding shell-quoting issues with complex input.
+pub(super) fn write_temp_file(
+    prefix: &str,
+    content: &str,
+    suffix: &str,
+) -> Result<NamedTempFile, AgentDriverError> {
+    let mut file = tempfile::Builder::new()
+        .prefix(prefix)
+        .suffix(suffix)
+        .tempfile()
+        .map_err(|e| {
+            AgentDriverError::ConfigBuildFailed(anyhow::anyhow!(
+                "Failed to create temp file '{prefix}': {e}"
+            ))
+        })?;
+    file.write_all(content.as_bytes()).map_err(|e| {
+        AgentDriverError::ConfigBuildFailed(anyhow::anyhow!(
+            "Failed to write temp file '{prefix}': {e}"
+        ))
+    })?;
+    Ok(file)
+}
+
+/// Upload a [`SerializedBlock`] as the JSON block snapshot for a third-party harness conversation.
+pub(crate) async fn upload_block_snapshot(
+    client: &dyn HarnessSupportClient,
+    conversation_id: &ServerConversationToken,
+    block: SerializedBlock,
+) -> Result<()> {
+    log::info!("Uploading block snapshot for CLI agent to conversation {conversation_id}");
+    let target = client
+        .get_block_snapshot_upload_target(conversation_id)
+        .await
+        .with_context(|| {
+            format!("Unable to get block upload slot for conversation {conversation_id}")
+        })?;
+
+    let body = block
+        .to_json()
+        .with_context(|| format!("Unable to serialize block for conversation {conversation_id}"))?;
+
+    upload_to_target(client.external_http_client(), &target, body).await
+}
+
+/// Fetch the current block snapshot for `block_id` and upload it to the server.
+///
+/// If the snapshot cannot be fetched, logs a warning and returns `Ok(())`.
+pub(super) async fn upload_current_block_snapshot(
+    foreground: &ModelSpawner<AgentDriver>,
+    terminal_driver: &ModelHandle<TerminalDriver>,
+    client: &dyn HarnessSupportClient,
+    conversation_id: &ServerConversationToken,
+    block_id: BlockId,
+) -> Result<()> {
+    let td = terminal_driver.clone();
+    let snapshot = foreground
+        .spawn(move |_, ctx| td.as_ref(ctx).block_snapshot(&block_id, ctx))
+        .await
+        .map_err(|_| anyhow::anyhow!("Agent driver dropped"))?;
+    match snapshot {
+        Some(block) => upload_block_snapshot(client, conversation_id, block).await,
+        None => {
+            log::warn!("No block snapshot found for harness command");
+            Ok(())
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "mod_tests.rs"]
+mod tests;

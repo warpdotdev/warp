@@ -1,0 +1,10 @@
+{
+  "rows": 3,
+  "columns": 10,
+  "cell_width_px": 7,
+  "cell_height_px": 21,
+  "padding_x_px": 0,
+  "padding_y_px": 0,
+  "pane_width_px": 70,
+  "pane_height_px": 63
+}

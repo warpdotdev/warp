@@ -1,0 +1,6 @@
+# This comment must remain in the destination.
+[agent.permissions]
+command_policy = "allow-safe"
+
+[tui]
+unknown_setting = true

@@ -1,0 +1,23 @@
+[Desktop Entry]
+# The version of the desktop entry spec this conforms to.
+Version=1.0
+
+Type=Application
+
+Name=Warp
+GenericName=TerminalEmulator
+
+Exec=warp-terminal %U
+StartupWMClass=dev.warp.Warp
+
+Keywords=shell;prompt;command;commandline;cmd;
+
+Icon=dev.warp.Warp
+
+Categories=System;TerminalEmulator;
+
+# Don't run this application within a terminal.
+Terminal=false
+
+# Register ourselves as the handler for warp:// URLs.
+MimeType=x-scheme-handler/warp;

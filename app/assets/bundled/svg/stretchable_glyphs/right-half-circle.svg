@@ -1,0 +1,11 @@
+<svg
+   width="20"
+   height="20"
+   viewBox="0 0 20 20"
+   fill="none"
+   version="1.1"
+   xmlns="http://www.w3.org/2000/svg">
+  <path
+     fill="red"
+     d="M -10,0 1,0 A 19,10 0 0 1 20,10 19,10 0 0 1 1,20 H -1,-1" />
+</svg>

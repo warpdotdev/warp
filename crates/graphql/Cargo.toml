@@ -1,0 +1,46 @@
+[package]
+authors = ["Warp Team <dev@warp.dev>"]
+edition = "2024"
+name = "warp_graphql"
+version = "0.1.0"
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+async-channel.workspace = true
+chrono.workspace = true
+cynic.workspace = true
+http_client.workspace = true
+futures-util.workspace = true
+futures.workspace = true
+http.workspace = true
+instant.workspace = true
+log.workspace = true
+persistence.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+warp_core.workspace = true
+warp_errors = { workspace = true, features = ["reqwest-errors"] }
+warp_graphql_schema.workspace = true
+websocket = {path = "../websocket"}
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+graphql-ws-client = {workspace = true, features = ["client-cynic", "tungstenite"]}
+
+[target.'cfg(target_family = "wasm")'.dependencies]
+graphql-ws-client = {workspace = true, features = ["client-cynic", "ws_stream_wasm"]}
+ws_stream_wasm = "0.7"
+
+[dev-dependencies]
+http_client = { workspace = true, features = ["test-util"] }
+serde_json.workspace = true
+
+[build-dependencies]
+anyhow.workspace = true
+cynic-codegen.workspace = true
+
+[features]
+# Enables utilities for testing.
+test-util = []

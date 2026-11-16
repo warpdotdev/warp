@@ -1,0 +1,38 @@
+# Warp Launch Configuration
+#
+#
+# Use this to start a certain configuration of windows, tabs, and panes
+# Open the launch configuration palette to access and open any launch configuration
+#
+# This file defines your launch configuration
+# More on how to do so here: [link to docs]
+#
+# All launch configurations are stored under ~/.warp/launch_configurations/
+# Edit them anytime!
+
+---
+name: Launch Config
+windows:
+  - tabs:
+      - layout:
+          split_direction: horizontal
+          panes:
+            - cwd: /Users/zhengtao/src/warp-internal/app/src/terminal
+            - cwd: /Users/zhengtao/src/warp-internal
+      - layout:
+          cwd: /Users/zhengtao/src/warp-internal
+      - layout:
+          cwd: /Users/zhengtao/src/warp-internal
+  - tabs:
+      - layout:
+          split_direction: horizontal
+          panes:
+            - cwd: /Users/zhengtao
+            - cwd: /Users/zhengtao
+      - layout:
+          cwd: /Users/zhengtao
+      - layout:
+          cwd: /Users/zhengtao
+  - tabs:
+      - layout:
+          cwd: /Users/zhengtao

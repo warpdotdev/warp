@@ -1,0 +1,10 @@
+{
+  "recommendations": [
+    "GraphQL.vscode-graphql",
+    "GraphQL.vscode-graphql-syntax",
+    "ms-vscode.PowerShell",
+    "rust-lang.rust-analyzer",
+    "tamasfe.even-better-toml",
+    "vadimcn.vscode-lldb",
+  ],
+}

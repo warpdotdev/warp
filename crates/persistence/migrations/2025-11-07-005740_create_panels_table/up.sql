@@ -1,0 +1,6 @@
+CREATE TABLE panels (
+  id INTEGER PRIMARY KEY NOT NULL,
+  tab_id INTEGER NOT NULL UNIQUE REFERENCES tabs(id) ON DELETE CASCADE,
+  left_panel TEXT,
+  right_panel TEXT
+);

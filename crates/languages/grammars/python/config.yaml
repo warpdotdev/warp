@@ -1,0 +1,12 @@
+# source: https://peps.python.org/pep-0008/#indentation
+display_name: "Python"
+indent_unit:
+  space: 4
+comment_prefix: "#"
+brackets:
+  - start: "{"
+    end: "}"
+  - start: "("
+    end: ")"
+  - start: "["
+    end: "]"

@@ -1,0 +1,23 @@
+[Desktop Entry]
+# The version of the desktop entry spec this conforms to.
+Version=1.0
+
+Type=Application
+
+Name=WarpPreview
+GenericName=TerminalEmulator
+
+Exec=warp-terminal-preview %U
+StartupWMClass=dev.warp.WarpPreview
+
+Keywords=shell;prompt;command;commandline;cmd;
+
+Icon=dev.warp.WarpPreview
+
+Categories=System;TerminalEmulator;
+
+# Don't run this application within a terminal.
+Terminal=false
+
+# Register ourselves as the handler for warppreview:// URLs.
+MimeType=x-scheme-handler/warppreview;

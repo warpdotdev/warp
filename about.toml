@@ -1,0 +1,49 @@
+# cargo-about configuration for generating third-party license attribution.
+#
+# The accepted license list must stay in sync with deny.toml's [licenses.allow].
+# CI enforces this via script/check_license_config_sync.
+
+accepted = [
+    "0BSD",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CC0-1.0",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "MPL-2.0",
+    "Unlicense",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "Zlib",
+]
+
+# Exclude private workspace crates (publish = false).
+private = { ignore = true }
+
+# Build and dev dependencies are not redistributed.
+ignore-build-dependencies = true
+ignore-dev-dependencies = true
+
+# Built-in workarounds for crates with complicated license packaging.
+workarounds = [
+    "ring",
+    "rustls",
+]
+
+# These are Warp's own private crates, sourced via git from the warpdotdev
+# organization. They are not part of this workspace and do not have explicit
+# licenses yet (they will be open-sourced soon). cargo-about will skip them
+# during generation. Once they are open-sourced and have license fields, they
+# will be included automatically and we can add --fail back to the generate
+# invocation.
+#
+# Excluded crates (same as deny.toml exceptions):
+#   - command-corrections
+#   - session-sharing-protocol
+#   - warp-command-signatures
+#   - warp-completion-metadata
+#   - warp-workflows
+#   - warp-workflows-types

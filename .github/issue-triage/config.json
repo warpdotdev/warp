@@ -1,0 +1,184 @@
+{
+  "labels": {
+    "bug": {
+      "color": "d73a4a",
+      "description": "Something isn't working."
+    },
+    "agent:bug": {
+      "color": "8ff8fd",
+      "description": "Bugs/regressions. Assigned by Warp triage agent."
+    },
+    "agent:feature": {
+      "color": "f47f64",
+      "description": "This issue is a feature request, not a bug report. Assigned by Warp triage agent."
+    },
+    "agent:security": {
+      "color": "a0ce9f",
+      "description": "Security issues/vulnerabilities that are immediately escalated. Assigned by Warp triage agent."
+    },
+    "agent:documentation": {
+      "color": "5f966f",
+      "description": "Missing documentation. Assigned by Warp triage agent."
+    },
+    "enhancement": {
+      "color": "a2eeef",
+      "description": "New feature or request."
+    },
+    "duplicate": {
+      "color": "cfd3d7",
+      "description": "This issue or pull request already exists."
+    },
+    "needs-info": {
+      "color": "fbca04",
+      "description": "More issue-specific reporter detail is needed before the problem can be confidently triaged."
+    },
+    "triaged": {
+      "color": "5319e7",
+      "description": "Issue has received an initial automated triage pass."
+    },
+    "ready-to-spec": {
+      "color": "1d76db",
+      "description": "The issue is ready for a product and technical spec."
+    },
+    "needs-mocks": {
+      "color": "f48c06",
+      "description": "The issue requires UI mocks from from Warp's design team before implementation can begin."
+    },
+    "ready-to-implement": {
+      "color": "0e8a16",
+      "description": "The issue is ready for implementation work."
+    },
+    "agent:priority-high": {
+      "color": "b60205",
+      "description": "High-priority issues that are immediately escalated. Assigned by Warp triage agent."
+    },
+    "repro:high": {
+      "color": "b60205",
+      "description": "The report includes enough evidence that the issue appears highly reproducible."
+    },
+    "repro:medium": {
+      "color": "fbca04",
+      "description": "The report suggests a plausible repro path, but some uncertainty remains."
+    },
+    "repro:low": {
+      "color": "d4c5f9",
+      "description": "The report points to a real problem, but reproduction details are weak or inconsistent."
+    },
+    "repro:unknown": {
+      "color": "6e7681",
+      "description": "The report does not provide enough evidence to estimate reproducibility yet."
+    },
+    "accessibility": {
+      "color": "7306a2",
+      "description": "Accessibility issues or requests."
+    },
+    "os:mac": {
+      "color": "f5f5f7",
+      "description": "macOS-specific behavior, regressions, or requests."
+    },
+    "os:linux": {
+      "color": "e95420",
+      "description": "Linux-specific behavior, regressions, or requests."
+    },
+    "os:windows": {
+      "color": "0078d6",
+      "description": "Windows-specific behavior, regressions, or requests."
+    },
+    "area:agent": {
+      "color": "0052cc",
+      "description": "Agent workflows, conversations, prompts, cloud mode, and AI-specific UI."
+    },
+    "area:auth": {
+      "color": "5319e7",
+      "description": "Authentication, login, SSO, session management, and account security."
+    },
+    "area:billing": {
+      "color": "8b5cf6",
+      "description": "Pricing, plans, subscriptions, payment, and billing management."
+    },
+    "area:code-review": {
+      "color": "0e8a16",
+      "description": "Git diff views, review UI, review comments, and PR-focused agent flows."
+    },
+    "area:completions": {
+      "color": "2da44e",
+      "description": "Standard shell completions, argument completions, and path completion."
+    },
+    "area:editor-notebooks": {
+      "color": "1d76db",
+      "description": "Editors, notebooks, markdown rendering, LSP, and code display."
+    },
+    "area:launch-configs": {
+      "color": "c2e0c6",
+      "description": "Launch configurations, workflows, tab configs, and automation entry points."
+    },
+    "area:mcp": {
+      "color": "bfdadc",
+      "description": "MCP server integrations, tool connections, and resource providers."
+    },
+    "area:onboarding": {
+      "color": "f9d0c4",
+      "description": "First-run experience, onboarding flows, and related callouts."
+    },
+    "area:performance": {
+      "color": "e36209",
+      "description": "General application performance, responsiveness, and resource usage."
+    },
+    "area:performance:cpu": {
+      "color": "d93f0b",
+      "description": "CPU utilization, process efficiency, and compute-bound performance."
+    },
+    "area:performance:memory": {
+      "color": "d93f0b",
+      "description": "Memory usage, allocation, leaks, and memory-bound performance."
+    },
+    "area:performance:gpu": {
+      "color": "d93f0b",
+      "description": "GPU utilization, rendering performance, and graphics resource usage."
+    },
+    "area:search": {
+      "color": "0366d6",
+      "description": "Global search, command palette, and content discovery."
+    },
+    "area:settings-keybindings": {
+      "color": "d876e3",
+      "description": "Settings UI, preferences, keybindings, and keyboard-shortcut management."
+    },
+    "area:shell-terminal": {
+      "color": "006b75",
+      "description": "Terminal output, shell integration, prompt rendering, and block display."
+    },
+    "area:skills": {
+      "color": "c6e2d6",
+      "description": "Agent skills, skill authoring, and skill execution."
+    },
+    "area:suggestions": {
+      "color": "7dc4e4",
+      "description": "AI-predictive suggestions, prompt predictions, next-command suggestions, and auto-suggest heuristics."
+    },
+    "area:terminal-input": {
+      "color": "0a6b5e",
+      "description": "Terminal command-line input, cursor movement, key handling, and input editing."
+    },
+    "area:ssh": {
+      "color": "00008b",
+      "description": "SSH and remote-session behavior, including tmux-related terminal flows."
+    },
+    "area:ui-framework": {
+      "color": "5319e7",
+      "description": "Core Warp UI framework, rendering, layout, and windowing infrastructure."
+    },
+    "area:warp-drive": {
+      "color": "0e8a16",
+      "description": "Warp Drive objects, sync, sharing, cloud object management, and persisted artifacts."
+    },
+    "area:window-tabs-panes": {
+      "color": "fef2c0",
+      "description": "Window, tab, pane, and layout management."
+    },
+    "area:workspace": {
+      "color": "0550ae",
+      "description": "File tree, workspace navigation, project switching, and working-directory management."
+    }
+  }
+}

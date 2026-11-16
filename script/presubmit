@@ -1,0 +1,69 @@
+#!/bin/bash
+
+# Script to run presubmit checks. Devs can run this script locally before sending out PRs for review to ensure
+# CI is passing for their PR.
+
+set -e
+cd "$(dirname "$0")/.."
+
+FMT_COMMAND="./script/format"
+echo "Running $FMT_COMMAND..."
+set -e
+EXIT_CODE=0
+$FMT_COMMAND --check || EXIT_CODE=$?
+if [[ $EXIT_CODE -ne 0 ]]; then
+    echo 'Run `'"$FMT_COMMAND"'` to fix.'
+    exit $EXIT_CODE
+fi
+
+echo "Rust formatting succeeded..."
+echo "Checking for inline Rust test modules..."
+./script/check_no_inline_test_modules
+echo "Inline Rust test module check succeeded..."
+
+echo "Running clippy..."
+# TODO(vorporeal): Re-enable the `all-features` flag once we've fixed things.
+cargo clippy --workspace --all-targets --tests -- -D warnings
+# Workspace feature unification enables `warp/tui` through the `warp_tui` package.
+# Also lint the default GUI configuration used by `cargo run` and `./script/run`.
+cargo clippy -p warp --all-targets --tests -- -D warnings
+echo "clippy succeeded..."
+
+echo "Running clang-format..."
+./script/run-clang-format.py -r --extensions 'c,h,cpp,m' ./crates/warpui/src/ ./app/src/
+echo "clang-format succeeded..."
+
+echo "Running factory-files validator cases..."
+./script/test_factory_files_skill.py
+echo "factory-files validator cases succeeded..."
+
+echo "Running wgslfmt..."
+# Normally a recursive glob pattern will do the trick, e.g. **/*.wgsl
+# However, the default bash version in MacOS is too old to support that, so we use `find` instead.
+find . -name "*.wgsl" -exec wgslfmt --check {} +
+echo "wgslfmt succeeded..."
+echo "Running ShellCheck..."
+./script/lint_shellcheck
+echo "ShellCheck check completed..."
+
+# check to see if we can run powershell on the device
+if command -v pwsh /dev/null 2>&1; then
+    echo "Running PSScriptAnalyzer..."
+    ./script/lint_powershell -ci
+    echo "PsScriptAnalyzer succeeded..."
+elif [ "${GITHUB_ACTIONS}" == "true" ]; then
+    # If we are in CI, and fail to find powershell, we should automatically fail
+    echo "No powershell installation detected! Aborting!"
+    exit 1
+else
+    # Otherwise, post a notice that we are skipping powershell
+    echo "No Powershell detected! skipping PSScriptAnalyzer!"
+fi
+
+echo "Running tests via nextest..."
+cargo nextest run --no-fail-fast --workspace
+echo "Running doc tests..."
+cargo test --doc
+echo "Tests succeeded..."
+
+echo "Congrats! All presubmits checks passed."

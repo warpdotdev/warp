@@ -1,0 +1,9 @@
+---
+name: "Bundle warp"
+command: "./script/bundle -c {{channel}}"
+description: ~
+arguments:
+  - name: channel
+    description: "The channel that should be bundled. One of \"stable\", \"preview\", or \"dev\"."
+author: Warp Team
+shells: []

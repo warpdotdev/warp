@@ -1,0 +1,62 @@
+[package]
+name = "input_classifier"
+authors = ["Warp Team <dev@warp.dev>"]
+edition = "2024"
+publish.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "evaluate"
+path = "src/bin/evaluate.rs"
+
+[features]
+onnx_candle = [
+    "onnx",
+    "dep:candle-core",
+    "dep:candle-nn",
+    "dep:candle-onnx",
+    "dep:prost",
+]
+onnx_ort = [
+    "onnx",
+    "dep:ort",
+    "dep:ndarray",
+    "dep:parking_lot",
+]
+onnx = ["dep:rust-embed", "dep:tokenizers"]
+# Selects which BERT-tiny ONNX model bytes are embedded via rust-embed; enable exactly one.
+nld_classifier_v1 = ["onnx_candle"]
+nld_classifier_v2 = ["onnx_candle"]
+nld_classifier_v3 = ["onnx_candle"]
+# Selects which shell-command heuristic behavior is used. If both are enabled, v2 wins.
+nld_heuristic_v1 = []
+nld_heuristic_v2 = []
+
+[dependencies]
+warp_errors.workspace = true
+anyhow.workspace = true
+async-trait.workspace = true
+clap.workspace = true
+futures.workspace = true
+candle-core = { version = "0.9.2", optional = true }
+candle-nn = { version = "0.9.2", optional = true }
+candle-onnx = { version = "0.9.2", optional = true }
+cfg-if.workspace = true
+itertools.workspace = true
+futures-lite.workspace = true
+instant.workspace = true
+lazy_static.workspace = true
+log.workspace = true
+natural_language_detection.workspace = true
+ndarray = { version = "0.16.1", optional = true }
+ort = { version = "2.0.0-rc.10", optional = true }
+parking_lot = { workspace = true, optional = true }
+prost = { version = "0.14.3", optional = true }
+rust-embed = { workspace = true, optional = true }
+serde.workspace = true
+smol_str.workspace = true
+tokenizers = { version = "0.21.4", optional = true }
+warp_completer.workspace = true
+
+[dev-dependencies]
+warp_features.workspace = true

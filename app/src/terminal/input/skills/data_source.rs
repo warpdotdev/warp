@@ -1,0 +1,358 @@
+use ai::skills::{SkillProvider, SkillReference, SkillScope};
+use fuzzy_match::FuzzyMatchResult;
+use ordered_float::OrderedFloat;
+use warp_core::ui::icons::Icon;
+use warp_core::ui::theme::Fill;
+use warp_util::local_or_remote_path::LocalOrRemotePath;
+use warpui::elements::{
+    ConstrainedBox, Container, CrossAxisAlignment, Flex, Highlight, ParentElement, Shrinkable, Text,
+};
+use warpui::fonts::{Properties, Weight};
+use warpui::keymap::Keystroke;
+use warpui::scene::{CornerRadius, Radius};
+use warpui::text_layout::ClipConfig;
+use warpui::{
+    AppContext, Element, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity as _,
+};
+
+use crate::appearance::Appearance;
+use crate::search::data_source::{Query, QueryResult};
+use crate::search::mixer::DataSourceRunErrorWrapper;
+use crate::search::result_renderer::ItemHighlightState;
+use crate::search::{SearchItem, SyncDataSource};
+use crate::terminal::input::inline_menu::{
+    InlineMenuAction, InlineMenuMessageArgs, InlineMenuType, default_navigation_message_items,
+    styles as inline_styles,
+};
+use crate::terminal::input::message_bar::{Message, MessageItem};
+use crate::terminal::input::skills::{SelectableSkill, query_selectable_skills};
+use crate::terminal::model::session::active_session::{ActiveSession, ActiveSessionEvent};
+use crate::terminal::view::ambient_agent::AmbientAgentViewModel;
+
+#[derive(Clone, Debug)]
+pub struct AcceptSkill {
+    pub skill_name: String,
+    pub skill_reference: SkillReference,
+}
+
+impl InlineMenuAction for AcceptSkill {
+    const MENU_TYPE: InlineMenuType = InlineMenuType::SkillMenu;
+
+    fn produce_inline_menu_message<T>(args: InlineMenuMessageArgs<'_, Self, T>) -> Option<Message> {
+        // If no item is selected, show "No skills found" message with escape hint
+        if args.inline_menu_model.selected_item().is_none() {
+            return Some(Message::new(vec![
+                MessageItem::text("No skills found"),
+                MessageItem::keystroke(Keystroke {
+                    key: "escape".to_owned(),
+                    ..Default::default()
+                }),
+                MessageItem::text(" to dismiss"),
+            ]));
+        }
+
+        // Otherwise show default navigation hints
+        Some(Message::new(default_navigation_message_items(&args)))
+    }
+
+    // No details panel - we show inline descriptions instead
+}
+
+/// Event emitted when available skills may have changed.
+#[derive(Debug, Clone, Copy)]
+pub struct UpdatedAvailableSkills;
+
+pub struct SkillSelectorDataSource {
+    active_session: ModelHandle<ActiveSession>,
+    terminal_view_id: EntityId,
+    /// Whether bundled skills should be included in results.
+    /// False for `/open-skill` (bundled skills can't be edited), true for `/skills` (they can be invoked).
+    include_bundled: bool,
+    /// Ambient agent view model for the pane, if it is a cloud pane. Used to detect when this
+    /// is a disconnected cloud follow-up composer and skills should be hidden (they run locally).
+    ambient_agent_view_model: Option<ModelHandle<AmbientAgentViewModel>>,
+}
+
+impl SkillSelectorDataSource {
+    pub fn new(
+        active_session: ModelHandle<ActiveSession>,
+        terminal_view_id: EntityId,
+        ambient_agent_view_model: Option<ModelHandle<AmbientAgentViewModel>>,
+        ctx: &mut ModelContext<Self>,
+    ) -> Self {
+        ctx.subscribe_to_model(&active_session, |_, _, event, ctx| match event {
+            // Emit event so the mixer can re-run its query with the new pwd
+            ActiveSessionEvent::UpdatedPwd | ActiveSessionEvent::Bootstrapped => {
+                ctx.emit(UpdatedAvailableSkills);
+            }
+        });
+
+        Self {
+            active_session,
+            terminal_view_id,
+            include_bundled: false,
+            ambient_agent_view_model,
+        }
+    }
+
+    /// Attaches an ambient agent view model after construction. Used on the shared-session viewer
+    /// path where the model is created lazily at `SessionJoined`. Idempotent: a no-op when a
+    /// model is already set.
+    pub fn set_ambient_agent_view_model(
+        &mut self,
+        view_model: ModelHandle<AmbientAgentViewModel>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if self.ambient_agent_view_model.is_some() {
+            return;
+        }
+        self.ambient_agent_view_model = Some(view_model);
+        // Re-run the query in case the menu is open so the routing state is re-evaluated.
+        ctx.emit(UpdatedAvailableSkills);
+    }
+
+    /// True when the pane is a cloud agent pane (viewer, disconnected follow-up, or read-only
+    /// tombstone). Skills invoke locally and must be hidden for any cloud pane since running a
+    /// skill locally is disconnected from the remote session.
+    fn is_cloud_pane(&self) -> bool {
+        self.ambient_agent_view_model.is_some()
+    }
+
+    pub fn set_include_bundled(&mut self, include_bundled: bool) {
+        self.include_bundled = include_bundled;
+    }
+
+    /// Get the current working directory location from the active session.
+    fn get_current_working_directory(&self, app: &AppContext) -> Option<LocalOrRemotePath> {
+        self.active_session
+            .as_ref(app)
+            .current_working_directory_location(app)
+    }
+}
+
+impl SyncDataSource for SkillSelectorDataSource {
+    type Action = AcceptSkill;
+
+    fn run_query(
+        &self,
+        query: &Query,
+        app: &AppContext,
+    ) -> Result<Vec<QueryResult<Self::Action>>, DataSourceRunErrorWrapper> {
+        // Skills invoke locally; hide them on any cloud pane (viewer, disconnected follow-up,
+        // or read-only tombstone) since running a skill locally is disconnected from the remote
+        // session. The execute-time guard in `execute_skill_command` provides a safety net for
+        // keybinding-triggered invocations.
+        // TODO: support skills over shared sessions and for handing off based on oz environment
+        if self.is_cloud_pane() {
+            return Ok(vec![]);
+        }
+
+        let cwd = self.get_current_working_directory(app);
+        Ok(query_selectable_skills(
+            cwd.as_ref(),
+            self.terminal_view_id,
+            self.include_bundled,
+            &query.text,
+            app,
+        )
+        .into_iter()
+        .map(SkillSearchItem::from)
+        .map(QueryResult::from)
+        .collect())
+    }
+}
+
+impl Entity for SkillSelectorDataSource {
+    type Event = UpdatedAvailableSkills;
+}
+
+#[derive(Clone)]
+struct SkillSearchItem {
+    skill_name: String,
+    skill_reference: SkillReference,
+    skill_description: String,
+    scope: SkillScope,
+    provider: SkillProvider,
+    icon_override: Option<Icon>,
+    name_match_result: Option<FuzzyMatchResult>,
+    score: OrderedFloat<f64>,
+}
+
+impl SkillSearchItem {
+    fn from(skill: SelectableSkill) -> Self {
+        Self {
+            skill_name: skill.name,
+            skill_reference: skill.reference,
+            skill_description: skill.description,
+            scope: skill.scope,
+            provider: skill.provider,
+            icon_override: skill.icon_override,
+            name_match_result: skill.name_match_result,
+            score: skill.score,
+        }
+    }
+}
+
+/// Fixed width for the skill name column (similar to slash commands).
+fn skill_name_column_width(app: &AppContext) -> f32 {
+    let appearance = Appearance::as_ref(app);
+    // Use a reasonable fixed width for skill names
+    app.font_cache().em_width(
+        appearance.monospace_font_family(),
+        inline_styles::font_size(appearance),
+    ) * 20.0 // Allow space for skill names like "/analyze-code"
+        + 32.0
+}
+
+impl SearchItem for SkillSearchItem {
+    type Action = AcceptSkill;
+
+    fn render_icon(
+        &self,
+        _highlight_state: ItemHighlightState,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let icon_color = inline_styles::icon_color(appearance);
+        let icon_size = inline_styles::font_size(appearance);
+
+        // Use icon_override if set (e.g. Figma skills), otherwise derive from provider.
+        let icon = if let Some(override_icon) = self.icon_override {
+            override_icon.to_warpui_icon(icon_color).finish()
+        } else {
+            self.provider
+                .icon()
+                .to_warpui_icon(self.provider.icon_fill(icon_color))
+                .finish()
+        };
+
+        Container::new(
+            ConstrainedBox::new(icon)
+                .with_width(icon_size)
+                .with_height(icon_size)
+                .finish(),
+        )
+        .with_margin_right(inline_styles::ICON_MARGIN)
+        .finish()
+    }
+
+    fn render_item(
+        &self,
+        _highlight_state: ItemHighlightState,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let appearance = Appearance::as_ref(app);
+        let theme = appearance.theme();
+
+        let font_size = inline_styles::font_size(appearance);
+        let background_color = inline_styles::menu_background_color(app);
+        let primary_text_color = inline_styles::primary_text_color(theme, background_color.into());
+        let secondary_color = inline_styles::secondary_text_color(theme, background_color.into());
+
+        // Create row layout for inline text
+        let mut row = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
+
+        // Skill name with fuzzy match highlighting
+        let mut name_text = Text::new_inline(
+            self.skill_name.clone(),
+            appearance.ui_font_family(),
+            font_size,
+        )
+        .with_color(primary_text_color.into())
+        .with_clip(ClipConfig::ellipsis());
+
+        if let Some(name_match) = &self.name_match_result
+            && !name_match.matched_indices.is_empty()
+        {
+            name_text = name_text.with_single_highlight(
+                Highlight::new().with_properties(Properties::default().weight(Weight::Bold)),
+                name_match.matched_indices.clone(),
+            );
+        }
+
+        row.add_child(
+            ConstrainedBox::new(name_text.finish())
+                .with_width(skill_name_column_width(app))
+                .finish(),
+        );
+
+        // Description and optional "Project Skill" badge
+        // The description should truncate first, badge stays fixed size
+        // We wrap the whole description_row in Shrinkable to give it a bounded constraint
+        let mut description_row = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
+
+        if !self.skill_description.is_empty() {
+            let description_text = Text::new_inline(
+                self.skill_description.clone(),
+                appearance.ui_font_family(),
+                font_size,
+            )
+            .with_color(secondary_color.into())
+            .with_clip(ClipConfig::ellipsis());
+
+            // Use Shrinkable so description truncates before the badge
+            description_row.add_child(Shrinkable::new(1., description_text.finish()).finish());
+        }
+
+        // "Project Skill" badge for project skills (placed after description)
+        if self.scope == SkillScope::Project {
+            let badge_font_size = font_size - 4.0;
+            // Badge text uses disabled_text_color (40% opacity) per Figma #6d7276
+            let badge_text_color =
+                inline_styles::disabled_text_color(theme, background_color.into());
+            let badge_text = Text::new_inline(
+                "Project Skill".to_string(),
+                appearance.ui_font_family(),
+                badge_font_size,
+            )
+            .with_color(badge_text_color.into())
+            .with_clip(ClipConfig::ellipsis());
+
+            let badge = Container::new(badge_text.finish())
+                .with_horizontal_padding(6.0)
+                .with_vertical_padding(2.0)
+                .with_background(theme.surface_overlay_1())
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)))
+                .with_margin_left(8.0)
+                .finish();
+
+            description_row.add_child(badge);
+        }
+
+        // Wrap in Shrinkable to provide bounded constraint for inner flexible children
+        row.add_child(Shrinkable::new(1., description_row.finish()).finish());
+
+        row.finish()
+    }
+
+    fn item_background(
+        &self,
+        highlight_state: ItemHighlightState,
+        appearance: &Appearance,
+    ) -> Option<Fill> {
+        inline_styles::item_background(highlight_state, appearance)
+    }
+
+    // No details panel - we show inline descriptions instead
+    fn render_details(&self, _app: &AppContext) -> Option<Box<dyn Element>> {
+        None
+    }
+
+    fn score(&self) -> OrderedFloat<f64> {
+        self.score
+    }
+
+    fn accept_result(&self) -> Self::Action {
+        AcceptSkill {
+            skill_name: self.skill_name.clone(),
+            skill_reference: self.skill_reference.clone(),
+        }
+    }
+
+    fn execute_result(&self) -> Self::Action {
+        self.accept_result()
+    }
+
+    fn accessibility_label(&self) -> String {
+        format!("Skill: {}", self.skill_name)
+    }
+}

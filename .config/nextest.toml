@@ -1,0 +1,44 @@
+[profile.default]
+# Mark a test as slow if it takes longer than 30s to execute, and terminate it
+# if it takes 2x as long as the slow timeout (i.e.: 60s total).
+slow-timeout = { period = "30s", terminate-after = 2 }
+
+[[profile.default.overrides]]
+filter = 'package(integration)'
+# Integration tests are heavier-weight than unit tests, so have each one
+# count twice against the parallelism limit.  This improves overall runtime
+# of the test suite, despite running fewer integration tests at a time.
+threads-required = 2
+
+[profile.ci]
+# Print out output for failing tests as soon as they fail, and also at the end
+# of the run (for easy scrollability).
+failure-output = "immediate-final"
+# Do not cancel the test run on the first failure.
+fail-fast = false
+
+[[profile.ci.overrides]]
+filter = 'package(integration)'
+# On CI, try integration tests up to 3 times (in total) to reduce the impact of
+# flaky tests.
+retries = 2
+
+[profile.ci.junit]
+# Output nextest results in junit format (for uploading to buildpulse).
+# If `--profile ci` is selected on the command line, then the JUnit report will
+# be written out to `target/nextest/ci/junit.xml`. 
+# Docs: https://nexte.st/docs/machine-readable/junit/
+path = "junit.xml"
+
+[[profile.ci.overrides]]
+# On Windows CI, update_manager tests are flaky and often time out but succeed after a retry
+# Evidence suggest that the test itself passes but the process running it hangs
+# We haven't figured out why the process hangs, so this is a workaround to unblock devs
+filter = 'test(update_manager)'
+platform = { host = 'cfg(target_os = "windows")' }
+retries = 2
+
+[[profile.ci.overrides]]
+filter = 'package(warp) and (test(=ai::agent_sdk::driver::mcp_startup::tests::configured_and_profile_mcp_servers_wait_for_environment_setup) or test(=terminal::view::tests::revoking_remote_session_ai_takes_effect_without_a_new_terminal_session))'
+platform = { host = 'cfg(target_os = "windows")' }
+slow-timeout = { period = "30s", terminate-after = 4 }

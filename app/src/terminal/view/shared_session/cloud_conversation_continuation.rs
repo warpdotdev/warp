@@ -1,0 +1,506 @@
+use warp_cli::agent::Harness;
+use warpui::{AppContext, EntityId, ModelHandle, SingletonEntity};
+
+use crate::ai::agent::api::ServerConversationToken;
+use crate::ai::agent::conversation::{
+    AIAgentHarness, AIConversationId, ServerAIConversationMetadata,
+};
+use crate::ai::agent_conversations_model::AgentConversationsModel;
+use crate::ai::ambient_agents::{
+    AmbientAgentTask, AmbientAgentTaskId, AmbientConversationStatus,
+    conversation_output_status_from_conversation,
+};
+use crate::ai::blocklist::BlocklistAIHistoryModel;
+use crate::auth::AuthStateProvider;
+use crate::cloud_object::{Owner, ServerGuestSubject};
+use crate::drive::sharing::SharingAccessLevel;
+use crate::server::ids::ServerId;
+use crate::terminal::TerminalModel;
+use crate::terminal::view::ambient_agent::AmbientAgentViewModel;
+use crate::workspaces::user_workspaces::UserWorkspaces;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TombstoneCta {
+    ContinueLocally { conversation_id: AIConversationId },
+    ContinueInCloud { task_id: AmbientAgentTaskId },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::terminal::view) enum CloudConversationContinuationUiState {
+    FollowupInput,
+    Tombstone { cta: Option<TombstoneCta> },
+}
+
+/// How a follow-up prompt for this pane should be routed. Single source of truth shared by the
+/// submission router (so a remote cloud conversation never continues on the local agent) and the
+/// agent input footer live-VM indicator.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum AIQueryRouting {
+    /// Connected as a live shared-session viewer; the follow-up is forwarded to the sharer.
+    /// `is_executor` gates whether this viewer may submit. `ambient_agent_task_id` is `None`
+    /// for a shared local session, so the footer's live-VM indicator stays hidden for those.
+    /// Also covers a disconnected pane whose owned run has an execution we can't attach to.
+    LiveRemoteVm {
+        is_executor: bool,
+        ambient_agent_task_id: Option<AmbientAgentTaskId>,
+    },
+    /// Disconnected but resumable owned Oz cloud conversation; the follow-up must start a new cloud
+    /// VM via cloud-to-cloud handoff.
+    NewCloudVm { task_id: AmbientAgentTaskId },
+    /// A finished/non-resumable remote cloud conversation (non-owner finished viewer, blocked
+    /// source, non-Oz tombstone). The input is non-editable; a follow-up must never run locally.
+    UnconnectedReadOnly,
+    /// Continues on the local machine. Covers ordinary local agent panes and local ambient sharers
+    /// (e.g. `run_agents(local)` orchestration children, `/remote-control` of a local session).
+    Local,
+    /// A retained environment-setup-failure session with an open debug window (REMOTE-2661).
+    /// Must route through the authenticated follow-up service, never the direct viewer prompt
+    /// path or the local agent — either would bypass authorization and could reopen the run.
+    RetainedSetupFailureDebug { task_id: AmbientAgentTaskId },
+}
+
+/// Which cloud-connection chip the agent input footer should show for a routing decision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CloudRoutingIndicator {
+    LiveSession,
+    NewCloudVm,
+}
+
+impl AIQueryRouting {
+    pub(crate) fn is_local(&self) -> bool {
+        matches!(self, Self::Local)
+    }
+
+    /// Live-VM requires an ambient task id so shared local session viewers stay unmarked.
+    pub(crate) fn cloud_routing_indicator(&self) -> Option<CloudRoutingIndicator> {
+        match self {
+            Self::LiveRemoteVm {
+                ambient_agent_task_id: Some(_),
+                ..
+            } => Some(CloudRoutingIndicator::LiveSession),
+            Self::NewCloudVm { .. } => Some(CloudRoutingIndicator::NewCloudVm),
+            // A debug follow-up lands on the still-retained session, not a new VM.
+            Self::RetainedSetupFailureDebug { .. } => Some(CloudRoutingIndicator::LiveSession),
+            // Shared *local* session viewers (no ambient task) and non-live panes show no indicator.
+            Self::LiveRemoteVm {
+                ambient_agent_task_id: None,
+                ..
+            }
+            | Self::UnconnectedReadOnly
+            | Self::Local => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::terminal::view) enum CloudConversationContinuationError {
+    MissingTask,
+    ActiveTaskExecution,
+    MissingConversationToken,
+    MissingServerConversationMetadata,
+    UnknownHarness,
+    UnknownConversationAccess,
+}
+
+impl CloudConversationContinuationError {
+    pub(in crate::terminal::view) fn should_fallback_to_tombstone(self) -> bool {
+        !matches!(self, Self::ActiveTaskExecution)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ConversationAccess {
+    Edit,
+    ViewOnly,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CompletedChildPresentation {
+    Continuation,
+    PassiveTranscript,
+}
+
+pub(crate) fn completed_child_presentation(
+    access: ConversationAccess,
+    blocks_cloud_followups: bool,
+) -> CompletedChildPresentation {
+    match (access, blocks_cloud_followups) {
+        (ConversationAccess::Edit, false) => CompletedChildPresentation::Continuation,
+        (ConversationAccess::Edit, true)
+        | (ConversationAccess::ViewOnly, _)
+        | (ConversationAccess::Unknown, _) => CompletedChildPresentation::PassiveTranscript,
+    }
+}
+
+pub(in crate::terminal::view) fn resolve_cloud_conversation_continuation_ui_state(
+    terminal_view_id: EntityId,
+    task_id: AmbientAgentTaskId,
+    app: &AppContext,
+) -> Result<CloudConversationContinuationUiState, CloudConversationContinuationError> {
+    let Some(task) = AgentConversationsModel::as_ref(app).get_task_data(&task_id) else {
+        return Err(CloudConversationContinuationError::MissingTask);
+    };
+    if task.blocks_cloud_followups() {
+        return Ok(CloudConversationContinuationUiState::Tombstone { cta: None });
+    }
+    if task.has_active_execution() {
+        return Err(CloudConversationContinuationError::ActiveTaskExecution);
+    }
+    let is_environment_setup_failure = task.state.is_failure_like()
+        && task
+            .status_message
+            .as_ref()
+            .is_some_and(|status_message| status_message.is_environment_setup_failure());
+    if is_environment_setup_failure && task.conversation_id().is_none() {
+        return Ok(CloudConversationContinuationUiState::Tombstone { cta: None });
+    }
+    let conversation_token = task
+        .conversation_id()
+        .map(|token| ServerConversationToken::new(token.to_string()));
+    let history_model = BlocklistAIHistoryModel::as_ref(app);
+
+    if let Some(conversation_token) = conversation_token.as_ref()
+        && let Some(metadata) =
+            history_model.get_server_conversation_metadata_by_server_token(conversation_token)
+    {
+        return continuation_ui_state_for_harness_and_access(
+            metadata.harness,
+            conversation_access(metadata, app),
+            terminal_view_id,
+            Some(conversation_token),
+            task_id,
+            history_model,
+        );
+    }
+
+    let access = task_ownership_access(&task, app);
+    if access == ConversationAccess::Edit {
+        return continuation_ui_state_for_harness_and_access(
+            task_harness(&task),
+            access,
+            terminal_view_id,
+            conversation_token.as_ref(),
+            task_id,
+            history_model,
+        );
+    }
+
+    if conversation_token.is_none() {
+        Err(CloudConversationContinuationError::MissingConversationToken)
+    } else {
+        Err(CloudConversationContinuationError::MissingServerConversationMetadata)
+    }
+}
+
+/// Resolves the ambient agent task id for a pane: the attached ambient view model's task id
+/// takes priority, falling back to the terminal model's own. Shared by
+/// [`resolve_ai_query_routing`] and other callers so they can't drift on how they resolve it.
+pub(crate) fn resolve_ambient_agent_task_id(
+    ambient_agent_view_model: Option<&ModelHandle<AmbientAgentViewModel>>,
+    terminal_model: &TerminalModel,
+    app: &AppContext,
+) -> Option<AmbientAgentTaskId> {
+    ambient_agent_view_model
+        .and_then(|model| model.as_ref(app).task_id())
+        .or_else(|| terminal_model.ambient_agent_task_id())
+}
+
+/// Resolves the [`AIQueryRouting`] for a pane from its terminal model and optional ambient
+/// view model. `terminal_model` must already be locked by the caller; this function does not lock
+/// it, and reuses [`resolve_cloud_conversation_continuation_ui_state`] for the disconnected case.
+pub(crate) fn resolve_ai_query_routing(
+    terminal_view_id: EntityId,
+    ambient_agent_view_model: Option<&ModelHandle<AmbientAgentViewModel>>,
+    terminal_model: &TerminalModel,
+    app: &AppContext,
+) -> AIQueryRouting {
+    let status = terminal_model.shared_session_status();
+    let is_ambient = terminal_model.is_shared_ambient_agent_session()
+        || ambient_agent_view_model.is_some_and(|model| model.as_ref(app).is_ambient_agent());
+    let is_transcript_viewer = terminal_model.is_conversation_transcript_viewer();
+    // `None` for a shared *local* session, hiding the footer's live-VM indicator for it.
+    let ambient_agent_task_id =
+        resolve_ambient_agent_task_id(ambient_agent_view_model, terminal_model, app);
+
+    // Takes priority over live-viewer routing below: an already-attached viewer must still
+    // submit through the authenticated follow-up service, not the direct viewer prompt path.
+    if let Some(task_id) = ambient_agent_task_id
+        && let Some(task) = AgentConversationsModel::as_ref(app).get_task_data(&task_id)
+        && is_retained_setup_failure_debug_editable(&task, app)
+    {
+        return AIQueryRouting::RetainedSetupFailureDebug { task_id };
+    }
+
+    // A live shared-session viewer forwards its follow-up to the sharer via the viewer prompt
+    // path, whether the shared session is an ambient cloud run or a shared local session.
+    if status.is_active_viewer() {
+        return AIQueryRouting::LiveRemoteVm {
+            is_executor: status.is_executor(),
+            ambient_agent_task_id,
+        };
+    }
+
+    // Ordinary local pane, or a sharer running locally (e.g. a local orchestration child).
+    if !is_ambient && !is_transcript_viewer {
+        return AIQueryRouting::Local;
+    }
+    if status.is_active_sharer() {
+        return AIQueryRouting::Local;
+    }
+
+    // Disconnected / ended / transcript ambient pane: defer to the resolved continuation state.
+    let Some(task_id) = ambient_agent_task_id else {
+        return AIQueryRouting::Local;
+    };
+
+    match resolve_cloud_conversation_continuation_ui_state(terminal_view_id, task_id, app) {
+        // Editable, resumable owned Oz cloud conversation -> the follow-up starts a new cloud VM.
+        Ok(CloudConversationContinuationUiState::FollowupInput)
+            if !terminal_model.is_read_only() =>
+        {
+            AIQueryRouting::NewCloudVm { task_id }
+        }
+        // A resumed third-party-harness "Continue" tombstone is now an editable pane, so its
+        // follow-up must also start a new cloud VM rather than be blocked as read-only.
+        Ok(CloudConversationContinuationUiState::Tombstone {
+            cta: Some(TombstoneCta::ContinueInCloud { .. }),
+        }) if !terminal_model.is_read_only() => AIQueryRouting::NewCloudVm { task_id },
+        // Active execution with no attached viewer: surface stale-pane guidance, never local.
+        Err(CloudConversationContinuationError::ActiveTaskExecution) => {
+            AIQueryRouting::LiveRemoteVm {
+                is_executor: false,
+                ambient_agent_task_id: Some(task_id),
+            }
+        }
+        // Any other outcome on an existing cloud task is non-resumable here: read-only, never local.
+        Ok(_) | Err(_) => AIQueryRouting::UnconnectedReadOnly,
+    }
+}
+
+/// Whether `task`'s retained setup-failure session presents an editable agent input for the
+/// current principal (REMOTE-2661), rather than the read-only tombstone or viewer prompt path.
+///
+/// Deliberately independent of whether a debug conversation exists yet: PRODUCT.md §7 requires
+/// every later prompt to reuse the same authenticated route once the first bootstrap persists a
+/// conversation ID.
+fn is_retained_setup_failure_debug_editable(task: &AmbientAgentTask, app: &AppContext) -> bool {
+    task.is_setup_failure_debug_session_open()
+        && task_ownership_access(task, app) == ConversationAccess::Edit
+}
+
+/// Task-id-only entry point for [`is_retained_setup_failure_debug_editable`], for callers that
+/// know the ambient task id but don't hold a locked [`TerminalModel`]. Returns `false` when the
+/// task hasn't been fetched into [`AgentConversationsModel`] yet.
+pub(crate) fn is_retained_setup_failure_debug_editable_for_task(
+    task_id: AmbientAgentTaskId,
+    app: &AppContext,
+) -> bool {
+    AgentConversationsModel::as_ref(app)
+        .get_task_data(&task_id)
+        .is_some_and(|task| is_retained_setup_failure_debug_editable(&task, app))
+}
+
+fn continuation_ui_state_for_harness_and_access(
+    harness: AIAgentHarness,
+    access: ConversationAccess,
+    terminal_view_id: EntityId,
+    conversation_token: Option<&ServerConversationToken>,
+    task_id: AmbientAgentTaskId,
+    history_model: &BlocklistAIHistoryModel,
+) -> Result<CloudConversationContinuationUiState, CloudConversationContinuationError> {
+    match (harness, access) {
+        (AIAgentHarness::Oz, ConversationAccess::Edit) => {
+            Ok(CloudConversationContinuationUiState::FollowupInput)
+        }
+        (AIAgentHarness::Oz, ConversationAccess::ViewOnly) => {
+            let cta = conversation_token
+                .and_then(|conversation_token| {
+                    local_conversation_id_for_local_continuation(
+                        terminal_view_id,
+                        conversation_token,
+                        history_model,
+                    )
+                })
+                .map(|conversation_id| TombstoneCta::ContinueLocally { conversation_id });
+            Ok(CloudConversationContinuationUiState::Tombstone { cta })
+        }
+        (
+            AIAgentHarness::ClaudeCode
+            | AIAgentHarness::Gemini
+            | AIAgentHarness::Pi
+            | AIAgentHarness::Codex,
+            ConversationAccess::Edit,
+        ) => Ok(CloudConversationContinuationUiState::Tombstone {
+            cta: Some(TombstoneCta::ContinueInCloud { task_id }),
+        }),
+        (
+            AIAgentHarness::ClaudeCode
+            | AIAgentHarness::Gemini
+            | AIAgentHarness::Pi
+            | AIAgentHarness::Codex,
+            ConversationAccess::ViewOnly,
+        ) => Ok(CloudConversationContinuationUiState::Tombstone { cta: None }),
+        (AIAgentHarness::Unknown, _) => Err(CloudConversationContinuationError::UnknownHarness),
+        (_, ConversationAccess::Unknown) => {
+            Err(CloudConversationContinuationError::UnknownConversationAccess)
+        }
+    }
+}
+
+pub(crate) fn conversation_access(
+    metadata: &ServerAIConversationMetadata,
+    app: &AppContext,
+) -> ConversationAccess {
+    let Some(current_user_uid) = AuthStateProvider::as_ref(app).get().user_id() else {
+        return ConversationAccess::Unknown;
+    };
+
+    let mut access_level = SharingAccessLevel::View;
+    match metadata.permissions.space {
+        Owner::User { user_uid } => {
+            let is_current_user_owner = user_uid == current_user_uid;
+            if is_current_user_owner {
+                access_level = access_level.max(SharingAccessLevel::Full);
+            }
+        }
+        Owner::Team { team_uid } => {
+            let is_current_team_owner = UserWorkspaces::as_ref(app)
+                .team_from_uid_across_all_workspaces(team_uid)
+                .is_some();
+            if is_current_team_owner {
+                access_level = access_level.max(SharingAccessLevel::Full);
+            }
+        }
+    }
+
+    if let Some(link_sharing) = &metadata.permissions.anyone_link_sharing {
+        access_level = access_level.max(link_sharing.access_level.into());
+    }
+
+    // Direct user and team ACLs can both apply, so use the highest matching grant.
+    for guest in &metadata.permissions.guests {
+        match &guest.subject {
+            ServerGuestSubject::User { firebase_uid } => {
+                let matches_current_user = firebase_uid == current_user_uid.as_str();
+                if matches_current_user {
+                    access_level = access_level.max(guest.access_level.into());
+                }
+            }
+            ServerGuestSubject::Team { team_uid } => {
+                let matches_current_team = UserWorkspaces::as_ref(app)
+                    .team_from_uid_across_all_workspaces(*team_uid)
+                    .is_some();
+                if matches_current_team {
+                    access_level = access_level.max(guest.access_level.into());
+                }
+            }
+            ServerGuestSubject::PendingUser { .. } => {}
+        }
+    }
+    let is_creator = metadata
+        .metadata
+        .creator_uid
+        .as_ref()
+        .is_some_and(|creator_uid| creator_uid == current_user_uid.as_str());
+    if is_creator {
+        access_level = access_level.max(SharingAccessLevel::Edit);
+    }
+    if access_level >= SharingAccessLevel::Edit {
+        ConversationAccess::Edit
+    } else {
+        ConversationAccess::ViewOnly
+    }
+}
+
+pub(crate) fn completed_child_conversation_access(
+    metadata: Option<&ServerAIConversationMetadata>,
+    task: Option<&AmbientAgentTask>,
+    app: &AppContext,
+) -> ConversationAccess {
+    match metadata {
+        Some(metadata) => conversation_access(metadata, app),
+        None => task
+            .map(|task| task_ownership_access(task, app))
+            .unwrap_or(ConversationAccess::Unknown),
+    }
+}
+
+/// Whether the current principal may edit a task with no conversation yet: either its creator,
+/// or a member of the owning team, mirroring the team check `conversation_access` already
+/// applies once a conversation exists.
+fn task_ownership_access(task: &AmbientAgentTask, app: &AppContext) -> ConversationAccess {
+    if is_current_user_on_owning_team(task, app) {
+        return ConversationAccess::Edit;
+    }
+
+    let current_user_uid = AuthStateProvider::as_ref(app).get().user_id();
+    if task
+        .creator
+        .as_ref()
+        .is_some_and(|creator| current_user_uid.is_some_and(|uid| creator.uid == uid.as_str()))
+    {
+        ConversationAccess::Edit
+    } else {
+        ConversationAccess::Unknown
+    }
+}
+
+fn is_current_user_on_owning_team(task: &AmbientAgentTask, app: &AppContext) -> bool {
+    let Some(scope) = task.scope.as_ref().filter(|scope| scope.is_team()) else {
+        return false;
+    };
+    let Ok(team_uid) = ServerId::try_from(scope.uid.as_str()) else {
+        return false;
+    };
+    UserWorkspaces::as_ref(app)
+        .team_from_uid_across_all_workspaces(team_uid)
+        .is_some()
+}
+
+fn task_harness(task: &AmbientAgentTask) -> AIAgentHarness {
+    match task
+        .agent_config_snapshot
+        .as_ref()
+        .and_then(|config| config.harness.as_ref())
+        .map(|harness| harness.harness_type)
+        .unwrap_or(Harness::Oz)
+    {
+        Harness::Oz => AIAgentHarness::Oz,
+        Harness::Claude => AIAgentHarness::ClaudeCode,
+        Harness::Gemini => AIAgentHarness::Gemini,
+        Harness::Pi => AIAgentHarness::Pi,
+        Harness::Codex => AIAgentHarness::Codex,
+        Harness::OpenCode | Harness::Unknown => AIAgentHarness::Unknown,
+    }
+}
+
+pub(in crate::terminal::view) fn conversation_failed_before_task_creation(
+    terminal_view_id: EntityId,
+    history_model: &BlocklistAIHistoryModel,
+) -> bool {
+    if history_model.is_terminal_surface_conversation_transcript_viewer(terminal_view_id) {
+        return false;
+    }
+    history_model
+        .all_live_conversations_for_terminal_surface(terminal_view_id)
+        .next()
+        .and_then(conversation_output_status_from_conversation)
+        .is_some_and(|status| matches!(status, AmbientConversationStatus::Error { .. }))
+}
+
+fn local_conversation_id_for_local_continuation(
+    terminal_view_id: EntityId,
+    conversation_token: &ServerConversationToken,
+    history_model: &BlocklistAIHistoryModel,
+) -> Option<AIConversationId> {
+    history_model
+        .all_live_conversations_for_terminal_surface(terminal_view_id)
+        .find(|conversation| conversation.server_conversation_token() == Some(conversation_token))
+        .map(|conversation| conversation.id())
+        .or_else(|| history_model.find_conversation_id_by_server_token(conversation_token))
+}
+
+#[cfg(test)]
+#[path = "cloud_conversation_continuation_tests.rs"]
+mod tests;

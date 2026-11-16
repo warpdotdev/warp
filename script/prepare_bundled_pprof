@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+#
+# Prepares bundled pprof for distribution.
+#
+# This script copies a pprof binary that should be bundled with Warp into a
+# destination directory.
+#
+# Usage:
+#   prepare_bundled_pprof <destination_directory>
+#
+# Arguments:
+#   destination_directory: The directory where pprof should be installed.
+
+set -e
+
+if [ $# -ne 1 ]; then
+  echo "Error: Expected 1 argument (destination directory) but received $#" >&2
+  echo "Usage: $0 <destination_directory>" >&2
+  exit 1
+fi
+
+DEST_DIR="$1"
+
+# Create the destination directory if it doesn't exist
+mkdir -p "$DEST_DIR"
+
+# Copy pprof
+echo "Copying pprof to $DEST_DIR/pprof"
+rm -f "$DEST_DIR/pprof"
+cp "$(go tool -n pprof)" "$DEST_DIR/pprof"

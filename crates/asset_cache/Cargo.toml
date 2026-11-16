@@ -1,0 +1,21 @@
+[package]
+name = "asset_cache"
+version = "0.0.0"
+edition = "2024"
+authors.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+warp_errors.workspace = true
+anyhow.workspace = true
+async-compat.workspace = true
+async-fs.workspace = true
+base64.workspace = true
+bytes.workspace = true
+cfg-if.workspace = true
+futures.workspace = true
+log.workspace = true
+reqwest.workspace = true
+url.workspace = true
+warpui_core.workspace = true

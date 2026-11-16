@@ -1,0 +1,51 @@
+# Please see the documentation for all configuration options:
+# https://docs.github.com/en/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
+
+version: 2
+updates:
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "daily"
+    assignees:
+      - "warpdotdev/tech-leads"
+    registries:
+      - github-private
+    # Only send security updates, not general version updates.
+    open-pull-requests-limit: 0
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "daily"
+    assignees:
+      - "warpdotdev/tech-leads"
+    cooldown:
+      # Don't update to any action release that is less than two weeks old.
+      default-days: 14
+    groups:
+      # Group all non-major updates of official actions together - they're lower-risk.
+      official-actions:
+        applies-to: version-updates
+        patterns:
+          - "actions/*"
+        update-types:
+          - "minor"
+          - "patch"
+      # Group all non-major updates of Namespace actions together - they're lower-risk.
+      namespace-actions:
+        applies-to: version-updates
+        patterns:
+          - "namespacelabs/*"
+          - "namespace-actions/*"
+        update-types:
+          - "minor"
+          - "patch"
+registries:
+  # Allow dependabot to access our private GitHub repositories.
+  github-private:
+    type: git
+    url: https://github.com
+    username: x-access-token
+    # This is a PAT (personal access token) for the warpmachineuser
+    # GitHub user.
+    password: ${{secrets.DEPENDABOT_PRIVATE_REPO_ACCESS_TOKEN}}

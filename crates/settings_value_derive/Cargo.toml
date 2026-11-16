@@ -1,0 +1,15 @@
+[package]
+name = "settings_value_derive"
+edition = "2024"
+authors.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+convert_case = "0.7"
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", default-features = false, features = ["derive", "parsing", "proc-macro", "printing", "extra-traits"] }

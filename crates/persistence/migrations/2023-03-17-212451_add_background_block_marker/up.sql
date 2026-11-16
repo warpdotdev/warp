@@ -1,0 +1,1 @@
+ALTER TABLE blocks ADD COLUMN is_background BOOLEAN NOT NULL DEFAULT false;

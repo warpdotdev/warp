@@ -1,0 +1,18 @@
+[package]
+name = "preview_proxy"
+edition = "2024"
+description = "Run-scoped loopback reverse proxy for Namespace previews"
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+bytes.workspace = true
+http.workspace = true
+http-body-util.workspace = true
+hyper = { workspace = true, features = ["client", "server", "http1"] }
+hyper-util = { workspace = true, features = ["client-legacy", "http1", "tokio"] }
+log.workspace = true
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "sync", "time"] }
+tokio-util.workspace = true
+tower.workspace = true

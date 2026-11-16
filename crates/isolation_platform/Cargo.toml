@@ -1,0 +1,22 @@
+[package]
+name = "warp_isolation_platform"
+description = "Utilities for running Warp within an isolated sandbox, such as a Docker container or Github Actions"
+version = "0.1.0"
+authors.workspace = true
+publish.workspace = true
+license.workspace = true
+edition = "2024"
+
+[dependencies]
+anyhow.workspace = true
+base64.workspace = true
+chrono.workspace = true
+log.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+command.workspace = true
+warp_core.workspace = true
+
+[dev-dependencies]
+serial_test = "0.8.0"

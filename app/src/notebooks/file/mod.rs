@@ -1,0 +1,1385 @@
+use std::mem;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use pathfinder_geometry::vector::vec2f;
+#[cfg(not(target_family = "wasm"))]
+use remote_server::manager::RemoteServerManager;
+use warp_core::features::FeatureFlag;
+use warp_core::ui::icons::ICON_DIMENSIONS;
+use warp_editor::model::CoreEditorModel;
+#[cfg(feature = "local_fs")]
+use warp_files::{FileModel, FileModelEvent};
+#[cfg(feature = "local_fs")]
+use warp_util::file::FileId;
+use warp_util::local_or_remote_path::LocalOrRemotePath;
+use warp_util::path::user_friendly_path;
+use warp_util::remote_path::RemotePath;
+use warpui::accessibility::{AccessibilityContent, WarpA11yRole};
+#[cfg(feature = "local_fs")]
+use warpui::clipboard::ClipboardContent;
+use warpui::elements::{
+    Align, Container, CrossAxisAlignment, DispatchEventResult, Empty, EventHandler, Flex,
+    MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, SavePosition, Shrinkable,
+    Stack, Text,
+};
+use warpui::keymap::EditableBinding;
+use warpui::presenter::ChildView;
+use warpui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
+use warpui::ui_components::components::{UiComponent, UiComponentStyles};
+use warpui::{
+    AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
+    ViewHandle,
+};
+
+use super::context_menu::{ContextMenuAction, ContextMenuState, show_rich_editor_context_menu};
+use super::editor::view::{EditorViewEvent, RichTextEditorConfig, RichTextEditorView};
+use super::link::{NotebookLinks, SessionSource};
+use super::telemetry::NotebookTelemetryAction;
+use super::{NotebookLocation, styles};
+use crate::appearance::Appearance;
+#[cfg(feature = "local_fs")]
+use crate::code::editor_management::CodeSource;
+use crate::editor::InteractionState;
+use crate::menu::{MenuItem, MenuItemFields};
+use crate::notebooks::editor::model::NotebooksEditorModel;
+use crate::notebooks::editor::rich_text_styles;
+use crate::pane_group::focus_state::PaneFocusHandle;
+use crate::pane_group::pane::view;
+use crate::pane_group::pane::view::header::components::{
+    CenteredHeaderEdgeWidth, render_pane_header_buttons, render_pane_header_title_text,
+    render_three_column_header,
+};
+use crate::pane_group::{BackingView, PaneConfiguration, PaneEvent};
+use crate::server::telemetry::{NotebookActionEvent, NotebookTelemetryMetadata, TelemetryEvent};
+use crate::settings::FontSettings;
+use crate::terminal::model::session::Session;
+use crate::ui_components::icons::Icon;
+#[cfg(feature = "local_fs")]
+use crate::util::openable_file_type::FileTarget;
+// `renders_in_warp_notebook_viewer` is only consumed by non-wasm views
+// (`code::view` resolves to `view.rs` off-wasm and to `wasm.rs` on-wasm, and the
+// tooltips helper is `local_fs`-gated). Gate the re-export to match, otherwise it
+// is flagged as an unused import on the wasm build where those consumers are absent.
+#[cfg(not(target_family = "wasm"))]
+pub use crate::util::openable_file_type::renders_in_warp_notebook_viewer;
+pub use crate::util::openable_file_type::{is_jupyter_notebook_file, is_markdown_file};
+use crate::view_components::{MarkdownToggleEvent, MarkdownToggleView};
+use crate::workflows::{WorkflowSource, WorkflowType};
+use crate::workspace::ActiveSession;
+use crate::{cmd_or_ctrl_shift, safe_warn, send_telemetry_from_ctx};
+
+/// Display mode for markdown files shown via the header segmented control.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MarkdownDisplayMode {
+    Rendered,
+    Raw,
+}
+
+/// View for a read-only notebook backed by a file, rather than Warp Drive.
+pub struct FileNotebookView {
+    /// Cached for displaying the title and breadcrumbs.
+    location: Option<FileLocation>,
+    /// Read-only view of the notebook contents.
+    editor: ViewHandle<RichTextEditorView>,
+    retry_button_mouse_state: MouseStateHandle,
+    file_state: FileState,
+    /// File watcher id for the currently opened file, if any.
+    #[cfg(feature = "local_fs")]
+    file_id: Option<FileId>,
+    pane_configuration: ModelHandle<PaneConfiguration>,
+    focus_handle: Option<PaneFocusHandle>,
+    links: ModelHandle<NotebookLinks>,
+    context_menu: ContextMenuState<Self>,
+    view_position_id: String,
+    markdown_display_mode: MarkdownDisplayMode,
+    display_mode_segmented_control: ViewHandle<MarkdownToggleView>,
+    /// Set when the file was opened from a CodePane, and restored on a raw/rendered toggle.
+    #[cfg(feature = "local_fs")]
+    code_source: Option<CodeSource>,
+    /// Persistent hover state for the header title tooltip.
+    header_title_mouse_state: MouseStateHandle,
+    /// Vertical scroll fraction (`0..=1`) to restore once the file content is first loaded,
+    /// captured before a markdown raw->rendered toggle. Consumed on the first `set_content`.
+    pending_scroll_fraction: Option<f32>,
+}
+
+#[derive(Debug, Clone)]
+pub enum FileNotebookEvent {
+    RunWorkflow {
+        workflow: Arc<WorkflowType>,
+        source: WorkflowSource,
+    },
+    TitleUpdated,
+    FileLoaded,
+    Pane(PaneEvent),
+    #[cfg(feature = "local_fs")]
+    OpenFileWithTarget {
+        path: PathBuf,
+        target: FileTarget,
+        line_col: Option<warp_util::path::LineAndColumnArg>,
+    },
+}
+
+impl From<PaneEvent> for FileNotebookEvent {
+    fn from(event: PaneEvent) -> Self {
+        FileNotebookEvent::Pane(event)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum FileNotebookAction {
+    Focus,
+    Close,
+    FocusTerminalInput,
+    ReloadFile,
+    #[cfg(feature = "local_fs")]
+    CopyFilePath,
+    #[cfg(feature = "local_fs")]
+    OpenInEditor,
+    #[cfg(feature = "local_fs")]
+    OpenAsCode,
+    ContextMenu(ContextMenuAction),
+    ToggleMarkdownDisplayMode(MarkdownDisplayMode),
+    ToggleMaximized,
+}
+
+impl From<ContextMenuAction> for FileNotebookAction {
+    fn from(action: ContextMenuAction) -> Self {
+        FileNotebookAction::ContextMenu(action)
+    }
+}
+
+/// Information about the notebook's backing file.
+#[derive(Debug, Clone)]
+enum SourceFile {
+    FileBased {
+        path: LocalOrRemotePath,
+        /// Only meaningful for local paths; remote paths carry their own host information.
+        session: Option<Arc<Session>>,
+    },
+    /// Static content provided inline (not backed by a file on disk).
+    Static { title: String },
+}
+
+impl SourceFile {
+    fn path(&self) -> Option<&LocalOrRemotePath> {
+        match self {
+            SourceFile::FileBased { path, .. } => Some(path),
+            SourceFile::Static { .. } => None,
+        }
+    }
+
+    fn local_path(&self) -> Option<&Path> {
+        self.path().and_then(|p| p.to_local_path())
+    }
+
+    fn display_name(&self) -> String {
+        match self {
+            SourceFile::FileBased { path, .. } => path.display_path(),
+            SourceFile::Static { title } => title.clone(),
+        }
+    }
+}
+
+#[derive(Debug)]
+enum FileState {
+    NoFile,
+    Loading(SourceFile),
+    Error(SourceFile),
+    Loaded(SourceFile),
+}
+
+impl FileState {
+    fn path(&self) -> Option<&LocalOrRemotePath> {
+        self.source().and_then(|src| src.path())
+    }
+
+    fn local_path(&self) -> Option<&Path> {
+        self.source().and_then(|src| src.local_path())
+    }
+
+    fn source(&self) -> Option<&SourceFile> {
+        match self {
+            FileState::NoFile => None,
+            FileState::Loading(source) | FileState::Error(source) | FileState::Loaded(source) => {
+                Some(source)
+            }
+        }
+    }
+
+    fn display_name(&self) -> Option<String> {
+        self.source().map(|src| src.display_name())
+    }
+}
+
+/// Keymap context set by a pane that can switch between the rendered and raw views of its file,
+/// so the toggle shortcut is only available where the Rendered/Raw control is shown.
+pub const MARKDOWN_DISPLAY_MODE_TOGGLE_CONTEXT: &str = "MarkdownDisplayModeToggle";
+
+// The rendered and raw views are separate panes with their own actions, so each registers its own
+// direction of the toggle. Sharing the name and description gives them a single, jointly
+// rebindable entry in settings.
+pub const TOGGLE_MARKDOWN_DISPLAY_MODE_BINDING_NAME: &str = "markdown:toggle_display_mode";
+pub const TOGGLE_MARKDOWN_DISPLAY_MODE_BINDING_DESCRIPTION: &str =
+    "Toggle Markdown rendered/raw view";
+pub const TOGGLE_MARKDOWN_DISPLAY_MODE_KEY_BINDING: &str = "cmdorctrl-e";
+
+pub fn init(app: &mut AppContext) {
+    use warpui::keymap::macros::*;
+
+    app.register_editable_bindings([
+        EditableBinding::new(
+            "notebookview:focus_terminal_input",
+            "Focus Terminal Input from File",
+            FileNotebookAction::FocusTerminalInput,
+        )
+        .with_context_predicate(id!("FileNotebookView"))
+        .with_key_binding(cmd_or_ctrl_shift("l")),
+        EditableBinding::new(
+            "notebookview:reload_file",
+            "Reload file",
+            FileNotebookAction::ReloadFile,
+        )
+        .with_context_predicate(id!("FileNotebookView")),
+        EditableBinding::new(
+            TOGGLE_MARKDOWN_DISPLAY_MODE_BINDING_NAME,
+            TOGGLE_MARKDOWN_DISPLAY_MODE_BINDING_DESCRIPTION,
+            FileNotebookAction::ToggleMarkdownDisplayMode(MarkdownDisplayMode::Raw),
+        )
+        .with_context_predicate(id!("FileNotebookView") & id!(MARKDOWN_DISPLAY_MODE_TOGGLE_CONTEXT))
+        .with_key_binding(TOGGLE_MARKDOWN_DISPLAY_MODE_KEY_BINDING),
+    ])
+}
+
+impl FileNotebookView {
+    /// Create a new file notebook view, with no open file.
+    pub fn new(ctx: &mut ViewContext<Self>) -> Self {
+        let window_id = ctx.window_id();
+        // Use the active session for links until we have something more specific.
+        let links = ctx.add_model(|ctx| NotebookLinks::new(SessionSource::Active(window_id), ctx));
+
+        let view_position_id = format!("file_notebook_view_{}", ctx.view_id());
+
+        let editor_model = ctx.add_model(|ctx| {
+            let styles = rich_text_styles(Appearance::as_ref(ctx), FontSettings::as_ref(ctx));
+            let mut model = NotebooksEditorModel::new(styles, window_id, ctx);
+            model.set_default_mermaid_display_mode(MarkdownDisplayMode::Rendered, ctx);
+            model
+        });
+        let editor = ctx.add_typed_action_view(|ctx| {
+            let mut view = RichTextEditorView::new(
+                view_position_id.clone(),
+                editor_model,
+                links.clone(),
+                RichTextEditorConfig::default(),
+                ctx,
+            );
+            view.set_interaction_state(InteractionState::Selectable, ctx);
+            view
+        });
+
+        ctx.subscribe_to_view(&editor, Self::handle_editor_event);
+
+        let pane_configuration = ctx.add_model(|_ctx| PaneConfiguration::new(""));
+
+        ctx.observe(
+            &ActiveSession::handle(ctx),
+            Self::handle_active_session_change,
+        );
+
+        let context_menu = ContextMenuState::new(ctx);
+
+        let display_mode_segmented_control = ctx.add_typed_action_view(|ctx| {
+            MarkdownToggleView::new(MarkdownDisplayMode::Rendered, ctx)
+        });
+
+        ctx.subscribe_to_view(&display_mode_segmented_control, |view, _, event, ctx| {
+            let MarkdownToggleEvent::ModeSelected(mode) = event;
+            view.handle_action(&FileNotebookAction::ToggleMarkdownDisplayMode(*mode), ctx);
+        });
+
+        Self {
+            location: None,
+            editor,
+            file_state: FileState::NoFile,
+            retry_button_mouse_state: Default::default(),
+            #[cfg(feature = "local_fs")]
+            file_id: None,
+            pane_configuration,
+            focus_handle: None,
+            links,
+            context_menu,
+            view_position_id,
+            markdown_display_mode: MarkdownDisplayMode::Rendered,
+            display_mode_segmented_control,
+            #[cfg(feature = "local_fs")]
+            code_source: None,
+            header_title_mouse_state: Default::default(),
+            pending_scroll_fraction: None,
+        }
+    }
+
+    #[cfg(feature = "local_fs")]
+    pub fn set_code_source(&mut self, source: Option<CodeSource>) {
+        self.code_source = source;
+    }
+
+    #[cfg(feature = "local_fs")]
+    pub fn code_source(&self) -> Option<&CodeSource> {
+        self.code_source.as_ref()
+    }
+
+    /// Set the scroll fraction to restore once the file content is first loaded. Used to preserve
+    /// scroll position when toggling markdown from raw to rendered.
+    #[cfg_attr(not(feature = "local_fs"), expect(dead_code))]
+    pub(crate) fn set_pending_scroll_fraction(&mut self, scroll_fraction: Option<f32>) {
+        self.pending_scroll_fraction = scroll_fraction;
+    }
+
+    /// The current vertical scroll fraction of the rendered editor, in `0..=1`.
+    #[cfg_attr(not(feature = "local_fs"), expect(dead_code))]
+    fn scroll_fraction(&self, ctx: &AppContext) -> Option<f32> {
+        Some(
+            self.editor
+                .as_ref(ctx)
+                .model()
+                .as_ref(ctx)
+                .render_state()
+                .as_ref(ctx)
+                .scroll_fraction(),
+        )
+    }
+
+    pub fn title(&self) -> String {
+        // `location` is only set once a Session resolves it, so fall back to the raw file path.
+        self.location
+            .as_ref()
+            .map(|location| location.name.clone())
+            .or_else(|| self.file_state.display_name())
+            .unwrap_or_else(|| "Untitled".to_string())
+    }
+
+    pub fn focus(&self, ctx: &mut ViewContext<Self>) {
+        // Emit accessibility content for the notebook, rather than the generic text input.
+        if let Some(a11y_content) = self.accessibility_contents(ctx) {
+            ctx.emit_a11y_content(a11y_content);
+        }
+        ctx.focus(&self.editor);
+    }
+
+    /// Reset the rich text contents based on the given file content.
+    ///
+    /// Jupyter notebook rendering stays behind a feature flag until it launches.
+    pub fn set_content(&mut self, content: &str, ctx: &mut ViewContext<Self>) {
+        let doc_path = self.file_state.local_path().map(|p| p.to_path_buf());
+        let render_as_ipynb =
+            FeatureFlag::JupyterNotebookRendering.is_enabled() && self.is_jupyter_notebook_file();
+        let scroll_fraction = self.pending_scroll_fraction.take();
+        self.editor.update(ctx, |editor, ctx| {
+            if render_as_ipynb {
+                editor.reset_with_ipynb(content, ctx);
+            } else {
+                editor.reset_with_markdown(content, ctx);
+            }
+            // Relative image paths in the content resolve against this.
+            editor.model().update(ctx, |model, ctx| {
+                model.set_document_path(doc_path, ctx);
+                // Restore scroll captured before a raw->rendered toggle. Deferred through the
+                // layout pipeline so it applies after the new content is laid out. The version is
+                // read here (after the reset above advanced it) rather than at dequeue: the reset's
+                // BufferEdit reaches the layout channel via a deferred subscription, so it can be
+                // enqueued after our ScrollToFraction.
+                if let Some(fraction) = scroll_fraction {
+                    let version = model.buffer_version(ctx);
+                    model.render_state().update(ctx, |render_state, _ctx| {
+                        render_state.scroll_to_fraction(fraction, version);
+                    });
+                }
+            });
+        });
+    }
+
+    #[cfg(feature = "local_fs")]
+    fn open_telemetry_metadata(&self, ctx: &ViewContext<Self>) -> NotebookTelemetryMetadata {
+        NotebookTelemetryMetadata::new(None, None, NotebookLocation::LocalFile, None)
+            .with_markdown_table_count(
+                self.editor
+                    .as_ref(ctx)
+                    .model()
+                    .as_ref(ctx)
+                    .markdown_table_count(ctx),
+            )
+    }
+
+    fn set_context(&mut self, path: &Path, session: Arc<Session>, ctx: &mut ViewContext<Self>) {
+        self.location = Some(FileLocation::new(path, session.home_dir()));
+        let title = self.title();
+        self.pane_configuration.update(ctx, |pane_config, ctx| {
+            pane_config.set_title(title, ctx);
+        });
+        if let Some(parent) = path.parent() {
+            self.links.update(ctx, |links, ctx| {
+                links.set_session_source(
+                    SessionSource::Target {
+                        session,
+                        base_directory: parent.to_path_buf(),
+                    },
+                    ctx,
+                )
+            })
+        }
+
+        ctx.notify();
+    }
+
+    /// Open a file from a local or remote path.
+    ///
+    /// `session` resolves display names and link context for local paths; when `None` the
+    /// view falls back to the active local session once one becomes available. Remote paths
+    /// ignore it because the `RemotePath` already carries host info.
+    pub fn open(
+        &mut self,
+        path: LocalOrRemotePath,
+        session: Option<Arc<Session>>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        match path {
+            LocalOrRemotePath::Local(local_path) => {
+                let session = session.or_else(|| {
+                    ActiveSession::as_ref(ctx)
+                        .session(ctx.window_id())
+                        .filter(|s| s.is_local())
+                });
+                self.open_local(local_path, session, ctx);
+            }
+            LocalOrRemotePath::Remote(remote_path) => {
+                self.open_remote(remote_path, ctx);
+            }
+        }
+    }
+
+    /// Asynchronously open a local file, watching for local file changes.
+    pub fn open_local(
+        &mut self,
+        path: impl Into<PathBuf>,
+        session: Option<Arc<Session>>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let local_path = path.into();
+
+        if let Some(session) = &session {
+            self.set_context(&local_path, session.clone(), ctx);
+        } else {
+            // Temporary title until a session resolves the real location.
+            self.pane_configuration.update(ctx, |pane_config, ctx| {
+                pane_config.set_title(local_path.display().to_string(), ctx);
+            });
+        }
+
+        self.file_state = FileState::Loading(SourceFile::FileBased {
+            path: LocalOrRemotePath::Local(local_path.clone()),
+            session: session.clone(),
+        });
+
+        #[cfg(feature = "local_fs")]
+        {
+            // Reopening (e.g. "Try again") must not leave the previous read, its watcher, or its
+            // event subscription behind: `subscribe_to_model` appends, so re-subscribing without
+            // this would stack one stale closure per attempt.
+            self.release_file_model(ctx);
+
+            let file_model = FileModel::handle(ctx);
+            let file_id = file_model.update(ctx, |m, ctx| m.open(&local_path, true, ctx));
+            self.file_id = Some(file_id);
+
+            ctx.subscribe_to_model(
+                &file_model,
+                move |me, file_model: ModelHandle<FileModel>, event: &FileModelEvent, ctx| {
+                    if event.file_id() != file_id {
+                        return;
+                    }
+                    match event {
+                        FileModelEvent::FileLoaded { content, .. } => {
+                            me.set_content(content, ctx);
+                            send_telemetry_from_ctx!(
+                                TelemetryEvent::OpenNotebook(me.open_telemetry_metadata(ctx)),
+                                ctx
+                            );
+
+                            // Record the canonical path instead of the input path when available.
+                            if let Some(canonical_path) = file_model.as_ref(ctx).file_path(file_id)
+                            {
+                                me.file_state = FileState::Loaded(SourceFile::FileBased {
+                                    path: LocalOrRemotePath::Local(canonical_path),
+                                    session: session.clone(),
+                                });
+                            }
+
+                            me.pane_configuration.update(ctx, |pane_config, ctx| {
+                                pane_config.refresh_pane_header_overflow_menu_items(ctx);
+                            });
+
+                            ctx.notify();
+
+                            // Trigger to save the open file path for session restoration.
+                            ctx.emit(FileNotebookEvent::FileLoaded);
+                        }
+                        FileModelEvent::FailedToLoad { error, .. } => {
+                            safe_warn!(
+                                safe: ("Unable to read local notebook file"),
+                                full: ("Unable to read local notebook file: {error}")
+                            );
+                            me.file_state =
+                                match mem::replace(&mut me.file_state, FileState::NoFile) {
+                                    FileState::NoFile => FileState::NoFile,
+                                    FileState::Loading(source)
+                                    | FileState::Loaded(source)
+                                    | FileState::Error(source) => FileState::Error(source),
+                                };
+                            ctx.notify();
+                        }
+                        FileModelEvent::FileUpdated { content, .. } => {
+                            me.set_content(content, ctx);
+                        }
+                        FileModelEvent::FileSaved { .. } | FileModelEvent::FailedToSave { .. } => {}
+                    }
+                },
+            );
+        }
+
+        #[cfg(not(feature = "local_fs"))]
+        {
+            // WASM builds should never call `open_local`, so we should never get here!
+            safe_warn!(
+                safe: ("Local filesystem access is not available in this build"),
+                full: ("Local filesystem access is not available in this build (feature \"local_fs\" disabled)")
+            );
+            self.file_state = FileState::Error(SourceFile::FileBased {
+                path: LocalOrRemotePath::Local(local_path),
+                session,
+            });
+            ctx.notify();
+        }
+    }
+
+    /// The [`FileId`] this view currently holds open, if any.
+    #[cfg(all(test, feature = "local_fs"))]
+    pub(crate) fn file_id_for_test(&self) -> Option<FileId> {
+        self.file_id
+    }
+
+    /// Releases everything this view holds in the shared [`FileModel`]: the in-flight read, the
+    /// file's watcher registration, and this view's subscription to the model's events.
+    ///
+    /// Safe to call when no file is open, and idempotent, so every teardown path can run it.
+    #[cfg(feature = "local_fs")]
+    pub(crate) fn release_file_model(&mut self, ctx: &mut ViewContext<Self>) {
+        let file_model = FileModel::handle(ctx);
+        if let Some(file_id) = self.file_id.take() {
+            file_model.update(ctx, |model, ctx| {
+                model.cancel(file_id);
+                model.unsubscribe(file_id, ctx);
+            });
+        }
+        ctx.unsubscribe_to_model(&file_model);
+    }
+
+    /// Open static Markdown as a file pane.
+    pub fn open_static(
+        &mut self,
+        title: impl Into<String>,
+        content: &str,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        #[cfg(feature = "local_fs")]
+        self.release_file_model(ctx);
+        self.set_content(content, ctx);
+        let title = title.into();
+        self.pane_configuration.update(ctx, |pane_config, ctx| {
+            pane_config.set_title(title.clone(), ctx);
+            pane_config.refresh_pane_header_overflow_menu_items(ctx);
+        });
+        self.file_state = FileState::Loaded(SourceFile::Static { title });
+    }
+
+    fn send_telemetry_action(&self, action: NotebookTelemetryAction, ctx: &mut ViewContext<Self>) {
+        send_telemetry_from_ctx!(
+            TelemetryEvent::NotebookAction(NotebookActionEvent {
+                action,
+                metadata: NotebookTelemetryMetadata::new(
+                    None,
+                    None,
+                    NotebookLocation::LocalFile,
+                    None
+                )
+            }),
+            ctx
+        );
+    }
+
+    /// Reload the file that was most recently opened (or attempted to open).
+    fn reload_file(&mut self, ctx: &mut ViewContext<Self>) {
+        // We can take the file state here because either it's (a) already NoFile or (b) about to
+        // be replaced with a loading state.
+        let (path, session) = match mem::replace(&mut self.file_state, FileState::NoFile) {
+            FileState::NoFile => return,
+            FileState::Loading(source) | FileState::Error(source) | FileState::Loaded(source) => {
+                match source {
+                    SourceFile::FileBased { path, session } => (path, session),
+                    SourceFile::Static { .. } => return,
+                }
+            }
+        };
+        self.open(path, session, ctx);
+    }
+
+    fn open_remote(&mut self, remote_path: RemotePath, ctx: &mut ViewContext<Self>) {
+        let path_str = remote_path.path.as_str().to_string();
+        let display_name = remote_path
+            .path
+            .file_name()
+            .unwrap_or(path_str.as_str())
+            .to_string();
+
+        self.pane_configuration.update(ctx, |pane_config, ctx| {
+            pane_config.set_title(display_name, ctx);
+        });
+
+        let lor_path = LocalOrRemotePath::Remote(remote_path.clone());
+        self.file_state = FileState::Loading(SourceFile::FileBased {
+            path: lor_path,
+            session: None,
+        });
+
+        let host_id = remote_path.host_id.clone();
+        let manager = remote_server::manager::RemoteServerManager::handle(ctx);
+
+        // The disconnection banner appears and disappears with the host's connection state.
+        let watched_host_id = host_id.clone();
+        ctx.subscribe_to_model(&manager, move |_me, _handle, event, ctx| {
+            use remote_server::manager::RemoteServerManagerEvent;
+            match event {
+                RemoteServerManagerEvent::HostDisconnected { host_id }
+                | RemoteServerManagerEvent::HostConnected { host_id }
+                    if *host_id == watched_host_id =>
+                {
+                    ctx.notify();
+                }
+                _ => {}
+            }
+        });
+        let request = remote_server::proto::ReadFileContextRequest {
+            files: vec![remote_server::proto::ReadFileContextFile {
+                path: path_str,
+                line_ranges: vec![],
+            }],
+            max_file_bytes: None,
+            max_batch_bytes: None,
+        };
+
+        let handle = manager.as_ref(ctx).host_request_handle(&host_id);
+        ctx.spawn(
+            async move { handle.read_file_context(request).await },
+            move |me, result, ctx| match result {
+                Ok(response) => {
+                    if let Some(file_ctx) = response.file_contexts.first() {
+                        let text = match &file_ctx.content {
+                            Some(
+                                remote_server::proto::file_context_proto::Content::TextContent(
+                                    text,
+                                ),
+                            ) => text.as_str(),
+                            _ => "",
+                        };
+                        me.set_content(text, ctx);
+                        me.file_state = match mem::replace(&mut me.file_state, FileState::NoFile) {
+                            FileState::Loading(source) => FileState::Loaded(source),
+                            other => other,
+                        };
+                        me.pane_configuration.update(ctx, |pane_config, ctx| {
+                            pane_config.refresh_pane_header_overflow_menu_items(ctx);
+                        });
+                        ctx.notify();
+                        ctx.emit(FileNotebookEvent::FileLoaded);
+                    } else if let Some(failed) = response.failed_files.first() {
+                        let error_msg = failed
+                            .error
+                            .as_ref()
+                            .map(|e| e.message.as_str())
+                            .unwrap_or("unknown error");
+                        safe_warn!(
+                            safe: ("Failed to read remote markdown file"),
+                            full: ("Failed to read remote markdown file: {error_msg}")
+                        );
+                        me.file_state = match mem::replace(&mut me.file_state, FileState::NoFile) {
+                            FileState::Loading(source) => FileState::Error(source),
+                            other => other,
+                        };
+                        ctx.notify();
+                    }
+                }
+                Err(err) => {
+                    safe_warn!(
+                        safe: ("Remote server error reading markdown file"),
+                        full: ("Remote server error reading markdown file: {err}")
+                    );
+                    me.file_state = match mem::replace(&mut me.file_state, FileState::NoFile) {
+                        FileState::Loading(source) => FileState::Error(source),
+                        other => other,
+                    };
+                    ctx.notify();
+                }
+            },
+        );
+    }
+
+    #[cfg(feature = "local_fs")]
+    fn open_as_code(&mut self, ctx: &mut ViewContext<Self>) {
+        if let Some(path) = self.file_state.path().cloned() {
+            let scroll_fraction = self.scroll_fraction(ctx).map(ordered_float::OrderedFloat);
+            ctx.emit(FileNotebookEvent::Pane(PaneEvent::ReplaceWithCodePane {
+                path,
+                source: self.code_source.clone(),
+                scroll_fraction,
+            }));
+        }
+    }
+
+    pub fn path(&self) -> Option<&LocalOrRemotePath> {
+        self.file_state.path()
+    }
+
+    pub fn local_path(&self) -> Option<PathBuf> {
+        self.file_state.local_path().map(Path::to_path_buf)
+    }
+
+    pub fn pane_configuration(&self) -> ModelHandle<PaneConfiguration> {
+        self.pane_configuration.clone()
+    }
+
+    /// Model for resolving and opening links relative to this notebook.
+    pub fn links(&self) -> ModelHandle<NotebookLinks> {
+        self.links.clone()
+    }
+
+    fn is_markdown_file(&self) -> bool {
+        self.file_state
+            .path()
+            .map(|p| is_markdown_file(Path::new(&p.display_path())))
+            .unwrap_or(false)
+    }
+
+    fn is_jupyter_notebook_file(&self) -> bool {
+        self.file_state
+            .path()
+            .map(|p| is_jupyter_notebook_file(Path::new(&p.display_path())))
+            .unwrap_or(false)
+    }
+
+    fn shows_markdown_toggle(&self) -> bool {
+        self.is_markdown_file()
+            || (FeatureFlag::JupyterNotebookRendering.is_enabled()
+                && self.is_jupyter_notebook_file())
+    }
+
+    fn update_editor_display_mode(&mut self, ctx: &mut ViewContext<Self>) {
+        match self.markdown_display_mode {
+            MarkdownDisplayMode::Rendered => {
+                self.editor.update(ctx, |editor, ctx| {
+                    editor.set_interaction_state(InteractionState::Selectable, ctx);
+                });
+            }
+            MarkdownDisplayMode::Raw => {
+                // For Raw we switch panes entirely (to CodePane). Interaction state here remains
+                // in the rendered notebook mode.
+            }
+        }
+    }
+
+    fn handle_editor_event(
+        &mut self,
+        _handle: ViewHandle<RichTextEditorView>,
+        event: &EditorViewEvent,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        match event {
+            EditorViewEvent::Focused => ctx.emit(FileNotebookEvent::Pane(PaneEvent::FocusSelf)),
+            EditorViewEvent::RunWorkflow(workflow) => {
+                let workflow_type = workflow.named_workflow(|| {
+                    self.location
+                        .as_ref()
+                        .map(|location| format!("Command from {}", location.name))
+                });
+                let source = workflow.source.unwrap_or(WorkflowSource::Notebook {
+                    notebook_id: None,
+                    team_uid: None,
+                    location: NotebookLocation::LocalFile,
+                });
+                ctx.emit(FileNotebookEvent::RunWorkflow {
+                    workflow: workflow_type,
+                    source,
+                });
+            }
+            EditorViewEvent::OpenedBlockInsertionMenu(source) => self.send_telemetry_action(
+                NotebookTelemetryAction::OpenBlockInsertionMenu { source: *source },
+                ctx,
+            ),
+            EditorViewEvent::OpenedEmbeddedObjectSearch => {
+                self.send_telemetry_action(NotebookTelemetryAction::OpenEmbeddedObjectSearch, ctx)
+            }
+            EditorViewEvent::OpenedFindBar => {
+                self.send_telemetry_action(NotebookTelemetryAction::OpenFindBar, ctx)
+            }
+            EditorViewEvent::InsertedEmbeddedObject(info) => self
+                .send_telemetry_action(NotebookTelemetryAction::InsertEmbeddedObject(*info), ctx),
+            EditorViewEvent::CopiedBlock { block, entrypoint } => self.send_telemetry_action(
+                NotebookTelemetryAction::CopyBlock {
+                    block: *block,
+                    entrypoint: *entrypoint,
+                },
+                ctx,
+            ),
+            EditorViewEvent::NavigatedCommands => {
+                self.send_telemetry_action(NotebookTelemetryAction::CommandKeyboardNavigation, ctx)
+            }
+            EditorViewEvent::ChangedSelectionMode(mode) => self.send_telemetry_action(
+                NotebookTelemetryAction::ChangeSelectionMode { mode: *mode },
+                ctx,
+            ),
+            EditorViewEvent::Navigate(_)
+            | EditorViewEvent::Edited
+            | EditorViewEvent::EditWorkflow(_)
+            | EditorViewEvent::CmdEnter
+            | EditorViewEvent::EscapePressed
+            | EditorViewEvent::TextSelectionChanged => (),
+            EditorViewEvent::OpenFile { .. } => {
+                // We don't support opening files from the notebook view: file paths rely on a
+                // Session, which today is only set from the AI document view.
+            }
+        }
+    }
+
+    fn handle_active_session_change(
+        &mut self,
+        handle: ModelHandle<ActiveSession>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        // If this file notebook is opened without a target session, we wait for one to start and
+        // use that instead.
+        if self.location.is_none() {
+            let Some(path) = self.local_path() else {
+                return;
+            };
+            if let Some(active_session) = handle.as_ref(ctx).session(ctx.window_id())
+                && active_session.is_local()
+            {
+                self.set_context(&path, active_session, ctx);
+                ctx.unsubscribe_to_model(&handle);
+            }
+        }
+    }
+
+    fn render_title(
+        &self,
+        appearance: &Appearance,
+        font_settings: &FontSettings,
+    ) -> Box<dyn Element> {
+        let title = Text::new_inline(
+            self.title(),
+            appearance.ui_font_family(),
+            styles::title_font_size(font_settings),
+        )
+        .with_color(styles::title_text_fill(appearance).into())
+        .with_style(styles::TITLE_FONT_PROPERTIES)
+        .finish();
+
+        let details = self.location.as_ref().map(|location| {
+            appearance
+                .ui_builder()
+                .span(location.breadcrumbs.clone())
+                .with_style(UiComponentStyles {
+                    font_color: Some(styles::title_text_fill(appearance).into_solid()),
+                    ..Default::default()
+                })
+                .build()
+                .finish()
+        });
+
+        styles::wrap_title(title, details)
+    }
+
+    /// Style for loading/error states.
+    fn state_style(&self, appearance: &Appearance) -> UiComponentStyles {
+        UiComponentStyles {
+            font_color: Some(
+                appearance
+                    .theme()
+                    .sub_text_color(appearance.theme().background())
+                    .into_solid(),
+            ),
+            ..Default::default()
+        }
+    }
+
+    fn render_error(&self, source: &SourceFile, appearance: &Appearance) -> Box<dyn Element> {
+        let error_text_color = appearance
+            .theme()
+            .sub_text_color(appearance.theme().background());
+        let error = Flex::column()
+            .with_main_axis_alignment(MainAxisAlignment::Center)
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_child(
+                appearance
+                    .ui_builder()
+                    .paragraph(format!("Could not read {}", source.display_name()))
+                    .with_style(self.state_style(appearance))
+                    .build()
+                    .finish(),
+            )
+            .with_child(
+                Container::new(
+                    appearance
+                        .ui_builder()
+                        .button(ButtonVariant::Basic, self.retry_button_mouse_state.clone())
+                        .with_text_and_icon_label(
+                            TextAndIcon::new(
+                                TextAndIconAlignment::TextFirst,
+                                "Try again".to_string(),
+                                Icon::Refresh.to_warpui_icon(error_text_color),
+                                MainAxisSize::Min,
+                                MainAxisAlignment::Center,
+                                vec2f(16., 16.),
+                            )
+                            .with_inner_padding(4.),
+                        )
+                        .build()
+                        .on_click(|ctx, _, _| {
+                            ctx.dispatch_typed_action(FileNotebookAction::ReloadFile)
+                        })
+                        .finish(),
+                )
+                .with_margin_top(8.)
+                .finish(),
+            );
+
+        Align::new(error.finish()).finish()
+    }
+
+    fn render_loading(&self, source: &SourceFile, appearance: &Appearance) -> Box<dyn Element> {
+        Align::new(
+            appearance
+                .ui_builder()
+                .paragraph(format!("Loading {}...", source.display_name()))
+                .with_style(self.state_style(appearance))
+                .build()
+                .finish(),
+        )
+        .finish()
+    }
+
+    fn render_no_file(&self, appearance: &Appearance) -> Box<dyn Element> {
+        Align::new(
+            appearance
+                .ui_builder()
+                .paragraph("Missing source file".to_string())
+                .with_style(self.state_style(appearance))
+                .build()
+                .finish(),
+        )
+        .finish()
+    }
+
+    /// Returns `true` when this notebook is backed by a remote file whose
+    /// host no longer has any connected session.
+    #[cfg(not(target_family = "wasm"))]
+    fn is_remote_disconnected(&self, app: &AppContext) -> bool {
+        let Some(LocalOrRemotePath::Remote(remote_path)) = self.file_state.path() else {
+            return false;
+        };
+        RemoteServerManager::as_ref(app)
+            .client_for_host(&remote_path.host_id)
+            .is_none()
+    }
+
+    fn render_body(&self, appearance: &Appearance, _app: &AppContext) -> Box<dyn Element> {
+        let body = match &self.file_state {
+            FileState::NoFile => self.render_no_file(appearance),
+            FileState::Loading(source) => self.render_loading(source, appearance),
+            FileState::Error(source) => self.render_error(source, appearance),
+            FileState::Loaded(_) => ChildView::new(&self.editor).finish(),
+        };
+
+        #[cfg(not(target_family = "wasm"))]
+        if matches!(self.file_state, FileState::Loaded(_)) && self.is_remote_disconnected(_app) {
+            let banner =
+                crate::code::local_code_editor::render_remote_disconnected_banner(appearance);
+            let mut col = Flex::column();
+            col.add_child(banner);
+            col.add_child(Shrinkable::new(1., styles::wrap_body(body)).finish());
+            return col.finish();
+        }
+
+        styles::wrap_body(body)
+    }
+}
+
+impl Entity for FileNotebookView {
+    type Event = FileNotebookEvent;
+}
+
+impl View for FileNotebookView {
+    fn ui_name() -> &'static str {
+        "FileNotebookView"
+    }
+
+    fn keymap_context(&self, _app: &AppContext) -> warpui::keymap::Context {
+        let mut context = Self::default_keymap_context();
+        if self.shows_markdown_toggle() {
+            context.set.insert(MARKDOWN_DISPLAY_MODE_TOGGLE_CONTEXT);
+        }
+        context
+    }
+
+    fn accessibility_contents(&self, _ctx: &AppContext) -> Option<AccessibilityContent> {
+        Some(AccessibilityContent::new_without_help(
+            format!("{} notebook", self.title()),
+            WarpA11yRole::TextRole,
+        ))
+    }
+
+    fn render(&self, app: &AppContext) -> Box<dyn Element> {
+        let appearance = Appearance::as_ref(app);
+        let font_settings = FontSettings::as_ref(app);
+
+        let column = Flex::column().with_children([
+            self.render_title(appearance, font_settings),
+            Shrinkable::new(1., self.render_body(appearance, app)).finish(),
+        ]);
+
+        let mut stack = Stack::new().with_child(column.finish());
+        self.context_menu.render(&mut stack);
+
+        let parent_position_id = self.view_position_id.clone();
+        let editor = self.editor.clone();
+
+        SavePosition::new(
+            EventHandler::new(Align::new(stack.finish()).top_left().finish())
+                .on_left_mouse_down(|ctx, _, _| {
+                    ctx.dispatch_typed_action(FileNotebookAction::Focus);
+                    DispatchEventResult::StopPropagation
+                })
+                .on_right_mouse_down(move |ctx, _, position, _| {
+                    show_rich_editor_context_menu::<FileNotebookAction>(
+                        ctx,
+                        position,
+                        &parent_position_id,
+                        &editor,
+                    );
+                    DispatchEventResult::StopPropagation
+                })
+                .finish(),
+            &self.view_position_id,
+        )
+        .finish()
+    }
+}
+
+impl TypedActionView for FileNotebookView {
+    type Action = FileNotebookAction;
+
+    fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
+        match action {
+            FileNotebookAction::Focus => ctx.focus_self(),
+            // Route through `BackingView::close` so this takes the header close button's path.
+            FileNotebookAction::Close => BackingView::close(self, ctx),
+            FileNotebookAction::FocusTerminalInput => {
+                ctx.emit(FileNotebookEvent::Pane(PaneEvent::FocusActiveSession))
+            }
+            FileNotebookAction::ReloadFile => self.reload_file(ctx),
+            #[cfg(feature = "local_fs")]
+            FileNotebookAction::CopyFilePath => {
+                if let Some(path) = self.file_state.path() {
+                    ctx.clipboard()
+                        .write(ClipboardContent::plain_text(path.display_path()));
+                }
+            }
+            #[cfg(feature = "local_fs")]
+            FileNotebookAction::OpenInEditor => {
+                if self.is_jupyter_notebook_file() {
+                    self.open_as_code(ctx);
+                } else if let Some(local_path) = self.local_path() {
+                    use crate::util::file::external_editor::EditorSettings;
+                    use crate::util::openable_file_type::resolve_file_target;
+                    let settings = EditorSettings::as_ref(ctx);
+                    let target = resolve_file_target(&local_path, settings, None);
+                    ctx.emit(FileNotebookEvent::OpenFileWithTarget {
+                        path: local_path,
+                        target,
+                        line_col: None,
+                    });
+                } else if let Some(path) = self.file_state.path().cloned() {
+                    // For remote files, open as a code editor pane.
+                    let scroll_fraction =
+                        self.scroll_fraction(ctx).map(ordered_float::OrderedFloat);
+                    ctx.emit(FileNotebookEvent::Pane(PaneEvent::ReplaceWithCodePane {
+                        path,
+                        source: None,
+                        scroll_fraction,
+                    }));
+                }
+            }
+            #[cfg(feature = "local_fs")]
+            FileNotebookAction::OpenAsCode => self.open_as_code(ctx),
+            FileNotebookAction::ContextMenu(action) => {
+                if matches!(action, ContextMenuAction::Open(_)) {
+                    self.send_telemetry_action(NotebookTelemetryAction::OpenContextMenu, ctx);
+                    let copy_file_path = self.file_state.path().map(|p| p.display_path());
+                    self.context_menu.set_copy_file_path(copy_file_path);
+                }
+                self.context_menu.handle_action(action, ctx);
+            }
+            FileNotebookAction::ToggleMarkdownDisplayMode(mode) => {
+                self.markdown_display_mode = *mode;
+                self.display_mode_segmented_control
+                    .update(ctx, |control, ctx| {
+                        control.set_selected_mode(*mode, ctx);
+                    });
+
+                match mode {
+                    MarkdownDisplayMode::Rendered => {
+                        // Already in FileNotebookView with rendered content; nothing else to do.
+                        self.update_editor_display_mode(ctx);
+                    }
+                    MarkdownDisplayMode::Raw => {
+                        #[cfg(feature = "local_fs")]
+                        {
+                            if let Some(path) = self.file_state.path().cloned() {
+                                let scroll_fraction =
+                                    self.scroll_fraction(ctx).map(ordered_float::OrderedFloat);
+                                ctx.emit(FileNotebookEvent::Pane(PaneEvent::ReplaceWithCodePane {
+                                    path,
+                                    source: self.code_source.clone(),
+                                    scroll_fraction,
+                                }));
+                            }
+                        }
+                    }
+                }
+            }
+            FileNotebookAction::ToggleMaximized => {
+                ctx.emit(FileNotebookEvent::Pane(PaneEvent::ToggleMaximized));
+                self.pane_configuration.update(ctx, |pane_config, ctx| {
+                    pane_config.refresh_pane_header_overflow_menu_items(ctx);
+                });
+            }
+        }
+    }
+}
+
+impl BackingView for FileNotebookView {
+    type PaneHeaderOverflowMenuAction = FileNotebookAction;
+    type CustomAction = ();
+    type AssociatedData = ();
+
+    fn handle_pane_header_overflow_menu_action(
+        &mut self,
+        action: &Self::PaneHeaderOverflowMenuAction,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.handle_action(action, ctx);
+    }
+
+    fn pane_header_overflow_menu_items(
+        &self,
+        ctx: &AppContext,
+    ) -> Vec<MenuItem<FileNotebookAction>> {
+        // Mirror the toggle that `CodeView` (the Raw markdown mode) exposes, so the Rendered
+        // markdown pane's overflow menu offers the same "Maximize pane" / "Minimize pane" entry.
+        let is_maximized = self
+            .focus_handle
+            .as_ref()
+            .is_some_and(|h| h.is_maximized(ctx));
+        let mut actions = vec![
+            MenuItemFields::toggle_pane_action(is_maximized)
+                .with_on_select_action(FileNotebookAction::ToggleMaximized)
+                .into_item(),
+        ];
+
+        if let Some(SourceFile::FileBased { .. }) = self.file_state.source() {
+            actions.push(MenuItem::Separator);
+            actions.push(
+                MenuItemFields::new("Refresh file")
+                    .with_on_select_action(FileNotebookAction::ReloadFile)
+                    .into_item(),
+            );
+
+            #[cfg(feature = "local_fs")]
+            {
+                // The markdown rendered/raw toggle is always visible in the pane header, so it is
+                // not duplicated here. "Open in editor" stays available for local files.
+                actions.push(
+                    MenuItemFields::new("Open in editor")
+                        .with_on_select_action(FileNotebookAction::OpenInEditor)
+                        .into_item(),
+                );
+                actions.extend([
+                    MenuItem::Separator,
+                    MenuItemFields::new("Copy file path")
+                        .with_on_select_action(FileNotebookAction::CopyFilePath)
+                        .into_item(),
+                ]);
+            }
+        }
+        actions
+    }
+
+    /// Requests that the pane close. The file itself is released by
+    /// `FilePane::detach(DetachType::Closed)`, once the pane is permanently discarded: with
+    /// undo-close the pane is only hidden, and the same view is reattached without reopening its
+    /// file, so releasing here would leave a restored pane showing content that never updates.
+    fn close(&mut self, ctx: &mut ViewContext<Self>) {
+        ctx.emit(FileNotebookEvent::Pane(PaneEvent::Close));
+    }
+
+    fn focus_contents(&mut self, ctx: &mut ViewContext<Self>) {
+        self.focus(ctx);
+    }
+
+    fn render_header_content(
+        &self,
+        ctx: &view::HeaderRenderContext<'_>,
+        app: &AppContext,
+    ) -> view::HeaderContent {
+        let title = self.pane_configuration.as_ref(app).title().to_owned();
+
+        if self.shows_markdown_toggle() {
+            // For markdown files (and rendered Jupyter notebooks) we use a custom header so the
+            // title stays centered identically in both rendered and raw (CodeView) modes.
+            let appearance = Appearance::as_ref(app);
+            let is_pane_dragging = ctx.draggable_state.is_dragging();
+
+            let mut right_row = Flex::row()
+                .with_main_axis_alignment(MainAxisAlignment::End)
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_main_axis_size(MainAxisSize::Min);
+
+            right_row.add_child(ChildView::new(&self.display_mode_segmented_control).finish());
+
+            let show_close_button = self
+                .focus_handle
+                .as_ref()
+                .is_some_and(|h| h.is_in_split_pane(app));
+
+            right_row.add_child(render_pane_header_buttons::<FileNotebookAction, ()>(
+                ctx,
+                appearance,
+                show_close_button,
+                None,
+                None,
+            ));
+
+            let button_count = show_close_button as u32 + ctx.has_overflow_items as u32;
+            let buttons_width = button_count as f32 * ICON_DIMENSIONS;
+
+            let title_text = render_pane_header_title_text(
+                title,
+                appearance,
+                warpui::text_layout::ClipConfig::start(),
+            );
+
+            let title_element: Box<dyn Element> =
+                if let Some(display_path) = self.file_state.path().map(|p| p.display_path()) {
+                    use pathfinder_geometry::vector::vec2f;
+                    use warpui::elements::{
+                        ChildAnchor, Hoverable, OffsetPositioning, ParentAnchor,
+                        ParentOffsetBounds, Stack,
+                    };
+                    Hoverable::new(self.header_title_mouse_state.clone(), move |hover_state| {
+                        let mut stack = Stack::new();
+                        stack.add_child(title_text);
+                        if hover_state.is_hovered() {
+                            let tooltip = appearance
+                                .ui_builder()
+                                .tool_tip(display_path.clone())
+                                .build()
+                                .finish();
+                            stack.add_positioned_overlay_child(
+                                tooltip,
+                                OffsetPositioning::offset_from_parent(
+                                    vec2f(0., 4.),
+                                    ParentOffsetBounds::Unbounded,
+                                    ParentAnchor::BottomMiddle,
+                                    ChildAnchor::TopMiddle,
+                                ),
+                            );
+                        }
+                        stack.finish()
+                    })
+                    .finish()
+                } else {
+                    title_text
+                };
+
+            view::HeaderContent::Custom {
+                element: render_three_column_header(
+                    Empty::new().finish(),
+                    title_element,
+                    right_row.finish(),
+                    CenteredHeaderEdgeWidth {
+                        min: buttons_width,
+                        max: 220.0,
+                    },
+                    ctx.header_left_inset,
+                    is_pane_dragging,
+                ),
+                has_custom_draggable_behavior: false,
+            }
+        } else {
+            view::HeaderContent::Standard(view::StandardHeader {
+                title,
+                title_secondary: None,
+                title_style: None,
+                title_clip_config: warpui::text_layout::ClipConfig::start(),
+                title_max_width: None,
+                left_of_title: None,
+                right_of_title: None,
+                left_of_overflow: None,
+                options: Default::default(),
+            })
+        }
+    }
+
+    fn set_focus_handle(&mut self, focus_handle: PaneFocusHandle, _ctx: &mut ViewContext<Self>) {
+        self.focus_handle = Some(focus_handle.clone());
+        self.context_menu.set_focus_handle(focus_handle);
+    }
+}
+
+/// Location information for a file, used to show its title and context.
+struct FileLocation {
+    breadcrumbs: String,
+    name: String,
+}
+
+impl FileLocation {
+    fn new(path: &Path, home_directory: Option<&str>) -> Self {
+        let breadcrumbs = match path.parent() {
+            Some(directory) => {
+                user_friendly_path(directory.to_string_lossy().as_ref(), home_directory)
+                    .into_owned()
+            }
+            None => String::new(),
+        };
+        let name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "Unnamed".to_string());
+
+        Self { breadcrumbs, name }
+    }
+}
+
+#[cfg(test)]
+#[path = "mod_tests.rs"]
+mod tests;

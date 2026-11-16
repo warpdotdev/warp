@@ -1,0 +1,1 @@
+ALTER TABLE ai_queries ADD COLUMN model_id TEXT NOT NULL DEFAULT '';

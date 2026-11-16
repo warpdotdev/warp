@@ -1,0 +1,17 @@
+display_name: "Scala"
+indent_unit:
+  space: 2
+comment_prefix: "//"
+brackets:
+  - start: "{"
+    end: "}"
+  - start: "("
+    end: ")"
+  - start: "["
+    end: "]"
+  - start: "\""
+    end: "\""
+  - start: "'"
+    end: "'"
+  - start: "`"
+    end: "`"

@@ -1,0 +1,52 @@
+[package]
+name = "repo_metadata"
+authors = ["Warp Team <dev@warp.dev>"]
+version = "0.1.0"
+edition = "2024"
+description = "Repository metadata utilities for Warp"
+publish.workspace = true
+license.workspace = true
+
+[features]
+local_fs = []
+test-util = []
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow.workspace = true
+dunce.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+walkdir.workspace = true
+itertools.workspace = true
+warpui_core.workspace = true
+warp_core.workspace = true
+warp_errors.workspace = true
+warp_util.workspace = true
+ignore = "0.4.23"
+once_cell.workspace = true
+log.workspace = true
+futures.workspace = true
+async-fs.workspace = true
+tempfile.workspace = true
+cfg-if = "1.0"
+dirs.workspace = true
+futures-lite.workspace = true
+strum_macros.workspace = true
+strum.workspace = true
+parking_lot.workspace = true
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+notify-debouncer-full.workspace = true
+watcher.workspace = true
+
+[build-dependencies]
+anyhow.workspace = true
+
+[dev-dependencies]
+env_logger.workspace = true
+futures = "0.3"
+virtual-fs.workspace = true
+warpui = { workspace = true, features = ["test-util"] }

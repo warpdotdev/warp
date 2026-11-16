@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>warp</title>
+  <style type="text/css">
+    body {
+      margin: 0px;
+      background-color: black;
+    }
+    canvas {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+      height: 100svh;
+      outline: none;
+    }
+  </style>
+</head>
+
+<body>
+  <script type="module">
+    import init from "/assets/client/wasm/warp.js";
+    window.addEventListener("load", () => {
+      init();
+    });
+  </script>
+
+</body>
+
+</html>

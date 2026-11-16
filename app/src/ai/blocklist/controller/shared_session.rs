@@ -1,0 +1,1052 @@
+// Session-sharing specific logic for BlocklistAIController.
+// This module extends BlocklistAIController with methods used when viewing a shared session
+// and defines state used only for session sharing.
+use std::collections::HashMap;
+
+use itertools::Itertools;
+use session_sharing_protocol::common::{AgentAttachment, ParticipantId, ServerConversationToken};
+use warp_core::features::FeatureFlag;
+use warp_errors::report_error;
+use warp_multi_agent_api::client_action::Action;
+use warp_multi_agent_api::message::Message;
+use warp_multi_agent_api::response_event::{ClientActions, stream_finished};
+use warpui::{AppContext, ModelContext, SingletonEntity};
+
+use super::response_stream::ResponseStreamId;
+use super::{BlocklistAIController, RequestInput, SessionContext};
+use crate::ai::agent::conversation::{AIConversationId, ConversationStatus, TaskSyncMode};
+use crate::ai::agent::{AIAgentActionId, AIAgentAttachment, BaseUserQuery, EntrypointType};
+use crate::ai::agent_conversations_model::AgentConversationsModel;
+use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::attachment_utils::{
+    build_file_attachment_map, download_task_file_attachments, resolve_agent_attachments,
+};
+use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
+use crate::ai::blocklist::history_model::BlocklistAIHistoryModel;
+use crate::ai::blocklist::local_agent_task_sync_model::LocalAgentTaskSyncModel;
+use crate::server::server_api::ServerApiProvider;
+use crate::workspaces::user_workspaces::ResolvedTeamScope;
+
+/// Resolution of the local conversation a shared-session-injected prompt should target. See
+/// [`BlocklistAIController::resolve_shared_session_prompt_target`].
+pub(super) enum SharedSessionPromptTarget {
+    /// Deliver to this existing local conversation -- either `server_token` resolved directly
+    /// to it, or (no token) this controller is bound to it for native startup injections.
+    Existing(AIConversationId),
+    /// No `server_token` was supplied at all, and this controller isn't bound to a native
+    /// conversation; the caller may create or reuse one via its own bootstrap logic. Only ever
+    /// returned when no token was supplied -- a token that fails to resolve locally must never
+    /// take this path, since the prompt names a specific conversation that already exists
+    /// somewhere (just not known to this client), and creating a new one would silently
+    /// duplicate it rather than deliver to it.
+    NoToken,
+    /// The prompt cannot be safely delivered anywhere and must be dropped, never used to create
+    /// a new conversation. `target` is `Some` when `server_token` resolves to a different local
+    /// conversation than the one this controller is bound to for native startup injections --
+    /// neither is safe to use, since the token addresses a conversation this controller doesn't
+    /// own and the binding addresses a conversation the prompt wasn't actually sent to. `target`
+    /// is `None` when `server_token` was supplied but doesn't resolve to any locally known
+    /// conversation at all (and this controller isn't bound, so there's no binding to fall back
+    /// to either).
+    Rejected { target: Option<AIConversationId> },
+}
+
+#[derive(Default)]
+pub(super) struct SharedSessionState {
+    // The current active request id for the shared session (used if subsequent events do not provide a request id)
+    current_response_id: Option<ResponseStreamId>,
+    /// `true` if shared response streams should be ignored, used to skip processing MAA response streams that
+    /// originate from session sharing replay when joining a new shared session for a follow-up on an existing
+    /// ambient agent conversation.
+    should_suppress_replayed_response_for_existing_conversation: bool,
+    /// Per-stream latch derived from the gate above once we decide the current replay should be
+    /// ignored.
+    should_skip_current_replayed_response: bool,
+    // The participant who initiated the current response stream
+    current_response_initiator: Option<ParticipantId>,
+    // The sharer's participant ID (set when session sharing starts)
+    sharer_participant_id: Option<ParticipantId>,
+}
+
+impl BlocklistAIController {
+    /// Controls whether replayed events for an already-restored shared-session conversation should
+    /// be ignored to avoid duplicating content appended from follow-up scrollback.
+    pub fn set_should_suppress_existing_agent_conversation_replay(&mut self, value: bool) {
+        self.shared_session_state
+            .should_suppress_replayed_response_for_existing_conversation = value;
+    }
+
+    /// Returns the current conversation ID for the active shared session stream.
+    /// Returns None if there's no active shared session conversation.
+    pub(crate) fn get_current_shared_session_conversation_id(
+        &self,
+        app: &AppContext,
+    ) -> Option<AIConversationId> {
+        self.shared_session_state
+            .current_response_id
+            .as_ref()
+            .and_then(|response_id| {
+                BlocklistAIHistoryModel::as_ref(app).conversation_for_response_stream(response_id)
+            })
+    }
+
+    /// Resolves a shared cancel control action to the live, not-yet-finished conversation bound
+    /// to `server_conversation_token`, if any. A finished conversation is not returned so that a
+    /// late or duplicate cancel cannot overwrite its terminal status.
+    pub fn conversation_for_shared_session_cancel_action(
+        &self,
+        server_conversation_token: ServerConversationToken,
+        ctx: &mut ModelContext<Self>,
+    ) -> Option<AIConversationId> {
+        let conversation_id = self.find_existing_conversation_by_server_token(
+            &server_conversation_token.to_string(),
+            ctx,
+        )?;
+        let history = BlocklistAIHistoryModel::as_ref(ctx);
+        let is_cancellable = history.is_conversation_live(conversation_id)
+            && history
+                .conversation(&conversation_id)
+                .is_some_and(|conversation| !conversation.status().is_done());
+        is_cancellable.then_some(conversation_id)
+    }
+
+    /// Apply agent session events to the current conversation state.
+    pub fn handle_shared_session_response_event(
+        &mut self,
+        resp: warp_multi_agent_api::ResponseEvent,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some(kind) = resp.r#type else {
+            return;
+        };
+        match kind {
+            warp_multi_agent_api::response_event::Type::Init(init) => {
+                self.on_shared_init(init, ctx)
+            }
+            warp_multi_agent_api::response_event::Type::ClientActions(actions) => {
+                self.on_shared_client_actions(actions, ctx)
+            }
+            warp_multi_agent_api::response_event::Type::Finished(finished) => {
+                self.on_shared_finished(finished, ctx);
+            }
+        }
+    }
+
+    fn on_shared_init(
+        &mut self,
+        init_event: warp_multi_agent_api::response_event::StreamInit,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let stream_id = ResponseStreamId::for_shared_session(&init_event);
+        self.shared_session_state.current_response_id = None;
+        self.shared_session_state
+            .should_skip_current_replayed_response = false;
+        let terminal_surface_id = self.terminal_surface_id;
+        let history = BlocklistAIHistoryModel::handle(ctx);
+
+        // If the server conversation already exists locally (matched by server_conversation_token), reuse it.
+        // Otherwise, if we're currently in an empty agent view conversation, reuse that
+        // local conversation ID and bind the incoming server token to it.
+        // This preserves block visibility for terminal blocks created in the given agent view.
+        let existing_conversation_id =
+            self.find_existing_conversation_by_server_token(&init_event.conversation_id, ctx);
+        let conversation_id = existing_conversation_id
+            .or_else(|| {
+                let selected_conversation_id = self
+                    .context_model
+                    .as_ref(ctx)
+                    .selected_conversation_id(ctx)?;
+
+                // If the current agent view's conversation is completely empty,
+                // we should just associate it with the incoming request/token.
+                let should_reuse_selected_conversation = history
+                    .as_ref(ctx)
+                    .conversation(&selected_conversation_id)
+                    .is_some_and(|conversation| {
+                        conversation.exchange_count() == 0
+                            && conversation.server_conversation_token().is_none()
+                    });
+                if !should_reuse_selected_conversation {
+                    return None;
+                }
+
+                history.update(ctx, |history, ctx| {
+                    history.set_server_conversation_token_for_conversation(
+                        selected_conversation_id,
+                        init_event.conversation_id.clone(),
+                    );
+                    history.set_viewing_shared_session_for_conversation(
+                        selected_conversation_id,
+                        true,
+                    );
+                    ctx.notify();
+                });
+
+                Some(selected_conversation_id)
+            })
+            .unwrap_or_else(|| {
+                history.update(ctx, |h, ctx| {
+                    h.start_new_conversation(terminal_surface_id, false, true, false, ctx)
+                })
+            });
+        if self.should_skip_replayed_response_for_existing_conversation(
+            existing_conversation_id,
+            &init_event.request_id,
+            ctx,
+        ) {
+            self.shared_session_state.current_response_id = Some(stream_id);
+            self.shared_session_state
+                .should_skip_current_replayed_response = true;
+            return;
+        }
+
+        self.shared_session_state.current_response_id = Some(stream_id.clone());
+        if existing_conversation_id.is_some() {
+            history.update(ctx, |history, ctx| {
+                history.set_viewing_shared_session_for_conversation(conversation_id, true);
+                ctx.notify();
+            });
+        }
+
+        let Some(conversation) = history.as_ref(ctx).conversation(&conversation_id) else {
+            report_error!(
+                "Tried to initialize shared session stream for non-existent conversation",
+                extra: { "conversation_id" => ?conversation_id }
+            );
+            return;
+        };
+        let task_id = conversation.get_root_task_id().clone();
+
+        // Ensure the action executor is in view-only mode for shared-session viewers.
+        self.action_model.update(ctx, |action_model, _ctx| {
+            action_model.set_view_only(true);
+        });
+
+        // Eagerly create an exchange for this request (with empty inputs) and initialize output.
+        let scope = ResolvedTeamScope::from_scope(&self.team_context(ctx));
+        history.update(ctx, |history_model, ctx| {
+            let _ = history_model.update_conversation_for_new_request_input(
+                RequestInput::for_task(
+                    vec![],
+                    task_id,
+                    &self.active_session,
+                    self.get_current_response_initiator(),
+                    conversation_id,
+                    self.terminal_surface_id,
+                    &scope,
+                    ctx,
+                ),
+                stream_id.clone(),
+                self.terminal_surface_id,
+                ctx,
+            );
+
+            history_model.initialize_output_for_response_stream(
+                &stream_id,
+                conversation_id,
+                self.terminal_surface_id,
+                init_event.clone(),
+                ctx,
+            );
+
+            // Mark conversation as in progress and active/selected
+            history_model.update_conversation_status(
+                self.terminal_surface_id,
+                conversation_id,
+                ConversationStatus::InProgress,
+                ctx,
+            );
+            history_model.set_active_conversation_id(
+                conversation_id,
+                self.terminal_surface_id,
+                ctx,
+            );
+        });
+        self.context_model.update(ctx, |context_model, ctx| {
+            context_model.set_pending_query_state_for_existing_conversation(
+                conversation_id,
+                AgentViewEntryOrigin::SharedSessionSelection,
+                ctx,
+            );
+        });
+    }
+
+    /// Returns whether replayed events for an already-populated shared-session conversation should
+    /// be ignored to avoid duplicating content that was restored from scrollback.
+    fn should_skip_replayed_response_for_existing_conversation(
+        &self,
+        existing_conversation_id: Option<AIConversationId>,
+        init_request_id: &str,
+        ctx: &mut ModelContext<Self>,
+    ) -> bool {
+        let Some(conversation_id) = existing_conversation_id else {
+            log::info!(
+                "should_skip_replayed_response: no existing conversation id, not skipping \
+                 (request_id={init_request_id})"
+            );
+            return false;
+        };
+        let is_receiving_replay = self
+            .terminal_model
+            .lock()
+            .is_receiving_agent_conversation_replay();
+        let suppress_enabled = self
+            .shared_session_state
+            .should_suppress_replayed_response_for_existing_conversation;
+        if !is_receiving_replay || !suppress_enabled {
+            log::info!(
+                "should_skip_replayed_response: not skipping \
+                 (request_id={init_request_id}, conversation_id={conversation_id:?}, \
+                 is_receiving_replay={is_receiving_replay}, suppress_enabled={suppress_enabled})"
+            );
+            return false;
+        }
+
+        // Only skip the replayed response when our local task already has the given request_id.
+        // New exchanges (e.g. the user's first post-handoff prompt) carry unseen request_ids and must flow through normally.
+        let history = BlocklistAIHistoryModel::as_ref(ctx);
+        let found = history.conversation(&conversation_id).is_some_and(|conv| {
+            conv.all_tasks()
+                .any(|task| task.messages().any(|msg| msg.request_id == init_request_id))
+        });
+        if !found {
+            log::info!(
+                "should_skip_replayed_response: not skipping, request_id not found in local \
+                 conversation (request_id={init_request_id}, conversation_id={conversation_id:?})"
+            );
+        }
+        found
+    }
+
+    fn on_shared_client_actions(
+        &mut self,
+        actions: warp_multi_agent_api::response_event::ClientActions,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if self
+            .shared_session_state
+            .should_skip_current_replayed_response
+        {
+            return;
+        }
+        let Some(stream_id) = self.shared_session_state.current_response_id.clone() else {
+            log::warn!("Received shared session client actions with no active response stream id.");
+            return;
+        };
+
+        let Some(conversation_id) =
+            BlocklistAIHistoryModel::as_ref(ctx).conversation_for_response_stream(&stream_id)
+        else {
+            log::warn!(
+                "No conversation ID for shared session response stream with id={stream_id:?}"
+            );
+            return;
+        };
+
+        self.update_directory_context_from_client_actions(&actions, ctx);
+        let skill_path_origin =
+            SessionContext::from_session(self.active_session.as_ref(ctx), ctx).skill_path_origin();
+        let history_model = BlocklistAIHistoryModel::handle(ctx);
+        history_model.update(ctx, |history_model, ctx| {
+            if let Err(e) = history_model.apply_client_actions(
+                &stream_id,
+                actions.actions,
+                conversation_id,
+                self.terminal_surface_id,
+                &skill_path_origin,
+                ctx,
+            ) {
+                report_error!(
+                    anyhow::Error::new(e).context(
+                        "Failed to apply client actions to conversation for shared session"
+                    )
+                );
+            }
+        });
+        let Some(conversation) = history_model.as_ref(ctx).conversation(&conversation_id) else {
+            report_error!(
+                "Failed to find conversation with id",
+                extra: { "conversation_id" => ?conversation_id }
+            );
+            return;
+        };
+
+        let new_action_results_to_apply = conversation
+            .new_exchange_ids_for_response(&stream_id)
+            .filter_map(|exchange_id| conversation.exchange_with_id(exchange_id))
+            .flat_map(|exchange| {
+                exchange
+                    .input
+                    .iter()
+                    .filter_map(|i| i.action_result().cloned())
+            })
+            .collect_vec();
+
+        // Apply finished results to unfinished actions.
+        for result in new_action_results_to_apply.into_iter() {
+            if self
+                .action_model
+                .as_ref(ctx)
+                .get_action_result(&result.id)
+                .is_none()
+            {
+                self.action_model.update(ctx, |action_model, ctx| {
+                    action_model.apply_finished_action_result(conversation_id, result, ctx);
+                });
+            }
+        }
+    }
+
+    /// Update the context model's working directory context using the most recent message context.
+    fn update_directory_context_from_client_actions(
+        &mut self,
+        actions: &ClientActions,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        for client_action in &actions.actions {
+            if let Some(Action::AddMessagesToTask(add)) = &client_action.action {
+                for message in &add.messages {
+                    if let Some(inner) = &message.message {
+                        let ctx_opt = match inner {
+                            Message::UserQuery(uq) => uq.context.as_ref(),
+                            Message::SystemQuery(sq) => sq.context.as_ref(),
+                            Message::ToolCallResult(tcr) => tcr.context.as_ref(),
+                            _ => None,
+                        };
+
+                        if let Some(input_ctx) = ctx_opt
+                            && let Some(dir) = &input_ctx.directory
+                        {
+                            self.context_model.update(ctx, |context_model, ctx| {
+                                context_model.update_directory_context(
+                                    if dir.pwd.is_empty() {
+                                        None
+                                    } else {
+                                        Some(dir.pwd.clone())
+                                    },
+                                    if dir.home.is_empty() {
+                                        None
+                                    } else {
+                                        Some(dir.home.clone())
+                                    },
+                                    ctx,
+                                );
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn on_shared_finished(
+        &mut self,
+        finished: warp_multi_agent_api::response_event::StreamFinished,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if self
+            .shared_session_state
+            .should_skip_current_replayed_response
+        {
+            self.shared_session_state.current_response_id.take();
+            self.shared_session_state
+                .should_skip_current_replayed_response = false;
+            return;
+        }
+        let Some(stream_id) = self.shared_session_state.current_response_id.take() else {
+            log::warn!("Shared Finished missing request_id");
+            return;
+        };
+        let Some(conversation_id) =
+            BlocklistAIHistoryModel::as_ref(ctx).conversation_for_response_stream(&stream_id)
+        else {
+            log::warn!(
+                "No conversation ID for shared session response stream with id={stream_id:?}"
+            );
+            return;
+        };
+
+        let history_model = BlocklistAIHistoryModel::handle(ctx);
+        let Some(conversation) = history_model.as_ref(ctx).conversation(&conversation_id) else {
+            report_error!(
+                "Failed to find conversation with id",
+                extra: { "conversation_id" => ?conversation_id }
+            );
+            return;
+        };
+
+        // Queue actions for viewer UI in view-only mode
+        let mut actions_to_queue = vec![];
+        let mut did_exchange_contain_user_query = false;
+
+        for new_exchange_id in conversation.new_exchange_ids_for_response(&stream_id) {
+            let Some(exchange) = conversation.exchange_with_id(new_exchange_id) else {
+                continue;
+            };
+            did_exchange_contain_user_query |=
+                exchange.input.iter().any(|input| input.is_user_query());
+
+            if let Some(output) = exchange.output_status.output() {
+                actions_to_queue.extend(output.get().actions().cloned().collect_vec().into_iter());
+            }
+        }
+
+        if !actions_to_queue.is_empty() {
+            self.action_model.update(ctx, |action_model, ctx| {
+                action_model.queue_actions(actions_to_queue, conversation_id, ctx);
+            });
+        }
+
+        self.handle_response_stream_finished(
+            &stream_id,
+            finished,
+            conversation_id,
+            did_exchange_contain_user_query,
+            ctx,
+        );
+    }
+
+    /// Finds an existing client conversation whose server_conversation_token matches `server_token`.
+    /// Searches only live conversations for this terminal surface. Returns None if no match is found.
+    pub fn find_existing_conversation_by_server_token(
+        &self,
+        server_token: &str,
+        ctx: &mut ModelContext<Self>,
+    ) -> Option<AIConversationId> {
+        let history = BlocklistAIHistoryModel::handle(ctx);
+        history
+            .as_ref(ctx)
+            .all_live_conversations_for_terminal_surface(self.terminal_surface_id)
+            .find_map(|conv| {
+                conv.server_conversation_token()
+                    .and_then(|t| (t.as_str() == server_token).then_some(conv.id()))
+            })
+    }
+
+    /// Resolves which local conversation a shared-session-injected prompt should target, given
+    /// an optional server-supplied `server_token` and this controller's native startup binding
+    /// (if any). Computed once so `route_native_startup_injection` and
+    /// `execute_warp_agent_prompt_from_shared_session_injection` agree on the same precedence: a
+    /// `server_token` that resolves locally is authoritative over the native binding, and an
+    /// explicit token that *doesn't* resolve locally is never treated the same as no token at
+    /// all -- see [`SharedSessionPromptTarget::NoToken`].
+    pub(super) fn resolve_shared_session_prompt_target(
+        &self,
+        server_token: Option<&ServerConversationToken>,
+        ctx: &mut ModelContext<Self>,
+    ) -> SharedSessionPromptTarget {
+        let Some(server_token) = server_token else {
+            return match self.native_prompt_conversation_id {
+                Some(bound) => SharedSessionPromptTarget::Existing(bound),
+                None => SharedSessionPromptTarget::NoToken,
+            };
+        };
+        let resolved =
+            self.find_existing_conversation_by_server_token(&server_token.to_string(), ctx);
+        match (resolved, self.native_prompt_conversation_id) {
+            (Some(target), Some(bound)) if target != bound => SharedSessionPromptTarget::Rejected {
+                target: Some(target),
+            },
+            (Some(target), _) => SharedSessionPromptTarget::Existing(target),
+            // A token was supplied but doesn't resolve locally. While bound, trust the binding
+            // regardless -- routinely true for early startup follow-ups before the
+            // conversation's token has synced locally (see `route_native_startup_injection`'s
+            // doc comment).
+            (None, Some(bound)) => SharedSessionPromptTarget::Existing(bound),
+            // Otherwise, this token names a conversation this client doesn't know
+            // about, so it must be rejected rather than mistaken for an explicit no-token
+            // request that's free to bootstrap a new conversation.
+            (None, None) => SharedSessionPromptTarget::Rejected { target: None },
+        }
+    }
+
+    /// Sends a synthetic cancellation event to viewers when the sharer cancels a conversation.
+    /// This ensures viewers see the conversation as cancelled and update their UI accordingly.
+    pub(super) fn send_cancellation_to_viewers(&mut self, ctx: &mut ModelContext<Self>) {
+        if !self
+            .terminal_model
+            .lock()
+            .shared_session_status()
+            .is_sharer()
+        {
+            return;
+        }
+
+        // Get the current conversation and build usage metadata from it.
+        let conversation_id = self.get_current_shared_session_conversation_id(ctx);
+        let usage_metadata = conversation_id.and_then(|conv_id| {
+            BlocklistAIHistoryModel::as_ref(ctx)
+                .conversation(&conv_id)
+                .map(|conversation| stream_finished::ConversationUsageMetadata {
+                    context_window_usage: conversation.context_window_usage(),
+                    credits_spent: conversation.inference_credits_spent(),
+                    #[allow(deprecated)]
+                    platform_credits_spent: conversation.platform_credits_spent(),
+                    summarized: conversation.was_summarized(),
+                    total_input_tokens: 0,
+                    total_charges: None,
+                    #[allow(deprecated)]
+                    token_usage: conversation
+                        .token_usage()
+                        .iter()
+                        .map(|u| u.to_proto_combined())
+                        .collect(),
+                    tool_usage_metadata: Some(conversation.tool_usage_metadata().into()),
+                    warp_token_usage: conversation
+                        .token_usage()
+                        .iter()
+                        .filter_map(|u| u.to_proto_warp_usage())
+                        .collect(),
+                    byok_token_usage: conversation
+                        .token_usage()
+                        .iter()
+                        .filter_map(|u| u.to_proto_byok_usage())
+                        .collect(),
+                    custom_endpoint_token_usage: conversation
+                        .token_usage()
+                        .iter()
+                        .filter_map(|u| u.to_proto_custom_endpoint_usage())
+                        .collect(),
+                    context_window_segments: conversation
+                        .context_window_segments()
+                        .iter()
+                        .map(Into::into)
+                        .collect(),
+                })
+        });
+
+        // Create a synthetic StreamFinished event to notify viewers of the cancellation.
+        // We use "Done" reason rather than a specific cancellation reason because
+        // the proto doesn't have explicit variants for UserCommandExecuted or ManuallyCancelled.
+        // TODO: we should probably add representations for said variants in the proto for this usecase.
+        let finished_event = warp_multi_agent_api::ResponseEvent {
+            r#type: Some(warp_multi_agent_api::response_event::Type::Finished(
+                warp_multi_agent_api::response_event::StreamFinished {
+                    reason: Some(stream_finished::Reason::Done(stream_finished::Done {})),
+                    conversation_usage_metadata: usage_metadata,
+                    token_usage: vec![],
+                    should_refresh_model_config: false,
+                    #[allow(deprecated)]
+                    request_cost: None,
+                    request_charges: None,
+                },
+            )),
+        };
+
+        // Send the cancellation event to viewers.
+        // If no initiator is tracked, fall back to the sharer's participant ID.
+        let forked_from_token = conversation_id.and_then(|conv_id| {
+            BlocklistAIHistoryModel::as_ref(ctx)
+                .conversation(&conv_id)
+                .and_then(|conv| {
+                    conv.forked_from_server_conversation_token()
+                        .map(|t| t.as_str().to_string())
+                })
+        });
+        self.terminal_model
+            .lock()
+            .send_agent_response_for_shared_session(
+                &finished_event,
+                self.get_current_response_initiator()
+                    .or_else(|| self.get_sharer_participant_id()),
+                forked_from_token,
+            );
+    }
+
+    /// Marks an action as remotely executing when a viewer receives a CommandExecutionStarted event.
+    /// This allows the viewer's UI to show the action as running rather than queued.
+    pub fn mark_action_as_remotely_executing_in_shared_session(
+        &mut self,
+        action_id: &AIAgentActionId,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.action_model.update(ctx, |action_model, ctx| {
+            action_model.mark_action_as_remotely_executing(action_id, conversation_id, ctx);
+        });
+    }
+
+    /// Sets the participant ID for the current response.
+    /// This should be called when initiating a query to track who sent it.
+    pub fn set_current_response_initiator(&mut self, participant_id: ParticipantId) {
+        self.shared_session_state.current_response_initiator = Some(participant_id);
+    }
+
+    /// Gets the participant ID for the current response.
+    pub(super) fn get_current_response_initiator(&self) -> Option<ParticipantId> {
+        self.shared_session_state.current_response_initiator.clone()
+    }
+
+    /// Sets the sharer's participant ID. Should be called when a shared session is created.
+    pub fn set_sharer_participant_id(&mut self, participant_id: ParticipantId) {
+        self.shared_session_state.sharer_participant_id = Some(participant_id);
+    }
+
+    /// Gets the sharer's participant ID.
+    pub(super) fn get_sharer_participant_id(&self) -> Option<ParticipantId> {
+        self.shared_session_state.sharer_participant_id.clone()
+    }
+
+    /// Links a forked conversation's new token to an existing conversation.
+    /// This is called on the viewer side when receiving a response for a forked conversation
+    /// so that new responses are added to the correct conversation.
+    pub fn link_forked_conversation_token(
+        &mut self,
+        forked_from_token: &str,
+        event: &warp_multi_agent_api::ResponseEvent,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        // Extract the new server conversation id from the StreamInit event
+        let new_conversation_id = match &event.r#type {
+            Some(warp_multi_agent_api::response_event::Type::Init(init)) => {
+                init.conversation_id.as_str()
+            }
+            // Only StreamInit events have conversation_id.
+            _ => return,
+        };
+
+        // Find the conversation with the forked_from token
+        if let Some(conversation_id) =
+            self.find_existing_conversation_by_server_token(forked_from_token, ctx)
+        {
+            // Update the conversation's server_conversation_token to the new one
+            BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                history.set_server_conversation_token_for_conversation(
+                    conversation_id,
+                    new_conversation_id.to_string(),
+                );
+                ctx.notify();
+            });
+        }
+    }
+
+    /// Execute an agent prompt on behalf of the viewer, against Warp's native Oz harness.
+    ///
+    /// Callers must have already routed away third-party-harness-backed tasks: this method (and
+    /// `send_warp_agent_prompt_from_shared_session_injection`, which it feeds into) can only
+    /// resolve or create *native* `AIConversation`s, so calling it for a task whose canonical
+    /// representation is a CLI-harness session would either miss (its conversation is never in
+    /// `BlocklistAIHistoryModel`) or, on the no-token fallback path, wrongly create one. See
+    /// `accept_agent_prompt` (`terminal_view_adaptor.rs`) for the routing choke point that
+    /// guarantees this.
+    pub fn execute_warp_agent_prompt_from_shared_session_injection(
+        &mut self,
+        prompt: String,
+        server_conversation_token: Option<ServerConversationToken>,
+        attachments: Vec<AgentAttachment>,
+        participant_id: ParticipantId,
+        base: Option<BaseUserQuery>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        // Route through the bound native conversation, if any -- see
+        // `route_native_startup_injection`'s doc comment for why this must fully own dispatch
+        // once bound, rather than falling back to token resolution below.
+        if self.route_native_startup_injection(
+            &prompt,
+            server_conversation_token.as_ref(),
+            &attachments,
+            &participant_id,
+            base.as_ref(),
+            ctx,
+        ) {
+            return;
+        }
+        // Not bound to a native conversation (checked by `route_native_startup_injection`
+        // above), so the resolver only ever resolves via `server_conversation_token`, allows
+        // bootstrapping a new conversation for an explicit no-token request (`NoToken`), or
+        // rejects outright -- never bound-vs-token mismatch, since that requires a binding.
+        let conversation_id = match self
+            .resolve_shared_session_prompt_target(server_conversation_token.as_ref(), ctx)
+        {
+            SharedSessionPromptTarget::Existing(id) => {
+                match BlocklistAIHistoryModel::as_ref(ctx).conversation(&id) {
+                    Some(_) => Some(id),
+                    None => {
+                        report_error!(
+                            "Tried to execute prompt for non-existent conversation",
+                            extra: { "id" => ?id }
+                        );
+                        None
+                    }
+                }
+            }
+            SharedSessionPromptTarget::NoToken => None,
+            SharedSessionPromptTarget::Rejected { target } => {
+                // A server token was supplied but doesn't resolve to any conversation known to
+                // this client. Never fall back to creating a new conversation here -- that would
+                // silently duplicate a conversation the prompt was actually addressed to.
+                report_error!(
+                    "Dropped a shared-session prompt whose server token does not resolve to a \
+                     known local conversation",
+                    extra: { "target_conversation_id" => ?target, "terminal_id" => ?self.terminal_surface_id }
+                );
+                return;
+            }
+        };
+
+        // Process attachments and set them in the context model
+        let (block_ids, selected_text_parts, file_downloads) =
+            resolve_agent_attachments(attachments);
+
+        // Set block and text attachments in the context model.
+        self.context_model.update(ctx, |context_model, ctx| {
+            // Set block IDs if any were provided
+            if !block_ids.is_empty() {
+                context_model.set_pending_context_block_ids(block_ids, false, ctx);
+            }
+
+            // Set selected text if any was provided
+            if !selected_text_parts.is_empty() {
+                let combined_text = selected_text_parts.join("\n");
+                context_model.set_pending_context_selected_text(Some(combined_text), false, ctx);
+            }
+        });
+
+        // If there are no file downloads (or the feature is disabled), send the query immediately.
+        if file_downloads.is_empty() || !FeatureFlag::CloudModeImageContext.is_enabled() {
+            self.send_warp_agent_prompt_from_shared_session_injection(
+                prompt,
+                conversation_id,
+                participant_id,
+                HashMap::new(),
+                base,
+                ctx,
+            );
+            return;
+        }
+
+        // We have file downloads — ensure both the download dir and task ID are available.
+        let Some(attachment_dir) = self.attachments_download_dir.clone() else {
+            report_error!(
+                "No attachments_download_dir set on controller, cannot process file attachments"
+            );
+            self.send_warp_agent_prompt_from_shared_session_injection(
+                prompt,
+                conversation_id,
+                participant_id,
+                HashMap::new(),
+                base,
+                ctx,
+            );
+            return;
+        };
+        let Some(task_id) = self.ambient_agent_task_id else {
+            report_error!("No task_id available to download attachments");
+            self.send_warp_agent_prompt_from_shared_session_injection(
+                prompt,
+                conversation_id,
+                participant_id,
+                HashMap::new(),
+                base,
+                ctx,
+            );
+            return;
+        };
+
+        let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
+        let http_client = ServerApiProvider::as_ref(ctx).get_http_client();
+
+        ctx.spawn(
+            download_task_file_attachments(
+                ai_client,
+                http_client,
+                task_id,
+                attachment_dir,
+                file_downloads,
+            ),
+            move |controller, downloaded, ctx| {
+                let file_attachments = build_file_attachment_map(&downloaded);
+                controller.send_warp_agent_prompt_from_shared_session_injection(
+                    prompt,
+                    conversation_id,
+                    participant_id,
+                    file_attachments,
+                    base,
+                    ctx,
+                );
+            },
+        );
+    }
+
+    /// Whether a no-token shared-session prompt landing right now would bootstrap a debug
+    /// conversation into a retained environment-setup-failure session (REMOTE-2661). Getting
+    /// this wrong only costs a misleading lifecycle update; the server guards against reopening.
+    fn is_open_for_setup_failure_debug_bootstrap(&self, ctx: &AppContext) -> bool {
+        self.ambient_agent_task_id.is_some_and(|task_id| {
+            AgentConversationsModel::as_ref(ctx)
+                .get_task_data(&task_id)
+                .is_some_and(|task| task.is_open_for_setup_failure_debug_bootstrap())
+        })
+    }
+
+    /// The task ID a no-token prompt landing right now must not spawn a native `AIConversation`
+    /// for, because it is (or is configured to be) backed by a third-party CLI-harness session.
+    /// Two independent signals are checked, since either can be true without the other:
+    /// - `LocalAgentTaskSyncModel::cli_harness_task_id_for_terminal_view`: the harness session has been
+    ///   registered for this pane (true from harness setup time, before its process launches).
+    /// - `AmbientAgentTask::is_third_party_harness`: the task's stored config says it runs on a
+    ///   third-party harness, independent of whether a session has registered for this pane yet
+    ///   (e.g. very early in setup, or if registration is ever skipped by a bug).
+    fn cli_harness_backed_task_id(&self, ctx: &AppContext) -> Option<AmbientAgentTaskId> {
+        LocalAgentTaskSyncModel::as_ref(ctx)
+            .cli_harness_task_id_for_terminal_view(self.terminal_surface_id)
+            .or_else(|| {
+                self.ambient_agent_task_id.filter(|task_id| {
+                    AgentConversationsModel::as_ref(ctx)
+                        .get_task_data(task_id)
+                        .is_some_and(|task| task.is_third_party_harness())
+                })
+            })
+    }
+
+    /// Tags `conversation_id` as a setup-failure debug bootstrap so `LocalAgentTaskSyncModel`
+    /// stops deriving task lifecycle updates from it. Must run before the first exchange can
+    /// report a server token, which would otherwise trigger an erroneous `IN_PROGRESS` report.
+    fn tag_conversation_as_setup_failure_debug_bootstrap(
+        &self,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, _ctx| {
+            let Some(conversation) = history.conversation_mut(&conversation_id) else {
+                report_error!(
+                    "Tried to tag non-existent conversation as a setup-failure debug bootstrap",
+                    extra: { "conversation_id" => ?conversation_id }
+                );
+                return;
+            };
+            conversation.set_task_sync_mode(TaskSyncMode::PreserveTerminalSetupFailure);
+        });
+    }
+
+    /// Helper to send a prompt against Warp's native Oz harness, used both for immediate sends
+    /// (no file attachments) and deferred sends (after file downloads complete). Only ever
+    /// resolves or creates a native `AIConversation` — see the doc comment on
+    /// `execute_warp_agent_prompt_from_shared_session_injection`, this method's sole caller.
+    fn send_warp_agent_prompt_from_shared_session_injection(
+        &mut self,
+        prompt: String,
+        conversation_id: Option<AIConversationId>,
+        participant_id: ParticipantId,
+        file_attachments: HashMap<String, AIAgentAttachment>,
+        base: Option<BaseUserQuery>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if let Some(conversation_id) = conversation_id {
+            if FeatureFlag::AgentView.is_enabled() {
+                // Enter agent view for this conversation so the sharer's UI state is correct
+                // and updates are sent to the viewer.
+                self.context_model.update(ctx, |context_model, ctx| {
+                    context_model.set_pending_query_state_for_existing_conversation(
+                        conversation_id,
+                        AgentViewEntryOrigin::SharedSessionSelection,
+                        ctx,
+                    );
+                });
+            }
+            self.send_user_query_in_conversation_with_attachments(
+                prompt,
+                conversation_id,
+                Some(participant_id),
+                file_attachments,
+                base,
+                ctx,
+            );
+        } else {
+            // Check before any conversation exists, so the tag lands before the first status
+            // update can fire (REMOTE-2661).
+            let bootstraps_setup_failure_debug =
+                self.is_open_for_setup_failure_debug_bootstrap(ctx);
+
+            // Defense-in-depth (REMOTE-2661): a task backed by a registered CLI-harness session
+            // must never get a native `AIConversation` from a no-token prompt — its canonical
+            // representation lives in `LocalAgentTaskSyncModel`/`CLIAgentSessionsModel`, never
+            // in `BlocklistAIHistoryModel`, so a conversation created here would silently become
+            // the run's wrong canonical conversation ID once it reports a server token.
+            // `accept_agent_prompt` (`terminal_view_adaptor.rs`) is the primary gate that routes
+            // these prompts to `PendingCliHarnessPromptQueue` before they ever reach this
+            // method; reaching here for such a task means that gate was bypassed by a bug.
+            if !bootstraps_setup_failure_debug
+                && let Some(task_id) = self.cli_harness_backed_task_id(ctx)
+            {
+                report_error!(
+                    "Refused to create a native conversation for a task backed by a registered \
+                     CLI-harness session; this prompt should have been routed to \
+                     PendingCliHarnessPromptQueue by accept_agent_prompt",
+                    extra: { "task_id" => %task_id }
+                );
+                return;
+            }
+
+            if FeatureFlag::AgentView.is_enabled() {
+                // If we're already in an empty agent view conversation, reuse it
+                // (so that any command blocks remain visible). Otherwise create a new one for the given prompt.
+                let history = BlocklistAIHistoryModel::handle(ctx);
+                let origin = AgentViewEntryOrigin::SharedSessionSelection;
+
+                let Some(conversation_id) = self
+                    .context_model
+                    .as_ref(ctx)
+                    .selected_conversation_id(ctx)
+                    .filter(|conversation_id| {
+                        history
+                            .as_ref(ctx)
+                            .conversation(conversation_id)
+                            .is_some_and(|conversation| {
+                                conversation.exchange_count() == 0
+                                    && conversation.server_conversation_token().is_none()
+                            })
+                    })
+                    .or_else(|| {
+                        self.context_model.update(ctx, |context_model, ctx| {
+                            context_model.try_start_new_conversation(origin, ctx).ok()
+                        })
+                    })
+                else {
+                    report_error!("Failed to get conversation id for shared session prompt");
+                    return;
+                };
+
+                if bootstraps_setup_failure_debug {
+                    self.tag_conversation_as_setup_failure_debug_bootstrap(conversation_id, ctx);
+                }
+
+                self.send_user_query_in_conversation_with_attachments(
+                    prompt,
+                    conversation_id,
+                    Some(participant_id),
+                    file_attachments,
+                    base,
+                    ctx,
+                );
+                return;
+            }
+
+            self.send_user_query_in_new_conversation_internal(
+                prompt,
+                None,
+                EntrypointType::SharedSession,
+                Some(participant_id),
+                /*is_queued_prompt*/ false,
+                /*queued_query_id*/ None,
+                base,
+                file_attachments,
+                ctx,
+            );
+
+            if bootstraps_setup_failure_debug {
+                // The legacy (non-AgentView) path doesn't hand back the new conversation ID
+                // directly; it becomes this surface's active conversation synchronously above.
+                if let Some(conversation_id) = BlocklistAIHistoryModel::as_ref(ctx)
+                    .active_conversation_id(self.terminal_surface_id)
+                {
+                    self.tag_conversation_as_setup_failure_debug_bootstrap(conversation_id, ctx);
+                } else {
+                    report_error!(
+                        "Could not resolve the bootstrapped debug conversation to tag it"
+                    );
+                }
+            }
+        }
+    }
+}

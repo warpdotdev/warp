@@ -1,0 +1,39 @@
+[package]
+name = "warp_managed_secrets"
+version = "0.1.0"
+authors.workspace = true
+publish.workspace = true
+license.workspace = true
+edition = "2024"
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+base64.workspace = true
+chrono.workspace = true
+log.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
+tink-core = "0.3"
+tink-proto = "0.3"
+tink-hybrid = "0.3"
+tracing.workspace = true
+zeroize = "1.8"
+warpui_core.workspace = true
+warp_core.workspace = true
+warp_graphql.workspace = true
+vec1.workspace = true
+warp_isolation_platform.workspace = true
+
+# Pure-Rust HPKE implementation (RFC 9180).
+hpke = { version = "0.13", default-features = false, features = ["alloc", "x25519"] }
+# Pinned to 0.9 (not the workspace 0.8) to match hpke's rand_core 0.9 requirement.
+rand = "0.9"
+
+[target.'cfg(target_family = "wasm")'.dependencies]
+getrandom = { version = "0.3", features = ["wasm_js"] }
+
+[dev-dependencies]
+tink-core = { version = "0.3", features = ["json", "insecure"] }

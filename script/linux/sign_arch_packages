@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+#
+# Signs the Arch Linux packages in a given directory.
+
+PKGDIR="$1"
+
+for package in $PKGDIR/*.pkg.tar.zst; do
+    gpg --no-tty --pinentry-mode loopback --detach-sign --no-armor --batch --yes --output $package.sig $package
+done

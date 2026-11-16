@@ -1,0 +1,15 @@
+Third-Party Licenses for Warp
+================================================================================
+
+This file contains license information for third-party components included
+in the Warp distribution.
+
+{{#each licenses}}
+{{name}}
+{{#each used_by}}
+  - {{crate.name}} {{crate.version}}
+{{/each}}
+--------------------------------------------------------------------------------
+{{{text}}}
+
+{{/each}}

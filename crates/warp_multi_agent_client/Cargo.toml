@@ -1,0 +1,24 @@
+[package]
+name = "warp_multi_agent_client"
+version = "0.1.0"
+edition = "2024"
+authors.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[features]
+agent_mode_evals = ["warp_server_client/agent_mode_evals"]
+
+[dependencies]
+anyhow.workspace = true
+base64.workspace = true
+cfg-if.workspace = true
+futures.workspace = true
+prost.workspace = true
+reqwest-eventsource.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-futures.workspace = true
+warp_core.workspace = true
+warp_multi_agent_api.workspace = true
+warp_server_client.workspace = true

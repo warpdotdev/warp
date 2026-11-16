@@ -1,0 +1,103 @@
+[package]
+name = "ai"
+version = "0.1.0"
+edition = "2024"
+publish.workspace = true
+license.workspace = true
+
+[features]
+jemalloc = []
+local_fs = []
+test-util = []
+crash_reporting = ["dep:sentry"]
+
+[dependencies]
+ai_types.workspace = true
+async-channel.workspace = true
+async-trait.workspace = true
+bincode.workspace = true
+bytes.workspace = true
+cfg-if.workspace = true
+computer_use.workspace = true
+dunce.workspace = true
+globset.workspace = true
+prost-types.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+schemars = "1"
+settings_value.workspace = true
+string-offset.workspace = true
+typed-path.workspace = true
+anyhow.workspace = true
+base16ct = "0.2.0"
+streaming-iterator.workspace = true
+instant.workspace = true
+itertools.workspace = true
+indexmap = { version = "2.0.2", features = ["serde"] }
+rayon.workspace = true
+ignore = "0.4.23"
+line-span = "0.1.5"
+log.workspace = true
+sentry = { workspace = true, optional = true }
+shellexpand.workspace = true
+strum.workspace = true
+strum_macros.workspace = true
+warpui_core.workspace = true
+warpui_extras = { workspace = true, features = ["default"] }
+warp_graphql.workspace = true
+warp_multi_agent_api.workspace = true
+dirs.workspace = true
+lazy_static.workspace = true
+regex.workspace = true
+rmcp.workspace = true
+sha2 = "0.10.8"
+strsim.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt"] }
+futures.workspace = true
+generic-array = "0.14.7"
+derivative.workspace = true
+hex.workspace = true
+warp_cli.workspace = true
+warp_core.workspace = true
+warp_errors.workspace = true
+warp_terminal.workspace = true
+warp_util.workspace = true
+chrono.workspace = true
+persistence.workspace = true
+priority-queue = "2.3.1"
+repo_metadata.workspace = true
+uuid.workspace = true
+unicode-width.workspace = true
+url.workspace = true
+yaml-rust.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+nix.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+async-fs.workspace = true
+async-process.workspace = true
+arborium.workspace = true
+base64.workspace = true
+command.workspace = true
+http_client.workspace = true
+languages.workspace = true
+rand.workspace = true
+serde_urlencoded.workspace = true
+syntax_tree.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread"] }
+watcher.workspace = true
+notify-debouncer-full.workspace = true
+
+[dev-dependencies]
+filetime = "0.2.25"
+prost.workspace = true
+serial_test = "0.8.0"
+tempfile.workspace = true
+virtual-fs.workspace = true
+warp_core = { workspace = true, features = ["test-util"] }
+
+[build-dependencies]
+anyhow.workspace = true

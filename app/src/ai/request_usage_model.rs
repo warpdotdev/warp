@@ -1,0 +1,964 @@
+use std::sync::Arc;
+
+use ai::api_keys::{ApiKeyManager, AwsCredentialsState};
+use anyhow::Context as _;
+use chrono::{DateTime, Local, Utc};
+use futures::channel::oneshot::{self, Receiver};
+use instant::Instant;
+use serde::{Deserialize, Serialize};
+use warp_core::user_preferences::GetUserPreferences as _;
+use warp_errors::report_error;
+pub use warp_graphql::billing::BonusGrantType;
+use warp_graphql::queries::get_request_limit_info::WorkspaceIncludedUsageInfo;
+use warp_graphql::scalars::time::ServerTimestamp;
+use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
+
+use crate::BlocklistAIHistoryModel;
+use crate::ai::agent::AIAgentExchangeId;
+use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::credit_availability::{AICreditAvailability, AICreditDenialReason, AICreditSource};
+use crate::auth::AuthStateProvider;
+use crate::pricing::PricingInfoModel;
+use crate::server::server_api::ai::AIClient;
+use crate::settings::AISettings;
+use crate::workspaces::user_workspaces::{TeamScope, UserWorkspaces};
+use crate::workspaces::workspace::WorkspaceUid;
+
+/// Threshold of ambient-only credits at which we surface upgrade/CTA UI.
+pub const AMBIENT_AGENT_TRIAL_CREDIT_THRESHOLD: i32 = 20;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BonusGrantScope {
+    User,
+    Team(WorkspaceUid),
+    Workspace(WorkspaceUid),
+}
+
+impl BonusGrantScope {
+    pub fn workspace_uid(&self) -> Option<WorkspaceUid> {
+        match self {
+            BonusGrantScope::User => None,
+            BonusGrantScope::Team(uid) | BonusGrantScope::Workspace(uid) => Some(*uid),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Default)]
+pub enum BuyCreditsBannerDisplayState {
+    #[default]
+    Hidden,
+    OutOfCredits,
+    MonthlyLimitReached,
+}
+
+#[derive(Clone, Debug)]
+pub struct BonusGrant {
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub cost_cents: i32,
+    pub expiration: Option<chrono::DateTime<chrono::Utc>>,
+    pub grant_type: BonusGrantType,
+    pub reason: String,
+    pub user_facing_message: Option<String>,
+    pub request_credits_granted: i32,
+    pub request_credits_remaining: i32,
+    /// The grant's `usageCentsGranted`: the usage it granted, in US cents, as recorded on the
+    /// grant ledger. `None` when the server does not send it.
+    pub usage_cents_granted: Option<f64>,
+    /// The grant's `usageCentsRemaining`: the usage left on it, in US cents, as recorded on the
+    /// grant ledger. `None` when the server does not send it.
+    pub usage_cents_remaining: Option<f64>,
+    pub scope: BonusGrantScope,
+}
+
+/// The key for the corresponding entry in UserDefaults.
+const REQUEST_LIMIT_INFO_CACHE_KEY: &str = "AIRequestLimitInfo";
+const AMBIENT_CREDITS_BANNER_DISMISSED_KEY: &str = "AmbientCreditsBannerDismissed";
+
+#[derive(Copy, Clone, Debug, Serialize, Deserialize)]
+pub enum RequestLimitRefreshDuration {
+    Weekly,
+    Monthly,
+    EveryTwoWeeks,
+}
+
+/// The current rate limit info for the user.
+#[derive(Copy, Clone, Debug, Serialize, Deserialize)]
+pub struct RequestLimitInfo {
+    pub limit: usize,
+    pub num_requests_used_since_refresh: usize,
+    /// The server's `includedUsageCents`: the included monthly allowance in US cents, when it
+    /// sends one. Whether to display usage in dollars is decided by the plan's
+    /// `Tier::charge_unit`, not by this being `Some`.
+    #[serde(default)]
+    pub included_usage_cents: Option<f64>,
+    /// The server's `usageCentsUsedSinceLastRefresh`: how much of the included allowance has
+    /// been used, in US cents, when it sends one.
+    #[serde(default)]
+    pub usage_cents_used_since_last_refresh: Option<f64>,
+    pub next_refresh_time: ServerTimestamp,
+    pub is_unlimited: bool,
+    pub request_limit_refresh_duration: RequestLimitRefreshDuration,
+    pub is_unlimited_voice: bool,
+    #[serde(default)]
+    pub voice_request_limit: usize,
+    #[serde(default)]
+    pub voice_requests_used_since_last_refresh: usize,
+    #[serde(default)]
+    pub is_unlimited_codebase_indices: bool,
+    #[serde(default)]
+    pub max_codebase_indices: usize,
+    #[serde(default)]
+    pub max_files_per_repo: usize,
+    #[serde(default)]
+    pub embedding_generation_batch_size: usize,
+}
+
+fn default_voice_requests_limit() -> usize {
+    10000
+}
+
+impl Default for RequestLimitInfo {
+    /// This is the default rate limit for the free tier imposed by the server as of 02/10/25.
+    fn default() -> Self {
+        Self {
+            limit: 150,
+            num_requests_used_since_refresh: 0,
+            included_usage_cents: None,
+            usage_cents_used_since_last_refresh: None,
+            next_refresh_time: ServerTimestamp::new(Utc::now() + chrono::Duration::days(30)),
+            is_unlimited: false,
+            request_limit_refresh_duration: RequestLimitRefreshDuration::Monthly,
+            is_unlimited_voice: false,
+            voice_request_limit: default_voice_requests_limit(),
+            voice_requests_used_since_last_refresh: 0,
+            is_unlimited_codebase_indices: false,
+            max_codebase_indices: 3,
+            max_files_per_repo: 5000,
+            embedding_generation_batch_size: 100,
+        }
+    }
+}
+
+#[cfg(test)]
+impl RequestLimitInfo {
+    pub fn new_for_test(limit: usize, num_requests_used_since_refresh: usize) -> Self {
+        Self {
+            limit,
+            num_requests_used_since_refresh,
+            ..Self::default()
+        }
+    }
+}
+
+pub struct CodebaseContextUsageLimit {
+    pub max_files_per_repo: usize,
+    pub max_indices_allowed: Option<usize>,
+    pub embedding_generation_batch_size: usize,
+}
+
+#[derive(Clone, Debug)]
+pub struct WorkspaceIncludedUsage {
+    pub workspace_uid: WorkspaceUid,
+    pub info: WorkspaceIncludedUsageInfo,
+}
+
+/// Contains all usage-related information fetched from the server.
+pub struct RequestUsageInfo {
+    pub request_limit_info: RequestLimitInfo,
+    pub bonus_grants: Vec<BonusGrant>,
+    pub workspace_allowances: Vec<WorkspaceIncludedUsage>,
+}
+
+#[cfg(feature = "agent_mode_evals")]
+impl RequestLimitInfo {
+    pub fn new_for_evals() -> Self {
+        Self {
+            limit: 999999,
+            num_requests_used_since_refresh: 0,
+            included_usage_cents: None,
+            usage_cents_used_since_last_refresh: None,
+            next_refresh_time: ServerTimestamp::new(Utc::now() + chrono::Duration::days(30)),
+            is_unlimited: true,
+            request_limit_refresh_duration: RequestLimitRefreshDuration::Monthly,
+            is_unlimited_voice: true,
+            voice_request_limit: 999999,
+            voice_requests_used_since_last_refresh: 0,
+            is_unlimited_codebase_indices: false,
+            max_codebase_indices: 40,
+            max_files_per_repo: 10000,
+            embedding_generation_batch_size: 100,
+        }
+    }
+}
+
+fn cache_request_limit_info(request_limit_info: RequestLimitInfo, app_mut: &mut AppContext) {
+    if let Ok(serialized) = serde_json::to_string(&request_limit_info) {
+        let _ = app_mut
+            .private_user_preferences()
+            .write_value(REQUEST_LIMIT_INFO_CACHE_KEY, serialized);
+    }
+}
+
+fn get_cached_request_limit_info(app_mut: &mut AppContext) -> Option<RequestLimitInfo> {
+    app_mut
+        .private_user_preferences()
+        .read_value(REQUEST_LIMIT_INFO_CACHE_KEY)
+        .unwrap_or_default()
+        .and_then(|serialized| serde_json::from_str(serialized.as_str()).ok())
+}
+
+fn cache_ambient_credits_banner_dismissed(dismissed: bool, app_mut: &mut AppContext) {
+    let _ = app_mut
+        .private_user_preferences()
+        .write_value(AMBIENT_CREDITS_BANNER_DISMISSED_KEY, dismissed.to_string());
+}
+
+fn get_cached_ambient_credits_banner_dismissed(app_mut: &mut AppContext) -> bool {
+    app_mut
+        .private_user_preferences()
+        .read_value(AMBIENT_CREDITS_BANNER_DISMISSED_KEY)
+        .unwrap_or_default()
+        .and_then(|value| value.parse::<bool>().ok())
+        .unwrap_or_default()
+}
+
+#[derive(Default)]
+struct ServerAvailabilityState {
+    /// Last successful decision; retained across transient refresh failures.
+    latest: Option<AICreditAvailability>,
+    last_success_time: Option<Instant>,
+    refresh_in_flight: bool,
+    last_error: Option<String>,
+}
+
+pub struct AIRequestUsageModel {
+    ai_client: Arc<dyn AIClient>,
+    workspace_allowances: Vec<WorkspaceIncludedUsage>,
+
+    /// The last time at which `request_limit_info` was updated.
+    last_update_time: Option<Instant>,
+
+    request_limit_info: RequestLimitInfo,
+
+    bonus_grants: Vec<BonusGrant>,
+
+    server_availability: ServerAvailabilityState,
+
+    /// Whether the buy credits banner has been dismissed by the user.
+    buy_addon_credits_banner_dismissed: bool,
+
+    /// Whether the ambient trial credits banner has been dismissed by the user.
+    ambient_credits_banner_dismissed: bool,
+}
+
+impl Entity for AIRequestUsageModel {
+    type Event = AIRequestUsageModelEvent;
+}
+
+pub enum AIRequestUsageModelEvent {
+    RequestUsageUpdated,
+    /// The server-authoritative credit availability decision was updated.
+    CreditAvailabilityUpdated,
+    AmbientCreditsBannerDismissed,
+    RequestBonusRefunded {
+        requests_refunded: i32,
+        server_conversation_id: String,
+        request_id: String,
+    },
+}
+
+impl AIRequestUsageModel {
+    pub(crate) fn workspace_included_usage(
+        &self,
+        ctx: &AppContext,
+    ) -> Option<&WorkspaceIncludedUsageInfo> {
+        if !AuthStateProvider::as_ref(ctx).get().is_logged_in() {
+            return None;
+        }
+        let workspace = UserWorkspaces::as_ref(ctx).current_workspace()?;
+        self.workspace_allowances
+            .iter()
+            .find(|allowance| allowance.workspace_uid == workspace.uid)
+            .map(|allowance| &allowance.info)
+    }
+
+    pub fn new(ai_client: Arc<dyn AIClient>, ctx: &mut ModelContext<Self>) -> Self {
+        // Check if the user has cached request limit info from before.
+        // This is only used to show the latest known value before we finish refreshing from the server below.
+        let cached_request_limit_info = get_cached_request_limit_info(ctx);
+        let request_limit_info = cached_request_limit_info.unwrap_or_default();
+        let ambient_credits_banner_dismissed = get_cached_ambient_credits_banner_dismissed(ctx);
+
+        Self {
+            ai_client,
+            workspace_allowances: Vec::new(),
+            request_limit_info,
+            last_update_time: None,
+            bonus_grants: vec![],
+            server_availability: ServerAvailabilityState::default(),
+            buy_addon_credits_banner_dismissed: false,
+            ambient_credits_banner_dismissed,
+        }
+    }
+
+    #[cfg(test)]
+    pub fn new_for_test(ai_client: Arc<dyn AIClient>, ctx: &mut ModelContext<Self>) -> Self {
+        Self {
+            ai_client,
+            workspace_allowances: Vec::new(),
+            last_update_time: None,
+            request_limit_info: RequestLimitInfo::default(),
+            bonus_grants: vec![],
+            server_availability: ServerAvailabilityState::default(),
+            buy_addon_credits_banner_dismissed: false,
+            ambient_credits_banner_dismissed: get_cached_ambient_credits_banner_dismissed(ctx),
+        }
+    }
+
+    pub fn last_update_time(&self) -> Option<Instant> {
+        self.last_update_time
+    }
+
+    /// Refreshes the latest AI request usage and bonus grants from the server.
+    ///
+    /// The receiver resolves to the freshly fetched base request limit. It
+    /// resolves to `None` if the user is logged out or the request fails, so
+    /// callers making entitlement decisions do not fall back to cached data.
+    pub fn refresh_request_usage(
+        &mut self,
+        ctx: &mut ModelContext<Self>,
+    ) -> Receiver<Option<usize>> {
+        let (sender, receiver) = oneshot::channel();
+        if !AuthStateProvider::as_ref(ctx).get().is_logged_in() {
+            let _ = sender.send(None);
+            return receiver;
+        }
+
+        let ai_client = self.ai_client.clone();
+        let mut sender = Some(sender);
+        ctx.spawn(
+            async move { ai_client.get_request_limit_info().await },
+            move |model, result, ctx| {
+                let request_limit = match result {
+                    Ok(usage_info) => {
+                        let request_limit = usage_info.request_limit_info.limit;
+                        model.bonus_grants = usage_info.bonus_grants;
+                        model.workspace_allowances = usage_info.workspace_allowances;
+                        model.update_request_limit_info(usage_info.request_limit_info, ctx);
+                        Some(request_limit)
+                    }
+                    Err(e) => {
+                        log::warn!("Failed to retrieve request limit info: {e:#}");
+                        None
+                    }
+                };
+                if let Some(sender) = sender.take() {
+                    let _ = sender.send(request_limit);
+                }
+            },
+        );
+        receiver
+    }
+
+    /// Spawns a task to refresh the latest AI request usage and bonus grants.
+    pub fn refresh_request_usage_async(&mut self, ctx: &mut ModelContext<Self>) {
+        drop(self.refresh_request_usage(ctx));
+    }
+
+    pub fn update_request_limit_info(
+        &mut self,
+        request_limit_info: RequestLimitInfo,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.last_update_time = Some(Instant::now());
+        self.request_limit_info = request_limit_info;
+        cache_request_limit_info(request_limit_info, ctx);
+
+        AISettings::handle(ctx).update(ctx, |ai_settings, ctx| {
+            ai_settings.update_quota_info(&request_limit_info, ctx);
+        });
+
+        ctx.emit(AIRequestUsageModelEvent::RequestUsageUpdated);
+    }
+
+    /// The server-authoritative availability decision, if one has been
+    /// successfully fetched this session (last-known-good on refresh failure).
+    pub fn server_availability(&self) -> Option<AICreditAvailability> {
+        self.server_availability.latest
+    }
+
+    /// Applies an availability fetch result, keeping last-known-good on failure.
+    pub fn apply_server_availability(
+        &mut self,
+        result: Result<AICreditAvailability, anyhow::Error>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        match result {
+            Ok(availability) => {
+                self.server_availability.latest = Some(availability);
+                self.server_availability.last_success_time = Some(Instant::now());
+                self.server_availability.last_error = None;
+                ctx.emit(AIRequestUsageModelEvent::CreditAvailabilityUpdated);
+                ctx.notify();
+            }
+            Err(e) => {
+                log::warn!("Failed to refresh AI credit availability: {e:#}");
+                self.server_availability.last_error = Some(format!("{e:#}"));
+            }
+        }
+    }
+
+    pub fn request_availability_refresh(&mut self, ctx: &mut ModelContext<Self>) {
+        if !AuthStateProvider::as_ref(ctx).get().is_logged_in() {
+            return;
+        }
+        if self.server_availability.refresh_in_flight {
+            return;
+        }
+        self.server_availability.refresh_in_flight = true;
+
+        let ai_client = self.ai_client.clone();
+        ctx.spawn(
+            async move { ai_client.get_ai_credit_availability().await },
+            |model, result, ctx| {
+                model.server_availability.refresh_in_flight = false;
+                model.apply_server_availability(result, ctx);
+            },
+        );
+    }
+
+    /// Clears the server-authoritative availability state, e.g. on logout.
+    pub fn reset_server_availability(&mut self, ctx: &mut ModelContext<Self>) {
+        self.server_availability = ServerAvailabilityState::default();
+        ctx.emit(AIRequestUsageModelEvent::CreditAvailabilityUpdated);
+        ctx.notify();
+    }
+
+    pub fn provide_negative_feedback_response_for_ai_conversation(
+        &mut self,
+        client_conversation_id: AIConversationId,
+        request_id: String,
+        client_exchange_id: AIAgentExchangeId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let server_conversation_id = BlocklistAIHistoryModel::as_ref(ctx)
+            .conversation(&client_conversation_id)
+            .and_then(|conversation| conversation.server_conversation_token());
+
+        let Some(server_conversation_id) = server_conversation_id else {
+            return;
+        };
+        let server_conversation_id_string = server_conversation_id.as_str().to_string();
+        let server_conversation_id_string_clone = server_conversation_id_string.clone();
+
+        let request_ids = BlocklistAIHistoryModel::as_ref(ctx)
+            .conversation(&client_conversation_id)
+            .map(|conversation| {
+                let mut request_ids = vec![];
+
+                let target_exchange = conversation
+                    .root_task_exchanges()
+                    .find(|exchange| exchange.id == client_exchange_id);
+
+                let mut found_target = false;
+
+                for exchange in conversation.exchanges_reversed() {
+                    if let Some(target_exchange) = target_exchange {
+                        if exchange.id == target_exchange.id {
+                            found_target = true;
+                        }
+                    } else {
+                        break;
+                    }
+
+                    if found_target {
+                        if let Some(server_output_id) = exchange.output_status.server_output_id() {
+                            request_ids.push(server_output_id.to_string());
+                        }
+
+                        if exchange
+                            .input
+                            .iter()
+                            .any(|input| input.display_query().is_some())
+                        {
+                            break;
+                        }
+                    }
+                }
+
+                request_ids
+            })
+            .unwrap_or_default();
+
+        // No reason to refund if there are no request ids.
+        if request_ids.is_empty() {
+            return;
+        }
+
+        let ai_client = self.ai_client.clone();
+        ctx.spawn(
+            async move {
+                ai_client
+                    .provide_negative_feedback_response_for_ai_conversation(
+                        server_conversation_id_string_clone,
+                        request_ids,
+                    )
+                    .await
+            },
+            |_, result, ctx| match result
+                .context("Failed to provide negative feedback response for ai conversation")
+            {
+                Ok(requests_refunded) => {
+                    if requests_refunded > 0 {
+                        ctx.emit(AIRequestUsageModelEvent::RequestBonusRefunded {
+                            requests_refunded,
+                            server_conversation_id: server_conversation_id_string,
+                            request_id,
+                        });
+                    }
+                }
+                Err(e) => {
+                    report_error!(e);
+                }
+            },
+        );
+    }
+
+    /// Returns the number of remaining requests the user has based on their latest rate limit info.
+    /// If the current time is past the next refresh time, then the number of remaining reqs is the limit.
+    fn requests_remaining(&self) -> usize {
+        if self.next_refresh_time() <= Utc::now() || self.is_unlimited() {
+            self.request_limit_info.limit
+        } else {
+            self.request_limit_info
+                .limit
+                .saturating_sub(self.request_limit_info.num_requests_used_since_refresh)
+        }
+    }
+
+    /// Whether unused base-plan request quota remains.
+    pub(crate) fn has_base_plan_requests_remaining(&self) -> bool {
+        self.requests_remaining() > 0
+    }
+
+    /// Returns `true` if the user can start an interactive AI request.
+    /// Prefers the server decision when present; otherwise uses the pre-fetch fallback.
+    pub fn has_any_ai_remaining<S: TeamScope + ?Sized>(&self, scope: &S, ctx: &AppContext) -> bool {
+        if let Some(availability) = self.server_availability.latest {
+            return Self::server_availability_permits_ai(availability, scope, ctx);
+        }
+        self.has_any_ai_remaining_before_server_decision(scope, ctx)
+    }
+
+    /// Trusts `available`; only `OutOfCredits` may be refined by local BYO credentials.
+    fn server_availability_permits_ai<S: TeamScope + ?Sized>(
+        availability: AICreditAvailability,
+        scope: &S,
+        ctx: &AppContext,
+    ) -> bool {
+        if availability.available {
+            return true;
+        }
+        matches!(
+            availability.denial_reason,
+            AICreditDenialReason::OutOfCredits
+        ) && Self::has_usable_byo_inference_path(scope, ctx)
+    }
+
+    /// Whether a local BYO path is usable under `scope`'s team policy.
+    fn has_usable_byo_inference_path<S: TeamScope + ?Sized>(scope: &S, ctx: &AppContext) -> bool {
+        if Self::has_usable_member_byo_inference_path(scope, ctx) {
+            return true;
+        }
+        let user_workspaces = UserWorkspaces::as_ref(ctx);
+        let api_keys = ApiKeyManager::as_ref(ctx);
+        user_workspaces.is_aws_bedrock_credentials_enabled(scope, ctx)
+            && matches!(
+                api_keys.aws_credentials_state(),
+                AwsCredentialsState::Loaded { .. }
+            )
+    }
+
+    fn has_usable_member_byo_inference_path<S: TeamScope + ?Sized>(
+        scope: &S,
+        ctx: &AppContext,
+    ) -> bool {
+        let user_workspaces = UserWorkspaces::as_ref(ctx);
+        let api_keys = ApiKeyManager::as_ref(ctx);
+        let has_provider_key = api_keys.keys().provider_key_count() > 0
+            || api_keys.has_grok_subscription()
+            || api_keys.has_chatgpt_subscription();
+        if user_workspaces.is_byo_api_key_enabled(ctx)
+            && user_workspaces.are_member_byo_keys_allowed(scope)
+            && has_provider_key
+        {
+            return true;
+        }
+        // `custom_endpoints()` is the resolved list request payloads already use, including
+        // current-format definitions whose secrets are stored apart from `keys.custom_endpoints`.
+        let has_custom_endpoint_key = api_keys
+            .custom_endpoints()
+            .iter()
+            .any(|endpoint| !endpoint.api_key.trim().is_empty());
+        if user_workspaces.is_byo_endpoint_enabled(ctx)
+            && user_workspaces.are_member_byo_endpoints_allowed(scope)
+            && has_custom_endpoint_key
+        {
+            return true;
+        }
+        false
+    }
+
+    /// Prefetch fallback used only before any successful server availability decision this session.
+    fn has_any_ai_remaining_before_server_decision<S: TeamScope + ?Sized>(
+        &self,
+        scope: &S,
+        ctx: &AppContext,
+    ) -> bool {
+        let current_workspace = UserWorkspaces::as_ref(ctx).current_workspace();
+
+        let has_base_plan_ai_requests = self.has_base_plan_requests_remaining();
+
+        let user_bonus_credits = self.total_user_interactive_bonus_credits_remaining() > 0;
+        let workspace_and_team_bonus_credits = current_workspace
+            .map(|workspace| {
+                self.total_workspace_and_team_bonus_credits_remaining(workspace.uid) > 0
+            })
+            .unwrap_or_default();
+
+        let workspace_has_overages =
+            current_workspace.is_some_and(|workspace| workspace.are_overages_remaining());
+
+        let is_payg_enabled = current_workspace
+            .is_some_and(|w| w.billing_metadata.is_enterprise_pay_as_you_go_enabled());
+        let is_enterprise_auto_reload_enabled = current_workspace
+            .is_some_and(|w| w.billing_metadata.is_enterprise_auto_reload_enabled());
+        let is_self_serve_auto_reload_enabled = current_workspace.is_some_and(|workspace| {
+            workspace
+                .billing_metadata
+                .is_purchase_add_on_credits_policy_enabled()
+                && workspace
+                    .settings
+                    .addon_credits_settings
+                    .auto_reload_enabled
+                && PricingInfoModel::as_ref(ctx)
+                    .addon_credits_options()
+                    .and_then(|options| workspace.get_auto_reload_price_cents(options))
+                    .is_some_and(|price| !workspace.would_addon_purchase_reach_limit(price))
+        });
+
+        // If you have provided your own API key or connected a Grok or ChatGPT
+        // subscription, it doesn't matter if you are out of warp-provided requests.
+        let has_byo_credentials = Self::has_usable_member_byo_inference_path(scope, ctx);
+
+        has_base_plan_ai_requests
+            || (user_bonus_credits || workspace_and_team_bonus_credits)
+            || workspace_has_overages
+            || is_payg_enabled
+            || is_enterprise_auto_reload_enabled
+            || is_self_serve_auto_reload_enabled
+            || has_byo_credentials
+    }
+
+    pub fn requests_used(&self) -> usize {
+        if self.next_refresh_time() <= Utc::now() {
+            return 0;
+        }
+        self.request_limit_info.num_requests_used_since_refresh
+    }
+
+    pub fn request_percentage_used(&self) -> f32 {
+        self.requests_used() as f32 / self.request_limit() as f32
+    }
+
+    pub fn request_limit(&self) -> usize {
+        self.request_limit_info.limit
+    }
+
+    /// Returns the number of indices the user's tier allows them to create and the number of files
+    /// the user's tier allows them to index. If the user is allowed unlimited indices, then the
+    /// max_indices_allowed is None.
+    pub fn codebase_context_limits(&self) -> CodebaseContextUsageLimit {
+        CodebaseContextUsageLimit {
+            max_files_per_repo: self.request_limit_info.max_files_per_repo,
+            max_indices_allowed: if self.request_limit_info.is_unlimited_codebase_indices {
+                None
+            } else {
+                Some(self.request_limit_info.max_codebase_indices)
+            },
+            embedding_generation_batch_size: self
+                .request_limit_info
+                .embedding_generation_batch_size,
+        }
+    }
+
+    pub fn next_refresh_time(&self) -> DateTime<Utc> {
+        self.request_limit_info.next_refresh_time.utc()
+    }
+
+    pub fn next_refresh_time_local(&self) -> DateTime<Local> {
+        self.next_refresh_time().with_timezone(&Local)
+    }
+
+    pub fn is_unlimited(&self) -> bool {
+        self.request_limit_info.is_unlimited
+    }
+
+    /// The dollar value of the included allowance, in cents, when the server supplied one.
+    pub fn included_usage_cents(&self) -> Option<f64> {
+        self.request_limit_info.included_usage_cents
+    }
+
+    /// The dollar value of the included allowance used since the last refresh, in cents, when
+    /// the server supplied one. Reads as zero once the refresh time has passed, mirroring
+    /// [`Self::requests_used`].
+    pub fn usage_cents_used(&self) -> Option<f64> {
+        let used = self
+            .request_limit_info
+            .usage_cents_used_since_last_refresh?;
+        if self.next_refresh_time() <= Utc::now() {
+            return Some(0.);
+        }
+        Some(used)
+    }
+
+    pub fn refresh_duration_to_string(&self) -> String {
+        match self.request_limit_info.request_limit_refresh_duration {
+            RequestLimitRefreshDuration::Weekly => "weekly".to_string(),
+            RequestLimitRefreshDuration::Monthly => "monthly".to_string(),
+            RequestLimitRefreshDuration::EveryTwoWeeks => "biweekly".to_string(),
+        }
+    }
+
+    pub fn bonus_grants(&self) -> &[BonusGrant] {
+        &self.bonus_grants
+    }
+
+    fn ambient_only_grants(&self) -> impl Iterator<Item = &BonusGrant> {
+        self.bonus_grants
+            .iter()
+            .filter(|g| g.grant_type == BonusGrantType::AmbientOnly)
+    }
+
+    /// Returns the total remaining ambient-only credits for the user.
+    /// Returns None if the user has never received any ambient-only grants.
+    pub fn ambient_only_credits_remaining(&self) -> Option<i32> {
+        let mut ambient_grants = self.ambient_only_grants().peekable();
+        ambient_grants.peek()?;
+        Some(ambient_grants.map(|g| g.request_credits_remaining).sum())
+    }
+
+    /// The dollar value of [`Self::ambient_only_credits_remaining`], in cents. `None` unless
+    /// every ambient-only grant carries a dollar value.
+    pub fn ambient_only_usage_cents_remaining(&self) -> Option<f64> {
+        let mut ambient_grants = self.ambient_only_grants().peekable();
+        ambient_grants.peek()?;
+        ambient_grants.map(|g| g.usage_cents_remaining).sum()
+    }
+
+    pub fn is_ambient_credits_banner_dismissed(&self) -> bool {
+        self.ambient_credits_banner_dismissed
+    }
+
+    pub fn dismiss_ambient_credits_banner(&mut self, ctx: &mut ModelContext<Self>) {
+        if self.ambient_credits_banner_dismissed {
+            return;
+        }
+        self.ambient_credits_banner_dismissed = true;
+        cache_ambient_credits_banner_dismissed(true, ctx);
+        ctx.emit(AIRequestUsageModelEvent::AmbientCreditsBannerDismissed);
+    }
+
+    fn workspace_and_team_bonus_grants(
+        &self,
+        uid: WorkspaceUid,
+    ) -> impl Iterator<Item = &BonusGrant> {
+        let now = Utc::now();
+        self.bonus_grants
+            .iter()
+            .filter(move |grant| grant.scope.workspace_uid() == Some(uid))
+            .filter(move |grant| grant.expiration.is_none_or(|exp| now < exp))
+    }
+
+    pub fn total_workspace_and_team_bonus_credits_remaining(&self, uid: WorkspaceUid) -> i32 {
+        self.workspace_and_team_bonus_grants(uid)
+            .map(|grant| grant.request_credits_remaining)
+            .sum()
+    }
+
+    /// The dollar value of [`Self::total_workspace_and_team_bonus_credits_remaining`], in cents.
+    /// `None` unless every counted grant carries a dollar value.
+    pub fn total_workspace_and_team_bonus_usage_cents_remaining(
+        &self,
+        uid: WorkspaceUid,
+    ) -> Option<f64> {
+        self.workspace_and_team_bonus_grants(uid)
+            .map(|grant| grant.usage_cents_remaining)
+            .sum()
+    }
+
+    pub fn total_current_workspace_and_team_bonus_credits_remaining(
+        &self,
+        ctx: &AppContext,
+    ) -> i32 {
+        UserWorkspaces::as_ref(ctx)
+            .current_workspace()
+            .map(|workspace| self.total_workspace_and_team_bonus_credits_remaining(workspace.uid))
+            .unwrap_or(0)
+    }
+
+    fn user_interactive_bonus_grants(&self) -> impl Iterator<Item = &BonusGrant> {
+        let now = Utc::now();
+        self.bonus_grants
+            .iter()
+            .filter(|grant| grant.scope == BonusGrantScope::User)
+            .filter(|grant| grant.grant_type != BonusGrantType::AmbientOnly)
+            .filter(move |grant| grant.expiration.is_none_or(|exp| now < exp))
+    }
+
+    pub fn total_user_interactive_bonus_credits_remaining(&self) -> i32 {
+        self.user_interactive_bonus_grants()
+            .map(|grant| grant.request_credits_remaining)
+            .sum()
+    }
+
+    /// The dollar value of [`Self::total_user_interactive_bonus_credits_remaining`], in cents.
+    /// `None` unless every counted grant carries a dollar value.
+    pub fn total_user_interactive_bonus_usage_cents_remaining(&self) -> Option<f64> {
+        self.user_interactive_bonus_grants()
+            .map(|grant| grant.usage_cents_remaining)
+            .sum()
+    }
+
+    /// Computes the current banner state based on live conditions.
+    pub fn compute_buy_addon_credits_banner_display_state<S: TeamScope + ?Sized>(
+        &self,
+        scope: &S,
+        ctx: &AppContext,
+    ) -> BuyCreditsBannerDisplayState {
+        // Early return if user dismissed
+        if self.buy_addon_credits_banner_dismissed {
+            return BuyCreditsBannerDisplayState::Hidden;
+        }
+        let user_workspaces = UserWorkspaces::as_ref(ctx);
+        let current_workspace = user_workspaces.current_workspace();
+        let policy_allows_purchasing = user_workspaces
+            .purchase_policy()
+            .is_some_and(|policy| policy.allows_purchases());
+
+        if !policy_allows_purchasing {
+            return BuyCreditsBannerDisplayState::Hidden;
+        }
+
+        // TODO: we might want to suggest credits purchase if request_remain/bonus credits is below certain threshold
+        // something to consider after launch
+        // Ambient-only credits are usable for cloud agents and should not suppress this banner.
+        let now = Utc::now();
+        let has_non_ambient_bonus_credits = self
+            .bonus_grants
+            .iter()
+            .filter(|grant| grant.grant_type != BonusGrantType::AmbientOnly)
+            .filter(|grant| grant.expiration.is_none_or(|exp| now < exp))
+            .filter(|grant| grant.request_credits_remaining > 0)
+            .any(|grant| match grant.scope {
+                BonusGrantScope::User => true,
+                BonusGrantScope::Team(uid) | BonusGrantScope::Workspace(uid) => {
+                    current_workspace.is_some_and(|workspace| workspace.uid == uid)
+                }
+            });
+
+        if let Some(availability) = self.server_availability.latest {
+            let only_ambient_server_source = availability.available
+                && matches!(
+                    availability.credit_source,
+                    Some(AICreditSource::AmbientBonusGrant)
+                );
+            // Hide when interactive AI is permitted, except ambient-only sources
+            // which do not fund interactive requests.
+            if self.has_any_ai_remaining(scope, ctx) && !only_ambient_server_source {
+                return BuyCreditsBannerDisplayState::Hidden;
+            }
+        } else if self.has_base_plan_requests_remaining() || has_non_ambient_bonus_credits {
+            return BuyCreditsBannerDisplayState::Hidden;
+        }
+
+        let auto_reload_enabled = current_workspace
+            .is_some_and(|w| w.settings.addon_credits_settings.auto_reload_enabled);
+        if !auto_reload_enabled {
+            return BuyCreditsBannerDisplayState::OutOfCredits;
+        }
+
+        let at_monthly_limit =
+            current_workspace.is_some_and(|w| w.is_at_addon_credits_monthly_limit());
+
+        let auto_reload_would_exceed = current_workspace
+            .and_then(|workspace| {
+                let options = PricingInfoModel::as_ref(ctx).addon_credits_options()?;
+                let price = workspace.get_auto_reload_price_cents(options)?;
+                Some(workspace.would_addon_purchase_reach_limit(price))
+            })
+            .unwrap_or(false);
+
+        if at_monthly_limit || auto_reload_would_exceed {
+            BuyCreditsBannerDisplayState::MonthlyLimitReached
+        } else {
+            BuyCreditsBannerDisplayState::Hidden
+        }
+    }
+
+    pub fn dismiss_buy_credits_banner(&mut self, ctx: &mut ModelContext<Self>) {
+        self.buy_addon_credits_banner_dismissed = true;
+        ctx.notify();
+    }
+
+    pub fn enable_buy_credits_banner(&mut self, ctx: &mut ModelContext<Self>) {
+        self.buy_addon_credits_banner_dismissed = false;
+        ctx.notify();
+    }
+}
+
+/// Voice request usage, only available if built with voice input support.
+#[cfg(feature = "voice_input")]
+impl AIRequestUsageModel {
+    fn voice_requests(&self) -> usize {
+        self.request_limit_info
+            .voice_requests_used_since_last_refresh
+    }
+
+    fn voice_requests_limit(&self) -> usize {
+        self.request_limit_info.voice_request_limit
+    }
+
+    fn is_unlimited_voice_requests(&self) -> bool {
+        self.request_limit_info.is_unlimited_voice
+    }
+
+    /// Returns the number of remaining requests the user has based on their latest rate limit info.
+    /// If the current time is past the next refresh time, then the number of remaining reqs is the limit.
+    fn voice_requests_remaining(&self) -> usize {
+        if self.next_refresh_time() <= Utc::now() || self.is_unlimited_voice_requests() {
+            self.voice_requests_limit()
+        } else {
+            self.voice_requests_limit()
+                .saturating_sub(self.voice_requests())
+        }
+    }
+
+    /// Returns `true` if the user has at least one voice request before hitting the
+    /// limit. Returns `false` otherwise.
+    fn has_voice_requests_remaining(&self) -> bool {
+        self.voice_requests_remaining() > 0
+    }
+
+    /// Checks request limits to see if the user can make a voice request.
+    /// Returns true if the user can make a voice request, false otherwise.
+    pub fn can_request_voice(&self) -> bool {
+        self.has_voice_requests_remaining()
+    }
+}
+
+impl SingletonEntity for AIRequestUsageModel {}
+
+#[cfg(test)]
+#[path = "request_usage_model_tests.rs"]
+mod tests;

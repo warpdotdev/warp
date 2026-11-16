@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+#
+# Builds an Arch Linux package as part of the bundling process.
+#
+# Required environment variables:
+#   - WORKSPACE_ROOT_DIR: The root directory of the Cargo workspace.
+#   - DIST_DIR: A temporary directory we can use for staging files as we build the package.
+#   - OUT_DIR: The directory into which we should place the final package.
+#   - CARGO_TARGET_OUTPUT_DIR: The cargo target directory containing build output.
+#   - RELEASE_CHANNEL: The release channel we're bundling (e.g.: "dev").
+#   - BUNDLE_ID: The app ID for the bundle (e.g.: "dev.warp.WarpDev").
+#   - EXECUTABLE_PATH: The path to the compiled executable we want to install.
+#   - BINARY_NAME: The name that the compiled executable should have on the target machine.
+#   - ARTIFACT: Which artifact to build: app or cli.
+
+set -e
+
+# Extract channel suffix from BINARY_NAME
+if [ "$ARTIFACT" = "cli" ]; then
+  CHANNEL_SUFFIX="${BINARY_NAME#oz}"
+else
+  CHANNEL_SUFFIX="${BINARY_NAME#warp}"
+fi
+
+# On Linux, we keep the `-stable` suffix for stable to avoid package conflicts.
+# The binary name is still `oz`, and the repo name is still `warpdotdev`.
+if [ "$ARTIFACT" = "cli" -a "$RELEASE_CHANNEL" = "stable" ]; then
+  CHANNEL_SUFFIX="-stable"
+fi
+
+if [ "$ARTIFACT" = "app" ]; then
+  PACKAGE_NAME="warp-terminal$CHANNEL_SUFFIX"
+elif [ "$ARTIFACT" = "cli" ]; then
+  PACKAGE_NAME="oz$CHANNEL_SUFFIX"
+else
+  echo "::error ::Unknown ARTIFACT: $ARTIFACT (expected 'app' or 'cli')"
+  exit 1
+fi
+
+BUILD_ARCH="${BUILD_ARCH:-$(uname -m)}"
+if [ "$BUILD_ARCH" = "aarch64" ]; then
+  ARCH="aarch64"
+else
+  ARCH="x86_64"
+fi
+
+PKGDIR="$DIST_DIR/archpkg"
+
+cleanup() {
+  # Delete the AppDir that was used as a staging area during the bundling
+  # process.
+  if [ -d "$PKGDIR" ]; then
+    rm -rf "$PKGDIR"
+  fi
+}
+
+# Run cleanup() when the script terminates (whether it succeeded or failed).
+trap cleanup EXIT
+
+# Construct a directory that contains all of the output data.
+rm -rf "$PKGDIR"
+mkdir -p "$PKGDIR"
+
+# Bundle the base filesystem into an archive to be unpacked by makepkg.
+mkdir "$PKGDIR/stage"
+OPT_DIR="/opt/warpdotdev/$PACKAGE_NAME"
+source "$WORKSPACE_ROOT_DIR/script/linux/bundle_install" "$PKGDIR/stage"
+tar cvf "$PKGDIR/data.tar" -C "$PKGDIR/stage" .
+
+# Move the Arch-specific package metadata into the package directory.
+VERSION="$GIT_RELEASE_TAG"
+RELEASE=1
+sed \
+    "s#@@CHANNEL_SUFFIX@@#$CHANNEL_SUFFIX#g; s#@@VERSION@@#$VERSION#g; s#@@RELEASE@@#$RELEASE#g; s#@@ARCH@@#$ARCH#g; s#@@OUTDIR@@#$OUT_DIR#g; s#@@BINARY_NAME@@#$BINARY_NAME#g" \
+    < "$WORKSPACE_ROOT_DIR/resources/linux/arch/$ARTIFACT/PKGBUILD.template" \
+    > "$PKGDIR/PKGBUILD"
+
+# Only create wrapper script for app artifact
+if [ "$ARTIFACT" = "app" ]; then
+  sed \
+      "s#@@CHANNEL_SUFFIX@@#$CHANNEL_SUFFIX#g; s#@@BINARY_NAME@@#$BINARY_NAME#g" \
+      < "$WORKSPACE_ROOT_DIR/resources/linux/arch/$ARTIFACT/warp.sh.template" \
+      > "$PKGDIR/$PACKAGE_NAME.sh"
+fi
+
+# Build the actual package.
+#
+# We install any needed build and runtime dependencies before making the
+# package, and remove them again afterwards.  We also skip verifying
+# checksums for the source files, as we generate them above and there's not
+# much reason to generate the checksums and then verify them immediately
+# afterwards.
+if [ "${GITHUB_ACTIONS}" == "true" ]; then
+  # If we're running in a GitHub action, don't ask for confirmation before
+  # installing packages.
+  EXTRA_ARGS="--noconfirm"
+fi
+cd "$PKGDIR"
+PKGDEST="$OUT_DIR" CARCH="$ARCH" makepkg -cfrs --needed --skipchecksums "$EXTRA_ARGS"
+
+PACKAGE_PATH="$OUT_DIR/${PACKAGE_NAME}-${VERSION}-${RELEASE}-${ARCH}.pkg.tar.zst"
+
+echo "Successfully built Arch package at $PACKAGE_PATH!"

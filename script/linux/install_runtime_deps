@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+#
+# Install all dependencies required to build and run Warp on Linux.
+
+set -e
+
+. "$PWD/script/warp_sudo"
+
+# Define some control sequences for text formatting.
+red="\033[0;31m"
+reset="\033[0m"
+
+# Install build dependencies.
+"$PWD"/script/linux/install_build_deps
+
+# Install additional runtime dependencies.
+UNAME="$(uname -a)"
+if [[ "$(source /etc/os-release; echo $ID $ID_LIKE)" = *"debian"* ]]; then
+  echo "⬇️  Installing runtime dependencies..."
+  # Define the packages to install as a bash array so we can include
+  # comments between lines.
+  PACKAGES=(
+    locales
+    # Runtime library to get font information.
+    fontconfig
+    # Runtime library for deflate compression.
+    zlib1g
+    # Runtime libraries for X11.
+    libx11-6 libxcb1 libxi6 libxcursor1 libxkbcommon-x11-0
+    # Runtime libraries for Wayland.
+    libwayland-client0 libwayland-egl1
+    # Open-source Vulkan drivers from the mesa project.
+    mesa-vulkan-drivers
+    # Runtime libraries for EGL.
+    libegl1
+    # Ensuring at least one cursor library for WSL.
+    yaru-theme-icon
+  )
+  warp_sudo apt-get install -y "${PACKAGES[@]}"
+else
+  echo -e "⚠️  ${red}Unknown Linux distribution; necessary runtime dependencies may not be installed!${reset}"
+fi

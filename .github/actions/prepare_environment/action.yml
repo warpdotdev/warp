@@ -1,0 +1,212 @@
+name: Prepare Environment
+description: A shared set of setup steps to prepare the runtime environment.
+inputs:
+  target_os:
+    required: true
+    description: The target OS that we're building for ("macos", "linux", "windows", or "wasm").
+  is_self_hosted:
+    required: true
+    description: Whether or not the workflow is running on a self-hosted runner.
+  ref:
+    description: If set, the ref to checkout.
+  install_test_deps:
+    description: If true, dependencies needed for running tests will be installed.
+  install_release_deps:
+    description: If true, dependencies needed for building release artifacts will be installed (e.g., cargo-about for license generation).
+  cache_key:
+    description: If set, the cache key to use.  If unset, the cache key will be derived from the target OS.
+  install_channel_config:
+    description: If true, mint a read token for the private warp-channel-config repository so the channel config generator can be installed. Only honored when running in warpdotdev/warp-internal.
+
+runs:
+  using: composite
+  steps:
+    - name: Make GitHub token available in the environment
+      shell: bash
+      run: echo "GH_TOKEN=${{ github.token }}" >> $GITHUB_ENV
+
+    - name: Set up git for Windows
+      if: ${{ inputs.target_os == 'windows' }}
+      shell: bash
+      run: git config --system core.longpaths true
+
+    - name: Set CARGO_HOME location
+      if: ${{ inputs.target_os == 'windows' }}
+      shell: bash
+      run: echo "CARGO_HOME=C:\cargo" >> $GITHUB_ENV
+
+    - name: Determine repository root
+      id: repo-root
+      shell: bash
+      run: |
+        # The action lives at <repo-root>/.github/actions/prepare_environment.
+        # Derive the repository root from the action path.
+        REPO_ROOT=$(cd "${{ github.action_path }}/../../.." && pwd)
+        echo "path=$REPO_ROOT" >> $GITHUB_OUTPUT
+        # Normalize $GITHUB_WORKSPACE through cd/pwd so that path formats
+        # match on Windows (where $GITHUB_WORKSPACE uses backslashes but
+        # pwd produces MSYS-style forward-slash paths).
+        WORKSPACE=$(cd "$GITHUB_WORKSPACE" && pwd)
+        if [ "$REPO_ROOT" = "$WORKSPACE" ]; then
+          echo "is-workspace-root=true" >> $GITHUB_OUTPUT
+        else
+          echo "is-workspace-root=false" >> $GITHUB_OUTPUT
+        fi
+
+    # Materialize Git LFS objects
+    - name: Fetch Git LFS objects
+      shell: bash
+      run: |
+        cd "${{ steps.repo-root.outputs.path }}"
+        git lfs install --local
+        git lfs pull
+
+    # Print a per-file listing of the LFS payloads in debug mode
+    - name: Verify LFS payloads
+      if: ${{ runner.debug == '1' }}
+      shell: bash
+      run: |
+        cd "${{ steps.repo-root.outputs.path }}"
+        git lfs ls-files --size
+
+    - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      if: ${{ inputs.is_self_hosted != 'true' && !startsWith(runner.name, 'nsc-runner') }}
+      with:
+        # Make sure x86_64-unknown-linux-gnu and wasm32-unknown-unknown builds
+        # don't share a cache, despite running on the same _host_ architecture.
+        key: ${{ inputs.cache_key != '' && inputs.cache_key || inputs.target_os }}
+        # Only cache runs on the master branch (caches on feature branches
+        # are not reusable).
+        save-if: ${{ github.ref == 'refs/heads/master' }}
+
+    - name: Set up Namespace cache
+      if: ${{ startsWith(runner.name, 'nsc-runner') }}
+      uses: namespacelabs/nscloud-cache-action@a90bb5d4b27522ce881c6e98eebd7d7e6d1653f9 # v1.4.2
+      with:
+        cache: |
+          rust
+          ${{ inputs.target_os == 'macos' && 'brew' || '' }}
+
+    # The script pins the binstall version, verifies the archive against an
+    # in-repo SHA-256, retries transient download failures, and skips the
+    # download entirely when the pinned version is already present (e.g.
+    # restored from a runner cache).
+    - name: Install cargo-binstall
+      shell: bash
+      run: |
+        cd "${{ steps.repo-root.outputs.path }}"
+        ./script/install_cargo_binstall
+
+    # The channel config generator lives in a private repo that install_channel_config fetches
+    # over an SSH URL. Only warpdotdev/warp-internal can mint a token for it; elsewhere (mirrors,
+    # fork PRs) these steps are skipped and install_channel_config falls back gracefully.
+    - name: Mint warp-channel-config token
+      if: ${{ github.repository == 'warpdotdev/warp-internal' && inputs.install_channel_config == 'true' }}
+      id: channel_config_token
+      uses: octo-sts/action@f603d3be9d8dd9871a265776e625a27b00effe05 # v1.1.1
+      with:
+        scope: warpdotdev/warp-channel-config
+        identity: warp-internal-release
+
+    # Rewrite the SSH URL to HTTPS and attach the minted token as an Authorization header scoped
+    # to the warp-channel-config URL. The token must go in a header rather than the URL:
+    # actions/checkout persists an `http.https://github.com/.extraheader` carrying GITHUB_TOKEN
+    # for the checkout, and git lets that header override URL-embedded credentials whenever a
+    # fetch runs inside the checkout. git picks the extraheader with the longest matching URL
+    # prefix, so the warp-channel-config-scoped one wins; URL paths match per component, so the
+    # key must carry the `.git` suffix that install_channel_config fetches. cargo only honors git
+    # URL rewrites when it shells out to the git CLI, so turn that on for the rest of the job.
+    - name: Route warp-channel-config fetches through the minted token
+      if: ${{ steps.channel_config_token.outputs.token != '' }}
+      shell: bash
+      env:
+        CHANNEL_CONFIG_TOKEN: ${{ steps.channel_config_token.outputs.token }}
+      run: |
+        basic_auth="$(printf 'x-access-token:%s' "$CHANNEL_CONFIG_TOKEN" | base64 | tr -d '\n')"
+        echo "::add-mask::$basic_auth"
+        git config --global "url.https://github.com/warpdotdev/warp-channel-config.insteadOf" "ssh://git@github.com/warpdotdev/warp-channel-config"
+        git config --global "http.https://github.com/warpdotdev/warp-channel-config.git.extraheader" "AUTHORIZATION: basic $basic_auth"
+        echo "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> "$GITHUB_ENV"
+
+    - uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1.7.0
+      if: ${{ inputs.target_os == 'macos' && inputs.is_self_hosted != 'true' }}
+      with:
+        xcode-version: '26'
+
+    - name: Install dependencies
+      shell: bash
+      run: |
+        cd "${{ steps.repo-root.outputs.path }}"
+        if ${{ inputs.target_os == 'macos' }}; then
+          # Try to install warp-channel-config but don't complain if it cannot
+          # be installed.
+          ./script/install_channel_config || true
+          if ${{ inputs.install_release_deps == 'true' }}; then
+            ./script/install_cargo_release_deps
+          else
+            ./script/install_cargo_build_deps
+          fi
+        elif ${{ inputs.target_os == 'linux' }}; then
+          # Update the apt cache before installing dependencies - it can be slow, so the install scripts
+          # don't do it.
+          sudo apt-get update -y
+
+          if ${{ inputs.install_test_deps == 'true' }}; then
+            ./script/linux/install_test_deps
+          elif ${{ inputs.install_release_deps == 'true' }}; then
+            ./script/linux/install_build_deps
+            ./script/install_cargo_release_deps
+          else
+            ./script/linux/install_build_deps
+          fi
+        elif ${{ inputs.target_os == 'windows' }}; then
+          ./script/windows/install_build_deps.ps1
+          if ${{ inputs.install_release_deps == 'true' }}; then
+            ./script/install_cargo_release_deps
+          fi
+        elif ${{ inputs.target_os == 'wasm' }}; then
+          # Update the apt cache before installing dependencies - it can be slow, so the install scripts
+          # don't do it (to avoid doing it more than once).
+          sudo apt update -y
+          ./script/wasm/install_build_deps
+        else
+          echo "::error::Missing logic to install build dependencies for OS \"${{ inputs.target_os }}\""
+          exit 1
+        fi
+
+
+    - name: Install protoc for generating rust bindings of protobuf APIs
+      id: install_protoc
+      # Install protoc for generating rust bindings of protobuf APIs.
+      uses: ConorMacBride/install-package@3e7ad059e07782ee54fa35f827df52aae0626f30 # v1
+      # Don't fail the job here so the Windows (winget) and macOS (brew) fallbacks
+      # below have a chance to run.
+      continue-on-error: true
+      with:
+        brew: protobuf
+        choco: protoc
+
+    - name: Install protoc via winget (fallback for Windows)
+      if: ${{ inputs.target_os == 'windows' && steps.install_protoc.outcome == 'failure' }}
+      shell: pwsh
+      run: winget install Google.Protobuf
+
+    - name: Install protoc via brew without index update (fallback for macOS)
+      if: ${{ inputs.target_os == 'macos' && steps.install_protoc.outcome == 'failure' }}
+      shell: bash
+      # The install-package action runs `brew update` first, whose fetch of the
+      # formula index from the formulae.brew.sh CDN intermittently times out and
+      # fails the step before `brew install` ever runs. Retry the install
+      # directly, skipping the index refresh: the runner image ships with a
+      # cached index that is at most days old, which is fine for protoc. A real
+      # install failure still fails this step and the job.
+      run: HOMEBREW_NO_AUTO_UPDATE=1 brew install protobuf
+
+    - name: Fail if protoc install did not succeed
+      # Windows and macOS surface failures via their fallback steps above.
+      if: ${{ inputs.target_os != 'windows' && inputs.target_os != 'macos' && steps.install_protoc.outcome == 'failure' }}
+      shell: bash
+      run: |
+        echo "::error::protoc install step failed on ${{ inputs.target_os }}"
+        exit 1
+

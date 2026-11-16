@@ -1,0 +1,317 @@
+use onboarding::slides::{AgentAutonomy, AgentDevelopmentSettings};
+use onboarding::{SelectedSettings, SessionDefault, UICustomizationSettings};
+use settings::Setting as _;
+use warp_errors::report_if_error;
+use warpui::{AppContext, SingletonEntity as _};
+
+use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
+use crate::ai::execution_profiles::{ActionPermission, WriteToPtyPermission};
+use crate::drive::settings::WarpDriveSettings;
+use crate::settings::ai::DefaultSessionMode;
+use crate::settings::{AISettings, CodeSettings, UsageDisplayUnit};
+use crate::workspace::tab_settings::TabSettings;
+use crate::workspaces::user_workspaces::{TeamContextForOperation, UserWorkspaces};
+use crate::workspaces::workspace::FtueAccountClass;
+
+pub(crate) fn apply_account_first_onboarding_settings(
+    selected_settings: &SelectedSettings,
+    account_class: Option<FtueAccountClass>,
+    is_new_account: bool,
+    team_context: TeamContextForOperation,
+    app: &mut AppContext,
+) {
+    // Every authenticated account-first user gets the Warp Agent surface,
+    // including standard-free accounts with no included Warp credits. Skipping
+    // account creation is the only outcome that leaves Agent disabled.
+    let is_ai_enabled = match account_class {
+        None => false,
+        Some(
+            FtueAccountClass::Paid | FtueAccountClass::FreeIcp | FtueAccountClass::FreeStandard,
+        ) => true,
+    };
+
+    // Preserve an existing account's synced preference on a new device.
+    if account_class.is_some() && is_new_account {
+        AISettings::handle(app).update(app, |settings, ctx| {
+            report_if_error!(
+                settings
+                    .usage_display_unit
+                    .set_value(UsageDisplayUnit::Dollars, ctx)
+            );
+        });
+    }
+
+    match selected_settings {
+        SelectedSettings::AgentDrivenDevelopment {
+            agent_settings,
+            ui_customization,
+            ..
+        } => {
+            apply_agent_settings(agent_settings, &team_context, app);
+            if let Some(ui) = ui_customization {
+                apply_ui_customization_settings(ui, true, app);
+            }
+        }
+        SelectedSettings::Terminal {
+            ui_customization,
+            cli_agent_toolbar_enabled,
+            show_agent_notifications,
+        } => {
+            if let Some(ui) = ui_customization {
+                apply_ui_customization_settings(ui, false, app);
+            }
+            AISettings::handle(app).update(app, |settings, ctx| {
+                report_if_error!(
+                    settings
+                        .should_render_cli_agent_footer
+                        .set_value(*cli_agent_toolbar_enabled, ctx)
+                );
+                report_if_error!(
+                    settings
+                        .show_agent_notifications
+                        .set_value(*show_agent_notifications, ctx)
+                );
+            });
+        }
+    }
+
+    AISettings::handle(app).update(app, |settings, ctx| {
+        report_if_error!(settings.is_any_ai_enabled.set_value(is_ai_enabled, ctx));
+    });
+}
+
+/// Applies onboarding settings based on the user's selected mode.
+///
+/// `has_account` indicates whether the user has (or is creating) a real Warp
+/// account. Warp's AI features run on a Warp account, so agent intent only
+/// enables AI when `has_account` is true; skipping login leaves AI off.
+pub(crate) fn apply_onboarding_settings(
+    selected_settings: &SelectedSettings,
+    has_account: bool,
+    team_context: TeamContextForOperation,
+    app: &mut AppContext,
+) {
+    let is_ai_enabled = match selected_settings {
+        SelectedSettings::AgentDrivenDevelopment {
+            agent_settings,
+            ui_customization,
+            ..
+        } => {
+            apply_agent_settings(agent_settings, &team_context, app);
+            if let Some(ui) = ui_customization {
+                apply_ui_customization_settings(ui, true, app);
+            }
+            // Agent intent means the user wants AI, but Warp's AI features run
+            // on a Warp account, so AI is only enabled once they have one.
+            // Skipping login leaves AI off even for agent intent (including the
+            // bring-your-own-agents `disable_oz` path).
+            has_account
+        }
+        SelectedSettings::Terminal {
+            ui_customization,
+            cli_agent_toolbar_enabled,
+            show_agent_notifications,
+        } => {
+            if let Some(ui) = ui_customization {
+                apply_ui_customization_settings(ui, false, app);
+            }
+            AISettings::handle(app).update(app, |settings, ctx| {
+                report_if_error!(
+                    settings
+                        .should_render_cli_agent_footer
+                        .set_value(*cli_agent_toolbar_enabled, ctx)
+                );
+                report_if_error!(
+                    settings
+                        .show_agent_notifications
+                        .set_value(*show_agent_notifications, ctx)
+                );
+            });
+            false
+        }
+    };
+
+    AISettings::handle(app).update(app, |settings, ctx| {
+        report_if_error!(settings.is_any_ai_enabled.set_value(is_ai_enabled, ctx));
+    });
+}
+
+/// Applies the explicit UI customization settings chosen during the
+/// "Customize your UI" onboarding slide.
+fn apply_ui_customization_settings(
+    ui: &UICustomizationSettings,
+    is_agent_intent: bool,
+    app: &mut AppContext,
+) {
+    TabSettings::handle(app).update(app, |settings, ctx| {
+        report_if_error!(
+            settings
+                .use_vertical_tabs
+                .set_value(ui.use_vertical_tabs, ctx)
+        );
+        report_if_error!(
+            settings
+                .show_code_review_button
+                .set_value(ui.show_code_review_button, ctx)
+        );
+    });
+
+    WarpDriveSettings::handle(app).update(app, |settings, ctx| {
+        report_if_error!(
+            settings
+                .enable_warp_drive
+                .set_value(ui.show_warp_drive, ctx)
+        );
+    });
+
+    CodeSettings::handle(app).update(app, |settings, ctx| {
+        report_if_error!(
+            settings
+                .show_project_explorer
+                .set_value(ui.show_project_explorer, ctx)
+        );
+        report_if_error!(
+            settings
+                .show_global_search
+                .set_value(ui.show_global_search, ctx)
+        );
+    });
+
+    // For agent intent, configure showing conversation history.
+    // For terminal intent, this option was not surfaced in onboarding, so leave the default.
+    // It will be hidden anyway because AI is off, but we want to keep the default in case they enable AI later.
+    if is_agent_intent {
+        AISettings::handle(app).update(app, |settings, ctx| {
+            report_if_error!(
+                settings
+                    .show_conversation_history
+                    .set_value(ui.show_conversation_history, ctx)
+            );
+        });
+    }
+}
+
+fn apply_agent_settings(
+    agent_settings: &AgentDevelopmentSettings,
+    team_context: &TeamContextForOperation,
+    app: &mut AppContext,
+) {
+    // Apply session default mode.
+    let default_mode = match agent_settings.session_default {
+        SessionDefault::Agent => DefaultSessionMode::Agent,
+        SessionDefault::Terminal => DefaultSessionMode::Terminal,
+    };
+    AISettings::handle(app).update(app, |settings, ctx| {
+        report_if_error!(
+            settings
+                .default_session_mode_internal
+                .set_value(default_mode, ctx)
+        );
+    });
+
+    let team_autonomy_settings = UserWorkspaces::as_ref(app).ai_autonomy_settings(team_context);
+
+    AISettings::handle(app).update(app, |settings, ctx| {
+        report_if_error!(
+            settings
+                .should_render_cli_agent_footer
+                .set_value(agent_settings.cli_agent_toolbar_enabled, ctx)
+        );
+        report_if_error!(
+            settings
+                .show_agent_notifications
+                .set_value(agent_settings.show_agent_notifications, ctx)
+        );
+    });
+
+    AIExecutionProfilesModel::handle(app).update(app, |profiles, ctx| {
+        let default_profile_info = profiles.default_profile(ctx);
+        let default_profile_id = default_profile_info.id().clone();
+
+        // Preserve profiles loaded for an existing account, regardless of
+        // whether the active source is legacy cloud objects or the settings
+        // collection. Fresh local profiles still receive onboarding values.
+        if profiles.should_preserve_onboarding_profile(ctx) {
+            log::info!(
+                "Preserving existing account execution profile; skipping \
+                 onboarding-driven overrides for profile {default_profile_id:?}"
+            );
+            return;
+        }
+
+        if let Some(model_id) = &agent_settings.selected_model_id {
+            profiles.set_base_model(&default_profile_id, Some(model_id.clone()), ctx);
+        }
+
+        // If autonomy is None, the workspace enforces autonomy settings, so skip setting them.
+        let Some(autonomy) = agent_settings.autonomy else {
+            return;
+        };
+
+        let permissions = action_permissions_for_onboarding_autonomy(autonomy);
+
+        // Only set permissions the team's admins do not already enforce.
+        if !team_autonomy_settings.has_override_for_code_diffs() {
+            profiles.set_apply_code_diffs(&default_profile_id, &permissions.apply_code_diffs, ctx);
+        }
+        if !team_autonomy_settings.has_override_for_read_files() {
+            profiles.set_read_files(&default_profile_id, &permissions.read_files, ctx);
+        }
+        if !team_autonomy_settings.has_override_for_execute_commands() {
+            profiles.set_execute_commands(&default_profile_id, &permissions.execute_commands, ctx);
+        }
+        // Note: MCP permissions don't have an admin-level override, so always set them
+        profiles.set_mcp_permissions(&default_profile_id, &permissions.mcp_permissions, ctx);
+        if !team_autonomy_settings.has_override_for_write_to_pty() {
+            profiles.set_write_to_pty(&default_profile_id, &permissions.write_to_pty, ctx);
+        }
+    });
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct OnboardingAutonomyPermissions {
+    apply_code_diffs: ActionPermission,
+    read_files: ActionPermission,
+    execute_commands: ActionPermission,
+    mcp_permissions: ActionPermission,
+    write_to_pty: WriteToPtyPermission,
+}
+
+fn action_permissions_for_onboarding_autonomy(
+    autonomy: AgentAutonomy,
+) -> OnboardingAutonomyPermissions {
+    match autonomy {
+        // Full autonomy promises "Runs commands, writes code, and reads files
+        // without asking," so every permission is `AlwaysAllow`. The command
+        // denylist still takes precedence at runtime when a specific command
+        // is considered unsafe.
+        AgentAutonomy::Full => OnboardingAutonomyPermissions {
+            apply_code_diffs: ActionPermission::AlwaysAllow,
+            read_files: ActionPermission::AlwaysAllow,
+            execute_commands: ActionPermission::AlwaysAllow,
+            mcp_permissions: ActionPermission::AlwaysAllow,
+            write_to_pty: WriteToPtyPermission::AlwaysAllow,
+        },
+        // Partial autonomy: reads are always allowed, applying code diffs
+        // always asks, and the agent decides on command / MCP execution
+        // (asking only for sensitive actions).
+        AgentAutonomy::Partial => OnboardingAutonomyPermissions {
+            apply_code_diffs: ActionPermission::AlwaysAsk,
+            read_files: ActionPermission::AlwaysAllow,
+            execute_commands: ActionPermission::AgentDecides,
+            mcp_permissions: ActionPermission::AgentDecides,
+            write_to_pty: WriteToPtyPermission::AlwaysAsk,
+        },
+        AgentAutonomy::None => OnboardingAutonomyPermissions {
+            apply_code_diffs: ActionPermission::AlwaysAsk,
+            read_files: ActionPermission::AlwaysAsk,
+            execute_commands: ActionPermission::AlwaysAsk,
+            mcp_permissions: ActionPermission::AlwaysAsk,
+            write_to_pty: WriteToPtyPermission::AlwaysAsk,
+        },
+    }
+}
+
+#[cfg(test)]
+#[path = "onboarding_tests.rs"]
+mod tests;

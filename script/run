@@ -1,0 +1,162 @@
+#!/bin/bash
+#
+# Cross-platform entrypoint for running a local Warp build.
+#
+# On macOS this delegates to `./script/macos/run`, which builds and runs Warp
+# as a real `.app` bundle (with code signing, plist updates, etc.). On Linux
+# and Windows it invokes `cargo run` directly for the appropriate binary.
+#
+# This script owns all cross-platform setup (running install_channel_config,
+# detecting internal vs OSS builds, and mapping legacy `--features` entries
+# to environment variables), so platform-specific scripts can assume those
+# values are already provided via environment variables.
+
+set -e
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")"/.. && pwd)"
+cd "${REPO_ROOT}"
+
+OS_TYPE="$(uname -s)"
+
+FEATURES="gui"
+INSTALL_COMMON_SKILLS=1
+FORCE_COMMON_SKILLS=0
+COMMON_SKILLS_TARGET="${WARP_COMMON_SKILLS_INSTALL_TARGET:-}"
+
+./script/install_channel_config || echo "Skipping internal channel config installation (no repo access)."
+
+
+# If warp_channel_config is on PATH, build the Local channel binary; otherwise build the OSS channel.
+if command -v warp-channel-config &>/dev/null; then
+    WARP_BIN_NAME="warp"
+    WARP_CHANNEL="local"
+else
+    WARP_BIN_NAME="warp-oss"
+    WARP_CHANNEL="oss"
+fi
+
+# Shared argument parsing. macOS-specific flags (--dont-open,
+# --open_with_launchd, --generate-schema) are forwarded through MAC_ARGS and
+# silently ignored on other platforms.
+MAC_ARGS=()
+CARGO_PARAMS=()
+WARP_ARGS=()
+
+while (( "$#" )); do
+  case "$1" in
+    --)
+      shift
+      WARP_ARGS=("$@")
+      break
+      ;;
+    --features)
+      if [ -n "$2" ] && [ "${2:0:1}" != "-" ]; then
+        FEATURES="$FEATURES,$2"
+        shift 2
+      else
+        echo "Error: Argument for $1 is missing" >&2
+        exit 1
+      fi
+      ;;
+    --host-id)
+      if [ -n "$2" ] && [ "${2:0:1}" != "-" ]; then
+        export WARP_CLOUD_MODE_DEFAULT_HOST="$2"
+        shift 2
+      else
+        echo "Error: Argument for $1 is missing" >&2
+        exit 1
+      fi
+      ;;
+    --install-common-skills)
+      FORCE_COMMON_SKILLS=1
+      shift
+      ;;
+    --release)
+      CARGO_PARAMS+=("$1")
+      MAC_ARGS+=("$1")
+      shift
+      ;;
+    --profile)
+      if [ -n "$2" ] && [ "${2:0:1}" != "-" ]; then
+        CARGO_PARAMS+=("$1" "$2")
+        MAC_ARGS+=("$1" "$2")
+        shift 2
+      else
+        echo "Error: Argument for $1 is missing" >&2
+        exit 1
+      fi
+      ;;
+    *)
+      # Unknown flags (including macOS-only flags like --dont-open) and any
+      # positional arguments are forwarded to the platform-specific script.
+      MAC_ARGS+=("$1")
+      shift
+      ;;
+  esac
+done
+
+install_common_skills_or_continue() {
+  if ! ./script/resolve_common_skills install_common_skills -- --repo-root "${REPO_ROOT}" "$@"; then
+    echo "error: unable to install common skills; continuing without them." >&2
+  fi
+}
+if [[ "$INSTALL_COMMON_SKILLS" -eq 1 ]]; then
+  COMMON_SKILLS_ARGS=()
+  if [[ "${COMMON_SKILLS_TARGET}" = "project" || "${COMMON_SKILLS_TARGET}" = "global" ]]; then
+    COMMON_SKILLS_ARGS=("--${COMMON_SKILLS_TARGET}")
+  fi
+  if [[ "${WARP_SKIP_COMMON_SKILLS_INSTALL:-}" = "1" ]]; then
+    :
+  elif [[ "$FORCE_COMMON_SKILLS" -eq 1 ]]; then
+    if [[ "${#COMMON_SKILLS_ARGS[@]}" -gt 0 ]]; then
+      install_common_skills_or_continue "${COMMON_SKILLS_ARGS[@]}" --force
+    else
+      install_common_skills_or_continue --force --prompt-for-target
+    fi
+  else
+    if [[ "${#COMMON_SKILLS_ARGS[@]}" -gt 0 ]]; then
+      install_common_skills_or_continue "${COMMON_SKILLS_ARGS[@]}" --if-needed --quiet
+    else
+      install_common_skills_or_continue --if-needed --prompt-for-target --quiet
+    fi
+  fi
+fi
+
+# These cargo features were removed and replaced by environment variables read
+# by warp-channel-config. Intercept them here so that existing --features
+# invocations keep working.
+for mapping in \
+    "with_local_server:WITH_LOCAL_SERVER" \
+    "with_local_session_sharing_server:WITH_LOCAL_SESSION_SHARING_SERVER" \
+    "with_sandbox_telemetry:WITH_SANDBOX_TELEMETRY"; do
+    feature="${mapping%%:*}"
+    env_var="${mapping##*:}"
+    if [[ ",$FEATURES," =~ ,"$feature", ]]; then
+        export "$env_var"=1
+        FEATURES="$(echo "$FEATURES" | sed "s/,$feature,/,/; s/^$feature,//; s/,$feature$//; s/^$feature$//")"
+        FEATURES="$(echo "$FEATURES" | sed 's/,,*/,/g; s/^,//; s/,$//')"
+        echo "Note: '$feature' is no longer a cargo feature; setting $env_var=1 instead."
+    fi
+done
+
+export FEATURES
+export WARP_BIN_NAME
+export WARP_CHANNEL
+
+if [[ "$OS_TYPE" = "Darwin" ]]; then
+  if [[ ${#WARP_ARGS[@]} -gt 0 ]]; then
+    exec ./script/macos/run "${MAC_ARGS[@]}" -- "${WARP_ARGS[@]}"
+  else
+    exec ./script/macos/run "${MAC_ARGS[@]}"
+  fi
+elif [[ "$OS_TYPE" = "Linux" ]] || [[ "$OS_TYPE" =~ ^(MINGW64_NT|MSYS_NT) ]]; then
+  echo "Running cargo run --bin $WARP_BIN_NAME --features \"$FEATURES\" ${CARGO_PARAMS[*]}"
+  if [[ ${#WARP_ARGS[@]} -gt 0 ]]; then
+    cargo run --bin "$WARP_BIN_NAME" --features "$FEATURES" "${CARGO_PARAMS[@]}" -- "${WARP_ARGS[@]}"
+  else
+    cargo run --bin "$WARP_BIN_NAME" --features "$FEATURES" "${CARGO_PARAMS[@]}"
+  fi
+else
+  echo "No run script defined for the current platform ($OS_TYPE)!" >&2
+  exit 1
+fi

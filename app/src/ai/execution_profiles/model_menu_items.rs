@@ -1,0 +1,230 @@
+use std::sync::Arc;
+
+use itertools::Itertools;
+use warp_core::ui::Icon;
+use warpui::elements::{
+    ConstrainedBox, Container, CrossAxisAlignment, Flex, ParentElement, SavePosition, Shrinkable,
+    Text,
+};
+use warpui::fonts::{Properties, Style};
+use warpui::{Action, AppContext, Element, SingletonEntity as _};
+
+use crate::ai::agent::conversation::AIConversation;
+use crate::ai::custom_model_routers::is_custom_router_id;
+use crate::ai::llms::{
+    DisableReason, LLMId, LLMInfo, LLMPreferences, ModelIconFlags, is_model_allowed_for_scope,
+    model_leading_icon, should_show_bedrock_icon_for_model,
+    should_show_gemini_enterprise_agent_platform_icon_for_model, should_show_key_icon_for_model,
+};
+use crate::menu::{MenuItem, MenuItemFields, MenuTooltipPosition};
+use crate::workspaces::user_workspaces::TeamScope;
+
+pub fn is_auto(llm: &LLMInfo) -> bool {
+    llm.display_name.to_lowercase().contains("auto")
+        || llm.id.to_string().to_lowercase().contains("auto")
+}
+
+/// Returns true if the given model has other variants with different reasoning levels.
+pub fn has_reasoning_variants(llm: &LLMInfo, all_models: &[&LLMInfo]) -> bool {
+    if !llm.has_reasoning_level() {
+        return false;
+    }
+    all_models
+        .iter()
+        .filter(|other| other.base_model_name() == llm.base_model_name() && other.id != llm.id)
+        .any(|other| other.has_reasoning_level())
+}
+
+fn with_cost_and_profile_info<A: Action + Clone>(
+    item: MenuItemFields<A>,
+    llm: &LLMInfo,
+    profile_default_model: Option<&LLMId>,
+) -> MenuItemFields<A> {
+    let mut label = String::new();
+
+    if Some(&llm.id) == profile_default_model {
+        label.push_str("Profile default");
+    }
+
+    match llm.usage_metadata.credit_multiplier {
+        Some(mult) if mult != 1. => {
+            let mut formatted_cost = format!("~{mult:.1}")
+                .trim_end_matches('0')
+                .trim_end_matches('.')
+                .to_string();
+            formatted_cost.push('x');
+            if label.is_empty() {
+                label.push_str(&formatted_cost);
+            } else {
+                label.push_str(&format!(" ({formatted_cost})"));
+            }
+        }
+        _ => {}
+    }
+
+    if label.is_empty() {
+        item
+    } else {
+        // Using the key shortcut label to display extra info is a hack.
+        item.with_key_shortcut_label(Some(label))
+    }
+}
+
+/// Which same-family variants a menu renders as one row, labelled by the family rather than
+/// the specific variant. The picked row then opens a sidecar to choose within the family.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct CollapsedModelVariants {
+    pub auto: bool,
+    pub reasoning: bool,
+}
+
+impl CollapsedModelVariants {
+    pub fn all() -> Self {
+        Self {
+            auto: true,
+            reasoning: true,
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn make_item_fields<A: Action + Clone>(
+    llm: &LLMInfo,
+    action: impl Fn(&LLMInfo) -> A,
+    position_id_fn: Option<&dyn Fn(&LLMId) -> String>,
+    model_id_to_add_profile_default_label_to: Option<&LLMId>,
+    collapse: CollapsedModelVariants,
+    conversation: Option<&AIConversation>,
+    scope: &dyn TeamScope,
+    app: &AppContext,
+) -> MenuItem<A> {
+    let is_auto_model = is_auto(llm);
+    let label = if collapse.auto && is_auto_model {
+        "auto".to_string()
+    } else if collapse.reasoning && llm.has_reasoning_level() {
+        llm.base_model_name().to_string()
+    } else {
+        llm.menu_display_name()
+    };
+    let is_using_bedrock = should_show_bedrock_icon_for_model(llm, scope, app);
+    let is_using_gemini_enterprise_agent_platform =
+        should_show_gemini_enterprise_agent_platform_icon_for_model(llm, scope, app);
+    let is_using_api_key = should_show_key_icon_for_model(llm, conversation, scope, app);
+    let is_custom_router = is_custom_router_id(llm.id.as_str());
+    let leading_icon = model_leading_icon(
+        llm,
+        ModelIconFlags {
+            is_custom_router,
+            is_auto: is_auto_model,
+            is_using_bedrock,
+            is_using_gemini_enterprise: is_using_gemini_enterprise_agent_platform,
+        },
+    );
+    let is_using_cloud_host = is_using_bedrock || is_using_gemini_enterprise_agent_platform;
+    let trailing_credential_icon = (!is_using_cloud_host && is_using_api_key).then_some(Icon::Key);
+
+    let mut item = if let Some(position_id_fn) = position_id_fn {
+        let position_id = position_id_fn(&llm.id);
+        MenuItemFields::new_with_custom_label(
+            Arc::new(move |_, _, appearance, _| {
+                let mut item_row =
+                    Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
+
+                let icon_container = Container::new(
+                    ConstrainedBox::new(
+                        leading_icon
+                            .to_warpui_icon(appearance.theme().foreground())
+                            .finish(),
+                    )
+                    .with_height(appearance.ui_font_size())
+                    .with_width(appearance.ui_font_size())
+                    .finish(),
+                )
+                .with_margin_right(appearance.ui_font_size() / 2.)
+                .finish();
+                item_row.add_child(icon_container);
+
+                let text = Text::new(
+                    label.clone(),
+                    appearance.ui_font_family(),
+                    appearance.ui_font_size(),
+                )
+                .with_color(
+                    appearance
+                        .theme()
+                        .main_text_color(appearance.theme().background())
+                        .into(),
+                )
+                .finish();
+                item_row.add_child(Shrinkable::new(4., text).finish());
+                if let Some(icon) = trailing_credential_icon {
+                    let credential_icon = Container::new(
+                        ConstrainedBox::new(
+                            icon.to_warpui_icon(appearance.theme().disabled_ui_text_color())
+                                .finish(),
+                        )
+                        .with_height(appearance.ui_font_size())
+                        .with_width(appearance.ui_font_size())
+                        .finish(),
+                    )
+                    .with_margin_left(6.)
+                    .finish();
+                    item_row.add_child(credential_icon);
+                }
+                SavePosition::new(item_row.finish(), &position_id).finish()
+            }),
+            None,
+        )
+    } else {
+        MenuItemFields::new(label).with_icon(leading_icon)
+    };
+
+    item = item
+        .with_on_select_action(action(llm))
+        .with_disabled(llm.disable_reason.is_some());
+
+    if let Some(reason) = &llm.disable_reason {
+        item = item
+            .with_tooltip(reason.tooltip_text())
+            .with_tooltip_position(MenuTooltipPosition::Above);
+
+        if matches!(reason, DisableReason::RequiresUpgrade) {
+            item =
+                item.with_right_side_label("disabled", Properties::default().style(Style::Italic));
+        }
+    }
+
+    with_cost_and_profile_info(item, llm, model_id_to_add_profile_default_label_to).into_item()
+}
+
+/// Builds the model menu rows. `conversation` is the conversation the menu applies to, when
+/// known; it decides whether a ChatGPT subscription counts as a connected key.
+#[allow(clippy::too_many_arguments)]
+pub fn available_model_menu_items<A: Action + Clone>(
+    choices: Vec<&LLMInfo>,
+    action: impl Fn(&LLMInfo) -> A,
+    model_id_to_add_profile_default_label_to: Option<&LLMId>,
+    position_id_fn: Option<&dyn Fn(&LLMId) -> String>,
+    collapse: CollapsedModelVariants,
+    conversation: Option<&AIConversation>,
+    scope: &dyn TeamScope,
+    app: &AppContext,
+) -> Vec<MenuItem<A>> {
+    let prefs = LLMPreferences::as_ref(app);
+    choices
+        .into_iter()
+        .filter(|llm| is_model_allowed_for_scope(prefs, llm, scope, app))
+        .map(|llm| {
+            make_item_fields(
+                llm,
+                &action,
+                position_id_fn,
+                model_id_to_add_profile_default_label_to,
+                collapse,
+                conversation,
+                scope,
+                app,
+            )
+        })
+        .collect_vec()
+}

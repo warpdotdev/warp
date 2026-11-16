@@ -1,0 +1,7 @@
+CREATE TABLE team_members (
+    id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    team_id INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+    user_uid TEXT NOT NULL,
+    email TEXT NOT NULL,
+    role TEXT NOT NULL
+);

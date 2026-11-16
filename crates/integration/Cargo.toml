@@ -1,0 +1,69 @@
+[package]
+edition = "2024"
+name = "integration"
+version = "0.1.0"
+publish.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "integration"
+path = "src/bin/integration.rs"
+# The integration test binary does not, itself, have any tests.
+test = false
+
+[dependencies]
+anyhow = "1.0"
+backtrace.workspace = true
+cfg-if.workspace = true
+chrono.workspace = true
+clap.workspace = true
+command.workspace = true
+directories.workspace = true
+itertools.workspace = true
+float-cmp.workspace = true
+instant.workspace = true
+lazy_static = "1.4.0"
+log = { version = "0.4", features = ["serde"] }
+mockito.workspace = true
+parking_lot = { version = "0.12.1", features = ["serde"] }
+pathfinder_geometry.workspace = true
+rand = "0.8.2"
+regex.workspace = true
+rust-embed.workspace = true
+serde = { version = "1.0", features = ["derive", "rc"] }
+serde_json.workspace = true
+settings.workspace = true
+simplelog.workspace = true
+strum.workspace = true
+strum_macros.workspace = true
+sum_tree.workspace = true
+version-compare.workspace = true
+warp = { workspace = true, features = ["integration_tests"] }
+warp_cli = { workspace = true, features = ["integration_tests"] }
+warp_core.workspace = true
+warp-command-signatures.workspace = true
+warp_multi_agent_api.workspace = true
+warp-workflows.workspace = true
+warpui_core.workspace = true
+warpui_extras = { workspace = true, features = [
+    "user_preferences-file",
+] }
+whoami = "1.5.2"
+
+[dev-dependencies]
+command = { workspace = true, features = ["test-util"] }
+warpui = { workspace = true, features = ["integration_tests"] }
+warp_core = { workspace = true, features = ["test-util"] }
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+app-installation-detection.workspace = true
+diesel = { version = "2.2.4", features = ["sqlite", "chrono"] }
+sysinfo.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+nix = { workspace = true, features = ["user", "signal"] }
+
+[features]
+run_on_linux = []
+drag_tabs_to_windows = ["warp/drag_tabs_to_windows"]
+default = ["run_on_linux"]

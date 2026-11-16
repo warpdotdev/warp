@@ -1,0 +1,27 @@
+[package]
+authors = ["Warp Team <dev@warp.dev>"]
+edition = "2024"
+name = "ipc"
+version = "0.1.0"
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+async-channel.workspace = true
+async-compat.workspace = true
+async-trait.workspace = true
+bincode.workspace = true
+futures.workspace = true
+itertools.workspace = true
+log.workspace = true
+rand.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+warpui_core.workspace = true
+
+[dev-dependencies]
+parking_lot.workspace = true
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+interprocess = {version = "1.2.1", features = ["tokio_support"]}

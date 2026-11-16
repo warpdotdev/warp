@@ -1,0 +1,11 @@
+# Owners for the ui_components crate.
+#
+# We're defining explicit approvers for this crate while we're still working
+# on solidifying patterns and best practices.  This set of approvers should
+# grow over time as more people contribute to the crate.
+
+vorporeal
+zachbai
+alokedesai
+bnavetta
+acarl005

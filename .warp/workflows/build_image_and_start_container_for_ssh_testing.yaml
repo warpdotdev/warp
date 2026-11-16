@@ -1,0 +1,14 @@
+---
+name: "Build image and start container for SSH testing"
+command:  |-
+  WARP_REPO_PATH=`git rev-parse --show-toplevel`
+  docker build -t {{image}} $WARP_REPO_PATH/app/tests/ssh
+  docker run -ditp 22:22 {{image}}
+tags: ["docker"]
+description: "Builds a Docker image and launches a container based on that image for SSH testing. You can run `ssh bash@0.0.0.0` or `ssh zsh@0.0.0.0` after running this. The password will be 'password'. After you first do this, you can manage the container with the Docker Desktop app. The container may stop (e.g. if you restart your computer), and you can usually bring it back by restarting it there (hit the play button)."
+arguments:
+  - name: image
+    description: The name of the Docker image. If you have multiple on your machine in order to test different operating systems, it might be useful to denominate them based on that.
+    default_value: ssh_test_ubuntu_latest
+author: Zheng Tao
+shells: ["zsh", "bash"]

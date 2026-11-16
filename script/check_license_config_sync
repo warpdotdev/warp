@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+#
+# Verifies that the accepted license lists in deny.toml and about.toml are in
+# sync. Exits non-zero with a diff if they diverge.
+
+set -e
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+
+python3 -c "
+import tomllib, sys
+
+with open('$REPO_ROOT/deny.toml', 'rb') as f:
+    deny = set(tomllib.load(f)['licenses']['allow'])
+with open('$REPO_ROOT/about.toml', 'rb') as f:
+    about = set(tomllib.load(f)['accepted'])
+
+if deny != about:
+    only_deny = deny - about
+    only_about = about - deny
+    if only_deny:
+        print(f'In deny.toml but not about.toml: {sorted(only_deny)}')
+    if only_about:
+        print(f'In about.toml but not deny.toml: {sorted(only_about)}')
+    sys.exit(1)
+
+print('License config in sync.')
+"

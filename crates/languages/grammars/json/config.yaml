@@ -1,0 +1,10 @@
+display_name: "JSON"
+indent_unit:
+  space: 4
+brackets:
+  - start: "{"
+    end: "}"
+  - start: "("
+    end: ")"
+  - start: "["
+    end: "]"

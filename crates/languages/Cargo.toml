@@ -1,0 +1,15 @@
+[package]
+name = "languages"
+edition = "2024"
+authors = ["Warp Team <dev@warp.dev>"]
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_yaml.workspace = true
+rust-embed.workspace = true
+arborium.workspace = true
+lazy_static.workspace = true
+warp_editor = { path = "../editor" }
+warp_util.workspace = true

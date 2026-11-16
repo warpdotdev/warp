@@ -1,0 +1,14 @@
+disallowed-macros = [
+    { path = "std::dbg", reason = "dbg!() is only for use in local testing, not submitted code" },
+]
+
+disallowed-types = [
+    { path = "std::time::Instant", reason = "std::time::Instant is not implemented for wasm targets. Use instant::Instant instead." },
+    { path = "std::process::Command", reason = "std::process::Command by default flashes a terminal when invoked on Windows. Use command::blocking::Command instead." },
+    { path = "async_process::Command", reason = "async_process::Command by default flashes a terminal when invoked on Windows. Use command::r#async::Command instead." },
+]
+
+disallowed-methods = [
+    { path = "async_channel::Sender::send_blocking", reason = "send_blocking() does not exist for wasm.  Use warpui::r#async::block_on() with send() instead.", allow-invalid = true },
+    { path = "line_ending::LineEnding::from_current_platform", reason = "line_ending::LineEnding::from_current_platform does not account for Unix-like subsystems for Windows. In most cases, use warp_core::platform::SessionPlatform::default_line_ending() instead." },
+]

@@ -1,0 +1,7 @@
+display_name: "XML"
+indent_unit:
+  space: 2
+comment_prefix: "<!--"
+brackets:
+  - start: "<"
+    end: ">"

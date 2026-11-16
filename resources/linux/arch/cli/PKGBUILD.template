@@ -1,0 +1,45 @@
+pkgname=oz@@CHANNEL_SUFFIX@@
+pkgver=@@VERSION@@
+pkgrel=@@RELEASE@@
+pkgdesc="The orchestration platform for cloud agents"
+arch=('@@ARCH@@')
+url="https://warp.dev"
+license=('custom')
+depends=(
+	'curl'
+	'zlib'
+)
+replaces=(
+	'warp-cli@@CHANNEL_SUFFIX@@'
+	'oz=v0.2026.02.09.06.06.stable_00'
+	'oz=v0.2026.02.09.06.06.stable_02'
+	'oz=v0.2026.02.10.11.37.stable_00'
+	'oz=v0.2026.02.10.11.37.stable_01'
+	'oz=v0.2026.02.11.08.23.stable_00'
+)
+conflicts=(
+	'warp-cli@@CHANNEL_SUFFIX@@'
+	'oz=v0.2026.02.09.06.06.stable_00'
+	'oz=v0.2026.02.09.06.06.stable_02'
+	'oz=v0.2026.02.10.11.37.stable_00'
+	'oz=v0.2026.02.10.11.37.stable_01'
+	'oz=v0.2026.02.11.08.23.stable_00'
+)
+optdepends=(
+	'org.freedesktop.secrets: for securely storing passwords'
+)
+# Don't perform additional stripping of binaries; we already do the amount of
+# stripping we want as part of the bundle_install script.
+options=('!strip')
+source=(
+	'data.tar'
+)
+
+package() {
+	# Unpack the base package into the output directory.
+	bsdtar -xf data.tar -C "$pkgdir/"
+
+	# Create a symlink to the binary in /usr/bin.
+	install -d "$pkgdir"/usr/bin
+	ln -s "/opt/warpdotdev/oz@@CHANNEL_SUFFIX@@/@@BINARY_NAME@@" "$pkgdir/usr/bin/@@BINARY_NAME@@"
+}

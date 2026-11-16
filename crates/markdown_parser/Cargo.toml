@@ -1,0 +1,19 @@
+[package]
+name = "markdown_parser"
+authors = ["Warp Team <dev@warp.dev>"]
+version = "0.1.0"
+edition = "2024"
+publish.workspace = true
+license.workspace = true
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow.workspace = true
+enum-iterator.workspace = true
+itertools.workspace = true
+nom.workspace = true
+html5ever.workspace = true
+markup5ever_rcdom = "0.35.0"
+serde_yaml.workspace = true
+thiserror.workspace = true

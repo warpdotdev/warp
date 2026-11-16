@@ -1,0 +1,31 @@
+on:
+  push:
+    branches:
+      # Potentially run this workflow whenever the master branch changes in,
+      # order to update the cache if necessary.
+      - master
+    paths:
+      # We only need to run this if there were changes to files that affect
+      # the cache key.
+      - 'Cargo.lock'
+      - '**/Cargo.toml'
+      - '.cargo/config.toml'
+      - 'rust-toolchain.toml'
+  # Run once per day to ensure the cache is populated even if we haven't
+  # modified Cargo.lock or Cargo.toml in a while.
+  schedule:
+    - cron: "0 8 * * 1-5" # Run every weekday at 3am EST.
+  workflow_dispatch:
+
+name: Populate Build Cache
+
+jobs:
+  populate_build_cache:
+    name: CI
+    if: github.repository_owner == 'warpdotdev'
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read # ci.yml jobs clone the repo
+      id-token: write # ci.yml's tests jobs mint an OIDC token to authenticate to GCP
+      pull-requests: read # ci.yml's params job reads the PR changed-files list; a reusable-workflow caller must grant everything its callee's jobs declare
+    secrets: inherit

@@ -1,0 +1,46 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Watch",
+            "group": "build",
+            "type": "shell",
+            "command": "cargo watch",
+            "problemMatcher": "$rustc-watch",
+            "isBackground": true
+        },
+        {
+            "type": "cargo",
+            "command": "build",
+            "problemMatcher": [
+                "$rustc"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "label": "rust: cargo build"
+        },
+        {
+            "type": "shell",
+            "command": "./script/run --dont-open",
+            "label": "build_warplocal"
+        },
+        {
+            "type": "shell",
+            "command": "./script/run --dont-open --features fast_dev",
+            "label": "build_warplocal_fastdev"
+        },
+        {
+            "type": "shell",
+            "command": "./script/run --dont-open --features fast_dev,with_local_session_sharing_server",
+            "label": "build_warplocal_fastdev_localsessionsharing"
+        },
+        {
+            "type": "shell",
+            "command": "./script/run --dont-open --features with_local_session_sharing_server",
+            "label": "build_warplocal_localsessionsharing"
+        }
+        // TODO: If adding more configs that just add feature flags, consider argument passing from launch.json to tasks.json
+    ]
+}

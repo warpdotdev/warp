@@ -1,0 +1,115 @@
+name: Legacy SSH Issues? Use this template
+description: "(Legacy) Issue template specialized for the circumstances where the shell doesn't bootstrap as a subshell over SSH"
+labels: ["bug","area:ssh"]
+body:
+  - type: checkboxes
+    attributes:
+      label: "Pre-submit Checks"
+      options:
+        - label: "I have [searched Warp SSH issues](https://github.com/warpdotdev/Warp/issues?q=is%3Aissue+is%3Aopen+label%3ASSH) and there are no duplicates"
+          required: true
+        - label: "I have [searched Warp known issues page](https://docs.warp.dev/help/known-issues) and my issue is not there"
+          required: true
+        - label: "I have technical issue and have included the logs (helps expedite the bug fix). [Log instructions](https://docs.warp.dev/support-and-community/troubleshooting-and-support/sending-us-feedback#gathering-warp-logs)"
+          required: false   
+  - type: dropdown
+    id: "os"
+    attributes:
+      label: "Operating system (OS)"
+      multiple: false
+      options:
+        - "Select an OS"
+        - macOS
+        - Linux
+        - Windows
+    validations:
+      required: true
+  - type: input
+    id: "os-version"
+    attributes:
+      label: "Operating System and Version"
+      description: "For example: Debian 11.2"
+    validations:
+      required: true
+  - type: input
+    id: "local-shell-version"
+    attributes:
+      label: "Local Shell Version"
+      description: "Output of `echo $BASH_VERSION` or `echo $ZSH_VERSION`"
+    validations:
+      required: true
+  - type: input
+    id: "remote-shell-version"
+    attributes:
+      label: "Remote Shell Version"
+      description: "Output of `echo $BASH_VERSION` or `echo $ZSH_VERSION`"
+    validations:
+      required: true
+  - type: input
+    id: "warp-version"
+    attributes:
+      label: "Warp Version"
+      description: "Click the 3-dots menu docked to the right of the tabs in Warp and click the copy button, e.g. `v0.2022.05.30.09.10.stable_01`"
+    validations:
+      required: true
+  - type: checkboxes
+    id: "rcfiles"
+    attributes:
+      label: "Have you tried commenting out my system & user rc files?"
+      description: "If the issue is with your system and user rc files, please isolate the issue by [debugging your rc files](https://docs.warp.dev/help/known-issues#configuring-and-debugging-your-rc-files)."
+      options:
+      - label: "Yes"
+  - type: textarea
+    id: "screenshots-logs"
+    attributes:
+      label: "Screenshots, videos, and logs"
+      description: "If applicable, add screenshots/videos/logs to help us understand your problem. While optional, these help expedite the time in which your bug is addressed."
+    validations:
+      required: false
+  - type: textarea
+    id: "xtrace-output"
+    attributes:
+      label: "Include shell xtrace output"
+      description: "1. Ensure you're on the 3.31 version of Warp or later. 2. Run WARP_DEBUG_MODE=1 ssh YOUR-HOSTNAME-HERE 3. Save the full output starting from the ssh command block. If you’re not comfortable posting the outputs to a public issue, you can email feedback@warp.dev. "
+    validations:
+      required: true
+  - type: dropdown
+    id: "blocker"
+    attributes:
+      label: "Does this block you from using Warp daily?"
+      description: "All feedback will be reviewed, even if you select 'No'."
+      multiple: false
+      options:
+        - "No"
+        - "Yes, this issue prevents me from using Warp daily."
+    validations:
+      required: true
+  - type: dropdown
+    id: "terminals"
+    attributes:
+      label: "Is this an issue only in Warp?"
+      description: "Verifying this issue doesn't happen in other terminals helps us to prioritize the fix"
+      multiple: false
+      options:
+        - "Yes, I confirmed that this only happens in Warp, not other terminals."
+        - "No, this issue happens in Warp and other terminals."
+    validations:
+      required: true
+  - type: dropdown
+    id: "linear-label-ssh"
+    attributes:
+      label: "Warp Internal (ignore) - linear-label:e7dfaa84-5fdb-4a00-b754-d8912da923fa"
+      multiple: false
+      options:
+        - Ignore
+    validations:
+      required: false
+  - type: dropdown
+    id: "linear-label-bug"
+    attributes:
+      label: "Warp Internal (ignore): linear-label:b8107fdf-ba31-488d-b103-d271c89cac3e"
+      multiple: false
+      options:
+        - Ignore
+    validations:
+      required: false

@@ -1,0 +1,41 @@
+#!/bin/bash
+
+set -e
+cd "$(dirname "$0")/.."
+
+matches=$(
+    find . \
+        \( -path './.git' -o -path './target' \) -prune -o \
+        -type f \
+        -name '*.rs' \
+        -exec grep -nE '^[[:space:]]*mod[[:space:]]+tests[[:space:]]*\{' {} + || true
+)
+
+if [[ -z "$matches" ]]; then
+    exit 0
+fi
+
+cat <<'EOF'
+Inline Rust test modules are not allowed. Move test code into a sibling `_tests.rs`
+file and include it from the original module like this:
+
+```
+#[cfg(test)]
+#[path = "..._tests.rs"]
+mod tests;
+```
+
+EOF
+while IFS= read -r match; do
+    file=${match%%:*}
+    rest=${match#*:}
+    line=${rest%%:*}
+
+    if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
+        echo "::error file=${file#./},line=$line::Move this inline test module to a sibling _tests.rs file."
+    else
+        echo "$match"
+    fi
+done <<< "$matches"
+
+exit 1

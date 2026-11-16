@@ -1,0 +1,26 @@
+{
+  "private": true,
+  "scripts": {
+    "generate": "graphql-codegen -r ts-node/register"
+  },
+  "dependencies": {
+    "graphql": "^16.8.1"
+  },
+  "devDependencies": {
+    "@graphql-codegen/cli": "^5.0.2",
+    "@graphql-tools/utils": "^10.1.2",
+    "cross-fetch": "^4.0.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.4.3"
+  },
+  "resolutions": {
+    "@fastify/busboy": "3.2.2",
+    "immutable": "4.3.9",
+    "lodash": "4.18.1",
+    "@babel/core": "7.29.6",
+    "brace-expansion": "^2.1.7",
+    "js-yaml": "^4.3.2",
+    "shell-quote": "^1.9.0",
+    "ws": "8.21.0"
+  }
+}
