@@ -1,6 +1,7 @@
 //! End-to-end hook tests with real parts: the checked-in Cursor fixtures copied to a temporary
 //! directory, real `sh` scripts, the registry and its loaders, the dispatcher, and the process
-//! runner. Each test is named after the Phase 1 test contract it proves (architecture.md §11).
+//! runner. The Phase 1 test contracts in architecture.md §11 are each covered here or in the app's
+//! end-to-end suite; the rest of these tests cover the factory layout and the shell slice.
 //!
 //! Every runner here gets an explicit `HOME` and `PATH`, so no test depends on the developer's
 //! own environment, and nothing changes the test process's environment.
@@ -1154,11 +1155,11 @@ mod factory_layout {
             ]
         }
 
-        /// A shell command the agent runs from the definition repository.
+        /// A shell command the agent runs from the definition repository, with only that
+        /// repository as a workspace root, so a hook from another repository applies without the
+        /// agent working in it.
         fn shell(&self, command: &str) -> HookEnvelope {
-            let mut envelope = shell_envelope(command, self.root(), Some(self.root()));
-            envelope.roots.push(self.api.clone());
-            envelope
+            shell_envelope(command, self.root(), Some(self.root()))
         }
 
         fn dispatch(&self, registry: &HookRegistry, command: &str) -> DispatchOutcome {
@@ -1297,16 +1298,20 @@ mod factory_layout {
     }
 
     /// A hooks file two entries select loads once, from the first entry's location, with the
-    /// stricter of each setting.
+    /// stricter of each setting taken from whichever entry has it.
     #[test]
     fn a_file_selected_twice_takes_the_stricter_settings() {
         let layout = Layout::new();
-        // The agent selects the factory's directory too, with default settings, before the
-        // factory's own strict entry.
-        let from_agent = repository_source(layout.root(), "hooks", HookSourceKind::FactoryAgent);
-        let from_factory = with_policy(layout.factory_hooks(), true, HookOnAsk::FailRun);
+        // The agent selects the factory's directory too, strict but denying on an ask, before the
+        // factory's own entry, which is not strict but fails the run on an ask.
+        let from_agent = with_policy(
+            repository_source(layout.root(), "hooks", HookSourceKind::FactoryAgent),
+            true,
+            HookOnAsk::Deny,
+        );
+        let from_factory = with_policy(layout.factory_hooks(), false, HookOnAsk::FailRun);
         let mut registry = HookRegistry::new();
-        load_sources(&mut registry, &[from_agent.clone(), from_factory]);
+        load_sources(&mut registry, &[from_agent, from_factory]);
 
         let snapshot = registry.snapshot();
         assert_eq!(snapshot.bindings.len(), 1, "{:?}", snapshot.bindings);
@@ -1332,7 +1337,14 @@ mod factory_layout {
             HookVerdict::Deny
         );
         let mut lenient = HookRegistry::new();
-        load_sources(&mut lenient, &[from_agent]);
+        load_sources(
+            &mut lenient,
+            &[repository_source(
+                layout.root(),
+                "hooks",
+                HookSourceKind::FactoryAgent,
+            )],
+        );
         assert_eq!(
             layout.dispatch(&lenient, "ls").effects.verdict,
             HookVerdict::NoOpinion
@@ -1340,7 +1352,7 @@ mod factory_layout {
     }
 
     /// When several hooks ask, the run ends if any one of them comes from an entry set to
-    /// `fail_run`, whichever source ranks first.
+    /// `fail_run`: the reviewer's, which ranks first, or the factory's, which ranks after it.
     #[test]
     fn any_asker_from_a_fail_run_entry_ends_the_run() {
         let layout = Layout::new();
@@ -1356,15 +1368,17 @@ printf '{"permission":"ask","agent_message":"The factory asks before anything is
             HookSourceKind::FactoryWide,
         );
 
-        for (reviewer_on_ask, ends_the_run) in
-            [(HookOnAsk::FailRun, true), (HookOnAsk::Deny, false)]
-        {
+        for (reviewer_on_ask, factory_on_ask, ends_the_run) in [
+            (HookOnAsk::FailRun, HookOnAsk::Deny, true),
+            (HookOnAsk::Deny, HookOnAsk::FailRun, true),
+            (HookOnAsk::Deny, HookOnAsk::Deny, false),
+        ] {
             let mut registry = HookRegistry::new();
             load_sources(
                 &mut registry,
                 &[
                     with_policy(layout.reviewer_hooks(), false, reviewer_on_ask),
-                    factory_asks.clone(),
+                    with_policy(factory_asks.clone(), false, factory_on_ask),
                 ],
             );
             let outcome = layout.dispatch(&registry, "publish v2");
@@ -1375,11 +1389,11 @@ printf '{"permission":"ask","agent_message":"The factory asks before anything is
                 .iter()
                 .map(|asker| asker.on_ask)
                 .collect::<Vec<_>>();
-            assert_eq!(on_ask, vec![reviewer_on_ask, HookOnAsk::Deny]);
+            assert_eq!(on_ask, vec![reviewer_on_ask, factory_on_ask]);
             assert_eq!(
                 outcome.effects.an_asker_fails_the_run(),
                 ends_the_run,
-                "reviewer on ask: {reviewer_on_ask:?}"
+                "reviewer on ask: {reviewer_on_ask:?}, factory on ask: {factory_on_ask:?}"
             );
         }
     }

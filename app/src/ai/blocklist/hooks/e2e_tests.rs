@@ -1,7 +1,8 @@
 //! End-to-end hook tests through the agent loop: the action model, the controller, and the
 //! agent driver, with the real `HookRuntime` wired to the real process runner and the checked-in
-//! Cursor fixtures. Each test is named after the Phase 1 test contract it proves
-//! (architecture.md §11).
+//! Cursor fixtures. The tests named after Phase 1 test contracts (architecture.md §11) prove those
+//! contracts; the factory-layout tests at the end run a factory's declared hook list through the
+//! driver.
 //!
 //! Every runner here gets an explicit `HOME` and `PATH`, hooks write only inside temporary
 //! directories, and nothing changes the test process's environment.
@@ -28,6 +29,8 @@ use serde_json::{Value, json};
 use warp_cli::agent::OutputFormat;
 use warp_core::execution_mode::{AppExecutionMode, ExecutionMode};
 use warp_multi_agent_api::message::{AgentReasoning, Message as MessageKind};
+use warp_multi_agent_api::request::input::tool_call_result::Result as WireResult;
+use warp_multi_agent_api::request::input::user_inputs::user_input::Input as WireInput;
 use warp_multi_agent_api::{self as api, Message};
 use warpui::r#async::Timer;
 use warpui::elements::Empty;
@@ -46,7 +49,8 @@ use super::test_utils::{
 use super::{HookRuntime, RunIdentity, RunSurface};
 use crate::ai::agent::conversation::{AIConversation, AIConversationId, ConversationStatus};
 use crate::ai::agent::{
-    AIAgentAction, AIAgentActionResult, AIAgentActionResultType, CancellationReason,
+    AIAgentAction, AIAgentActionId, AIAgentActionResult, AIAgentActionResultType,
+    CancellationReason,
 };
 use crate::ai::agent_sdk::driver::hooks::{
     ConfiguredHookLocation, ConfiguredHookSource, RunHooks, write_diagnostic, write_notice,
@@ -278,10 +282,10 @@ async fn finished_result(
 }
 
 fn hook_denied_reason(result: &AIAgentActionResultType) -> Option<&str> {
-    match result {
-        AIAgentActionResultType::DeniedByHook { reason } => Some(reason),
-        _ => None,
-    }
+    let AIAgentActionResultType::DeniedByHook { reason } = result else {
+        return None;
+    };
+    Some(reason)
 }
 
 fn line_count(path: &Path) -> usize {
@@ -1180,6 +1184,11 @@ impl FactoryRun {
     /// The hook list `factory.yaml` and `agents/reviewer/agent.md` declare, as the server sends
     /// it: the agent's entries first, then the factory's.
     fn declared_sources() -> Vec<ConfiguredHookSource> {
+        Self::declared_sources_with(HookOnAsk::FailRun)
+    }
+
+    /// [`Self::declared_sources`], with the reviewer's entry set to `reviewer_on_ask`.
+    fn declared_sources_with(reviewer_on_ask: HookOnAsk) -> Vec<ConfiguredHookSource> {
         vec![
             repository_entry(
                 "api",
@@ -1193,7 +1202,7 @@ impl FactoryRun {
                 HookSourceKind::FactoryAgent,
                 HookSourcePolicy {
                     strict: false,
-                    on_ask: HookOnAsk::FailRun,
+                    on_ask: reviewer_on_ask,
                 },
             ),
             repository_entry(
@@ -1246,7 +1255,7 @@ impl FactoryRun {
             .harness
             .terminal
             .read(app, |view, _| view.ai_action_model().clone());
-        let id = crate::ai::agent::AIAgentActionId::from(call_id.to_owned());
+        let id = AIAgentActionId::from(call_id.to_owned());
         wait_for(app, &format!("a result for {call_id}"), |app| {
             model.read(app, |model, _| model.get_action_result(&id).is_some())
         })
@@ -1264,8 +1273,7 @@ impl FactoryRun {
             .collect()
     }
 
-    /// The `hook_diagnostic` records for sources that failed. The sample's `sessionStart` hook
-    /// also produces a warning, since model context is not supported yet.
+    /// The `hook_diagnostic` records for sources that failed.
     fn load_errors(&self) -> Vec<Value> {
         self.records_of("hook_diagnostic")
             .into_iter()
@@ -1275,15 +1283,13 @@ impl FactoryRun {
 }
 
 fn denied_by_hook_on_the_wire(result: AIAgentActionResult) -> Option<String> {
-    let api::request::input::user_inputs::user_input::Input::ToolCallResult(wire) =
-        api::request::input::user_inputs::user_input::Input::try_from(result).ok()?
-    else {
+    let WireInput::ToolCallResult(wire) = WireInput::try_from(result).ok()? else {
         return None;
     };
-    match wire.result? {
-        api::request::input::tool_call_result::Result::DeniedByHook(denied) => Some(denied.reason),
-        _ => None,
-    }
+    let Some(WireResult::DeniedByHook(denied)) = wire.result else {
+        return None;
+    };
+    Some(denied.reason)
 }
 
 /// Rung 4 of the testing ladder with the factory layout: an execution configuration that names
@@ -1297,7 +1303,11 @@ fn a_factory_run_denies_through_another_repositorys_cursor_hooks() {
         let run = FactoryRun::new(&mut app);
         let (_driver, started) = run.start(&mut app, FactoryRun::declared_sources());
         let _run_exit = started.expect("every declared source loads");
-        assert!(run.load_errors().is_empty(), "{:?}", run.load_errors());
+        // Nothing about these sources is reported: they all load, and the sample's `sessionStart`
+        // note that model context is not delivered yet only predicts what a hook might do, so it
+        // stays in the log.
+        let diagnostics = run.records_of("hook_diagnostic");
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
 
         run.stream_shell_call(&mut app, "rm-call", "rm -rf build");
         let result = run.result_for(&mut app, "rm-call").await;
@@ -1326,8 +1336,8 @@ fn a_factory_run_denies_through_another_repositorys_cursor_hooks() {
     });
 }
 
-/// A strict entry that cannot be found stops the run before it starts; an entry that is not
-/// strict is reported as a `hook_diagnostic` record and the run goes on without it.
+/// A strict entry that cannot be found stops the run before it starts, and the failure names only
+/// that entry.
 #[test]
 fn a_missing_strict_entry_stops_the_run() {
     App::test((), |mut app| async move {
@@ -1354,6 +1364,8 @@ fn a_missing_strict_entry_stops_the_run() {
     });
 }
 
+/// An entry that is not strict and cannot be found is one `hook_diagnostic` error record, and the
+/// run goes on with the entries that loaded.
 #[test]
 fn a_missing_entry_that_is_not_strict_is_reported_and_the_run_goes_on() {
     App::test((), |mut app| async move {
@@ -1406,5 +1418,30 @@ fn an_ask_from_a_fail_run_entry_ends_the_factory_run() {
             conversation_status(app, conversation_id) == Some(ConversationStatus::Error)
         })
         .await;
+    });
+}
+
+/// The control for the test above: with the reviewer's entry set to `deny`, its hook's ask still
+/// denies the publish with the same reason, and the run's conversation does not fail.
+#[test]
+fn an_ask_from_a_deny_entry_is_denied_and_the_run_goes_on() {
+    App::test((), |mut app| async move {
+        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
+        let run = FactoryRun::new(&mut app);
+        let (_driver, started) = run.start(
+            &mut app,
+            FactoryRun::declared_sources_with(HookOnAsk::Deny),
+        );
+        let _run_exit = started.expect("every declared source loads");
+
+        let conversation_id = run.stream_shell_call(&mut app, "publish-call", "publish v2");
+        let result = run.result_for(&mut app, "publish-call").await;
+        let reason = denied_by_hook_on_the_wire(result).expect("the ask became a denial");
+        assert!(reason.starts_with(APPROVAL_UNAVAILABLE_PREFIX), "{reason}");
+        let_background_work_settle(&mut app).await;
+        assert_ne!(
+            conversation_status(&app, conversation_id),
+            Some(ConversationStatus::Error)
+        );
     });
 }
