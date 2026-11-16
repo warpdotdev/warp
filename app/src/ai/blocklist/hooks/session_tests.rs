@@ -2,7 +2,7 @@ use std::ffi::OsString;
 use std::time::Duration;
 
 use ai::hooks::test_util::{ScriptedRunner, test_binding, test_source_id};
-use ai::hooks::{DeclaredBinding, HookBoundary, HookPayload};
+use ai::hooks::{DeclaredBinding, HookBoundary, HookPayload, HookRegistry};
 use chrono::Local;
 use instant::Instant;
 use warpui::{App, SingletonEntity};
@@ -231,6 +231,40 @@ fn a_conversation_with_exchanges_is_not_a_new_session() {
         let_background_work_settle(&mut app).await;
         assert_eq!(harness.hooks.adapter.encoded_count(), 0);
         assert_eq!(harness.hooks.runner.invocation_count(), 0);
+    });
+}
+
+/// Bindings can be in the registry before the loader finalizes it. A request in that window is
+/// not held, and the conversation is not marked as started, so its first request after
+/// finalization still fires `session.start`.
+#[test]
+fn a_request_before_finalization_does_not_use_up_the_session_start() {
+    App::test((), |mut app| async move {
+        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
+        let harness = hook_test_app(&mut app);
+        app.update(|ctx| harness.hooks.stage_bindings(vec![session_binding()], ctx));
+
+        let early =
+            app.update(|ctx| barrier(harness.conversation_id, &harness.active_session, ctx));
+        assert!(early.is_none());
+        assert!(app.read(|ctx| {
+            !HookRuntime::as_ref(ctx)
+                .session_starts
+                .states
+                .contains_key(&harness.conversation_id)
+        }));
+        assert_eq!(harness.hooks.runner.invocation_count(), 0);
+
+        app.update(|ctx| {
+            HookRegistry::handle(ctx).update(ctx, |registry, _| {
+                registry.finalize().expect("finalizes once");
+            });
+        });
+        let after = app
+            .update(|ctx| barrier(harness.conversation_id, &harness.active_session, ctx))
+            .expect("the first request after finalization waits for session.start");
+        after.await;
+        assert_eq!(harness.hooks.runner.invocation_count(), 1);
     });
 }
 

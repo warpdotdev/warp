@@ -544,14 +544,27 @@ pub(crate) struct TestHooks {
 impl TestHooks {
     /// Replaces the active snapshot with `bindings`, all using this adapter.
     pub(crate) fn install_bindings(&self, bindings: Vec<DeclaredBinding>, ctx: &mut AppContext) {
-        let adapter: Arc<dyn ai::hooks::HookFormatAdapter> = self.adapter.clone();
-        let active = bindings
-            .into_iter()
-            .map(|binding| ai::hooks::test_util::active_binding(binding, adapter.clone()))
-            .collect::<Vec<ActiveBinding>>();
+        let active = self.active_bindings(bindings);
         HookRegistry::handle(ctx).update(ctx, |registry, _| {
             registry.install_snapshot_for_test(active, Vec::<HookDiagnostic>::new());
         });
+    }
+
+    /// Puts `bindings` in the registry without finalizing it, as if the loader were still
+    /// running.
+    pub(crate) fn stage_bindings(&self, bindings: Vec<DeclaredBinding>, ctx: &mut AppContext) {
+        let active = self.active_bindings(bindings);
+        HookRegistry::handle(ctx).update(ctx, |registry, _| {
+            registry.stage_snapshot_for_test(active, Vec::<HookDiagnostic>::new());
+        });
+    }
+
+    fn active_bindings(&self, bindings: Vec<DeclaredBinding>) -> Vec<ActiveBinding> {
+        let adapter: Arc<dyn ai::hooks::HookFormatAdapter> = self.adapter.clone();
+        bindings
+            .into_iter()
+            .map(|binding| ai::hooks::test_util::active_binding(binding, adapter.clone()))
+            .collect()
     }
 }
 
