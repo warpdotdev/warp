@@ -360,7 +360,9 @@ fn add_to_denylist(app: &mut App, harness: &HookTestApp, pattern: &str) {
 fn is_denylisted(result: &AIAgentActionResultType) -> bool {
     matches!(
         result,
-        AIAgentActionResultType::RequestCommandOutput(RequestCommandOutputResult::Denylisted { .. })
+        AIAgentActionResultType::RequestCommandOutput(
+            RequestCommandOutputResult::Denylisted { .. }
+        )
     )
 }
 
@@ -448,7 +450,11 @@ esac"#,
 
         // When the profile asks, a headless run refuses the command until the conversation opts
         // into auto-approval.
-        set_execute_commands(&mut app, harness.terminal_view_id, ActionPermission::AlwaysAsk);
+        set_execute_commands(
+            &mut app,
+            harness.terminal_view_id,
+            ActionPermission::AlwaysAsk,
+        );
         let asking = new_conversation(&mut app, &harness);
         let build = shell_action("build-asking", "npm run build");
         queue(&mut app, &model, asking, vec![build.clone()]);
@@ -458,11 +464,7 @@ esac"#,
         let auto_approving = new_conversation(&mut app, &harness);
         app.update(|ctx| {
             BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
-                history.toggle_autoexecute_override(
-                    &auto_approving,
-                    harness.terminal_view_id,
-                    ctx,
-                );
+                history.toggle_autoexecute_override(&auto_approving, harness.terminal_view_id, ctx);
             });
         });
         let build = shell_action("build", "npm run build");
@@ -875,13 +877,12 @@ printf '{"permission":"deny","agent_message":"Project setup is handled by the pl
         queue(&mut app, &model, harness.conversation_id, vec![rm.clone()]);
         let result = finished_result(&mut app, &model, &rm).await;
         assert_eq!(hook_denied_reason(&result), Some(SAMPLE_RM_REASON));
-        let wire = api::request::input::user_inputs::user_input::Input::try_from(
-            AIAgentActionResult {
+        let wire =
+            api::request::input::user_inputs::user_input::Input::try_from(AIAgentActionResult {
                 id: rm.id.clone(),
                 task_id: rm.task_id.clone(),
                 result,
-            },
-        )
+            })
             .expect("a hook denial reaches the wire");
         let api::request::input::user_inputs::user_input::Input::ToolCallResult(wire) = wire else {
             panic!("a tool call result on the wire");
@@ -905,14 +906,13 @@ printf '{"permission":"deny","agent_message":"Project setup is handled by the pl
                 reason: "Project setup is handled by the platform team.".to_owned(),
             }
         );
-        let wire = api::request::input::user_inputs::user_input::Input::try_from(
-            AIAgentActionResult {
+        let wire =
+            api::request::input::user_inputs::user_input::Input::try_from(AIAgentActionResult {
                 id: init.id.clone(),
                 task_id: init.task_id.clone(),
                 result,
-            },
-        )
-        .expect("a hook denial reaches the wire");
+            })
+            .expect("a hook denial reaches the wire");
         let api::request::input::user_inputs::user_input::Input::ToolCallResult(wire) = wire else {
             panic!("a tool call result on the wire");
         };

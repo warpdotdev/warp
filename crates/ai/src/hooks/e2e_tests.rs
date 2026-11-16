@@ -32,9 +32,7 @@ use crate::hooks::model::{
 use crate::hooks::registry::HookRegistry;
 use crate::hooks::runner::ProcessExit;
 use crate::hooks::runner::command::CommandHookRunner;
-use crate::hooks::sources::{
-    ExplicitHookSource, ExplicitSourceScope, load_explicit_sources,
-};
+use crate::hooks::sources::{ExplicitHookSource, ExplicitSourceScope, load_explicit_sources};
 use crate::hooks::test_util::{RecordingMessenger, test_envelope};
 
 const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/src/hooks/fixtures");
@@ -209,10 +207,7 @@ fn shell_action(command: &str) -> AIAgentActionType {
 /// A `tool.pre` envelope for a shell command run at `cwd` inside the project at `root`.
 fn shell_envelope(command: &str, cwd: &Path, root: Option<&Path>) -> HookEnvelope {
     let action = shell_action(command);
-    let mut envelope = test_envelope(
-        AIConversationId::new(),
-        HookPayload::ToolPre { action },
-    );
+    let mut envelope = test_envelope(AIConversationId::new(), HookPayload::ToolPre { action });
     envelope.cwd = Some(cwd.to_path_buf());
     envelope.roots = root.map(Path::to_path_buf).into_iter().collect();
     envelope.action_id = Some(AIAgentActionId::from("call_1".to_owned()));
@@ -304,10 +299,7 @@ fn adapter_and_reducer_fixtures() {
     let cursor_hooks_file = fixture.cursor_hooks_file();
     let parsed_source = source_id(&cursor_hooks_file, ExplicitSourceScope::FactoryAgent);
     let config = adapter
-        .parse(
-            &fs::read(cursor_hooks_file).expect("read"),
-            &parsed_source,
-        )
+        .parse(&fs::read(cursor_hooks_file).expect("read"), &parsed_source)
         .expect("the sample parses");
     assert!(config.warnings.is_empty(), "{:?}", config.warnings);
     let mut declared = adapter
