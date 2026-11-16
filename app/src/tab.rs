@@ -2093,26 +2093,84 @@ impl<'a> TabComponent<'a> {
             };
         }
 
-        let mut tab = Container::new(stack)
-            .with_vertical_padding(2.)
-            .with_background(background_color);
-        if FeatureFlag::NewTabStyling.is_enabled() {
-            let is_first_tab = self.tab_index == 0;
-            tab = tab.with_border(
-                Border::all(1.)
-                    // We only include a left border on the very first tab to avoid double borders.
-                    .with_sides(false, is_first_tab, false, true)
-                    .with_border_fill(border_fill),
+        let tab = if cfg!(target_os = "macos") {
+            let first = self.tab_index == 0;
+            let last = self.tab_index + 1 == self.tab_bar.tab_count;
+            let radius = Radius::Pixels(14.);
+            let track_radius = match (first, last) {
+                (true, true) => CornerRadius::with_all(radius),
+                (true, false) => CornerRadius::with_left(radius),
+                (false, true) => CornerRadius::with_right(radius),
+                (false, false) => CornerRadius::with_all(Radius::Pixels(0.)),
+            };
+            let highlight = if self.styles.background.is_none() && is_active {
+                internal_colors::fg_overlay_3(theme).into()
+            } else if self.styles.background.is_none() && !is_hovered && !is_in_multi_tab_selection
+            {
+                Fill::None
+            } else {
+                background_color
+            };
+            let mut pill = Container::new(stack)
+                .with_vertical_padding(2.)
+                .with_background(highlight)
+                .with_corner_radius(CornerRadius::with_all(radius));
+            if is_active {
+                pill = pill.with_border(
+                    Border::all(1.).with_border_fill(internal_colors::fg_overlay_4(theme)),
+                );
+            }
+            let mut segment = Stack::new().with_child(
+                Container::new(pill.finish())
+                    .with_horizontal_padding(2.)
+                    .with_vertical_padding(2.)
+                    .finish(),
             );
+            if !last && !is_active && self.tab_bar.active_tab_index != Some(self.tab_index + 1) {
+                segment.add_positioned_child(
+                    ConstrainedBox::new(
+                        Rect::new()
+                            .with_background_color(internal_colors::fg_overlay_3(theme).into())
+                            .finish(),
+                    )
+                    .with_width(1.)
+                    .with_height(14.)
+                    .finish(),
+                    OffsetPositioning::offset_from_parent(
+                        vec2f(0., 0.),
+                        ParentOffsetBounds::ParentByPosition,
+                        ParentAnchor::MiddleRight,
+                        ChildAnchor::MiddleRight,
+                    ),
+                );
+            }
+            Container::new(segment.finish())
+                .with_background(internal_colors::fg_overlay_1(theme))
+                .with_corner_radius(track_radius)
+                .finish()
         } else {
-            tab = tab
-                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)))
-                .with_border(Border::all(1.).with_border_fill(border_fill));
-        }
+            let mut tab = Container::new(stack)
+                .with_vertical_padding(2.)
+                .with_background(background_color);
+            if FeatureFlag::NewTabStyling.is_enabled() {
+                let is_first_tab = self.tab_index == 0;
+                tab = tab.with_border(
+                    Border::all(1.)
+                        // We only include a left border on the very first tab to avoid double borders.
+                        .with_sides(false, is_first_tab, false, true)
+                        .with_border_fill(border_fill),
+                );
+            } else {
+                tab = tab
+                    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)))
+                    .with_border(Border::all(1.).with_border_fill(border_fill));
+            }
+            tab.finish()
+        };
 
         // If the tab is being dragged, add an opaque background behind it
         if is_tab_dragging {
-            Container::new(tab.finish())
+            Container::new(tab)
                 .with_background_color(
                     self.ui_builder
                         .warp_theme()
@@ -2126,10 +2184,10 @@ impl<'a> TabComponent<'a> {
             // semantically meaningful for an element that follows the cursor,
             // and because the inner `DropTarget`'s position is unrelated to
             // any real tab in the target window.
-            tab.finish()
+            tab
         } else {
             DropTarget::new(
-                tab.finish(),
+                tab,
                 TabBarDropTargetData {
                     tab_bar_location: TabBarLocation::TabIndex(self.tab_index),
                 },
@@ -2160,6 +2218,7 @@ impl UiComponent for TabComponent<'_> {
         // Capture before `self` is moved into the Hoverable closure below.
         let for_drag_ghost = self.for_drag_ghost;
         let sole_grouped_member = self.sole_grouped_member;
+        let compact_track = cfg!(target_os = "macos") && !self.grouped_member;
         let locator = self.locator;
         let is_in_multi_tab_selection = self.is_in_multi_tab_selection;
 
@@ -2361,7 +2420,11 @@ impl UiComponent for TabComponent<'_> {
         } else {
             // Use dynamic sizing when not hovering
             ConstrainedBox::new(tab.finish())
-                .with_max_width(200.)
+                .with_max_width(if compact_track {
+                    320.
+                } else {
+                    200.
+                })
                 .finish()
         };
 
@@ -2401,7 +2464,7 @@ impl UiComponent for TabComponent<'_> {
             let tab_with_drag: Box<dyn Element> = draggable.finish();
             SavePosition::new(tab_with_drag, &tab_position_id(tab_index)).finish()
         };
-        if FeatureFlag::NewTabStyling.is_enabled() {
+        if compact_track || FeatureFlag::NewTabStyling.is_enabled() {
             Shrinkable::new(1.0, full_tab)
         } else {
             Shrinkable::new(
