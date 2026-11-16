@@ -2,7 +2,9 @@ use warp_core::ui::appearance::Appearance;
 use warpui::platform::WindowStyle;
 use warpui::{App, TypedActionView};
 
-use super::{Menu, MenuAction, MenuItem, MenuItemFields, SelectAction, SubMenu};
+use super::{
+    AnyMenuItem, AnySubMenu, Menu, MenuAction, MenuItem, MenuItemFields, SelectAction, SubMenu,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum TestAction {
@@ -30,16 +32,29 @@ fn test_submenu_items() -> Vec<MenuItem<TestAction>> {
     ]
 }
 
+fn selected_label(menu: &AnySubMenu) -> String {
+    match menu.selected_item() {
+        Some(AnyMenuItem::Item(fields)) => fields.label().to_string(),
+        other => panic!("expected a selected single item, got {other:?}"),
+    }
+}
+
 #[test]
 fn test_menu_item_selectable() {
-    assert!(MenuItemFields::<()>::new("normal").into_item().selectable());
+    assert!(
+        MenuItemFields::<()>::new("normal")
+            .into_item()
+            .into_any()
+            .selectable()
+    );
     assert!(
         !MenuItemFields::<()>::new("disabled")
             .with_disabled(true)
             .into_item()
+            .into_any()
             .selectable()
     );
-    assert!(!MenuItem::<()>::Separator.selectable());
+    assert!(!MenuItem::<()>::Separator.into_any().selectable());
 }
 
 #[test]
@@ -143,10 +158,7 @@ fn test_right_opens_selected_submenu_and_selects_first_child() {
             assert_eq!(menu.selected_index(), Some(0));
             let submenu = menu.menu.selected_submenu().unwrap();
             assert_eq!(submenu.selected_index(), Some(0));
-            assert_eq!(
-                submenu.selected_item().unwrap().fields().unwrap().label(),
-                "child one"
-            );
+            assert_eq!(selected_label(submenu), "child one");
         });
     })
 }
@@ -169,19 +181,13 @@ fn test_up_and_down_navigate_the_active_submenu() {
 
             let submenu = menu.menu.selected_submenu().unwrap();
             assert_eq!(submenu.selected_index(), Some(1));
-            assert_eq!(
-                submenu.selected_item().unwrap().fields().unwrap().label(),
-                "child two"
-            );
+            assert_eq!(selected_label(submenu), "child two");
 
             menu.handle_action(&MenuAction::Select(SelectAction::Previous), ctx);
 
             let submenu = menu.menu.selected_submenu().unwrap();
             assert_eq!(submenu.selected_index(), Some(0));
-            assert_eq!(
-                submenu.selected_item().unwrap().fields().unwrap().label(),
-                "child one"
-            );
+            assert_eq!(selected_label(submenu), "child one");
         });
     })
 }
@@ -206,7 +212,12 @@ fn test_enter_uses_the_active_submenu_selection() {
             selected_action = menu.menu.selected_action_for_enter(ctx);
         });
 
-        assert_eq!(selected_action, Some(TestAction::ChildTwo));
+        assert_eq!(
+            selected_action
+                .as_ref()
+                .and_then(|action| action.downcast_ref::<TestAction>()),
+            Some(&TestAction::ChildTwo)
+        );
     })
 }
 
