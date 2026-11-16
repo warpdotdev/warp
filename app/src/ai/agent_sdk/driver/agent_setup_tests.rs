@@ -662,8 +662,9 @@ fn the_login_shell_path_capture_starts_only_for_a_run_with_hooks() {
         let root = TempDir::new().unwrap();
         let working_dir = dunce::canonicalize(root.path()).unwrap();
         let (driver, _, _) = driver_with_path_recording_hook(&mut app, &working_dir);
-        let pending =
-            |app: &App| app.read(|ctx| HookRuntime::as_ref(ctx).login_shell_path_capture_is_pending());
+        let pending = |app: &App| {
+            app.read(|ctx| HookRuntime::as_ref(ctx).login_shell_path_capture_is_pending())
+        };
         assert!(pending(&app), "installing the runner starts no capture");
 
         let foreground = driver.update(&mut app, |driver, ctx| {
@@ -689,8 +690,7 @@ fn the_first_hook_gets_the_login_shell_path() {
     App::test((), |mut app| async move {
         let root = TempDir::new().unwrap();
         let working_dir = dunce::canonicalize(root.path()).unwrap();
-        let (driver, messenger, recorded) =
-            driver_with_path_recording_hook(&mut app, &working_dir);
+        let (driver, messenger, recorded) = driver_with_path_recording_hook(&mut app, &working_dir);
         HookRuntime::handle(&app).update(&mut app, |runtime, _| {
             runtime.set_login_shell_path_capture_for_test(
                 async {
@@ -712,10 +712,17 @@ fn the_first_hook_gets_the_login_shell_path() {
         run_shell_hook(&mut app).await;
 
         assert_eq!(
-            fs::read_to_string(&recorded).unwrap().lines().collect::<Vec<_>>(),
+            fs::read_to_string(&recorded)
+                .unwrap()
+                .lines()
+                .collect::<Vec<_>>(),
             vec!["/login/bin:/usr/bin:/bin"]
         );
-        assert!(messenger.diagnostics().is_empty(), "{:?}", messenger.diagnostics());
+        assert!(
+            messenger.diagnostics().is_empty(),
+            "{:?}",
+            messenger.diagnostics()
+        );
     });
 }
 
@@ -727,8 +734,7 @@ fn without_the_login_shell_path_every_hook_gets_the_process_path() {
     App::test((), |mut app| async move {
         let root = TempDir::new().unwrap();
         let working_dir = dunce::canonicalize(root.path()).unwrap();
-        let (driver, messenger, recorded) =
-            driver_with_path_recording_hook(&mut app, &working_dir);
+        let (driver, messenger, recorded) = driver_with_path_recording_hook(&mut app, &working_dir);
         HookRuntime::handle(&app).update(&mut app, |runtime, _| {
             runtime.set_login_shell_path_capture_for_test(futures::future::pending().boxed());
         });
@@ -746,10 +752,16 @@ fn without_the_login_shell_path_every_hook_gets_the_process_path() {
 
         let process_path = std::env::var("PATH").unwrap();
         assert_eq!(
-            fs::read_to_string(&recorded).unwrap().lines().collect::<Vec<_>>(),
+            fs::read_to_string(&recorded)
+                .unwrap()
+                .lines()
+                .collect::<Vec<_>>(),
             vec![process_path.as_str(), process_path.as_str()]
         );
-        assert_eq!(app.read(|ctx| HookRuntime::as_ref(ctx).login_shell_path_for_test()), None);
+        assert_eq!(
+            app.read(|ctx| HookRuntime::as_ref(ctx).login_shell_path_for_test()),
+            None
+        );
         let diagnostics = messenger.diagnostics();
         assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
         assert_eq!(diagnostics[0].severity, DiagnosticSeverity::Warning);

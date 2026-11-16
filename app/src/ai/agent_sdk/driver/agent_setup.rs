@@ -691,14 +691,16 @@ pub(crate) async fn wait_for_login_shell_path(
                 });
                 if let Some(message) = unread {
                     log::warn!("{message}");
-                    HookRuntime::as_ref(ctx).messenger().diagnostic(HookDiagnostic {
-                        source: HookSourceId {
-                            kind: HookSourceKind::FactoryWide,
-                            location: HookSourceLocation::Named("login shell".to_owned()),
-                        },
-                        severity: DiagnosticSeverity::Warning,
-                        message,
-                    });
+                    HookRuntime::as_ref(ctx)
+                        .messenger()
+                        .diagnostic(HookDiagnostic {
+                            source: HookSourceId {
+                                kind: HookSourceKind::FactoryWide,
+                                location: HookSourceLocation::Named("login shell".to_owned()),
+                            },
+                            severity: DiagnosticSeverity::Warning,
+                            message,
+                        });
                 }
             })
             .await?;

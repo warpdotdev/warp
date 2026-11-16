@@ -461,11 +461,26 @@ mod hooks {
                 false,
             );
 
-            assert!(matches!(init_never_finalized_result, TryExecuteResult::ExecutedSync));
-            assert!(matches!(init_finalized_empty_result, TryExecuteResult::ExecutedSync));
-            assert_eq!(shapes(&events, &init_never_finalized), shapes(&events, &init_finalized_empty));
-            assert_eq!(reason_of(&shell_never_finalized_result), reason_of(&shell_finalized_empty_result));
-            assert_eq!(shapes(&events, &shell_never_finalized), shapes(&events, &shell_finalized_empty));
+            assert!(matches!(
+                init_never_finalized_result,
+                TryExecuteResult::ExecutedSync
+            ));
+            assert!(matches!(
+                init_finalized_empty_result,
+                TryExecuteResult::ExecutedSync
+            ));
+            assert_eq!(
+                shapes(&events, &init_never_finalized),
+                shapes(&events, &init_finalized_empty)
+            );
+            assert_eq!(
+                reason_of(&shell_never_finalized_result),
+                reason_of(&shell_finalized_empty_result)
+            );
+            assert_eq!(
+                shapes(&events, &shell_never_finalized),
+                shapes(&events, &shell_finalized_empty)
+            );
 
             let_background_work_settle(&mut app).await;
             assert_eq!(harness.hooks.adapter.encoded_count(), 0);
