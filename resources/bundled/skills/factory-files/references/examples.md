@@ -249,7 +249,8 @@ the scripts it runs) for the factory's agents. It goes at the top level of
 that agent; not under `agentDefaults`. An agent runs its own entries first,
 then the factory's, and cannot drop the factory's.
 
-`factory.yaml`:
+An excerpt of `factory.yaml` (the rest of the file is as in the minimal factory
+above):
 
 ```yaml
 repositories:
@@ -278,10 +279,15 @@ Review the change you are given.
 ```
 
 - With `repo`, the repository must be one the factory lists under
-  `repositories`, and `path` is a directory inside it with no `..`. The hooks
-  run from the repository root, so a repository's own `.cursor` directory works
-  unchanged. Without `repo`, `path` is an absolute directory on the machine
-  that runs the agent, and the hooks run from that directory.
+  `repositories`. `repo` takes `owner`, `name`, and an optional `codeForge`, and
+  ignores `deferred`, so an entry can be copied from `repositories`. A
+  repository a hooks entry names is cloned at the start of the agent's runs
+  even when the factory defers it. `path` is a directory inside it with no `..`
+  (`.` is the repository root). The hooks run from the repository root, so a
+  repository's own `.cursor` directory works unchanged. Without `repo`, `path`
+  is an absolute directory on the machine that runs the agent, starting with
+  `/`, and the hooks run from that directory. Drive letters and backslashes are
+  rejected in both forms.
 - `strict: true` makes the directory required (a missing or invalid one fails
   the run) and makes a hook that crashes, times out, or prints nothing or
   invalid output block the action instead of letting it through.
@@ -294,3 +300,7 @@ Review the change you are given.
   uses another harness.
 - Hooks load only in runs the server starts. Starting a run by hand with the
   CLI's `agent run --task-id` and no execution id loads none.
+- A hook does not get the run's managed secrets or the credentials Warp itself
+  uses; other variables on the worker pass through. In particular, a hook that
+  calls `gh` or the GitHub API cannot rely on `GITHUB_PERSONAL_ACCESS_TOKEN`; it
+  must bring its own credentials.
