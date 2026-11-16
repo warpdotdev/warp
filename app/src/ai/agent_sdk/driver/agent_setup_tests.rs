@@ -8,6 +8,7 @@ use ai::hooks::test_util::RecordingMessenger;
 use ai::hooks::{DiagnosticSeverity, HookFormat, HookRegistry, HookSourceKind, HookSourcePolicy};
 use ai::skills::{ParsedSkill, SkillProvider};
 use cloud_object_models::CodeForge;
+use futures::FutureExt as _;
 use tempfile::TempDir;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::{App, ModelHandle};
@@ -583,46 +584,209 @@ fn a_process_without_the_hook_runtime_fails_a_run_that_has_hooks() {
     });
 }
 
-/// Installing the command runner starts nothing; the login-shell PATH capture starts when a run
-/// loads hooks, and not when it loads none.
+/// A runner with the command runner installed, a hook directory whose `beforeShellExecution` hook
+/// writes the `PATH` it was given to `path.txt`, and a driver whose run selects that directory.
 #[cfg(feature = "local_tty")]
-#[test]
-fn the_login_shell_path_capture_starts_only_when_hooks_load() {
+fn driver_with_path_recording_hook(
+    app: &mut App,
+    working_dir: &Path,
+) -> (ModelHandle<AgentDriver>, Arc<RecordingMessenger>, PathBuf) {
+    use std::os::unix::fs::PermissionsExt;
+
     use crate::process_environment::InitialProcessEnvironment;
 
+    let dir = working_dir.join("hooks");
+    fs::create_dir_all(&dir).unwrap();
+    let script = dir.join("record-path.sh");
+    fs::write(
+        &script,
+        "#!/bin/sh\ncat > /dev/null\nprintf '%s' \"$PATH\" >> \"$PWD/path.txt\"\nprintf '\\n' >> \"$PWD/path.txt\"\nprintf '{\"permission\":\"allow\"}'\n",
+    )
+    .unwrap();
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+    fs::write(
+        dir.join("hooks.json"),
+        r#"{"version":1,"hooks":{"beforeShellExecution":[{"command":"./record-path.sh"}]}}"#,
+    )
+    .unwrap();
+    let (driver, messenger) = driver_with_test_hooks(app, working_dir);
+    app.update(|ctx| {
+        ctx.add_singleton_model(|_| InitialProcessEnvironment::capture());
+        HookRuntime::install_command_runner(ctx);
+    });
+    driver.update(app, |driver, _| {
+        driver.hooks.sources = vec![worker_source(&dir.display().to_string(), true)];
+    });
+    (driver, messenger, dir.join("path.txt"))
+}
+
+/// Runs the loaded `beforeShellExecution` hook once, through the runtime's own dispatcher.
+#[cfg(feature = "local_tty")]
+async fn run_shell_hook(app: &mut App) {
+    use ai::agent::action::AIAgentActionType;
+    use ai::hooks::HookPayload;
+    use ai::hooks::test_util::test_envelope;
+
+    let dispatch = app.update(|ctx| {
+        let runtime = HookRuntime::as_ref(ctx);
+        let envelope = test_envelope(
+            crate::ai::agent::conversation::AIConversationId::new(),
+            HookPayload::ToolPre {
+                action: AIAgentActionType::RequestCommandOutput {
+                    command: "ls".to_owned(),
+                    is_read_only: None,
+                    is_risky: None,
+                    wait_until_completion: true,
+                    uses_pager: None,
+                    rationale: None,
+                    citations: Vec::new(),
+                },
+            },
+        );
+        runtime.dispatcher().dispatch(
+            envelope,
+            runtime.snapshot(ctx),
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        )
+    });
+    let outcome = dispatch.await;
+    assert_eq!(outcome.invocations.len(), 1, "the hook ran");
+}
+
+/// Installing the command runner starts nothing. The capture starts when a run that has hooks
+/// begins its setup, and not for a run that has none.
+#[cfg(feature = "local_tty")]
+#[test]
+fn the_login_shell_path_capture_starts_only_for_a_run_with_hooks() {
     App::test((), |mut app| async move {
         let root = TempDir::new().unwrap();
         let working_dir = dunce::canonicalize(root.path()).unwrap();
-        write_hooks_file(&working_dir.join("hooks"));
-        let (driver, _) = driver_with_test_hooks(&mut app, &working_dir);
-        app.update(|ctx| {
-            ctx.add_singleton_model(|_| InitialProcessEnvironment::capture());
-            HookRuntime::install_command_runner(ctx);
-        });
-        let pending = |app: &App| {
-            app.read(|ctx| HookRuntime::as_ref(ctx).login_shell_path_capture_is_pending())
-        };
+        let (driver, _, _) = driver_with_path_recording_hook(&mut app, &working_dir);
+        let pending =
+            |app: &App| app.read(|ctx| HookRuntime::as_ref(ctx).login_shell_path_capture_is_pending());
         assert!(pending(&app), "installing the runner starts no capture");
 
-        let result = driver.update(&mut app, |driver, ctx| {
-            driver.load_hook_sources_for_run(&[], ctx)
+        let foreground = driver.update(&mut app, |driver, ctx| {
+            driver.hooks.sources.clear();
+            ctx.spawner()
         });
-        assert!(result.is_ok(), "{result:?}");
+        start_login_shell_path_capture(&foreground).await.unwrap();
         assert!(pending(&app), "a run with no hooks starts no capture");
 
-        // A second worker process would load its own list; reset the registry to stand in for it.
-        app.update(|ctx| {
-            HookRegistry::handle(ctx).update(ctx, |registry, _| *registry = HookRegistry::new());
+        driver.update(&mut app, |driver, _| {
+            driver.hooks.sources = vec![worker_source("/opt/hooks", false)];
         });
-        let result = driver.update(&mut app, |driver, ctx| {
-            driver.hooks.sources = vec![worker_source(
-                &working_dir.join("hooks").display().to_string(),
-                true,
-            )];
+        start_login_shell_path_capture(&foreground).await.unwrap();
+        assert!(!pending(&app), "a run with hooks starts the capture");
+    });
+}
+
+/// The first hook of a run already gets the login shell's PATH, even when reading it takes a
+/// while: setup waits for it before any hook can run.
+#[cfg(feature = "local_tty")]
+#[test]
+fn the_first_hook_gets_the_login_shell_path() {
+    App::test((), |mut app| async move {
+        let root = TempDir::new().unwrap();
+        let working_dir = dunce::canonicalize(root.path()).unwrap();
+        let (driver, messenger, recorded) =
+            driver_with_path_recording_hook(&mut app, &working_dir);
+        HookRuntime::handle(&app).update(&mut app, |runtime, _| {
+            runtime.set_login_shell_path_capture_for_test(
+                async {
+                    warpui::r#async::Timer::after(Duration::from_millis(200)).await;
+                    Some("/login/bin:/usr/bin:/bin".to_owned())
+                }
+                .boxed(),
+            );
+        });
+        let foreground = driver.update(&mut app, |_, ctx| ctx.spawner());
+
+        let loaded = driver.update(&mut app, |driver, ctx| {
             driver.load_hook_sources_for_run(&[], ctx)
         });
-        assert!(result.is_ok(), "{result:?}");
-        assert!(!pending(&app), "loading hooks starts the capture");
+        assert!(loaded.is_ok(), "{loaded:?}");
+        wait_for_login_shell_path(&foreground, LOGIN_SHELL_PATH_WAIT)
+            .await
+            .unwrap();
+        run_shell_hook(&mut app).await;
+
+        assert_eq!(
+            fs::read_to_string(&recorded).unwrap().lines().collect::<Vec<_>>(),
+            vec!["/login/bin:/usr/bin:/bin"]
+        );
+        assert!(messenger.diagnostics().is_empty(), "{:?}", messenger.diagnostics());
+    });
+}
+
+/// When the login shell's PATH cannot be read in time, every hook in the run gets this process's
+/// PATH, the run's output says so once, and the run goes on.
+#[cfg(feature = "local_tty")]
+#[test]
+fn without_the_login_shell_path_every_hook_gets_the_process_path() {
+    App::test((), |mut app| async move {
+        let root = TempDir::new().unwrap();
+        let working_dir = dunce::canonicalize(root.path()).unwrap();
+        let (driver, messenger, recorded) =
+            driver_with_path_recording_hook(&mut app, &working_dir);
+        HookRuntime::handle(&app).update(&mut app, |runtime, _| {
+            runtime.set_login_shell_path_capture_for_test(futures::future::pending().boxed());
+        });
+        let foreground = driver.update(&mut app, |_, ctx| ctx.spawner());
+
+        let loaded = driver.update(&mut app, |driver, ctx| {
+            driver.load_hook_sources_for_run(&[], ctx)
+        });
+        assert!(loaded.is_ok(), "{loaded:?}");
+        wait_for_login_shell_path(&foreground, Duration::from_secs(1))
+            .await
+            .unwrap();
+        run_shell_hook(&mut app).await;
+        run_shell_hook(&mut app).await;
+
+        let process_path = std::env::var("PATH").unwrap();
+        assert_eq!(
+            fs::read_to_string(&recorded).unwrap().lines().collect::<Vec<_>>(),
+            vec![process_path.as_str(), process_path.as_str()]
+        );
+        assert_eq!(app.read(|ctx| HookRuntime::as_ref(ctx).login_shell_path_for_test()), None);
+        let diagnostics = messenger.diagnostics();
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert_eq!(diagnostics[0].severity, DiagnosticSeverity::Warning);
+        assert!(
+            diagnostics[0]
+                .message
+                .contains("hooks run with the worker's PATH because the login shell's PATH"),
+            "{diagnostics:?}"
+        );
+    });
+}
+
+/// A capture that finishes without a PATH is reported the same way.
+#[cfg(feature = "local_tty")]
+#[test]
+fn a_login_shell_that_gives_no_path_is_reported_once() {
+    App::test((), |mut app| async move {
+        let root = TempDir::new().unwrap();
+        let working_dir = dunce::canonicalize(root.path()).unwrap();
+        let (driver, messenger, _) = driver_with_path_recording_hook(&mut app, &working_dir);
+        HookRuntime::handle(&app).update(&mut app, |runtime, _| {
+            runtime.set_login_shell_path_capture_for_test(futures::future::ready(None).boxed());
+        });
+        let foreground = driver.update(&mut app, |_, ctx| ctx.spawner());
+        let loaded = driver.update(&mut app, |driver, ctx| {
+            driver.load_hook_sources_for_run(&[], ctx)
+        });
+        assert!(loaded.is_ok(), "{loaded:?}");
+        wait_for_login_shell_path(&foreground, LOGIN_SHELL_PATH_WAIT)
+            .await
+            .unwrap();
+        let diagnostics = messenger.diagnostics();
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert!(
+            diagnostics[0].message.ends_with("could not be read"),
+            "{diagnostics:?}"
+        );
     });
 }
 
@@ -668,7 +832,6 @@ fn a_file_selected_from_two_locations_is_reported_as_a_warning() {
 #[test]
 fn only_definite_load_warnings_reach_the_run_output() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let root = TempDir::new().unwrap();
         let working_dir = dunce::canonicalize(root.path()).unwrap();
         let dir = working_dir.join("hooks");

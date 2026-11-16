@@ -172,7 +172,8 @@ impl AgentDriver {
     /// Records the run this process belongs to and installs the messenger that writes to the
     /// run's output.
     pub(super) fn prepare_hooks_for_run(&self, ctx: &mut ModelContext<Self>) {
-        if !HookRuntime::is_installed(ctx) {
+        // A run with no hooks has nothing to record or report.
+        if self.hooks.sources.is_empty() || !HookRuntime::is_installed(ctx) {
             return;
         }
         let run = self.task_id.map(|task_id| RunIdentity {
@@ -228,12 +229,6 @@ impl AgentDriver {
         let (sources, mut failures) =
             resolve_sources(&self.hooks.sources, &self.working_dir, repositories);
         failures.extend(load_into_registry(&sources, ctx)?);
-        #[cfg(feature = "local_tty")]
-        if HookRuntime::is_active(ctx) {
-            HookRuntime::handle(ctx).update(ctx, |runtime, ctx| {
-                runtime.capture_login_shell_path(ctx);
-            });
-        }
 
         let messenger = HookRuntime::as_ref(ctx).messenger();
         for failure in &failures {

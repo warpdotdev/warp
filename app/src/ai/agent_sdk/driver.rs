@@ -2387,7 +2387,9 @@ impl AgentDriver {
             // The server rejects hooks on an agent whose harness is not Oz; a run that still has
             // them fails before any setup work rather than running without them.
             match &task.harness {
-                HarnessKind::Oz => {}
+                HarnessKind::Oz => {
+                    agent_setup::start_login_shell_path_capture(&foreground).await?;
+                }
                 HarnessKind::ThirdParty(_) | HarnessKind::Unsupported(_) => {
                     agent_setup::refuse_hooks_for_other_harness(&foreground, &task.harness).await?;
                 }
