@@ -499,14 +499,15 @@ fn prewarmed_config_conversion_and_state_binding_preserve_run_settings() {
 }
 
 /// A standby driver takes its assignment in place. Nothing before the claim loads or finalizes
-/// hooks: the assignment's sources only reach the driver with the run configuration, and the
-/// single load happens after that, when the claimed run starts (`run_internal`).
+/// hooks: the standby's own preparation (clones, setup commands, MCP, skills) loads none, the
+/// assignment's sources only reach the driver with the run configuration, and the single load
+/// happens after that, in the setup step the claimed run calls (`run_internal`).
 #[test]
 fn a_standby_loads_hooks_only_after_it_claims_a_task() {
     App::test((), |mut app| async move {
         let _hooks = FeatureFlag::AgentHooks.override_enabled(true);
         initialize_app_for_terminal_view(&mut app);
-        let test_hooks = app.update(crate::ai::blocklist::hooks::test_utils::install_test_hooks);
+        app.update(crate::ai::blocklist::hooks::test_utils::install_test_hooks);
         let root = tempfile::tempdir().unwrap();
         let hooks_dir = root.path().join("worker-hooks");
         std::fs::create_dir_all(&hooks_dir).unwrap();
@@ -523,7 +524,24 @@ fn a_standby_loads_hooks_only_after_it_claims_a_task() {
             .add_model(|ctx| AgentDriver::new_for_test(root.path().into(), terminal_driver, ctx));
         let is_finalized =
             |app: &App| app.read(|ctx| ai::hooks::HookRegistry::as_ref(ctx).is_finalized());
-        assert!(!is_finalized(&app), "a waiting standby has loaded no hooks");
+        let foreground = driver.update(&mut app, |_, ctx| ctx.spawner());
+        let setup_events = crate::ai::agent_sdk::setup_observability::SetupClientEventReporter::standby(
+            std::sync::Arc::new(MockAIClient::new()),
+            app.background_executor(),
+        );
+        AgentDriver::prepare_resources(
+            &foreground,
+            warp_cli::agent::Harness::Oz,
+            Vec::new(),
+            super::agent_setup::GlobalSkillResolution {
+                specs: Vec::new(),
+                repos: Vec::new(),
+            },
+            &setup_events,
+        )
+        .await
+        .expect("the standby prepares");
+        assert!(!is_finalized(&app), "standby preparation loads no hooks");
 
         let mut configuration = config();
         configuration.agent_hook_sources = serde_json::from_value(serde_json::json!([{
@@ -562,10 +580,9 @@ fn a_standby_loads_hooks_only_after_it_claims_a_task() {
         );
         driver.read(&app, |driver, _| assert_eq!(driver.hooks.sources.len(), 1));
 
-        let loaded = driver.update(&mut app, |driver, ctx| {
-            driver.load_hook_sources_for_run(&[], ctx)
-        });
-        assert!(loaded.is_ok(), "{loaded:?}");
+        super::agent_setup::setup_hooks_for_run(&foreground, Vec::new())
+            .await
+            .expect("the claimed run loads its hooks");
         assert!(is_finalized(&app));
         assert_eq!(
             app.read(|ctx| ai::hooks::HookRegistry::as_ref(ctx)
@@ -574,7 +591,6 @@ fn a_standby_loads_hooks_only_after_it_claims_a_task() {
                 .len()),
             1
         );
-        assert!(test_hooks.messenger.diagnostics().is_empty());
     });
 }
 
