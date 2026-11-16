@@ -377,7 +377,9 @@ pub(crate) struct HookTestApp {
     pub hooks: TestHooks,
     pub active_session: ModelHandle<ActiveSession>,
     pub dispatcher: ModelHandle<ModelEventDispatcher>,
-    /// The sessions behind `active_session`, empty until a test registers one.
+    /// The sessions behind `active_session`, empty until a test registers one. Only the Unix-only
+    /// end-to-end suite registers one.
+    #[cfg_attr(not(unix), allow(dead_code))]
     pub sessions: ModelHandle<Sessions>,
     pub conversation_id: AIConversationId,
     pub terminal_view_id: warpui::EntityId,
