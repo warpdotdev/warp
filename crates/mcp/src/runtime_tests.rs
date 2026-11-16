@@ -15,9 +15,9 @@ use rmcp::model::{
 use serde_json::{Value, json};
 
 use super::{
-    challenge_parameter_names, determine_transport, has_caller_supplied_credential,
-    is_oauth_challenge, query_resources_for, query_tools_for, should_query_resources,
-    should_query_tools, spawn_server,
+    build_client_with_headers, challenge_parameter_names, determine_transport,
+    has_caller_supplied_credential, is_oauth_challenge, query_resources_for, query_tools_for,
+    should_query_resources, should_query_tools, spawn_server,
 };
 use crate::refreshable_headers::{RefreshableHeaders, RejectionHandler};
 
@@ -493,6 +493,10 @@ async fn assert_http_startup(
     let app = Router::new().route("/mcp", post(move |headers: HeaderMap, Json(request): Json<Value>| {
         captured.lock().expect("request capture").push(request.clone());
         async move {
+            // Mirrors Snowflake's managed MCP servers, which reject requests without a User-Agent.
+            if headers.get(http::header::USER_AGENT).is_none_or(|v| v.is_empty()) {
+                return (StatusCode::BAD_REQUEST, "Invalid or empty User-Agent header").into_response();
+            }
             if static_credential
                 && (headers.get("x-api-key").and_then(|v| v.to_str().ok()) != Some("test-key")
                     || headers.get("authorization").and_then(|v| v.to_str().ok()) != Some("Bearer test-token")) {
@@ -1473,4 +1477,41 @@ async fn expired_token_without_a_handler_reports_the_rejection() {
         "expected a credential-rejection error, got: {error}"
     );
     server.abort();
+}
+
+#[tokio::test]
+async fn http_client_sends_default_user_agent_unless_configured() {
+    let user_agents = Arc::new(Mutex::new(Vec::new()));
+    let captured = user_agents.clone();
+    let app = Router::new().route(
+        "/mcp",
+        post(move |headers: HeaderMap| {
+            captured.lock().expect("user agent capture").push(
+                headers
+                    .get(http::header::USER_AGENT)
+                    .and_then(|v| v.to_str().ok())
+                    .map(ToString::to_string),
+            );
+            async { StatusCode::OK }
+        }),
+    );
+    let (url, server) = serve_http_router(app).await;
+
+    for configured in [headers(&[]), headers(&[("User-Agent", "custom-agent/1.0")])] {
+        build_client_with_headers(&configured)
+            .expect("client should build")
+            .post(&url)
+            .send()
+            .await
+            .expect("request should succeed");
+    }
+    server.abort();
+
+    let user_agents = user_agents.lock().expect("user agent capture").clone();
+    let [Some(default), Some(configured)] = user_agents.as_slice() else {
+        panic!("expected a User-Agent on every request, got {user_agents:?}");
+    };
+    // Must stay identical to warp-server's `managedMCPOutboundUserAgent`.
+    assert_eq!(default, "Warp-MCP-Client/1.0 (+https://www.warp.dev)");
+    assert_eq!(configured, "custom-agent/1.0");
 }
