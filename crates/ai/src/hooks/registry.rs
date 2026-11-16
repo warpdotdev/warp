@@ -1,17 +1,18 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use warpui_core::{Entity, SingletonEntity};
 
-use crate::hooks::adapters::{DeclaredBinding, HookFormatAdapter};
+use crate::hooks::adapters::{DeclaredBinding, HookConfigError, HookFormatAdapter};
 #[cfg(feature = "local_fs")]
-use crate::hooks::adapters::{HookConfigError, ParsedHookConfig, adapter_for};
+use crate::hooks::adapters::{ParsedHookConfig, adapter_for};
 #[cfg(feature = "local_fs")]
 use crate::hooks::model::{
-    DiagnosticSeverity, HookFormat, HookSourceId, HookSourceKind, HookSourceLocation,
-    validate_capabilities,
+    DiagnosticSeverity, HookSourceId, HookSourceLocation, validate_capabilities,
 };
-use crate::hooks::model::{HookBoundary, HookDiagnostic, HookExecutionHost};
+use crate::hooks::model::{HookBoundary, HookDiagnostic, HookExecutionHost, HookSourcePolicy};
+#[cfg(feature = "local_fs")]
+use crate::hooks::sources::ExplicitHookSource;
 
 /// A binding from a configured source that is ready to run.
 #[derive(Clone)]
@@ -21,6 +22,9 @@ pub struct ActiveBinding {
     pub host: HookExecutionHost,
     /// The directory the hook command runs in and resolves relative paths against.
     pub working_directory: PathBuf,
+    /// The project directory the hook is told it runs for, when its source fixes one.
+    pub project_dir: Option<PathBuf>,
+    pub policy: HookSourcePolicy,
 }
 
 impl std::fmt::Debug for ActiveBinding {
@@ -29,6 +33,8 @@ impl std::fmt::Debug for ActiveBinding {
             .field("binding", &self.binding)
             .field("host", &self.host)
             .field("working_directory", &self.working_directory)
+            .field("project_dir", &self.project_dir)
+            .field("policy", &self.policy)
             .finish_non_exhaustive()
     }
 }
@@ -142,18 +148,16 @@ impl HookRegistry {
     }
 }
 
-/// Loading one named file. Explicit sources are selected by the resolved run configuration, so
-/// they require no source-location trust decision and apply everywhere on the local host.
+/// Loading one configured file. Explicit sources are selected by the resolved run configuration,
+/// so they require no source-location trust decision and apply everywhere on the local host.
 #[cfg(feature = "local_fs")]
 impl HookRegistry {
-    /// Reads `path`, parses it with the adapter for `format`, and publishes a new snapshot in
-    /// which this file's bindings replace any loaded from the same file before. Relative commands
-    /// in the file resolve against the file's directory.
+    /// Reads `source`'s configuration file, parses it with the adapter for its format, and
+    /// publishes a new snapshot in which this file's bindings replace any loaded from the same
+    /// file before. The bindings run in the source's working directory under its policy.
     pub fn install_explicit_source(
         &mut self,
-        path: &Path,
-        format: HookFormat,
-        kind: HookSourceKind,
+        source: &ExplicitHookSource,
     ) -> Result<(), HookConfigError> {
         if self.finalized {
             return Err(HookConfigError::Invalid(
@@ -161,31 +165,23 @@ impl HookRegistry {
                     .to_owned(),
             ));
         }
+        let path = &source.config_file;
         let unreadable = |error: std::io::Error| {
             HookConfigError::Unreadable(format!("{}: {error}", path.display()))
         };
-        let canonical_path = std::fs::canonicalize(path).map_err(unreadable)?;
+        let canonical_path = dunce::canonicalize(path).map_err(unreadable)?;
         let bytes = std::fs::read(&canonical_path).map_err(unreadable)?;
-        let working_directory =
-            canonical_path
-                .parent()
-                .map(Path::to_path_buf)
-                .ok_or_else(|| {
-                    HookConfigError::Unreadable(format!(
-                        "{} has no parent directory",
-                        path.display()
-                    ))
-                })?;
+        let format = source.format;
         let adapter = adapter_for(format).ok_or_else(|| {
             HookConfigError::Invalid(format!("no adapter is registered for {format:?}"))
         })?;
-        let source = HookSourceId {
-            kind,
+        let source_id = HookSourceId {
+            kind: source.kind,
             location: HookSourceLocation::CanonicalPath(canonical_path),
         };
-        let config = adapter.parse(&bytes, &source)?;
-        let (bindings, diagnostics) = activate(&adapter, &config, &working_directory);
-        self.replace_source(&source, bindings, diagnostics);
+        let config = adapter.parse(&bytes, &source_id)?;
+        let (bindings, diagnostics) = activate(&adapter, &config, source);
+        self.replace_source(&source_id, bindings, diagnostics);
         Ok(())
     }
 
@@ -195,14 +191,26 @@ impl HookRegistry {
         source: HookSourceId,
         message: impl Into<String>,
     ) -> HookDiagnostic {
-        debug_assert!(!self.finalized);
         let diagnostic = HookDiagnostic {
             source: source.clone(),
             severity: DiagnosticSeverity::Error,
             message: message.into(),
         };
-        self.replace_source(&source, Vec::new(), vec![diagnostic.clone()]);
+        self.record_diagnostic(diagnostic.clone());
         diagnostic
+    }
+
+    /// Adds a diagnostic about a source without changing any bindings.
+    pub(crate) fn record_diagnostic(&mut self, diagnostic: HookDiagnostic) {
+        debug_assert!(!self.finalized);
+        let previous = &self.snapshot;
+        let mut diagnostics = previous.diagnostics.clone();
+        diagnostics.push(diagnostic);
+        self.snapshot = Arc::new(RegistrySnapshot {
+            revision: previous.revision + 1,
+            bindings: previous.bindings.clone(),
+            diagnostics,
+        });
     }
 
     /// Publishes a snapshot in which `source`'s bindings and diagnostics are the given ones and
@@ -214,22 +222,6 @@ impl HookRegistry {
         diagnostics: Vec<HookDiagnostic>,
     ) {
         let previous = &self.snapshot;
-        let existing_priority = previous
-            .bindings
-            .iter()
-            .map(|active| &active.binding.id.source)
-            .chain(
-                previous
-                    .diagnostics
-                    .iter()
-                    .map(|diagnostic| &diagnostic.source),
-            )
-            .filter(|existing| existing.location == source.location)
-            .map(|existing| existing.kind.priority())
-            .min();
-        if existing_priority.is_some_and(|priority| priority < source.kind.priority()) {
-            return;
-        }
         let mut next_bindings = previous
             .bindings
             .iter()
@@ -252,14 +244,14 @@ impl HookRegistry {
     }
 }
 
-/// Turns a parsed source into bindings that apply everywhere on the local host and run in
-/// `working_directory`, plus the source's parse warnings and one warning per capability the
-/// boundary cannot honor yet.
+/// Turns a parsed source into bindings that apply everywhere on the local host and run where
+/// `source` says, plus the source's parse warnings and one warning per capability the boundary
+/// cannot honor yet.
 #[cfg(feature = "local_fs")]
 fn activate(
     adapter: &Arc<dyn HookFormatAdapter>,
     config: &ParsedHookConfig,
-    working_directory: &Path,
+    source: &ExplicitHookSource,
 ) -> (Vec<ActiveBinding>, Vec<HookDiagnostic>) {
     let mut diagnostics = config.warnings.clone();
     let mut bindings = Vec::new();
@@ -275,7 +267,9 @@ fn activate(
             binding,
             adapter: adapter.clone(),
             host: HookExecutionHost::Local,
-            working_directory: working_directory.to_path_buf(),
+            working_directory: source.working_directory.clone(),
+            project_dir: source.project_dir.clone(),
+            policy: source.policy,
         });
     }
     (bindings, diagnostics)

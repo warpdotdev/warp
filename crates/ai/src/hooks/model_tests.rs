@@ -336,19 +336,11 @@ fn runs_and_hidden_children_are_headless_and_interactive_surfaces_are_not() {
 
 #[test]
 fn source_kind_priority_follows_the_documented_order() {
-    let mut kinds = [
-        HookSourceKind::RunDelivered,
-        HookSourceKind::FactoryWide,
-        HookSourceKind::FactoryAgent,
-    ];
+    let mut kinds = [HookSourceKind::FactoryWide, HookSourceKind::FactoryAgent];
     kinds.sort_by_key(HookSourceKind::priority);
     assert_eq!(
         kinds,
-        [
-            HookSourceKind::FactoryAgent,
-            HookSourceKind::FactoryWide,
-            HookSourceKind::RunDelivered,
-        ]
+        [HookSourceKind::FactoryAgent, HookSourceKind::FactoryWide]
     );
     let factory = test_source_id_of_kind("agent", HookSourceKind::FactoryAgent);
     assert_eq!(factory.to_string(), "agent");

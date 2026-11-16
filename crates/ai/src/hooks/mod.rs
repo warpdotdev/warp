@@ -17,15 +17,17 @@ pub mod sources;
 pub mod test_util;
 
 pub use adapters::{
-    DeclaredBinding, DecodePolicy, HookConfigError, HookFormatAdapter, ParsedHookConfig,
+    DeclaredBinding, DecodePolicy, HookConfigError, HookDirectory, HookFormatAdapter,
+    HookSourceLayout, ParsedHookConfig, source_layout,
 };
 pub use dispatch::{DispatchOutcome, HookDispatcher, InvocationRecord};
 pub use model::{
     BindingCapabilities, CapabilityWarning, ContinuationRequest, DiagnosticSeverity,
     ENVELOPE_SCHEMA_VERSION, EffectKind, EmptyOutputPolicy, FailurePolicy, FollowUpChainId,
     HOOK_FOLLOW_UP_CAP, HOOK_PROTOCOL_VERSION, HandlerKind, HookBindingId, HookBoundary,
-    HookDiagnostic, HookEffects, HookEnvelope, HookExecutionHost, HookFormat, HookPayload,
-    HookReason, HookSourceId, HookSourceKind, HookSourceLocation, HookSurface, HookTurnId,
+    HookDiagnostic, HookEffects, HookEnvelope, HookExecutionHost, HookFormat, HookOnAsk,
+    HookPayload, HookReason, HookSourceId, HookSourceKind, HookSourceLocation, HookSourcePolicy,
+    HookSurface, HookTurnId,
     HookVerdict, MalformedOutputPolicy, MatcherTarget, MergedEffects, PermissionFacts,
     PromptProvenance, RunMetadata, TurnStopStatus, UnsupportedEffect, reduce_effects,
     validate_capabilities,
@@ -41,7 +43,4 @@ pub use runner::{
 };
 #[cfg(feature = "local_fs")]
 pub use sources::load_explicit_sources;
-pub use sources::{
-    ExplicitHookSource, ExplicitSourceScope, WARP_HOOK_DIRS_ENV, parse_hook_dirs_value,
-    resolve_hook_dirs, sources_for_hook_dirs,
-};
+pub use sources::{ExplicitHookSource, SourceLoadFailure};

@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
@@ -28,6 +29,37 @@ fn parsed(text: &str) -> ParsedHookConfig {
 fn the_cursor_adapter_is_registered() {
     let adapter = adapter_for(HookFormat::Cursor).expect("registered");
     assert_eq!(adapter.format(), HookFormat::Cursor);
+}
+
+#[test]
+fn a_repository_hook_directory_runs_from_the_repository_root() {
+    let layout = source_layout(&HookDirectory::Repository {
+        root: PathBuf::from("/work/api"),
+        directory: PathBuf::from("/work/api/.cursor"),
+    });
+    assert_eq!(
+        layout,
+        HookSourceLayout {
+            config_file: PathBuf::from("/work/api/.cursor/hooks.json"),
+            working_directory: PathBuf::from("/work/api"),
+            project_dir: Some(PathBuf::from("/work/api")),
+        }
+    );
+}
+
+#[test]
+fn a_worker_hook_directory_runs_from_itself_with_no_fixed_project() {
+    let layout = source_layout(&HookDirectory::Worker {
+        directory: PathBuf::from("/etc/acme/warp-hooks"),
+    });
+    assert_eq!(
+        layout,
+        HookSourceLayout {
+            config_file: PathBuf::from("/etc/acme/warp-hooks/hooks.json"),
+            working_directory: PathBuf::from("/etc/acme/warp-hooks"),
+            project_dir: None,
+        }
+    );
 }
 
 #[test]

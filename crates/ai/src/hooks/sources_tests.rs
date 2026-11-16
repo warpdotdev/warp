@@ -1,61 +1,85 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use super::*;
-use crate::skills::parse_skills_dirs_value;
+use crate::hooks::model::HookOnAsk;
 
 #[test]
-fn hook_dirs_are_split_trimmed_and_resolved_like_skill_dirs() {
-    let value = " /a/hooks , ,relative/hooks,~/shared ";
-    assert_eq!(parse_hook_dirs_value(value), parse_skills_dirs_value(value));
-    assert!(parse_hook_dirs_value(" , ,").is_empty());
-
+fn a_source_from_a_repository_directory_runs_from_the_repository_root() {
+    let source = ExplicitHookSource::from_directory(
+        HookFormat::Cursor,
+        &HookDirectory::Repository {
+            root: PathBuf::from("/work/api"),
+            directory: PathBuf::from("/work/api/.cursor"),
+        },
+        HookSourceKind::FactoryAgent,
+        HookSourcePolicy {
+            strict: true,
+            on_ask: HookOnAsk::FailRun,
+        },
+    );
     assert_eq!(
-        resolve_hook_dirs(
-            Path::new("/run/cwd"),
-            vec![PathBuf::from("hooks"), PathBuf::from("/abs/hooks")],
-        ),
-        vec![PathBuf::from("/run/cwd/hooks"), PathBuf::from("/abs/hooks")]
+        source,
+        ExplicitHookSource {
+            config_file: PathBuf::from("/work/api/.cursor/hooks.json"),
+            format: HookFormat::Cursor,
+            kind: HookSourceKind::FactoryAgent,
+            working_directory: PathBuf::from("/work/api"),
+            project_dir: Some(PathBuf::from("/work/api")),
+            policy: HookSourcePolicy {
+                strict: true,
+                on_ask: HookOnAsk::FailRun,
+            },
+        }
     );
 }
 
 #[test]
-fn configured_directories_become_run_delivered_cursor_sources() {
-    assert_eq!(
-        sources_for_hook_dirs(&[PathBuf::from("/a"), PathBuf::from("/b")]),
-        vec![
-            ExplicitHookSource {
-                path: PathBuf::from("/a/hooks.json"),
-                format: HookFormat::Cursor,
-                scope: ExplicitSourceScope::Run,
-            },
-            ExplicitHookSource {
-                path: PathBuf::from("/b/hooks.json"),
-                format: HookFormat::Cursor,
-                scope: ExplicitSourceScope::Run,
-            },
-        ]
+fn a_source_from_a_worker_directory_runs_from_that_directory() {
+    let source = ExplicitHookSource::from_directory(
+        HookFormat::Cursor,
+        &HookDirectory::Worker {
+            directory: PathBuf::from("/etc/acme/warp-hooks"),
+        },
+        HookSourceKind::FactoryWide,
+        HookSourcePolicy::default(),
     );
+    assert_eq!(
+        source.config_file,
+        PathBuf::from("/etc/acme/warp-hooks/hooks.json")
+    );
+    assert_eq!(
+        source.working_directory,
+        PathBuf::from("/etc/acme/warp-hooks")
+    );
+    assert_eq!(source.project_dir, None);
 }
 
 #[test]
-fn scopes_map_to_source_priority_kinds() {
+fn the_stricter_policy_wins_each_setting() {
+    let lax = HookSourcePolicy::default();
+    let strict_only = HookSourcePolicy {
+        strict: true,
+        on_ask: HookOnAsk::Deny,
+    };
+    let fail_only = HookSourcePolicy {
+        strict: false,
+        on_ask: HookOnAsk::FailRun,
+    };
+    assert_eq!(lax.stricter(lax), lax);
     assert_eq!(
-        ExplicitSourceScope::Run.source_kind(),
-        HookSourceKind::RunDelivered
+        strict_only.stricter(fail_only),
+        HookSourcePolicy {
+            strict: true,
+            on_ask: HookOnAsk::FailRun,
+        }
     );
-    assert_eq!(
-        ExplicitSourceScope::FactoryAgent.source_kind(),
-        HookSourceKind::FactoryAgent
-    );
-    assert_eq!(
-        ExplicitSourceScope::FactoryWide.source_kind(),
-        HookSourceKind::FactoryWide
-    );
+    assert_eq!(fail_only.stricter(lax), fail_only);
 }
 
 #[cfg(feature = "local_fs")]
 mod loading {
     use std::fs;
+    use std::path::Path;
     use std::sync::Arc;
 
     use tempfile::TempDir;
@@ -65,6 +89,7 @@ mod loading {
         DiagnosticSeverity, HookBoundary, HookExecutionHost, HookSourceKind,
     };
     use crate::hooks::registry::HookRegistry;
+    use crate::hooks::test_util::{repository_source, worker_source};
 
     const VALID: &str =
         r#"{ "version": 1, "hooks": { "beforeShellExecution": [ { "command": "./hook.sh" } ] } }"#;
@@ -75,24 +100,35 @@ mod loading {
         dir
     }
 
-    fn source(dir: &TempDir, scope: ExplicitSourceScope) -> ExplicitHookSource {
-        ExplicitHookSource {
-            path: dir.path().join("hooks.json"),
-            format: HookFormat::Cursor,
-            scope,
+    fn canonical(path: &Path) -> PathBuf {
+        dunce::canonicalize(path).expect("canonical")
+    }
+
+    fn strict() -> HookSourcePolicy {
+        HookSourcePolicy {
+            strict: true,
+            on_ask: HookOnAsk::Deny,
         }
+    }
+
+    fn load(sources: &[ExplicitHookSource], registry: &mut HookRegistry) -> Vec<SourceLoadFailure> {
+        load_explicit_sources(sources, registry).expect("not finalized yet")
     }
 
     #[test]
     fn configured_sources_activate_and_finalize_without_a_trust_decision() {
-        let run = hook_dir(VALID);
+        let agent = hook_dir(VALID);
         let factory = hook_dir(VALID);
         let mut registry = HookRegistry::new();
 
-        let failures = load_explicit_sources(
+        let failures = load(
             &[
-                source(&run, ExplicitSourceScope::Run),
-                source(&factory, ExplicitSourceScope::FactoryAgent),
+                worker_source(
+                    factory.path(),
+                    HookSourceKind::FactoryWide,
+                    HookSourcePolicy::default(),
+                ),
+                worker_source(agent.path(), HookSourceKind::FactoryAgent, strict()),
             ],
             &mut registry,
         );
@@ -105,65 +141,125 @@ mod loading {
             bindings[0].binding.id.source.kind,
             HookSourceKind::FactoryAgent
         );
-        assert_eq!(
-            bindings[1].working_directory,
-            dunce::canonicalize(run.path()).expect("canonical")
+        assert_eq!(bindings[0].policy, strict());
+        assert_eq!(bindings[1].policy, HookSourcePolicy::default());
+        assert_eq!(bindings[1].working_directory, factory.path());
+        assert_eq!(bindings[1].project_dir, None);
+    }
+
+    #[test]
+    fn a_repository_source_runs_from_the_repository_root_and_names_it_as_the_project() {
+        let repo = TempDir::new().expect("tempdir");
+        let cursor = repo.path().join(".cursor");
+        fs::create_dir_all(&cursor).expect("mkdir");
+        fs::write(cursor.join("hooks.json"), VALID).expect("write");
+        let mut registry = HookRegistry::new();
+
+        let failures = load(
+            &[repository_source(
+                repo.path(),
+                &cursor,
+                HookSourceKind::FactoryAgent,
+                HookSourcePolicy::default(),
+            )],
+            &mut registry,
         );
+
+        assert!(failures.is_empty(), "{failures:?}");
+        let bindings = registry.bindings_for(HookBoundary::ToolPre, HookExecutionHost::Local);
+        assert_eq!(bindings.len(), 1);
+        assert_eq!(bindings[0].working_directory, repo.path());
+        assert_eq!(bindings[0].project_dir.as_deref(), Some(repo.path()));
     }
 
     #[test]
     fn an_empty_resolved_set_is_finalized() {
         let mut registry = HookRegistry::new();
-        assert!(load_explicit_sources(&[], &mut registry).is_empty());
+        assert!(load(&[], &mut registry).is_empty());
         assert!(registry.is_finalized());
         assert!(registry.snapshot().is_empty());
     }
 
     #[test]
-    fn missing_and_invalid_sources_are_reported_before_finalization() {
+    fn each_failure_carries_its_own_sources_strict_setting() {
         let missing_dir = TempDir::new().expect("tempdir");
         let invalid = hook_dir("{ not json");
         let mut registry = HookRegistry::new();
 
-        let failures = load_explicit_sources(
+        let failures = load(
             &[
-                ExplicitHookSource {
-                    path: missing_dir.path().join("hooks.json"),
-                    format: HookFormat::Cursor,
-                    scope: ExplicitSourceScope::Run,
-                },
-                source(&invalid, ExplicitSourceScope::FactoryWide),
+                worker_source(missing_dir.path(), HookSourceKind::FactoryAgent, strict()),
+                worker_source(
+                    invalid.path(),
+                    HookSourceKind::FactoryWide,
+                    HookSourcePolicy::default(),
+                ),
             ],
             &mut registry,
         );
 
-        assert_eq!(failures.len(), 2, "{failures:?}");
+        assert_eq!(
+            failures.iter().map(|failure| failure.strict).collect::<Vec<_>>(),
+            vec![true, false],
+            "{failures:?}"
+        );
         assert!(registry.is_finalized());
         assert!(registry.snapshot().is_empty());
         assert!(
             failures
                 .iter()
-                .all(|failure| failure.severity == DiagnosticSeverity::Error)
+                .all(|failure| failure.diagnostic.severity == DiagnosticSeverity::Error)
         );
     }
 
     #[test]
-    fn a_finalized_set_rejects_later_sources_and_keeps_its_snapshot() {
+    fn a_rejected_definition_is_a_failure_of_its_source() {
+        let dir = hook_dir(
+            r#"{ "version": 1, "hooks": { "beforeShellExecution": [ { "timeout": 5 } ] } }"#,
+        );
+        let mut registry = HookRegistry::new();
+
+        let failures = load(
+            &[worker_source(
+                dir.path(),
+                HookSourceKind::FactoryAgent,
+                strict(),
+            )],
+            &mut registry,
+        );
+
+        assert_eq!(failures.len(), 1, "{failures:?}");
+        assert!(failures[0].strict);
+    }
+
+    #[test]
+    fn a_finalized_set_rejects_a_second_load_and_keeps_its_snapshot() {
         let initial = hook_dir(VALID);
         let later = hook_dir(VALID);
         let mut registry = HookRegistry::new();
         assert!(
-            load_explicit_sources(&[source(&initial, ExplicitSourceScope::Run)], &mut registry)
-                .is_empty()
+            load(
+                &[worker_source(
+                    initial.path(),
+                    HookSourceKind::FactoryAgent,
+                    HookSourcePolicy::default(),
+                )],
+                &mut registry,
+            )
+            .is_empty()
         );
         let snapshot = registry.snapshot();
 
-        let failures = load_explicit_sources(
-            &[source(&later, ExplicitSourceScope::FactoryAgent)],
+        let result = load_explicit_sources(
+            &[worker_source(
+                later.path(),
+                HookSourceKind::FactoryAgent,
+                HookSourcePolicy::default(),
+            )],
             &mut registry,
         );
 
-        assert_eq!(failures.len(), 1);
+        assert!(result.is_err());
         assert_eq!(registry.snapshot().revision, snapshot.revision);
         assert_eq!(registry.snapshot().bindings.len(), 1);
     }
@@ -173,8 +269,15 @@ mod loading {
         let dir = hook_dir(VALID);
         let mut registry = HookRegistry::new();
         assert!(
-            load_explicit_sources(&[source(&dir, ExplicitSourceScope::Run)], &mut registry)
-                .is_empty()
+            load(
+                &[worker_source(
+                    dir.path(),
+                    HookSourceKind::FactoryAgent,
+                    HookSourcePolicy::default(),
+                )],
+                &mut registry,
+            )
+            .is_empty()
         );
         let before = registry.snapshot();
 
@@ -189,31 +292,128 @@ mod loading {
         assert_eq!(after.bindings.len(), 1);
     }
 
-    #[cfg(unix)]
+    /// An agent entry and a factory entry name the same directory: it runs once, under the agent
+    /// entry, with the factory entry's stricter settings.
     #[test]
-    fn a_canonical_source_selected_twice_runs_once_at_the_higher_priority() {
+    fn a_file_selected_by_agent_and_factory_runs_once_under_the_agent_with_the_stricter_policy() {
         let dir = hook_dir(VALID);
-        let link_dir = TempDir::new().expect("tempdir");
-        std::os::unix::fs::symlink(dir.path(), link_dir.path().join("linked")).expect("symlink");
         let mut registry = HookRegistry::new();
 
-        let failures = load_explicit_sources(
+        let failures = load(
             &[
-                source(&dir, ExplicitSourceScope::Run),
-                ExplicitHookSource {
-                    path: link_dir.path().join("linked/hooks.json"),
-                    format: HookFormat::Cursor,
-                    scope: ExplicitSourceScope::FactoryAgent,
-                },
+                worker_source(
+                    dir.path(),
+                    HookSourceKind::FactoryAgent,
+                    HookSourcePolicy::default(),
+                ),
+                worker_source(
+                    dir.path(),
+                    HookSourceKind::FactoryWide,
+                    HookSourcePolicy {
+                        strict: true,
+                        on_ask: HookOnAsk::FailRun,
+                    },
+                ),
             ],
             &mut registry,
         );
 
         assert!(failures.is_empty(), "{failures:?}");
-        assert_eq!(registry.snapshot().bindings.len(), 1);
+        let snapshot = registry.snapshot();
+        assert_eq!(snapshot.bindings.len(), 1);
+        let binding = &snapshot.bindings[0];
+        assert_eq!(binding.binding.id.source.kind, HookSourceKind::FactoryAgent);
         assert_eq!(
-            registry.snapshot().bindings[0].binding.id.source.kind,
-            HookSourceKind::FactoryAgent
+            binding.policy,
+            HookSourcePolicy {
+                strict: true,
+                on_ask: HookOnAsk::FailRun,
+            }
+        );
+        assert!(
+            snapshot.diagnostics.is_empty(),
+            "agreeing duplicates are not reported: {:?}",
+            snapshot.diagnostics
+        );
+    }
+
+    /// Two entries at the same level reach one file from different locations: the first entry's
+    /// location is used and the disagreement is reported.
+    #[test]
+    fn a_file_selected_twice_from_different_locations_uses_the_first_and_warns() {
+        let repo = TempDir::new().expect("tempdir");
+        let cursor = repo.path().join(".cursor");
+        fs::create_dir_all(&cursor).expect("mkdir");
+        fs::write(cursor.join("hooks.json"), VALID).expect("write");
+        let mut registry = HookRegistry::new();
+
+        let failures = load(
+            &[
+                repository_source(
+                    repo.path(),
+                    &cursor,
+                    HookSourceKind::FactoryAgent,
+                    HookSourcePolicy::default(),
+                ),
+                worker_source(&cursor, HookSourceKind::FactoryAgent, strict()),
+            ],
+            &mut registry,
+        );
+
+        assert!(failures.is_empty(), "{failures:?}");
+        let snapshot = registry.snapshot();
+        assert_eq!(snapshot.bindings.len(), 1);
+        assert_eq!(snapshot.bindings[0].working_directory, repo.path());
+        assert_eq!(snapshot.bindings[0].policy, strict());
+        assert_eq!(snapshot.diagnostics.len(), 1, "{:?}", snapshot.diagnostics);
+        let warning = &snapshot.diagnostics[0];
+        assert_eq!(warning.severity, DiagnosticSeverity::Warning);
+        assert!(
+            warning.message.contains(&repo.path().display().to_string())
+                && warning.message.contains(&cursor.display().to_string()),
+            "{}",
+            warning.message
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_file_reached_through_a_link_is_the_same_source() {
+        let dir = hook_dir(VALID);
+        let link_dir = TempDir::new().expect("tempdir");
+        let linked = link_dir.path().join("linked");
+        std::os::unix::fs::symlink(dir.path(), &linked).expect("symlink");
+        let mut registry = HookRegistry::new();
+
+        let failures = load(
+            &[
+                worker_source(
+                    &linked,
+                    HookSourceKind::FactoryAgent,
+                    HookSourcePolicy::default(),
+                ),
+                worker_source(
+                    dir.path(),
+                    HookSourceKind::FactoryWide,
+                    HookSourcePolicy::default(),
+                ),
+            ],
+            &mut registry,
+        );
+
+        assert!(failures.is_empty(), "{failures:?}");
+        let snapshot = registry.snapshot();
+        assert_eq!(snapshot.bindings.len(), 1);
+        assert_eq!(
+            snapshot.bindings[0].binding.id.source.location,
+            crate::hooks::model::HookSourceLocation::CanonicalPath(canonical(
+                &dir.path().join("hooks.json")
+            ))
+        );
+        assert!(
+            snapshot.diagnostics.is_empty(),
+            "a link to the same directory is not a different location: {:?}",
+            snapshot.diagnostics
         );
     }
 }

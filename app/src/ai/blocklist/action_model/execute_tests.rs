@@ -678,7 +678,8 @@ mod hooks {
         use std::fs;
         use std::os::unix::fs::PermissionsExt;
 
-        use ai::hooks::{HookFormat, HookRegistry, HookSourceKind};
+        use ai::hooks::test_util::worker_source;
+        use ai::hooks::{HookRegistry, HookSourceKind, HookSourcePolicy, load_explicit_sources};
         use tempfile::TempDir;
         use warpui::{App, SingletonEntity};
 
@@ -713,15 +714,19 @@ mod hooks {
                 app.update(|ctx| {
                     ctx.add_singleton_model(|_| InitialProcessEnvironment::capture());
                     HookRuntime::install_command_runner(ctx);
-                    HookRegistry::handle(ctx)
+                    let failures = HookRegistry::handle(ctx)
                         .update(ctx, |registry, _| {
-                            registry.install_explicit_source(
-                                &hooks_json,
-                                HookFormat::Cursor,
-                                HookSourceKind::RunDelivered,
+                            load_explicit_sources(
+                                &[worker_source(
+                                    dir.path(),
+                                    HookSourceKind::FactoryAgent,
+                                    HookSourcePolicy::default(),
+                                )],
+                                registry,
                             )
                         })
-                        .expect("the file loads");
+                        .expect("the registry was not finalized yet");
+                    assert!(failures.is_empty(), "{failures:?}");
                 });
                 let (executor, events) = build_executor(&mut app, &harness);
                 let shell = shell_action("id-shell", "rm -rf build");

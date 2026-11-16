@@ -84,25 +84,25 @@ fn bindings_for_filters_by_boundary() {
 #[test]
 fn bindings_for_sorts_by_source_priority_and_keeps_source_order_within_it() {
     let adapter: Arc<dyn HookFormatAdapter> = Arc::new(RecordingAdapter::new());
-    let run = test_source_id_of_kind("run", HookSourceKind::RunDelivered);
     let factory = test_source_id_of_kind("factory", HookSourceKind::FactoryWide);
+    let agent = test_source_id_of_kind("agent", HookSourceKind::FactoryAgent);
     let mut registry = HookRegistry::new();
     registry.install_snapshot_for_test(
         vec![
-            active_binding(
-                test_binding(run.clone(), HookBoundary::ToolPre, 0, None),
-                adapter.clone(),
-            ),
-            active_binding(
-                test_binding(run.clone(), HookBoundary::ToolPre, 1, None),
-                adapter.clone(),
-            ),
             active_binding(
                 test_binding(factory.clone(), HookBoundary::ToolPre, 0, None),
                 adapter.clone(),
             ),
             active_binding(
                 test_binding(factory.clone(), HookBoundary::ToolPre, 1, None),
+                adapter.clone(),
+            ),
+            active_binding(
+                test_binding(agent.clone(), HookBoundary::ToolPre, 0, None),
+                adapter.clone(),
+            ),
+            active_binding(
+                test_binding(agent.clone(), HookBoundary::ToolPre, 1, None),
                 adapter.clone(),
             ),
         ],
@@ -116,10 +116,10 @@ fn bindings_for_sorts_by_source_priority_and_keeps_source_order_within_it() {
     assert_eq!(
         ids,
         vec![
+            "agent#tool.pre[0]",
+            "agent#tool.pre[1]",
             "factory#tool.pre[0]",
             "factory#tool.pre[1]",
-            "run#tool.pre[0]",
-            "run#tool.pre[1]",
         ]
     );
 }
