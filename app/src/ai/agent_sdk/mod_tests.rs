@@ -1592,3 +1592,129 @@ fn run_message_watch_telemetry_defaults_to_unknown_harness() {
 
     assert_eq!(event.payload(), Some(json!({ "harness": "unknown" })));
 }
+
+/// Rung 4 of the local testing ladder: a canned execution configuration, no server. The
+/// configuration names a repository's unchanged `.cursor` directory, whose command is relative to
+/// the repository root, and the run converts it, finds it in the repository's clone, loads it
+/// through the driver, and runs the real script, which denies a shell command. The denial is
+/// carried in the tool call result that goes to the server.
+#[cfg(all(unix, feature = "local_fs"))]
+#[test]
+fn a_canned_execution_configuration_denies_a_command_through_a_real_hook() {
+    use std::os::unix::fs::PermissionsExt;
+
+    use ai::hooks::{HookRegistry, PermissionDecision, PermissionFloors, WarpPermissionResult};
+    use warp_multi_agent_api as api;
+
+    use crate::ai::agent::{AIAgentActionResult, AIAgentActionResultType};
+    use crate::ai::blocklist::hooks::test_utils::{hook_test_app, shell_action};
+    use crate::ai::blocklist::hooks::{HookRuntime, pre_tool};
+    use crate::process_environment::InitialProcessEnvironment;
+    use crate::test_util::terminal::add_window_with_terminal;
+
+    App::test((), |mut app| async move {
+        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
+        let harness = hook_test_app(&mut app);
+        let root = tempfile::TempDir::new().unwrap();
+        let working_dir = dunce::canonicalize(root.path()).unwrap();
+        let cursor = working_dir.join("api/.cursor");
+        fs::create_dir_all(cursor.join("hooks")).unwrap();
+        let script = cursor.join("hooks/deny-rm.sh");
+        fs::write(
+            &script,
+            "#!/bin/sh\nprintf '{\"permission\":\"deny\",\"agent_message\":\"rm is not allowed in this repository\"}'\n",
+        )
+        .unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::write(
+            cursor.join("hooks.json"),
+            r#"{ "version": 1, "hooks": { "beforeShellExecution": [
+                { "command": ".cursor/hooks/deny-rm.sh", "matcher": "rm " }
+            ] } }"#,
+        )
+        .unwrap();
+
+        let mut config = execution_config_with_hooks(json!([{
+            "format": "CURSOR",
+            "repository": { "forge": "GITHUB", "owner": "acme", "name": "api" },
+            "path": ".cursor",
+            "level": "AGENT",
+            "strict": true,
+            "onAsk": "DENY"
+        }]));
+        config["repositories"] = json!([{
+            "forge": "GITHUB", "owner": "acme", "name": "api",
+            "ref": null, "cloneFrom": null, "preserveOrigin": true, "expectedSha": null
+        }]);
+        let options = options_for(&mut app, config).expect("builds");
+        let cloned = options.workspace.source_repos.clone();
+
+        app.update(|ctx| {
+            ctx.add_singleton_model(|_| InitialProcessEnvironment::capture());
+            HookRuntime::install_command_runner(ctx);
+        });
+        let terminal = add_window_with_terminal(&mut app, None);
+        let driver = app.add_model(|ctx| {
+            let terminal_driver =
+                super::driver::terminal::TerminalDriver::create_from_existing_view(terminal, ctx);
+            super::driver::AgentDriver::new_for_test(working_dir.clone(), terminal_driver, ctx)
+        });
+        let loaded = driver.update(&mut app, |driver, ctx| {
+            driver.load_hooks_for_test(options.hooks.clone(), &cloned, ctx)
+        });
+        assert!(loaded.is_ok(), "{loaded:?}");
+        assert!(app.read(|ctx| HookRegistry::as_ref(ctx).is_finalized()));
+
+        let action = shell_action("call-rm", "rm -rf build");
+        let lookup = app.update(|ctx| {
+            pre_tool::begin_or_lookup(
+                &action,
+                harness.conversation_id,
+                false,
+                &harness.active_session,
+                ctx,
+            )
+        });
+        let pre_tool::PreToolLookup::Pending {
+            dispatch: Some(dispatch),
+        } = lookup
+        else {
+            panic!("the repository's hook applies to the command");
+        };
+        let outcome = futures::executor::block_on(dispatch.future);
+        assert_eq!(outcome.invocations.len(), 1, "the real script ran once");
+        let decision = app.update(|ctx| {
+            pre_tool::decide(
+                &outcome.effects,
+                WarpPermissionResult {
+                    can_auto_execute: true,
+                    is_user_initiated: false,
+                    is_autonomous_shell_exception: false,
+                },
+                PermissionFloors::default(),
+                &action,
+                harness.conversation_id,
+                ctx,
+            )
+        });
+        let PermissionDecision::Deny { reason, .. } = decision else {
+            panic!("expected the hook to deny the command, got {decision:?}");
+        };
+        assert_eq!(reason.text, "rm is not allowed in this repository");
+
+        let wire = api::request::input::user_inputs::user_input::Input::try_from(
+            AIAgentActionResult {
+                id: action.id.clone(),
+                task_id: action.task_id.clone(),
+                result: AIAgentActionResultType::DeniedByHook {
+                    reason: reason.text.clone(),
+                },
+            },
+        )
+        .expect("a hook denial converts to a tool call result");
+        assert!(
+            format!("{wire:?}").contains("rm is not allowed in this repository"),
+            "{wire:?}"
+        );
+    });
+}

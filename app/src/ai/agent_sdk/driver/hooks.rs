@@ -434,5 +434,20 @@ pub(crate) fn write_diagnostic<W: Write>(
 }
 
 #[cfg(test)]
+impl AgentDriver {
+    /// Gives the driver `hooks` and loads them, as a claimed run does after environment
+    /// preparation.
+    pub(crate) fn load_hooks_for_test(
+        &mut self,
+        hooks: RunHooks,
+        repositories: &[SourceRepo],
+        ctx: &mut ModelContext<Self>,
+    ) -> Result<(), AgentDriverError> {
+        self.hooks = hooks;
+        self.load_hook_sources_for_run(repositories, ctx)
+    }
+}
+
+#[cfg(test)]
 #[path = "hooks_tests.rs"]
 mod tests;
