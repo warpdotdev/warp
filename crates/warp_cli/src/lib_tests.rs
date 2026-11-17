@@ -3756,6 +3756,58 @@ fn run_message_delivered_alias_parses() {
 }
 
 #[test]
+fn wait_for_events_parses_target_runs() {
+    let args = Args::try_parse_from([
+        "warp",
+        "harness-support",
+        "--run-id",
+        "parent-run",
+        "wait-for-events",
+        "--run-ids",
+        "child-one",
+        "child-two",
+    ])
+    .unwrap();
+
+    let Some(Command::CommandLine(command)) = args.command else {
+        panic!("Expected CLI command");
+    };
+    let CliCommand::HarnessSupport(args) = command.as_ref() else {
+        panic!("Expected harness-support command");
+    };
+    let HarnessSupportCommand::WaitForEvents(wait) = &args.command else {
+        panic!("Expected wait-for-events command");
+    };
+    assert_eq!(args.run_id, "parent-run");
+    assert_eq!(wait.run_ids, ["child-one", "child-two"]);
+}
+
+#[test]
+fn wait_for_events_requires_target_runs() {
+    assert!(
+        Args::try_parse_from([
+            "warp",
+            "harness-support",
+            "--run-id",
+            "parent-run",
+            "wait-for-events",
+        ])
+        .is_err()
+    );
+    assert!(
+        Args::try_parse_from([
+            "warp",
+            "harness-support",
+            "--run-id",
+            "parent-run",
+            "wait-for-events",
+            "--run-ids",
+        ])
+        .is_err()
+    );
+}
+
+#[test]
 fn finish_task_accepts_status_success() {
     let args = Args::try_parse_from([
         "warp",

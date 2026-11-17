@@ -23,6 +23,7 @@ impl HarnessSupportCommand {
                 "harness-support report-external-reference"
             }
             HarnessSupportCommand::NotifyUser(_) => "harness-support notify-user",
+            HarnessSupportCommand::WaitForEvents(_) => "harness-support wait-for-events",
             HarnessSupportCommand::FinishTask(_) => "harness-support finish-task",
             HarnessSupportCommand::ReportShutdown(_) => "harness-support report-shutdown",
         }
@@ -45,6 +46,9 @@ pub enum HarnessSupportCommand {
 
     /// Send a progress notification to the task's originating platform (Slack, Linear, etc.).
     NotifyUser(NotifyUserArgs),
+
+    /// Wait for inbound lifecycle or message events from other agents.
+    WaitForEvents(WaitForEventsArgs),
 
     /// Report task completion or failure, as well as a summary of the task.
     FinishTask(FinishTaskArgs),
@@ -100,6 +104,13 @@ pub struct NotifyUserArgs {
     /// The message to send as a progress update.
     #[arg(long)]
     pub message: String,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct WaitForEventsArgs {
+    /// Run IDs whose work you are waiting on. Any inbound event can resume the run.
+    #[arg(long, required = true, num_args = 1..)]
+    pub run_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
