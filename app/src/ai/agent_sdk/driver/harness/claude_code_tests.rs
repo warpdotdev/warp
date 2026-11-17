@@ -31,7 +31,6 @@ fn sample_parent_bridge_message(
         subject: subject.to_string(),
         body: body.to_string(),
         occurred_at: "2026-04-17T15:46:00Z".to_string(),
-        event_type: None,
     }
 }
 
@@ -46,7 +45,6 @@ fn sample_staged_parent_bridge_message(
         subject: String::new(),
         body: String::new(),
         occurred_at: "2026-04-17T15:46:00Z".to_string(),
-        event_type: None,
     }
 }
 
