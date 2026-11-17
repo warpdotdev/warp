@@ -1457,7 +1457,7 @@ fn skill_delta_experiment_scopes_repo_skills_and_keeps_global_selection() {
 
 fn load_overlap_repo_as_env_and_global(flag_enabled: bool, skill_deltas: bool) {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::CwdScopedCloudSkills.override_enabled(flag_enabled);
+        let _flag = warp_core::features::FeatureFlag::CwdScopedCloudSkills.override_enabled(flag_enabled);
         initialize_app_for_terminal_view(&mut app);
 
         let temp = TempDir::new().unwrap();
@@ -1602,7 +1602,7 @@ fn write_flat_skill(skills_dir: &Path, name: &str) {
 #[test]
 fn factory_reference_folders_remain_home_skills_across_cwd_changes() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::CwdScopedCloudSkills.override_enabled(true);
+        let _flag = warp_core::features::FeatureFlag::CwdScopedCloudSkills.override_enabled(true);
         initialize_app_for_terminal_view(&mut app);
         let temp = TempDir::new().unwrap();
         let working_dir = dunce::canonicalize(temp.path()).unwrap();
