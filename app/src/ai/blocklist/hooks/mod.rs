@@ -4,6 +4,8 @@
 //! state, and returns early when hooks are off or nothing is configured, so the inactive path
 //! adds no work beyond that check.
 
+#[cfg(all(test, feature = "local_fs"))]
+mod e2e_tests;
 pub(crate) mod envelope;
 pub(crate) mod pre_tool;
 pub(crate) mod prompt;

@@ -471,6 +471,24 @@ impl AgentDriver {
         self.hooks = hooks;
         self.load_hook_sources_for_run(repositories, ctx)
     }
+
+    /// Loads `hooks` against `repositories` and starts the run with no initial turn, as the run
+    /// loop does after environment preparation, for tests outside this module. The runtime keeps
+    /// whatever messenger the test installed.
+    pub(crate) fn start_run_with_hooks_for_test(
+        &mut self,
+        hooks: RunHooks,
+        repositories: &[SourceRepo],
+        ctx: &mut ModelContext<Self>,
+    ) -> Result<
+        futures::channel::oneshot::Receiver<super::SDKConversationOutputStatus>,
+        AgentDriverError,
+    > {
+        self.skip_initial_turn = true;
+        self.idle_on_complete = None;
+        self.load_hooks_for_test(hooks, repositories, ctx)?;
+        Ok(self.execute_run(super::AgentRunPrompt::Local(String::new()), ctx))
+    }
 }
 
 #[cfg(test)]
