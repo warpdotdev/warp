@@ -1,10 +1,9 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::thread::JoinHandle;
-use std::time::SystemTime;
 
 use ::preview_proxy::{PortSource, PreviewRecord, Proxy};
-use anyhow::{Context as _, bail};
+use anyhow::Context as _;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 use uuid::Uuid;
@@ -104,7 +103,6 @@ fn preview_records(
     let mut ids = HashSet::new();
     let mut ports = HashSet::new();
     let mut origins = HashSet::new();
-    let now = SystemTime::now();
     response
         .previews
         .into_iter()
@@ -115,43 +113,22 @@ fn preview_records(
                 preview.port
             );
             anyhow::ensure!(ports.insert(preview.port), "Duplicate preview app port");
-            match (preview.id, preview.url, preview.expires_at) {
-                (None, _, expiry) => {
-                    let expires_at = expiry.map(SystemTime::from);
-                    if let Some(expires_at) = expires_at {
-                        anyhow::ensure!(
-                            expires_at > now,
-                            "Legacy preview record is already expired"
-                        );
-                    }
-                    Ok(PreviewRecord {
-                        id: None,
-                        port: preview.port,
-                        origin: None,
-                        expires_at,
-                    })
-                }
-                (Some(id_string), Some(public_url), Some(expiry)) => {
-                    let id = Uuid::parse_str(&id_string).context("Invalid preview UUID")?;
-                    anyhow::ensure!(
-                        !id.is_nil() && id.to_string() == id_string,
-                        "Preview UUID must be non-nil and use canonical lowercase formatting"
-                    );
-                    anyhow::ensure!(ids.insert(id), "Duplicate preview UUID");
-                    let origin = preview_origin(&public_url)?;
-                    anyhow::ensure!(origins.insert(origin.clone()), "Duplicate preview origin");
+            let id_string = preview.id.context("Preview record missing UUID")?;
+            let public_url = preview.url.context("Preview record missing public URL")?;
+            let id = Uuid::parse_str(&id_string).context("Invalid preview UUID")?;
+            anyhow::ensure!(
+                !id.is_nil() && id.to_string() == id_string,
+                "Preview UUID must be non-nil and use canonical lowercase formatting"
+            );
+            anyhow::ensure!(ids.insert(id), "Duplicate preview UUID");
+            let origin = preview_origin(&public_url)?;
+            anyhow::ensure!(origins.insert(origin.clone()), "Duplicate preview origin");
 
-                    let expires_at: SystemTime = expiry.into();
-                    anyhow::ensure!(expires_at > now, "Preview record is already expired");
-                    Ok(PreviewRecord {
-                        id: Some(id),
-                        port: preview.port,
-                        origin: Some(origin),
-                        expires_at: Some(expires_at),
-                    })
-                }
-                (Some(_), _, _) => bail!("Preview record has incomplete identity metadata"),
-            }
+            Ok(PreviewRecord {
+                id,
+                port: preview.port,
+                origin,
+            })
         })
         .collect()
 }
@@ -166,15 +143,7 @@ fn preview_origin(public_url: &str) -> anyhow::Result<String> {
         url.username().is_empty() && url.password().is_none(),
         "Preview URL must not contain credentials"
     );
-    anyhow::ensure!(
-        url.path() == "/" && url.query().is_none() && url.fragment().is_none(),
-        "Preview URL must contain only an origin"
-    );
-    let origin = url.origin().ascii_serialization();
-    if origin == "null" {
-        bail!("Preview URL has no HTTP origin");
-    }
-    Ok(origin)
+    Ok(url.origin().ascii_serialization())
 }
 impl Drop for Manager {
     fn drop(&mut self) {

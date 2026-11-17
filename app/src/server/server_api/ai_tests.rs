@@ -43,7 +43,7 @@ fn list_run_previews_uses_ambient_run_auth_and_reads_app_ports() {
             .match_header(AMBIENT_WORKLOAD_TOKEN_HEADER, "test-workload-token")
             .with_status(200)
             .with_body(
-                r#"{"execution_id":42,"previews":[{"id":"550e8400-e29b-41d4-a716-446655440003","url":"https://preview.example.test","expires_at":"2030-10-22T18:00:00Z","port":3000}]}"#,
+                r#"{"execution_id":42,"previews":[{"id":"550e8400-e29b-41d4-a716-446655440003","url":"https://preview.example.test","port":3000}]}"#,
             )
             .expect(1)
             .create()
@@ -61,7 +61,6 @@ fn list_run_previews_uses_ambient_run_auth_and_reads_app_ports() {
         response.previews[0].url.as_deref(),
         Some("https://preview.example.test")
     );
-    assert!(response.previews[0].expires_at.is_some());
     request.assert();
 }
 #[test]

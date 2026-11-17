@@ -3,7 +3,7 @@ use std::convert::Infallible;
 use std::future::Future;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use bytes::Bytes;
@@ -33,7 +33,7 @@ const WARP_RESERVED_PORTS: [u16; 6] = [9277, 9278, 9279, 9280, 9281, 9282];
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const HEADER_TIMEOUT: Duration = Duration::from_secs(10);
 const PORT_FETCH_TIMEOUT: Duration = Duration::from_secs(15);
-const PREVIEW_CACHE_TTL: Duration = Duration::from_secs(30);
+const PREVIEW_CACHE_TTL: Duration = Duration::from_secs(15 * 60);
 const MISS_REFRESH_BACKOFF: Duration = Duration::from_secs(1);
 const ACCEPT_RETRY_DELAY: Duration = Duration::from_millis(100);
 const MAX_CONNECTIONS: usize = 256;
@@ -41,27 +41,18 @@ const MAX_CONNECTIONS: usize = 256;
 type Body = BoxBody<Bytes, hyper::Error>;
 #[derive(Clone, Debug)]
 pub struct PreviewRecord {
-    pub id: Option<Uuid>,
+    pub id: Uuid,
     pub port: u16,
-    pub origin: Option<String>,
-    pub expires_at: Option<SystemTime>,
+    pub origin: String,
 }
 
 pub trait PortSource: Send + Sync {
     fn previews(&self) -> impl Future<Output = Result<Vec<PreviewRecord>>> + Send;
 }
 
-#[derive(Clone)]
-struct CachedPreview {
-    id: Option<Uuid>,
-    port: u16,
-    origin: Option<String>,
-    expires_at: Instant,
-}
-
 #[derive(Default)]
 struct PreviewCache {
-    previews: Vec<CachedPreview>,
+    previews: Vec<PreviewRecord>,
     refreshed_at: Option<Instant>,
     last_attempt_at: Option<Instant>,
     refresh_generation: u64,
@@ -82,7 +73,7 @@ impl PreviewCache {
 
 struct ParsedRoute {
     port: u16,
-    id: Option<Uuid>,
+    id: Uuid,
     origin: Option<String>,
 }
 
@@ -115,19 +106,18 @@ impl<S: PortSource> Routing<S> {
         if !cache.is_fresh(now) {
             return None;
         }
-        let preview = cache.previews.iter().find(|preview| {
-            preview.port == route.port
-                && preview.expires_at > now
-                && route.id.is_none_or(|id| preview.id == Some(id))
-        })?;
-        let translated_origin = match (&route.id, &route.origin) {
-            (Some(_), Some(origin)) => {
-                let source = cache.previews.iter().find(|preview| {
-                    preview.origin.as_deref() == Some(origin) && preview.expires_at > now
-                })?;
-                Some(format!("http://localhost:{}", source.port))
+        let preview = cache
+            .previews
+            .iter()
+            .find(|preview| preview.port == route.port && preview.id == route.id)?;
+        let translated_origin = match &route.origin {
+            Some(origin) => {
+                if preview.origin != *origin {
+                    return None;
+                }
+                Some(format!("http://localhost:{}", preview.port))
             }
-            _ => None,
+            None => None,
         };
         Some(AuthorizedRoute {
             port: preview.port,
@@ -178,57 +168,25 @@ impl<S: PortSource> Routing<S> {
 fn validate_previews(
     previews: Vec<PreviewRecord>,
     listener_port: u16,
-) -> Result<Vec<CachedPreview>> {
-    let wall_now = SystemTime::now();
-    let monotonic_now = Instant::now();
+) -> Result<Vec<PreviewRecord>> {
     let mut ids = HashSet::new();
     let mut ports = HashSet::new();
     let mut origins = HashSet::new();
-    previews
-        .into_iter()
-        .map(|preview| {
-            anyhow::ensure!(
-                preview.port >= 1024
-                    && !WARP_RESERVED_PORTS.contains(&preview.port)
-                    && preview.port != listener_port,
-                "invalid preview app port {}",
-                preview.port
-            );
-            anyhow::ensure!(ports.insert(preview.port), "duplicate preview app port");
-            let (id, origin, expires_at) = match (preview.id, preview.origin, preview.expires_at) {
-                (Some(id), Some(origin), Some(expiry)) => {
-                    anyhow::ensure!(!id.is_nil(), "preview UUID must not be nil");
-                    anyhow::ensure!(valid_origin(&origin), "invalid preview origin");
-                    anyhow::ensure!(ids.insert(id), "duplicate preview UUID");
-                    anyhow::ensure!(origins.insert(origin.clone()), "duplicate preview origin");
-                    let lifetime = expiry
-                        .duration_since(wall_now)
-                        .context("preview record is expired")?;
-                    let expires_at = monotonic_now
-                        .checked_add(lifetime)
-                        .context("preview expiry is out of range")?;
-                    (Some(id), Some(origin), expires_at)
-                }
-                (None, None, Some(expiry)) => {
-                    let lifetime = expiry
-                        .duration_since(wall_now)
-                        .context("legacy preview record is expired")?;
-                    let expires_at = monotonic_now
-                        .checked_add(lifetime)
-                        .context("legacy preview expiry is out of range")?;
-                    (None, None, expires_at)
-                }
-                (None, None, None) => (None, None, monotonic_now + PREVIEW_CACHE_TTL),
-                _ => bail!("preview record has incomplete identity metadata"),
-            };
-            Ok(CachedPreview {
-                id,
-                port: preview.port,
-                origin,
-                expires_at,
-            })
-        })
-        .collect()
+    for preview in &previews {
+        anyhow::ensure!(
+            preview.port >= 1024
+                && !WARP_RESERVED_PORTS.contains(&preview.port)
+                && preview.port != listener_port,
+            "invalid preview app port {}",
+            preview.port
+        );
+        anyhow::ensure!(ports.insert(preview.port), "duplicate preview app port");
+        anyhow::ensure!(!preview.id.is_nil(), "preview UUID must not be nil");
+        anyhow::ensure!(valid_origin(&preview.origin), "invalid preview origin");
+        anyhow::ensure!(ids.insert(preview.id), "duplicate preview UUID");
+        anyhow::ensure!(origins.insert(&preview.origin), "duplicate preview origin");
+    }
+    Ok(previews)
 }
 
 fn valid_origin(origin: &str) -> bool {
@@ -271,24 +229,15 @@ fn parse_route(headers: &HeaderMap, listener_port: u16) -> Option<ParsedRoute> {
         return None;
     }
 
-    let id = match unique_header(headers, "x-warp-preview-id").ok()? {
-        Some(value) => {
-            let id_text = value.to_str().ok()?;
-            let id = Uuid::parse_str(id_text).ok()?;
-            if id.is_nil() || id.to_string() != id_text {
-                return None;
-            }
-            Some(id)
-        }
+    let id_value = unique_header(headers, "x-warp-preview-id").ok()??;
+    let id_text = id_value.to_str().ok()?;
+    let id = Uuid::parse_str(id_text).ok()?;
+    if id.is_nil() || id.to_string() != id_text {
+        return None;
+    }
+    let origin = match unique_header(headers, "origin").ok()? {
+        Some(value) => Some(value.to_str().ok()?.to_owned()),
         None => None,
-    };
-    let origin = if id.is_some() {
-        match unique_header(headers, "origin").ok()? {
-            Some(value) => Some(value.to_str().ok()?.to_owned()),
-            None => None,
-        }
-    } else {
-        None
     };
     Some(ParsedRoute { port, id, origin })
 }
@@ -456,12 +405,10 @@ async fn forward<S: PortSource + 'static>(
         return Ok(empty(StatusCode::FORBIDDEN));
     };
     let app_port = authorized.port;
-    let negotiated = route.id.is_some();
     let downstream_upgrade = upgrade.as_ref().map(|_| hyper::upgrade::on(&mut request));
     prepare_headers(
         request.headers_mut(),
         app_port,
-        negotiated,
         authorized.translated_origin,
     );
     if let Some(value) = upgrade {
@@ -538,12 +485,7 @@ async fn connect(port: u16) -> Result<TcpStream> {
     .context("Failed to connect to preview app")
 }
 
-fn prepare_headers(
-    headers: &mut HeaderMap,
-    port: u16,
-    negotiated: bool,
-    translated_origin: Option<String>,
-) {
+fn prepare_headers(headers: &mut HeaderMap, port: u16, translated_origin: Option<String>) {
     let trailers = headers
         .get_all(TE)
         .iter()
@@ -577,14 +519,12 @@ fn prepare_headers(
             HeaderValue::from_str(&origin).expect("translated loopback origin is valid"),
         );
     }
-    if negotiated {
-        headers.insert("x-forwarded-host", host);
-        headers.insert("x-forwarded-proto", HeaderValue::from_static("http"));
-        headers.insert(
-            "x-forwarded-port",
-            HeaderValue::from_str(&port.to_string()).expect("port is a valid header value"),
-        );
-    }
+    headers.insert("x-forwarded-host", host);
+    headers.insert("x-forwarded-proto", HeaderValue::from_static("http"));
+    headers.insert(
+        "x-forwarded-port",
+        HeaderValue::from_str(&port.to_string()).expect("port is a valid header value"),
+    );
 }
 
 fn strip_credentials(headers: &mut HeaderMap) {

@@ -15,12 +15,11 @@ fn preview(id: &str, port: u16, url: &str) -> RunPreview {
         port,
         id: Some(id.to_owned()),
         url: Some(url.to_owned()),
-        expires_at: Some(chrono::Utc::now() + chrono::Duration::hours(1)),
     }
 }
 
 #[test]
-fn preview_records_preserve_uuid_port_origin_and_expiry() {
+fn preview_records_preserve_uuid_port_and_origin() {
     let id = "550e8400-e29b-41d4-a716-446655440003";
     let records = preview_records(
         ListRunPreviewsResponse {
@@ -32,36 +31,37 @@ fn preview_records_preserve_uuid_port_origin_and_expiry() {
     .unwrap();
 
     assert_eq!(records.len(), 1);
-    assert_eq!(records[0].id, Some(Uuid::parse_str(id).unwrap()));
+    assert_eq!(records[0].id, Uuid::parse_str(id).unwrap());
     assert_eq!(records[0].port, 3000);
-    assert_eq!(
-        records[0].origin.as_deref(),
-        Some("https://preview.example.test")
-    );
-    assert!(records[0].expires_at.unwrap() > SystemTime::now());
+    assert_eq!(records[0].origin, "https://preview.example.test");
 }
 
 #[test]
-fn preview_records_accept_old_port_only_responses() {
-    let records = preview_records(
-        ListRunPreviewsResponse {
-            execution_id: Some(42),
-            previews: vec![RunPreview {
-                port: 3000,
-                id: None,
-                url: None,
-                expires_at: Some(chrono::Utc::now() + chrono::Duration::hours(1)),
-            }],
-        },
-        42,
-    )
-    .unwrap();
-
-    assert_eq!(records.len(), 1);
-    assert_eq!(records[0].port, 3000);
-    assert_eq!(records[0].id, None);
-    assert_eq!(records[0].origin, None);
-    assert!(records[0].expires_at.unwrap() > SystemTime::now());
+fn preview_origin_uses_only_scheme_host_and_port() {
+    for (url, expected) in [
+        (
+            "HTTPS://PREVIEW.example.test:443/path?query=1#fragment",
+            "https://preview.example.test",
+        ),
+        (
+            "http://preview.example.test:80/path?query=1#fragment",
+            "http://preview.example.test",
+        ),
+        (
+            "https://preview.example.test:8443/path?query=1#fragment",
+            "https://preview.example.test:8443",
+        ),
+        (
+            "https://[2001:db8::1]:8443/path?query=1#fragment",
+            "https://[2001:db8::1]:8443",
+        ),
+        (
+            "http://[::1]:8080/path?query=1#fragment",
+            "http://[::1]:8080",
+        ),
+    ] {
+        assert_eq!(preview_origin(url).unwrap(), expected, "{url}");
+    }
 }
 
 #[test]
@@ -84,19 +84,19 @@ fn preview_records_reject_execution_mismatch_and_missing_fields() {
 
     let mut invalid_id = preview("not-a-uuid", 3000, "https://preview.example.test");
     invalid_id.id = Some("not-a-uuid".to_owned());
-    let mut missing_expiry = preview(
-        "550e8400-e29b-41d4-a716-446655440003",
-        3000,
-        "https://preview.example.test",
-    );
-    missing_expiry.expires_at = None;
     let mut partial_origin = preview(
         "550e8400-e29b-41d4-a716-446655440003",
         3000,
         "https://preview.example.test",
     );
     partial_origin.url = None;
-    for invalid in [invalid_id, missing_expiry, partial_origin] {
+    let mut partial_id = preview(
+        "550e8400-e29b-41d4-a716-446655440003",
+        3000,
+        "https://preview.example.test",
+    );
+    partial_id.id = None;
+    for invalid in [invalid_id, partial_origin, partial_id] {
         assert!(
             preview_records(
                 ListRunPreviewsResponse {
@@ -111,7 +111,7 @@ fn preview_records_reject_execution_mismatch_and_missing_fields() {
 }
 
 #[test]
-fn preview_records_reject_invalid_urls_expiry_and_duplicate_identity() {
+fn preview_records_reject_invalid_urls_and_duplicate_identity() {
     let mut nil_id = preview(
         "550e8400-e29b-41d4-a716-446655440003",
         3000,
@@ -131,9 +131,8 @@ fn preview_records_reject_invalid_urls_expiry_and_duplicate_identity() {
     for url in [
         "not a URL",
         "javascript:alert(1)",
+        "ftp://preview.example.test/path",
         "https://user:password@preview.example.test",
-        "https://preview.example.test/path",
-        "https://preview.example.test/?query=1",
     ] {
         assert!(
             preview_records(
@@ -147,23 +146,6 @@ fn preview_records_reject_invalid_urls_expiry_and_duplicate_identity() {
             "{url}"
         );
     }
-
-    let mut expired = preview(
-        "550e8400-e29b-41d4-a716-446655440003",
-        3000,
-        "https://preview.example.test",
-    );
-    expired.expires_at = Some(chrono::Utc::now() - chrono::Duration::seconds(1));
-    assert!(
-        preview_records(
-            ListRunPreviewsResponse {
-                execution_id: Some(42),
-                previews: vec![expired],
-            },
-            42,
-        )
-        .is_err()
-    );
 
     let id = "550e8400-e29b-41d4-a716-446655440003";
     let cases = [

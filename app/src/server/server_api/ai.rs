@@ -1288,8 +1288,6 @@ pub struct RunPreview {
     pub id: Option<String>,
     #[serde(default)]
     pub url: Option<String>,
-    #[serde(default)]
-    pub expires_at: Option<DateTime<Utc>>,
 }
 
 impl<'de> serde::Deserialize<'de> for ListRunsResponse {

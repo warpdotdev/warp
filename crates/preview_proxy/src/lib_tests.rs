@@ -1,5 +1,4 @@
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::time::SystemTime;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use uuid::Uuid;
@@ -13,7 +12,6 @@ pub(super) struct Ports {
     pause: AtomicBool,
     started: tokio::sync::Notify,
     resume: tokio::sync::Notify,
-    legacy: AtomicBool,
 }
 
 impl Ports {
@@ -25,16 +23,14 @@ impl Ports {
             pause: AtomicBool::new(false),
             started: tokio::sync::Notify::new(),
             resume: tokio::sync::Notify::new(),
-            legacy: AtomicBool::new(false),
         })
     }
 }
 pub(super) fn preview(port: u16) -> PreviewRecord {
     PreviewRecord {
-        id: Some(Uuid::from_u128(u128::from(port) + 1)),
+        id: Uuid::from_u128(u128::from(port) + 1),
         port,
-        origin: Some(format!("https://preview-{port}.example.test")),
-        expires_at: Some(SystemTime::now() + Duration::from_secs(3600)),
+        origin: format!("https://preview-{port}.example.test"),
     }
 }
 
@@ -53,23 +49,8 @@ impl PortSource for Ports {
             .lock()
             .unwrap()
             .iter()
-            .map(|port| {
-                if self.legacy.load(Ordering::SeqCst) {
-                    legacy_preview(*port)
-                } else {
-                    preview(*port)
-                }
-            })
+            .map(|port| preview(*port))
             .collect())
-    }
-}
-
-fn legacy_preview(port: u16) -> PreviewRecord {
-    PreviewRecord {
-        id: None,
-        port,
-        origin: None,
-        expires_at: None,
     }
 }
 
@@ -105,7 +86,7 @@ pub(super) async fn request_with_origin(
                 "GET /path?q=preserved HTTP/1.1\r\nHost: ingress.invalid\r\n\
                  X-Warp-Preview-ID: {}\r\n\
                  X-Warp-Preview-Port: {app_port}\r\n{origin}{extra}\r\n",
-                preview(app_port).id.unwrap()
+                preview(app_port).id
             )
             .as_bytes(),
         )
@@ -114,21 +95,20 @@ pub(super) async fn request_with_origin(
     stream
 }
 
-async fn legacy_request_with_origin(
+async fn request_with_identity(
     proxy_port: u16,
-    app_port: u16,
-    origin: Option<&str>,
+    route_port: u16,
+    id: Uuid,
     extra: &str,
 ) -> TcpStream {
     let mut stream = TcpStream::connect((Ipv4Addr::LOCALHOST, proxy_port))
         .await
         .unwrap();
-    let origin = origin.map_or_else(String::new, |origin| format!("Origin: {origin}\r\n"));
     stream
         .write_all(
             format!(
                 "GET /path?q=preserved HTTP/1.1\r\nHost: ingress.invalid\r\n\
-                 X-Warp-Preview-Port: {app_port}\r\n{origin}{extra}\r\n"
+                 X-Warp-Preview-ID: {id}\r\nX-Warp-Preview-Port: {route_port}\r\n{extra}\r\n"
             )
             .as_bytes(),
         )
@@ -254,6 +234,7 @@ async fn normalizes_host_and_forwarded_headers_without_rewriting_application_cre
     ] {
         assert!(response.contains(expected), "{expected}: {response}");
     }
+    assert!(!response.contains("\"origin\""), "{response}");
     assert!(response.contains(&format!("\"x-forwarded-host\": \"localhost:{app_port}\"")));
     assert!(response.contains(&format!("\"x-forwarded-port\": \"{app_port}\"")));
     for absent in [
@@ -270,100 +251,11 @@ async fn normalizes_host_and_forwarded_headers_without_rewriting_application_cre
 }
 
 #[tokio::test]
-async fn legacy_requests_without_uuid_route_by_port_and_preserve_origin() {
-    let (app_port, app_task) = app().await;
-    let source = Ports::new(vec![app_port]);
-    source.legacy.store(true, Ordering::SeqCst);
-    let mut proxy = Proxy::bind(0, source).await.unwrap();
-    let origin = "https://legacy-preview.example.test";
-    let mut stream = legacy_request_with_origin(
-        proxy.port(),
-        app_port,
-        Some(origin),
-        "Connection: close\r\nForwarded: for=client.example\r\n\
-         X-Forwarded-For: 203.0.113.1\r\nX-Real-IP: 203.0.113.2\r\n\
-         X-Forwarded-Host: browser.example.test\r\n\
-         X-Forwarded-Proto: https\r\nX-Forwarded-Port: 443\r\n\
-         X-Original-Host: browser.example.test\r\n\
-         X-Original-URL: https://browser.example.test/path\r\n\
-         X-Forwarded-Prefix: /prefix\r\n",
-    )
-    .await;
-    let mut response = String::new();
-    stream.read_to_string(&mut response).await.unwrap();
-    assert!(response.starts_with("HTTP/1.1 200"), "{response}");
-    assert!(response.contains(&format!("\"host\": \"localhost:{app_port}\"")));
-    assert!(response.contains(&format!("\"origin\": \"{origin}\"")));
-    for preserved in [
-        "203.0.113.1",
-        "203.0.113.2",
-        "browser.example.test",
-        "\"x-forwarded-proto\": \"https\"",
-        "\"x-forwarded-port\": \"443\"",
-    ] {
-        assert!(response.contains(preserved), "{preserved}: {response}");
-    }
-    for absent in [
-        "\"forwarded\"",
-        "x-original-host",
-        "x-original-url",
-        "x-forwarded-prefix",
-    ] {
-        assert!(!response.contains(absent), "{absent}: {response}");
-    }
-    assert!(!response.contains("x-warp-preview-"));
-
-    proxy.shutdown().await;
-    app_task.abort();
-}
-
-#[tokio::test]
-async fn preserves_post_method_body_and_hmr_header_for_same_origin_legacy_request() {
-    let (app_port, app_task) = app().await;
-    let source = Ports::new(vec![app_port]);
-    source.legacy.store(true, Ordering::SeqCst);
-    let mut proxy = Proxy::bind(0, source).await.unwrap();
-    let mut stream = TcpStream::connect((Ipv4Addr::LOCALHOST, proxy.port()))
-        .await
-        .unwrap();
-    let body = b"preserve this body";
-    stream
-        .write_all(
-            format!(
-                "POST /submit HTTP/1.1\r\nHost: ingress.invalid\r\n\
-                 Origin: http://ingress.invalid\r\nX-Warp-Preview-Port: {app_port}\r\n\
-                 X-Connections-HMR: 1\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                body.len()
-            )
-            .as_bytes(),
-        )
-        .await
-        .unwrap();
-    stream.write_all(body).await.unwrap();
-
-    let mut response = String::new();
-    stream.read_to_string(&mut response).await.unwrap();
-    assert!(response.starts_with("HTTP/1.1 200"), "{response}");
-    for expected in [
-        "POST /submit",
-        "preserve this body",
-        "\"origin\": \"http://ingress.invalid\"",
-        "\"x-connections-hmr\": \"1\"",
-        &format!("\"host\": \"localhost:{app_port}\""),
-    ] {
-        assert!(response.contains(expected), "{expected}: {response}");
-    }
-
-    proxy.shutdown().await;
-    app_task.abort();
-}
-
-#[tokio::test]
 async fn translates_same_origin_uuid_post_and_rejects_foreign_origin() {
     let (app_port, app_task) = strict_same_origin_post_app().await;
     let mut proxy = Proxy::bind(0, Ports::new(vec![app_port])).await.unwrap();
-    let id = preview(app_port).id.unwrap();
-    let public_origin = preview(app_port).origin.unwrap();
+    let id = preview(app_port).id;
+    let public_origin = preview(app_port).origin;
     let body = b"preserve this body";
     let mut stream = TcpStream::connect((Ipv4Addr::LOCALHOST, proxy.port()))
         .await
@@ -402,18 +294,15 @@ async fn translates_same_origin_uuid_post_and_rejects_foreign_origin() {
 }
 
 #[tokio::test]
-async fn translates_known_origins_and_normalizes_forwarded_headers() {
+async fn translates_destination_origin_and_normalizes_forwarded_headers() {
     let (target_port, target_task) = app().await;
-    let (source_port, source_task) = app().await;
-    let mut proxy = Proxy::bind(0, Ports::new(vec![target_port, source_port]))
-        .await
-        .unwrap();
+    let mut proxy = Proxy::bind(0, Ports::new(vec![target_port])).await.unwrap();
     let port = proxy.port();
-    let source_origin = preview(source_port).origin.unwrap();
+    let target_origin = preview(target_port).origin;
     let mut stream = request_with_origin(
         port,
         target_port,
-        Some(&source_origin),
+        Some(&target_origin),
         "Connection: close\r\nAuthorization: Bearer application\r\n\
          Cookie: app=visible\r\nForwarded: for=spoofed\r\n\
          X-Forwarded-For: spoofed\r\nX-Original-URL: https://spoofed.example/\r\n",
@@ -423,7 +312,7 @@ async fn translates_known_origins_and_normalizes_forwarded_headers() {
     stream.read_to_string(&mut response).await.unwrap();
     assert!(response.starts_with("HTTP/1.1 200"), "{response}");
     assert!(
-        response.contains(&format!("http://localhost:{source_port}")),
+        response.contains(&format!("http://localhost:{target_port}")),
         "{response}"
     );
     for expected in [
@@ -453,18 +342,45 @@ async fn translates_known_origins_and_normalizes_forwarded_headers() {
 
     proxy.shutdown().await;
     target_task.abort();
-    source_task.abort();
+}
+
+#[tokio::test]
+async fn rejects_sibling_preview_origin_for_http_and_websocket() {
+    let target = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+    let target_port = target.local_addr().unwrap().port();
+    let sibling = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+    let sibling_port = sibling.local_addr().unwrap().port();
+    let mut proxy = Proxy::bind(0, Ports::new(vec![target_port, sibling_port]))
+        .await
+        .unwrap();
+    let sibling_origin = preview(sibling_port).origin;
+
+    for extra in [
+        "Connection: close\r\n",
+        "Connection: upgrade\r\nUpgrade: websocket\r\n",
+    ] {
+        let mut stream =
+            request_with_origin(proxy.port(), target_port, Some(&sibling_origin), extra).await;
+        assert!(headers(&mut stream).await.starts_with("HTTP/1.1 403"));
+    }
+    assert_eq!(
+        target.into_std().unwrap().accept().unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock
+    );
+    proxy.shutdown().await;
 }
 
 #[tokio::test]
 async fn rejects_missing_ambiguous_or_unknown_preview_identity() {
     let (app_port, app_task) = app().await;
-    let source = Ports::new(vec![app_port]);
+    let (sibling_port, sibling_task) = app().await;
+    let source = Ports::new(vec![app_port, sibling_port]);
     let mut proxy = Proxy::bind(0, source).await.unwrap();
     let port = proxy.port();
-    let id = preview(app_port).id.unwrap();
-    let preview_origin = preview(app_port).origin.unwrap();
+    let id = preview(app_port).id;
+    let preview_origin = preview(app_port).origin;
     let cases = [
+        format!("X-Warp-Preview-Port: {app_port}\r\n"),
         format!("X-Warp-Preview-ID: invalid\r\nX-Warp-Preview-Port: {app_port}\r\n"),
         format!(
             "X-Warp-Preview-ID: {}\r\n\
@@ -502,6 +418,17 @@ async fn rejects_missing_ambiguous_or_unknown_preview_identity() {
             .unwrap();
         assert!(headers(&mut stream).await.starts_with("HTTP/1.1 403"));
     }
+    let mut wrong_id = request_with_identity(
+        port,
+        app_port,
+        preview(sibling_port).id,
+        "Connection: close\r\n",
+    )
+    .await;
+    assert!(headers(&mut wrong_id).await.starts_with("HTTP/1.1 403"));
+    let mut wrong_port =
+        request_with_identity(port, sibling_port, id, "Connection: close\r\n").await;
+    assert!(headers(&mut wrong_port).await.starts_with("HTTP/1.1 403"));
 
     let mut stream = request_with_origin(
         port,
@@ -513,29 +440,18 @@ async fn rejects_missing_ambiguous_or_unknown_preview_identity() {
     assert!(headers(&mut stream).await.starts_with("HTTP/1.1 400"));
     proxy.shutdown().await;
     app_task.abort();
+    sibling_task.abort();
 }
 
 #[test]
-fn rejects_duplicate_or_expired_records_and_enforces_hard_cache_freshness() {
+fn validates_preview_identity_and_enforces_cache_freshness() {
     let duplicate = preview(3000);
     let mut duplicate_id = preview(3001);
     duplicate_id.id = duplicate.id;
     assert!(validate_previews(vec![duplicate, duplicate_id], 0).is_err());
 
-    let mut expired = preview(3000);
-    expired.expires_at = Some(SystemTime::now() - Duration::from_secs(1));
-    assert!(validate_previews(vec![expired], 0).is_err());
-    let cached_legacy = validate_previews(vec![legacy_preview(3001)], 0).unwrap();
-    assert_eq!(cached_legacy[0].id, None);
-    assert_eq!(cached_legacy[0].origin, None);
-    assert!(cached_legacy[0].expires_at <= Instant::now() + PREVIEW_CACHE_TTL);
-
-    let mut partial = legacy_preview(3002);
-    partial.id = Some(Uuid::from_u128(3003));
-    assert!(validate_previews(vec![partial], 0).is_err());
-
     let mut nil_id = preview(3004);
-    nil_id.id = Some(Uuid::nil());
+    nil_id.id = Uuid::nil();
     assert!(validate_previews(vec![nil_id], 0).is_err());
 
     let refreshed_at = Instant::now();
@@ -552,7 +468,7 @@ async fn rejects_arbitrary_destination_requests() {
     let app_port = 12345;
     let mut proxy = Proxy::bind(0, Ports::new(vec![app_port])).await.unwrap();
     let port = proxy.port();
-    let id = preview(app_port).id.unwrap();
+    let id = preview(app_port).id;
     for target in ["CONNECT other.example:443", "GET http://other.example/"] {
         let mut stream = TcpStream::connect((Ipv4Addr::LOCALHOST, port))
             .await
@@ -763,7 +679,7 @@ async fn copies_upgraded_frames_after_http_reuse_and_closes_on_driver_shutdown()
     let mut stream = request_with_origin(
         port,
         app_port,
-        Some(&preview(app_port).origin.unwrap()),
+        Some(&preview(app_port).origin),
         "Connection: upgrade, te\r\nTE: trailers\r\nUpgrade: websocket\r\nSec-WebSocket-Protocol: vite-hmr\r\n",
     )
     .await;
@@ -890,7 +806,7 @@ fn forwards_only_trailers_te_negotiation_and_removes_other_hop_headers() {
         headers.insert(TE, HeaderValue::from_str(value).unwrap());
         headers.insert(CONNECTION, HeaderValue::from_static("te, x-remove"));
         headers.insert("x-remove", HeaderValue::from_static("hidden"));
-        prepare_headers(&mut headers, 3000, true, None);
+        prepare_headers(&mut headers, 3000, None);
         assert!(!headers.contains_key("x-remove"));
         if trailers {
             assert_eq!(headers[TE], "trailers");
