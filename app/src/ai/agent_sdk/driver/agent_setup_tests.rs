@@ -63,6 +63,7 @@ fn assert_third_party_standby_preparation(harness: Harness) {
                 repos: Vec::new(),
             },
             &events,
+            false,
         )
         .await
         .unwrap();
@@ -155,6 +156,7 @@ fn resource_preparation_rejects_a_consumed_workspace() {
                 repos: Vec::new(),
             },
             &setup_events,
+            false,
         )
         .await
         .unwrap_err();
@@ -212,6 +214,7 @@ fn standby_provider_setup_precedes_workspace_preparation() {
                 repos: Vec::new(),
             },
             &setup_events,
+            false,
         )
         .await
         .unwrap_err();

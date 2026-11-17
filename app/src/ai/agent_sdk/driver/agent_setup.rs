@@ -56,12 +56,18 @@ impl AgentDriver {
         mcp_specs: Vec<MCPSpec>,
         global_skills: GlobalSkillResolution,
         setup_events: &SetupClientEventReporter,
+        runner_preparation: bool,
     ) -> Result<PathBuf, AgentDriverError> {
         // Standby resolves global skills before this call to check checkout names before any clone.
         let mut workspace = foreground
             .spawn(|me, _| match me.workspace.take() {
                 Some(WorkspaceState::Pending(workspace)) => Some(workspace),
-                Some(WorkspaceState::Prepared(_)) | None => None,
+                Some(
+                    WorkspaceState::Prepared(_)
+                    | WorkspaceState::RunnerPrepared(_)
+                    | WorkspaceState::PendingRunner(_),
+                )
+                | None => None,
             })
             .await?
             .ok_or(AgentDriverError::InvalidRuntimeState)?;
@@ -127,14 +133,19 @@ impl AgentDriver {
         foreground
             .spawn(move |me, _| {
                 me.harness_working_dir = working_dir;
-                me.workspace = Some(WorkspaceState::Prepared(StandbyWorkspace {
+                let prepared = StandbyWorkspace {
                     harness,
                     configuration: prepared_configuration,
                     repositories,
-                }));
+                };
+                me.workspace = Some(if runner_preparation {
+                    WorkspaceState::RunnerPrepared(prepared)
+                } else {
+                    WorkspaceState::Prepared(prepared)
+                });
             })
             .await?;
-        if harness != Harness::Oz {
+        if runner_preparation || harness != Harness::Oz {
             return Ok(prepared.harness_working_dir);
         }
         let managed_mcp_client = foreground

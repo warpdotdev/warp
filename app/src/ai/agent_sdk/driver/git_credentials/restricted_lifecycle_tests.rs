@@ -221,6 +221,7 @@ impl PrewarmedSandboxClient for RenewalClient {
             credentials[0].token = "renewed-standby-token".into();
             credentials[0].expires_at = Some((Utc::now() + TimeDelta::hours(2)).into());
             return Ok(PrewarmedSandboxConfiguration {
+                runner_preparation: false,
                 sandbox_id: "sandbox".into(),
                 generation: "renewed".into(),
                 github_credential_mode: GitHubCredentialMode::RestrictedInstallation,

@@ -2935,6 +2935,7 @@ union PopulateMerkleTreeCacheResult = PopulateMerkleTreeCacheOutput | UserFacing
 
 input PrewarmedSandboxConfigInput {
   githubCredentialContractVersion: Int
+  runnerPreparationContractVersion: Int
   sandboxId: ID!
   supportsAgentHooks: Boolean
   supportsDeferredRepositories: Boolean
@@ -2943,6 +2944,8 @@ input PrewarmedSandboxConfigInput {
 union PrewarmedSandboxConfigResult = PrewarmedSandboxConfiguration | UserFacingError
 
 type PrewarmedSandboxConfiguration {
+  preparationKind: String!
+  runnerPreparationContractVersion: Int
   environmentVariables: [PrewarmedSandboxVariable!]!
   expiresAt: Time!
   fingerprint: String!
