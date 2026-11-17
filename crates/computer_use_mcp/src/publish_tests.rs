@@ -5,6 +5,10 @@ use serde_json::json;
 
 use super::*;
 
+fn far_deadline() -> Instant {
+    Instant::now() + Duration::from_secs(60)
+}
+
 fn strings(args: Vec<OsString>) -> Vec<String> {
     args.into_iter()
         .map(|arg| arg.into_string().unwrap())
@@ -65,6 +69,7 @@ async fn saving_to_a_directory_moves_the_video() {
         &RecordingDestination::Directory(directory.clone()),
         None,
         None,
+        far_deadline(),
     )
     .await
     .unwrap();
@@ -110,6 +115,7 @@ async fn uploads_go_through_the_cli_for_the_run() {
         },
         Some("Demo"),
         None,
+        far_deadline(),
     )
     .await
     .unwrap();
@@ -153,11 +159,41 @@ async fn failed_uploads_keep_the_video() {
         },
         None,
         None,
+        far_deadline(),
     )
     .await
     .unwrap_err();
 
     assert!(error.contains("not logged in"), "{error}");
+    assert!(
+        error.contains(&format!("kept at {}", video.display())),
+        "{error}"
+    );
+    assert!(video.exists());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn uploads_that_miss_the_deadline_keep_the_video() {
+    let temp = tempfile::tempdir().unwrap();
+    let cli = fake_cli(temp.path(), "sleep 30");
+    let video = temp.path().join("recording.mp4");
+    std::fs::write(&video, b"video").unwrap();
+
+    let error = publish(
+        &video,
+        &RecordingDestination::OzRun {
+            cli,
+            run_id: "run-1".to_owned(),
+        },
+        None,
+        None,
+        Instant::now() + Duration::from_millis(200),
+    )
+    .await
+    .unwrap_err();
+
+    assert!(error.contains("Timed out uploading"), "{error}");
     assert!(
         error.contains(&format!("kept at {}", video.display())),
         "{error}"

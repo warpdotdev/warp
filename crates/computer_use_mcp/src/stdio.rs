@@ -6,11 +6,13 @@ use anyhow::Context as _;
 use rmcp::ServiceExt as _;
 use tokio::io::AsyncWrite;
 
-use crate::{ComputerUseMcpConfig, ComputerUseMcpServer};
+use crate::{ComputerUseMcpConfig, ComputerUseMcpServer, STOP_RECORDING_TIMEOUT};
 
-/// How long to spend publishing a recording left running when the session ends, which can
-/// include uploading it.
-const FINISH_RECORDING_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+/// How long to wait for a recording left running when the session ends to be published. Publishing
+/// enforces [`STOP_RECORDING_TIMEOUT`] itself, so this only guards against stopping or
+/// post-processing the capture hanging.
+const FINISH_RECORDING_TIMEOUT: Duration =
+    Duration::from_secs(STOP_RECORDING_TIMEOUT.as_secs() + 30);
 
 /// Serves computer-use tools over MCP on stdin and stdout until the client disconnects or the
 /// process is asked to terminate.
@@ -48,6 +50,7 @@ async fn serve(
             Ok(())
         }
     };
+    server.release_held_input().await;
     if tokio::time::timeout(FINISH_RECORDING_TIMEOUT, server.finish_recording())
         .await
         .is_err()
@@ -87,17 +90,23 @@ fn protocol_output() -> anyhow::Result<tokio::io::Stdout> {
 async fn shutdown_signal() {
     use tokio::signal::unix::{SignalKind, signal};
 
-    match signal(SignalKind::terminate()) {
-        Ok(mut terminate) => {
-            tokio::select! {
-                _ = terminate.recv() => {}
-                _ = tokio::signal::ctrl_c() => {}
+    async fn received(kind: SignalKind) {
+        match signal(kind) {
+            Ok(mut signals) => {
+                let _ = signals.recv().await;
+            }
+            Err(error) => {
+                log::warn!("Failed to listen for {kind:?}: {error}");
+                std::future::pending::<()>().await;
             }
         }
-        Err(error) => {
-            log::warn!("Failed to listen for SIGTERM: {error}");
-            let _ = tokio::signal::ctrl_c().await;
-        }
+    }
+
+    // A hangup arrives when the terminal the harness runs in closes.
+    tokio::select! {
+        () = received(SignalKind::terminate()) => {}
+        () = received(SignalKind::hangup()) => {}
+        _ = tokio::signal::ctrl_c() => {}
     }
 }
 

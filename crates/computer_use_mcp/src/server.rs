@@ -55,6 +55,11 @@ impl ComputerUseMcpServer {
         }
     }
 
+    /// Releases keys and mouse buttons that tool calls left pressed, for when the session ends.
+    pub(crate) async fn release_held_input(&self) {
+        self.session.lock().await.release_held_input().await;
+    }
+
     /// Stops and publishes the recording in progress, if any, for when the session ends.
     pub(crate) async fn finish_recording(&self) {
         match self.session.lock().await.finish_recording().await {

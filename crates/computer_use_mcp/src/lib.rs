@@ -30,6 +30,10 @@ pub use stdio::run_stdio;
 /// and viewers title those calls from the tool and argument names in `tool_contract.json`.
 pub const SERVER_NAME: &str = "warp-computer-use";
 
+/// The longest stopping a recording takes, including post-processing and uploading it. Harnesses
+/// must wait longer than this for a tool call to finish.
+pub const STOP_RECORDING_TIMEOUT: Duration = Duration::from_secs(9 * 60);
+
 /// Configuration for a computer-use MCP server.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ComputerUseMcpConfig {

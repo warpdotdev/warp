@@ -1,8 +1,9 @@
 //! Per-connection computer-use state shared across tool calls.
 
 use computer_use::{
-    Action, ActionResult, Actor, Options, Recorder, RecordingConfig, RecordingFinalizeReason,
-    Screenshot, TargetedAction, is_meaningful_action_group, overlay_labels_for,
+    Action, ActionResult, Actor, Key, MouseButton, Options, Recorder, RecordingConfig,
+    RecordingFinalizeReason, Screenshot, TargetedAction, is_meaningful_action_group,
+    overlay_labels_for,
 };
 use serde_json::{Value, json};
 
@@ -45,6 +46,8 @@ pub(crate) struct Session {
     /// Created on first use and then kept, because actors carry input state across calls (such
     /// as a button held by `mouse_down`) that later calls rely on.
     actor: Option<Box<dyn Actor>>,
+    /// Input that `actor` has pressed and not yet released, to release when the session ends.
+    held: HeldInput,
     /// The geometry of the most recent full screenshot, which defines the coordinate space of
     /// every tool's input.
     geometry: Option<ScreenGeometry>,
@@ -64,6 +67,7 @@ impl Session {
             key_platform: KeyPlatform::current(),
             actor_factory,
             actor: None,
+            held: HeldInput::default(),
             geometry: None,
             recorder,
             recording: None,
@@ -160,6 +164,7 @@ impl Session {
         }
         match result {
             Ok(result) => {
+                self.held.apply(&plan.actions);
                 if plan.capture == Capture::FullScreen
                     && let Some(screenshot) = &result.screenshot
                 {
@@ -168,14 +173,28 @@ impl Session {
                 Ok(result)
             }
             Err(error) => {
-                release_keys(&mut **actor, &plan.actions).await;
+                // There's no telling how far the batch got, so release everything it may have
+                // pressed rather than leave a modifier or mouse button held for later input.
+                let pressed = HeldInput::pressed_by(&plan.actions);
+                release(&mut **actor, &pressed).await;
+                self.held.remove(&pressed);
                 // An actor without a platform could not connect to a display (for example because
                 // one wasn't available yet), so build a fresh one on the next call.
                 if actor.platform().is_none() {
                     self.actor = None;
+                    self.held = HeldInput::default();
                 }
                 Err(format!("Computer use failed: {error}").into())
             }
+        }
+    }
+
+    /// Releases every key and mouse button that input has left pressed, such as a button held by
+    /// `mouse_down`.
+    pub async fn release_held_input(&mut self) {
+        let held = std::mem::take(&mut self.held);
+        if let Some(actor) = self.actor.as_mut() {
+            release(&mut **actor, &held).await;
         }
     }
 
@@ -333,28 +352,94 @@ impl Session {
     }
 }
 
-/// Releases every key pressed by `actions`, so a batch that failed partway through doesn't leave
-/// modifiers held for later input.
-async fn release_keys(actor: &mut dyn Actor, actions: &[Action]) {
-    let mut pressed = Vec::new();
-    for action in actions {
-        if let Action::KeyDown { key } = action
-            && !pressed.contains(key)
-        {
-            pressed.push(key.clone());
+/// Keys and mouse buttons that are pressed, in the order they were pressed.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct HeldInput {
+    keys: Vec<Key>,
+    buttons: Vec<MouseButton>,
+}
+
+impl HeldInput {
+    /// Every key and button that `actions` press, including those they release again.
+    fn pressed_by(actions: &[Action]) -> Self {
+        let mut pressed = Self::default();
+        for action in actions {
+            match action {
+                Action::KeyDown { key } => pressed.press_key(key),
+                Action::MouseDown { button, .. } => pressed.press_button(*button),
+                Action::Wait(_)
+                | Action::MouseUp { .. }
+                | Action::MouseMove { .. }
+                | Action::MouseWheel { .. }
+                | Action::TypeText { .. }
+                | Action::KeyUp { .. } => {}
+            }
+        }
+        pressed
+    }
+
+    /// Updates the held input for `actions` having been performed.
+    fn apply(&mut self, actions: &[Action]) {
+        for action in actions {
+            match action {
+                Action::KeyDown { key } => self.press_key(key),
+                Action::KeyUp { key } => self.keys.retain(|held| held != key),
+                Action::MouseDown { button, .. } => self.press_button(*button),
+                Action::MouseUp { button } => self.buttons.retain(|held| held != button),
+                Action::Wait(_)
+                | Action::MouseMove { .. }
+                | Action::MouseWheel { .. }
+                | Action::TypeText { .. } => {}
+            }
         }
     }
-    if pressed.is_empty() {
+
+    fn remove(&mut self, released: &HeldInput) {
+        self.keys.retain(|key| !released.keys.contains(key));
+        self.buttons
+            .retain(|button| !released.buttons.contains(button));
+    }
+
+    fn is_empty(&self) -> bool {
+        self.keys.is_empty() && self.buttons.is_empty()
+    }
+
+    /// Actions that release everything held: buttons first, so a modified drag ends with its
+    /// modifiers still applied, then keys in reverse press order.
+    fn release_actions(&self) -> Vec<TargetedAction> {
+        self.buttons
+            .iter()
+            .map(|&button| Action::MouseUp { button })
+            .chain(
+                self.keys
+                    .iter()
+                    .rev()
+                    .map(|key| Action::KeyUp { key: key.clone() }),
+            )
+            .map(TargetedAction::screen)
+            .collect()
+    }
+
+    fn press_key(&mut self, key: &Key) {
+        if !self.keys.contains(key) {
+            self.keys.push(key.clone());
+        }
+    }
+
+    fn press_button(&mut self, button: MouseButton) {
+        if !self.buttons.contains(&button) {
+            self.buttons.push(button);
+        }
+    }
+}
+
+async fn release(actor: &mut dyn Actor, input: &HeldInput) {
+    if input.is_empty() {
         return;
     }
-    let releases: Vec<_> = pressed
-        .into_iter()
-        .rev()
-        .map(|key| TargetedAction::screen(Action::KeyUp { key }))
-        .collect();
     if let Err(error) = actor
         .perform_actions(
-            &releases,
+            &input.release_actions(),
             Options {
                 screenshot_params: None,
                 background_enabled: false,
@@ -363,7 +448,7 @@ async fn release_keys(actor: &mut dyn Actor, actions: &[Action]) {
         )
         .await
     {
-        log::warn!("Failed to release keys after a failed computer use action: {error}");
+        log::warn!("Failed to release held computer use input: {error}");
     }
 }
 

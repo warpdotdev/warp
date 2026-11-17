@@ -181,6 +181,112 @@ async fn failed_input_releases_pressed_keys() {
     );
 }
 
+fn last_batch_actions(log: &FakeActorLog) -> Vec<Action> {
+    log.batches()
+        .last()
+        .unwrap()
+        .actions
+        .iter()
+        .map(|targeted| targeted.action.clone())
+        .collect()
+}
+
+#[tokio::test]
+async fn failed_drag_releases_the_mouse_button_and_modifiers() {
+    let log = FakeActorLog::default();
+    let mut session = session(&log);
+    session
+        .handle(ToolRequest::Screenshot, false)
+        .await
+        .unwrap();
+    log.fail_next_input("mouse move timed out");
+    session
+        .handle(
+            ToolRequest::Drag {
+                from: Point { x: 10, y: 10 },
+                to: Point { x: 50, y: 50 },
+                button: MouseButton::Left,
+                modifiers: Some("shift".to_owned()),
+            },
+            false,
+        )
+        .await
+        .unwrap_err();
+
+    let shift =
+        parse_chord("shift", KeyPlatform::current(), KeyDialect::Anthropic).unwrap()[0].clone();
+    assert_eq!(
+        last_batch_actions(&log),
+        vec![
+            Action::MouseUp {
+                button: MouseButton::Left
+            },
+            Action::KeyUp { key: shift },
+        ]
+    );
+    let batches = log.batches().len();
+    session.release_held_input().await;
+    assert_eq!(log.batches().len(), batches, "nothing is left held");
+}
+
+#[tokio::test]
+async fn a_held_mouse_button_is_released_when_the_session_ends() {
+    let log = FakeActorLog::default();
+    let mut session = session(&log);
+    session
+        .handle(
+            ToolRequest::MouseDown {
+                at: None,
+                button: MouseButton::Left,
+            },
+            false,
+        )
+        .await
+        .unwrap();
+
+    session.release_held_input().await;
+    assert_eq!(
+        last_batch_actions(&log),
+        vec![Action::MouseUp {
+            button: MouseButton::Left
+        }]
+    );
+
+    let batches = log.batches().len();
+    session.release_held_input().await;
+    assert_eq!(log.batches().len(), batches, "input is released only once");
+}
+
+#[tokio::test]
+async fn completed_input_leaves_nothing_to_release() {
+    let log = FakeActorLog::default();
+    let mut session = session(&log);
+    session
+        .handle(
+            ToolRequest::MouseDown {
+                at: None,
+                button: MouseButton::Left,
+            },
+            false,
+        )
+        .await
+        .unwrap();
+    session
+        .handle(
+            ToolRequest::MouseUp {
+                button: MouseButton::Left,
+            },
+            false,
+        )
+        .await
+        .unwrap();
+    session.handle(click(5, 5), false).await.unwrap();
+
+    let batches = log.batches().len();
+    session.release_held_input().await;
+    assert_eq!(log.batches().len(), batches);
+}
+
 #[tokio::test]
 async fn cursor_position_is_reported_in_screenshot_coordinates() {
     let log = FakeActorLog::default();
@@ -255,8 +361,9 @@ async fn input_is_logged_while_recording() {
     session.handle(click(1, 1), true).await.unwrap_err();
 
     let recorded: Vec<_> = log.batches().iter().map(|batch| batch.recorded).collect();
-    // The screenshot isn't input, so only the key press and the click are recorded.
-    assert_eq!(recorded, [false, true, true]);
+    // The screenshot isn't input and the release after the failed click isn't the model's, so
+    // only the key press and the click are recorded.
+    assert_eq!(recorded, [false, true, true, false]);
     let actions = session.active_recording().unwrap().action_log.entries();
     let [entry] = actions else {
         panic!("only the successful key press should be logged, got {actions:?}");

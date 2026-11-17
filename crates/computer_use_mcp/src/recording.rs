@@ -7,8 +7,9 @@ use computer_use::{
     prepare_recording,
 };
 use serde_json::{Value, json};
+use tokio::time::Instant;
 
-use crate::{ToolError, publish};
+use crate::{STOP_RECORDING_TIMEOUT, ToolError, publish};
 
 /// Where finished recordings are published.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -61,6 +62,7 @@ pub(crate) async fn finish(
     destination: &RecordingDestination,
     reason: RecordingFinalizeReason,
 ) -> Result<Value, ToolError> {
+    let deadline = Instant::now() + STOP_RECORDING_TIMEOUT;
     let ActiveRecording {
         handle,
         frame_rate,
@@ -83,6 +85,7 @@ pub(crate) async fn finish(
         destination,
         title.as_deref(),
         description.as_deref(),
+        deadline,
     )
     .await;
     for path in &video.intermediates {
