@@ -197,11 +197,17 @@ fn a_repository_on_another_forge_is_not_the_same_repository() {
 
 #[test]
 fn a_worker_source_must_be_absolute() {
+    let absolute_path = std::env::current_dir()
+        .unwrap()
+        .join("acme")
+        .join("hooks")
+        .to_string_lossy()
+        .into_owned();
     let (sources, failures) = resolve_sources(
         &[
             source(
                 ConfiguredHookLocation::Worker {
-                    path: "/etc/acme/hooks".to_owned(),
+                    path: absolute_path.clone(),
                 },
                 false,
             ),
@@ -218,7 +224,7 @@ fn a_worker_source_must_be_absolute() {
     assert_eq!(sources.len(), 1);
     assert_eq!(
         sources[0].working_directory,
-        PathBuf::from("/etc/acme/hooks")
+        PathBuf::from(absolute_path)
     );
     assert_eq!(sources[0].project_dir, None);
     assert_eq!(failures.len(), 1);

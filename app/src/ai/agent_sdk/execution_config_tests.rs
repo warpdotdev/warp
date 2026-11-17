@@ -144,7 +144,13 @@ fn a_repository_hook_path_stays_inside_its_repository() {
 
 #[test]
 fn a_worker_hook_path_is_absolute() {
-    assert!(hook_worker_path("/etc/acme/hooks").is_ok());
+    let absolute_path = std::env::current_dir()
+        .unwrap()
+        .join("acme")
+        .join("hooks")
+        .to_string_lossy()
+        .into_owned();
+    assert!(hook_worker_path(&absolute_path).is_ok());
     for invalid in ["", "etc/hooks", "./hooks", " /etc/hooks"] {
         assert!(hook_worker_path(invalid).is_err(), "{invalid:?}");
     }
