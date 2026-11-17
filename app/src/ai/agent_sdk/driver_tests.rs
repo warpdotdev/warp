@@ -26,6 +26,7 @@ use warp_cli::{
     SESSION_SHARING_SERVER_URL_OVERRIDE_ENV, WS_SERVER_URL_OVERRIDE_ENV,
 };
 use warp_core::channel::ChannelState;
+use warp_core::execution_mode::{AppExecutionMode, ExecutionMode};
 use warp_core::features::FeatureFlag;
 use warp_graphql::ai::AgentTaskState;
 use warp_graphql::platform_error::PlatformErrorMessageFormat;
@@ -1928,6 +1929,12 @@ fn a_scripted_ask_from_a_fail_run_source_ends_the_run_with_the_hook_reason() {
     App::test((), |mut app| async move {
         let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let harness = test_utils::controller_harness(&mut app);
+        let headless_mode = app.add_model(|ctx| {
+            AppExecutionMode::new_with_headlessness(ExecutionMode::Sdk, false, true, ctx)
+        });
+        AppExecutionMode::handle(&app).update(&mut app, |mode, ctx| {
+            *mode = headless_mode.as_ref(ctx).clone();
+        });
         let binding = test_binding(
             test_source_id("policy"),
             HookBoundary::ToolPre,
@@ -1946,8 +1953,7 @@ fn a_scripted_ask_from_a_fail_run_source_ends_the_run_with_the_hook_reason() {
                 registry.install_snapshot_for_test(vec![active], Vec::new());
             });
         });
-        // A hidden child conversation has nobody to answer an `ask` even in a desktop test
-        // process, the way a run has nobody.
+        // Run the hook on a hidden child rather than the driver's visible root conversation.
         let terminal_id = harness.terminal_id();
         let conversation_id =
             BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
