@@ -381,7 +381,11 @@ impl PrewarmedSandboxControlReader {
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
 pub trait PrewarmedSandboxClient: 'static + Send + Sync {
     /// Fetches this sandbox's preparation plan and credentials.
-    async fn fetch_configuration(&self, sandbox_id: &str) -> Result<PrewarmedSandboxConfiguration>;
+    async fn fetch_configuration(
+        &self,
+        sandbox_id: &str,
+        supports_deferred_repositories: bool,
+    ) -> Result<PrewarmedSandboxConfiguration>;
 
     /// Reports whether preparation succeeded for the supplied configuration generation.
     async fn report_status(
@@ -442,11 +446,16 @@ impl ServerApi {
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
 impl PrewarmedSandboxClient for ServerApi {
-    async fn fetch_configuration(&self, sandbox_id: &str) -> Result<PrewarmedSandboxConfiguration> {
+    async fn fetch_configuration(
+        &self,
+        sandbox_id: &str,
+        supports_deferred_repositories: bool,
+    ) -> Result<PrewarmedSandboxConfiguration> {
         let operation = PrewarmedSandboxConfig::build(PrewarmedSandboxConfigVariables {
             input: PrewarmedSandboxConfigInput {
                 sandbox_id: sandbox_id.into(),
                 github_credential_contract_version: Some(1),
+                supports_deferred_repositories: Some(supports_deferred_repositories),
             },
             request_context: get_request_context(),
         });

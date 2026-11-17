@@ -135,7 +135,7 @@ fn configuration_errors_return_after_one_request() {
             .create();
         drop(server);
 
-        let error = block_on(api.fetch_configuration("sandbox")).unwrap_err();
+        let error = block_on(api.fetch_configuration("sandbox", true)).unwrap_err();
         assert_eq!(
             match error
                 .downcast_ref::<warp_graphql::client::GraphQLError>()
@@ -286,7 +286,8 @@ fn configuration_uses_default_graphql_timeout_and_authentication() {
             payload["variables"]["input"],
             serde_json::json!({
                 "sandboxId": "11111111-2222-3333-4444-555555555555",
-                "githubCredentialContractVersion": 1
+                "githubCredentialContractVersion": 1,
+                "supportsDeferredRepositories": true
             })
         );
     }));
@@ -300,7 +301,7 @@ fn configuration_uses_default_graphql_timeout_and_authentication() {
         .create();
     drop(server);
     assert_eq!(
-        block_on(api.fetch_configuration("11111111-2222-3333-4444-555555555555"))
+        block_on(api.fetch_configuration("11111111-2222-3333-4444-555555555555", true))
             .unwrap()
             .generation,
         "abc123"
@@ -338,7 +339,7 @@ fn configuration_rejects_user_errors_unknown_results_and_missing_data() {
             .with_body(body.to_string())
             .create();
         drop(server);
-        let error = block_on(api.fetch_configuration("sandbox")).unwrap_err();
+        let error = block_on(api.fetch_configuration("sandbox", true)).unwrap_err();
         assert_eq!(error.to_string(), expected);
         assert!(!format!("{error:#}").contains("private-server-detail"));
         request.assert();
@@ -635,7 +636,7 @@ fn all_endpoints_use_cached_credentials_and_expected_payloads() {
     drop(server);
     block_on(async {
         assert_eq!(
-            api.fetch_configuration("11111111-2222-3333-4444-555555555555")
+            api.fetch_configuration("11111111-2222-3333-4444-555555555555", true)
                 .await
                 .unwrap()
                 .generation,
@@ -818,7 +819,7 @@ fn config_gone_requires_the_structured_lifecycle_marker() {
             .with_body(response.to_string())
             .create();
         drop(server);
-        let error = block_on(api.fetch_configuration("sandbox")).unwrap_err();
+        let error = block_on(api.fetch_configuration("sandbox", true)).unwrap_err();
         assert_eq!(is_prewarmed_sandbox_unavailable(&error), expected);
         assert!(!format!("{error:#}").contains("private-server-detail"));
         request.assert();

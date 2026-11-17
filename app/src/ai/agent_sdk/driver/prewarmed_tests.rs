@@ -149,7 +149,7 @@ fn assert_third_party_assignment(
             ("WARP_API_KEY".into(), "run-key".into()),
             ("RUN_SETTING".into(), "assigned".into()),
         ]);
-        validate_assignment(&configuration).unwrap();
+        validate_assignment(&configuration, true).unwrap();
         let (mut options, task, _, _) = app.update(|ctx| {
             build_execution_task_and_options(
                 None,
@@ -341,6 +341,7 @@ fn installation_failures_are_reported_against_the_run_with_its_credential() {
             HashMap::from([("WARP_GITHUB_CREDENTIAL_MODE".into(), "future_mode".into())]),
             "assigned-run-key".into(),
             Utc::now() + TimeDelta::hours(1),
+            false,
         )
         .await
         .unwrap_err();
@@ -358,19 +359,19 @@ fn installation_failures_are_reported_against_the_run_with_its_credential() {
 fn prewarmed_accepts_server_assignments() {
     let mut configuration = server_assignment();
     assert!(configuration.providers.is_some());
-    validate_assignment(&configuration).unwrap();
+    validate_assignment(&configuration, true).unwrap();
     configuration.skip_initial_turn = true;
-    validate_assignment(&configuration).unwrap();
+    validate_assignment(&configuration, true).unwrap();
     configuration.skip_initial_turn = false;
     configuration.conversation_id = Some("conversation".into());
-    validate_assignment(&configuration).unwrap();
+    validate_assignment(&configuration, true).unwrap();
     configuration.conversation_id = None;
     configuration.harness = warp_graphql::ai::AgentHarness::ClaudeCode;
-    validate_assignment(&configuration).unwrap();
+    validate_assignment(&configuration, true).unwrap();
     configuration.harness = warp_graphql::ai::AgentHarness::Codex;
-    validate_assignment(&configuration).unwrap();
+    validate_assignment(&configuration, true).unwrap();
     configuration.harness = warp_graphql::ai::AgentHarness::Gemini;
-    validate_assignment(&configuration).unwrap();
+    validate_assignment(&configuration, true).unwrap();
 }
 
 #[test]
@@ -386,18 +387,18 @@ fn prewarmed_rejects_deferred_repositories_without_client_support() {
         expected_sha: None,
     }]);
     {
-        let _unsupported = FeatureFlag::FactoryDeferredRepositories.override_enabled(false);
-        assert!(validate_assignment(&configuration).is_err());
+        let _supported_flag = FeatureFlag::FactoryDeferredRepositories.override_enabled(true);
+        assert!(validate_assignment(&configuration, false).is_err());
     }
-    let _supported = FeatureFlag::FactoryDeferredRepositories.override_enabled(true);
-    validate_assignment(&configuration).unwrap();
+    let _disabled_flag = FeatureFlag::FactoryDeferredRepositories.override_enabled(false);
+    validate_assignment(&configuration, true).unwrap();
 }
 
 #[test]
 fn prewarmed_config_conversion_and_state_binding_preserve_run_settings() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
-        let _factory = FeatureFlag::FactoryDeferredRepositories.override_enabled(true);
+        let _factory = FeatureFlag::FactoryDeferredRepositories.override_enabled(false);
         let root = tempfile::tempdir().unwrap();
         let terminal = add_window_with_terminal(&mut app, None);
         let terminal_driver = app.update(|ctx| {
@@ -408,6 +409,15 @@ fn prewarmed_config_conversion_and_state_binding_preserve_run_settings() {
             .add_model(|ctx| AgentDriver::new_for_test(root.path().into(), terminal_driver, ctx));
         let mut configuration = config();
         configuration.profile_id = Some("run-profile".into());
+        configuration.deferred_repositories = Some(vec![ExecutionRepository {
+            forge: CodeForge::GitHub,
+            owner: "benchmarks".into(),
+            name: "frozen-api".into(),
+            ref_: None,
+            clone_from: None,
+            preserve_origin: false,
+            expected_sha: None,
+        }]);
         configuration.parent_run_id = Some("parent-run".into());
         configuration.idle_on_complete_seconds = Some(17);
         configuration.idle_on_fail_seconds = Some(23);
@@ -467,6 +477,8 @@ fn prewarmed_config_conversion_and_state_binding_preserve_run_settings() {
             assert_eq!(policy.task_id, TASK_ID);
             assert_eq!(policy.execution_id, "42");
             assert_eq!(policy.working_dir, root.path());
+            assert!(policy.supports_deferred_repositories);
+            assert_eq!(policy.deferred.len(), 1);
             assert_eq!(driver.terminal_driver.id(), terminal_id);
             assert_eq!(driver.task_id.unwrap().to_string(), TASK_ID);
             assert_eq!(driver.parent_run_id.as_deref(), Some("parent-run"));
