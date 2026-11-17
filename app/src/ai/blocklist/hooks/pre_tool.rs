@@ -606,6 +606,7 @@ fn file_write_floors(
 }
 
 /// How an MCP action names its server when it carries no installation id.
+#[cfg_attr(target_family = "wasm", expect(dead_code))]
 enum McpLookup<'a> {
     Tool { name: &'a str },
     Resource { name: &'a str, uri: Option<&'a str> },
