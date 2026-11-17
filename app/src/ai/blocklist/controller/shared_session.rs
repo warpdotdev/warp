@@ -487,7 +487,7 @@ impl BlocklistAIController {
                 exchange.input.iter().any(|input| input.is_user_query());
 
             if let Some(output) = exchange.output_status.output() {
-                actions_to_queue.extend(output.get().actions().cloned().collect_vec().into_iter());
+                actions_to_queue.extend(output.get().actions().cloned().collect_vec());
             }
         }
 

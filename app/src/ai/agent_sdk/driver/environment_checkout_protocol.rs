@@ -240,16 +240,15 @@ impl CheckoutRequest {
             return Err("invalid checkout name");
         }
         match &self.head {
-            Some(RepositoryHeadRef::CommitSha(sha)) => {
+            Some(RepositoryHeadRef::CommitSha(sha))
                 if sha.len() != 40
                     || !sha
                         .bytes()
-                        .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
-                {
-                    return Err("invalid checkout commit");
-                }
+                        .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f')) =>
+            {
+                return Err("invalid checkout commit");
             }
-            Some(RepositoryHeadRef::Branch(value)) => {
+            Some(RepositoryHeadRef::Branch(value))
                 if value.len() > 1024
                     || value.is_empty()
                     || value.starts_with('-')
@@ -265,12 +264,11 @@ impl CheckoutRequest {
                         character.is_whitespace()
                             || character.is_control()
                             || matches!(character, ':' | '\\' | '*' | '?' | '[' | '^' | '~')
-                    })
-                {
-                    return Err("invalid checkout ref");
-                }
+                    }) =>
+            {
+                return Err("invalid checkout ref");
             }
-            None => {}
+            Some(RepositoryHeadRef::CommitSha(_) | RepositoryHeadRef::Branch(_)) | None => {}
         }
         if self.fetch_branch_only && !matches!(self.head, Some(RepositoryHeadRef::Branch(_))) {
             return Err("branch-only checkout requires a branch");

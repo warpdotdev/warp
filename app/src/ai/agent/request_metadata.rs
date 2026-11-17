@@ -162,7 +162,7 @@ impl RequestMetadataRecord {
         let mut platform_charges = Vec::new();
         if let Some(charges) = metadata.charges.as_ref() {
             let mut categories: Vec<_> = charges.usage_by_category.iter().collect();
-            categories.sort_by(|(a, _), (b, _)| a.cmp(b));
+            categories.sort_by_key(|(a, _)| *a);
             for (category, charged) in categories {
                 let sections = [
                     (
@@ -177,7 +177,7 @@ impl RequestMetadataRecord {
                 ];
                 for (usage_type, by_model) in sections {
                     let mut models: Vec<_> = by_model.iter().collect();
-                    models.sort_by(|(a, _), (b, _)| a.cmp(b));
+                    models.sort_by_key(|(a, _)| *a);
                     for (model_id, inference) in models {
                         let tokens = inference.token_count.unwrap_or_default();
                         let cost = inference.token_cost.unwrap_or_default();

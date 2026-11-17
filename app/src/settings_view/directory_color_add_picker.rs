@@ -306,7 +306,7 @@ fn compute_candidate_paths(
     let mut seen_keys = HashSet::new();
     let mut candidates: Vec<(String, PathBuf)> = Vec::new();
 
-    for path in indexed_paths.into_iter().chain(persisted_paths.into_iter()) {
+    for path in indexed_paths.into_iter().chain(persisted_paths) {
         if !path_exists(&path) {
             continue;
         }

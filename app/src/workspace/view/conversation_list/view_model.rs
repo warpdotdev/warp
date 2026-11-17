@@ -1,3 +1,5 @@
+use std::cmp::Reverse;
+
 use fuzzy_match::match_indices_case_insensitive;
 use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity, WindowId};
 
@@ -164,7 +166,7 @@ impl ConversationListViewModel {
                 })
                 .collect();
 
-            matched_items.sort_by(|a, b| b.0.cmp(&a.0));
+            matched_items.sort_by_key(|a| Reverse(a.0));
             self.filtered_items = matched_items.into_iter().map(|(_, item)| item).collect();
         }
     }

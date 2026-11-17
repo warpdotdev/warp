@@ -94,11 +94,9 @@ impl GlowingEditor {
             }
             EditorEvent::Escape => ctx.emit(GlowingEditorEvent::Cancel),
             // Clear error state when user types (since this is submit-only validation)
-            EditorEvent::Edited(_) => {
-                if self.has_error {
-                    self.has_error = false;
-                    ctx.notify();
-                }
+            EditorEvent::Edited(_) if self.has_error => {
+                self.has_error = false;
+                ctx.notify();
             }
             _ => (),
         }

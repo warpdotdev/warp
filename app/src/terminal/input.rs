@@ -8907,7 +8907,7 @@ impl Input {
             .iter()
             .map(|style_run| style_run.byte_range().clone())
             .collect::<Vec<_>>();
-        ranges.sort_by(|a, b| a.start.cmp(&b.start));
+        ranges.sort_by_key(|a| a.start);
 
         let capacity = ranges.len();
 

@@ -189,11 +189,7 @@ async fn fuzzy_match_files_zero_state(
 
             if is_git_changed || is_recently_opened {
                 let rank = recency_index.get(&item.path).copied().unwrap_or(0);
-                let recency_bonus = if max_recency > 0 {
-                    (30 * rank / max_recency) as i64
-                } else {
-                    0
-                };
+                let recency_bonus = (30 * rank).checked_div(max_recency).unwrap_or(0) as i64;
                 let base_score = if is_git_changed { 10000 } else { 0 };
                 let match_result = FuzzyMatchResult {
                     score: base_score + recency_bonus,
@@ -255,11 +251,7 @@ async fn fuzzy_match_files_query(
 
                 // Add a recency bonus, capped at 30.
                 let rank = recency_index.get(&item.path).copied().unwrap_or(0);
-                let recency_bonus = if max_recency > 0 {
-                    (30 * rank / max_recency) as i64
-                } else {
-                    0
-                };
+                let recency_bonus = (30 * rank).checked_div(max_recency).unwrap_or(0) as i64;
 
                 match_result.score += recency_bonus;
 

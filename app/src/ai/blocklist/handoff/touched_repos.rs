@@ -177,10 +177,8 @@ fn parse_github_repo(remote_url: &str) -> Option<GithubRepo> {
         rest
     } else if let Some(rest) = trimmed.strip_prefix("https://github.com/") {
         rest
-    } else if let Some(rest) = trimmed.strip_prefix("ssh://git@github.com/") {
-        rest
     } else {
-        return None;
+        trimmed.strip_prefix("ssh://git@github.com/")?
     };
 
     let path_part = path_part.strip_suffix(".git").unwrap_or(path_part);

@@ -6,6 +6,7 @@
 mod background_task;
 mod work_queue;
 
+use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::ops::RangeInclusive;
 use std::sync::Arc;
@@ -660,7 +661,7 @@ impl AsyncFindController {
 
         // Sort by TotalIndex descending so that matches closest to the end
         // of the blocklist (newest blocks, near the prompt) come first.
-        ordered_blocks.sort_by(|a, b| b.0.cmp(&a.0));
+        ordered_blocks.sort_by_key(|a| Reverse(a.0));
 
         let reverse_within_block = matches!(
             self.block_sort_direction,

@@ -857,11 +857,11 @@ where
         event_ctx: &mut TuiEventContext<'_>,
         app: &AppContext,
     ) -> bool {
-        self.visible_elements
-            .iter_mut()
-            .fold(false, |handled, visible| {
-                visible.element.dispatch_event(event, event_ctx, app) || handled
-            })
+        let mut handled = false;
+        for visible in &mut self.visible_elements {
+            handled |= visible.element.dispatch_event(event, event_ctx, app);
+        }
+        handled
     }
 }
 

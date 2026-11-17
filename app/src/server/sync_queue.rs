@@ -1809,20 +1809,19 @@ impl SyncQueue {
                             );
                         }
                     }
-                    QueueItem::UpdateWorkflow { model, .. } => {
+                    QueueItem::UpdateWorkflow { model, .. }
                         // Only update the workflow if it depends on this dependency.
                         if self
                             .queue_dependencies
                             .get(item_id)
                             .is_some_and(|deps| deps.contains(dependency))
-                        {
+                        => {
                             let workflow_model = Arc::make_mut(model);
                             workflow_model.data.replace_object_id(
                                 SyncId::ClientId(client_id),
                                 SyncId::from(server_id),
                             );
                         }
-                    }
                     _ => {}
                 }
             }

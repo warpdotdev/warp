@@ -103,10 +103,7 @@ fn replace_template_chars_with_arguments(
     for argument in arguments {
         let template_i = templated_bytes.iter().position(|b| b == &TEMPLATE_CHAR);
         if let Some(template_i) = template_i {
-            templated_bytes.splice(
-                template_i..template_i + 1,
-                argument.into_bytes().into_iter(),
-            );
+            templated_bytes.splice(template_i..template_i + 1, argument.into_bytes());
         } else {
             debug_assert!(
                 false,

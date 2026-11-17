@@ -249,28 +249,26 @@ async fn suggestions_for_parse_error(
         ParseErrorReason::ArgumentError {
             command: _,
             error: UnexpectedArgument(arg),
-        } => {
-            if arg.span.end() == line.len() {
-                // The unexpected argument could be a prefix for a subcommand.
-                let prefix = arg.item.as_str();
-                let results = (signature.subcommands().iter().filter_map(|subcmd| {
-                    options
-                        .match_strategy
-                        .get_match_type(prefix, subcmd.name())
-                        .map(|match_type| {
-                            let suggestion = Suggestion::with_same_display_and_replacement(
-                                subcmd.name.clone(),
-                                subcmd.description.as_ref().cloned(),
-                                SuggestionType::Subcommand,
-                                subcmd.priority.into(),
-                            );
-                            MatchedSuggestion::new(suggestion, match_type)
-                        })
-                }))
-                .sorted_by(MatchedSuggestion::cmp_by_display)
-                .collect();
-                return (results, false);
-            }
+        } if arg.span.end() == line.len() => {
+            // The unexpected argument could be a prefix for a subcommand.
+            let prefix = arg.item.as_str();
+            let results = (signature.subcommands().iter().filter_map(|subcmd| {
+                options
+                    .match_strategy
+                    .get_match_type(prefix, subcmd.name())
+                    .map(|match_type| {
+                        let suggestion = Suggestion::with_same_display_and_replacement(
+                            subcmd.name.clone(),
+                            subcmd.description.as_ref().cloned(),
+                            SuggestionType::Subcommand,
+                            subcmd.priority.into(),
+                        );
+                        MatchedSuggestion::new(suggestion, match_type)
+                    })
+            }))
+            .sorted_by(MatchedSuggestion::cmp_by_display)
+            .collect();
+            return (results, false);
         }
         _ => {}
     }

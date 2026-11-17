@@ -3843,9 +3843,7 @@ pub fn test_open_new_tab_with_specific_shell_from_new_session_menu() -> Builder 
     let mut builder = new_builder()
         .set_should_run_test(|| cfg!(windows))
         .with_step(wait_until_bootstrapped_single_pane_for_tab(0));
-    let mut tab_index = 1;
-
-    for (shell, test_command) in test_cases {
+    for (tab_index, (shell, test_command)) in (1..).zip(test_cases) {
         let expected =
             regex::Regex::new(format!("{}$", shell.name()).as_str()).expect("regex should compile");
         builder = builder
@@ -3864,7 +3862,6 @@ pub fn test_open_new_tab_with_specific_shell_from_new_session_menu() -> Builder 
                 ExpectedExitStatus::Success,
                 expected,
             ));
-        tab_index += 1;
     }
     builder
 }

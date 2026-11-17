@@ -1643,16 +1643,14 @@ impl<V: EditorView> Element for EditorWrapper<V> {
                         .store(in_bound, Ordering::Relaxed);
                 }
             }
-            Some(Event::LeftMouseUp { position, .. }) => {
-                if !gutter_handled {
-                    let was_clicking = self.state_handle.in_click.swap(false, Ordering::Relaxed);
+            Some(Event::LeftMouseUp { position, .. }) if !gutter_handled => {
+                let was_clicking = self.state_handle.in_click.swap(false, Ordering::Relaxed);
 
-                    if was_clicking
-                        && let Some(gutter_range) =
-                            self.gutter_element_range_containing_position(*position, false)
-                    {
-                        (self.click_handler)(gutter_range, ctx);
-                    }
+                if was_clicking
+                    && let Some(gutter_range) =
+                        self.gutter_element_range_containing_position(*position, false)
+                {
+                    (self.click_handler)(gutter_range, ctx);
                 }
             }
             _ => (),

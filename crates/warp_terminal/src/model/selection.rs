@@ -506,11 +506,9 @@ impl Selection {
         let mut range_end =
             grid_handler.semantic_search_right(end, |c| is_word_boundary_char(selection, c));
 
-        if selection.smart_select_enabled() && self.smart_select_override.is_some() {
-            let smart_select_override = self
-                .smart_select_override
-                .as_ref()
-                .expect("already checked this is Some");
+        if selection.smart_select_enabled()
+            && let Some(smart_select_override) = self.smart_select_override.as_ref()
+        {
             if smart_select_override.contains(&start) || smart_select_override.contains(&end) {
                 range_start = min(range_start, *smart_select_override.start());
                 range_end = max(range_end, *smart_select_override.end());

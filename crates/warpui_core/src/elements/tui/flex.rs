@@ -443,9 +443,11 @@ impl TuiElement for TuiFlex {
         event_ctx: &mut TuiEventContext<'_>,
         app: &AppContext,
     ) -> bool {
-        self.children.iter_mut().fold(false, |handled, child| {
-            child.element.dispatch_event(event, event_ctx, app) || handled
-        })
+        let mut handled = false;
+        for child in &mut self.children {
+            handled |= child.element.dispatch_event(event, event_ctx, app);
+        }
+        handled
     }
 }
 

@@ -128,7 +128,7 @@ impl Outline {
         // Extract paths from TargetFile for addition, filtering out gitignored files
         for target_file in added
             .into_iter()
-            .chain(modified.into_iter())
+            .chain(modified)
             .chain(moved.keys().cloned())
             .filter(|target_file| !target_file.is_ignored)
         {

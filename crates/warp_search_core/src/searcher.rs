@@ -592,7 +592,7 @@ impl SearcherWriterWrapper {
             .iter()
             .filter(|(name, _)| self.id_field_names.contains(*name))
             .collect();
-        id_pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
+        id_pairs.sort_by_key(|(a, _)| *a);
 
         let mut hasher = Sha256::new();
         // Add each field-value pair to the hasher in sorted order

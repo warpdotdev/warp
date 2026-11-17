@@ -70,7 +70,7 @@ impl SyncDataSource for ProfileSelectorDataSource {
                 Some((profile_id, profile_name))
             })
             .collect();
-        profiles.sort_by(|(_, a), (_, b)| a.to_lowercase().cmp(&b.to_lowercase()));
+        profiles.sort_by_key(|(_, a)| a.to_lowercase());
 
         for (profile_id, profile_name) in profiles {
             let is_active = profile_id == active_profile_id;

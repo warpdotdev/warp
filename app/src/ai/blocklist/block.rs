@@ -2711,16 +2711,14 @@ impl AIBlock {
                             base_branch,
                         },
                     ..
-                } => {
-                    if self.model.is_restored() && FeatureFlag::PRCommentsV2.is_enabled() {
-                        self.handle_insert_code_review_comments(
-                            id.clone(),
-                            repo_path,
-                            comments,
-                            base_branch.as_deref(),
-                            ctx,
-                        );
-                    }
+                } if self.model.is_restored() && FeatureFlag::PRCommentsV2.is_enabled() => {
+                    self.handle_insert_code_review_comments(
+                        id.clone(),
+                        repo_path,
+                        comments,
+                        base_branch.as_deref(),
+                        ctx,
+                    );
                 }
                 _ => (),
             }

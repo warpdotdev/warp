@@ -906,7 +906,7 @@ pub(crate) async fn upload_snapshot_for_handoff(
         );
     }
     let mut target_map: HashMap<String, UploadTarget> = HashMap::new();
-    for (file, target) in file_infos.iter().zip(response.uploads.into_iter()) {
+    for (file, target) in file_infos.iter().zip(response.uploads) {
         target_map.insert(file.filename.clone(), target);
     }
 
@@ -1217,7 +1217,7 @@ async fn upload_gathered_snapshot(
                 chunk.len(),
             );
         }
-        for (file, target) in chunk.iter().zip(targets.into_iter()) {
+        for (file, target) in chunk.iter().zip(targets) {
             target_map.insert(file.filename.clone(), target);
         }
     }
