@@ -130,9 +130,22 @@ impl HookRegistry {
         self.snapshot.bindings_for(boundary, host)
     }
 
-    /// Replaces the active set with the given bindings and bumps the revision.
+    /// Replaces the active set with the given bindings, bumps the revision, and finalizes.
     #[cfg(any(test, feature = "test-util"))]
     pub fn install_snapshot_for_test(
+        &mut self,
+        bindings: Vec<ActiveBinding>,
+        diagnostics: Vec<HookDiagnostic>,
+    ) -> u64 {
+        let revision = self.stage_snapshot_for_test(bindings, diagnostics);
+        self.finalized = true;
+        revision
+    }
+
+    /// Replaces the active set with the given bindings and bumps the revision without
+    /// finalizing, as the loader does before it has finished.
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn stage_snapshot_for_test(
         &mut self,
         bindings: Vec<ActiveBinding>,
         diagnostics: Vec<HookDiagnostic>,
@@ -143,7 +156,6 @@ impl HookRegistry {
             bindings,
             diagnostics,
         });
-        self.finalized = true;
         revision
     }
 }

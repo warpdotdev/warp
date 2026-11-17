@@ -14,16 +14,18 @@ pub(crate) mod test_utils;
 pub(crate) mod tool_result;
 pub(crate) mod turn;
 
+use std::collections::HashMap;
 #[cfg(feature = "local_tty")]
 use std::ffi::OsString;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::time::Duration;
 
 #[cfg(feature = "local_tty")]
 use ai::hooks::runner::command::CommandHookRunner;
 use ai::hooks::{
-    HookDispatcher, HookEnvelope, HookMessenger, HookRegistry, HookRunner, RegistrySnapshot,
-    RunMetadata,
+    HookDispatcher, HookEnvelope, HookMessenger, HookRegistry, HookRunner, HookTurnId,
+    RegistrySnapshot, RunMetadata,
 };
 #[cfg(feature = "local_tty")]
 use parking_lot::Mutex;
@@ -31,10 +33,15 @@ use warp_core::execution_mode::AppExecutionMode;
 use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 
 use self::pre_tool::PreToolVerdictCache;
+use self::prompt::PendingPrompts;
+use self::session::SessionStarts;
 use self::stream::StreamObserverState;
+use self::tool_result::ShellCompletions;
+use self::turn::TurnStops;
 use crate::ai::agent::AIAgentActionId;
 use crate::ai::agent::conversation::{AIConversationId, ConversationDriver};
 use crate::ai::blocklist::BlocklistAIHistoryModel;
+use crate::ai::blocklist::history_model::BlocklistAIHistoryEvent;
 use crate::features::FeatureFlag;
 #[cfg(feature = "local_tty")]
 use crate::process_environment::InitialProcessEnvironment;
@@ -64,6 +71,12 @@ pub struct HookRuntime {
     run_metadata: Option<RunMetadata>,
     pre_tool_verdicts: PreToolVerdictCache,
     stream_observer: StreamObserverState,
+    /// The turn each conversation is in, allocated when a prompt starts a turn.
+    turn_ids: HashMap<AIConversationId, HookTurnId>,
+    session_starts: SessionStarts,
+    turn_stops: TurnStops,
+    pending_prompts: PendingPrompts,
+    shell_completions: ShellCompletions,
     #[cfg(test)]
     observed_terminal_results: Vec<tool_result::ObservedTerminalResult>,
 }
@@ -74,6 +87,7 @@ impl HookRuntime {
         messenger: Arc<dyn HookMessenger>,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
+        Self::subscribe_to_conversation_cleanup(ctx);
         Self {
             registry: HookRegistry::handle(ctx),
             dispatcher: Arc::new(HookDispatcher::new(runner, messenger.clone())),
@@ -81,9 +95,97 @@ impl HookRuntime {
             run_metadata: None,
             pre_tool_verdicts: PreToolVerdictCache::default(),
             stream_observer: StreamObserverState::default(),
+            turn_ids: HashMap::new(),
+            session_starts: SessionStarts::default(),
+            turn_stops: TurnStops::default(),
+            pending_prompts: PendingPrompts::default(),
+            shell_completions: ShellCompletions::default(),
             #[cfg(test)]
             observed_terminal_results: Vec::new(),
         }
+    }
+
+    fn subscribe_to_conversation_cleanup(ctx: &mut ModelContext<Self>) {
+        if !ctx.has_singleton_model::<BlocklistAIHistoryModel>() {
+            return;
+        }
+        ctx.subscribe_to_model(
+            &BlocklistAIHistoryModel::handle(ctx),
+            |me, _, event, _| match event {
+                BlocklistAIHistoryEvent::RemoveConversation {
+                    conversation_id, ..
+                }
+                | BlocklistAIHistoryEvent::DeletedConversation {
+                    conversation_id, ..
+                } => me.forget_conversation(*conversation_id),
+                BlocklistAIHistoryEvent::ClearedConversationsForTerminalSurface {
+                    cleared_conversation_ids,
+                    ..
+                } => {
+                    for conversation_id in cleared_conversation_ids {
+                        me.forget_cleared_conversation(*conversation_id);
+                    }
+                }
+                BlocklistAIHistoryEvent::AppendedExchange { .. }
+                | BlocklistAIHistoryEvent::StartedNewConversation { .. }
+                | BlocklistAIHistoryEvent::CreatedSubtask { .. }
+                | BlocklistAIHistoryEvent::UpgradedTask { .. }
+                | BlocklistAIHistoryEvent::ReassignedExchange { .. }
+                | BlocklistAIHistoryEvent::UpdatedStreamingExchange { .. }
+                | BlocklistAIHistoryEvent::UpdatedConversationStatus { .. }
+                | BlocklistAIHistoryEvent::SetActiveConversation { .. }
+                | BlocklistAIHistoryEvent::ClearedActiveConversation { .. }
+                | BlocklistAIHistoryEvent::UpdatedTodoList { .. }
+                | BlocklistAIHistoryEvent::UpdatedAutoexecuteOverride { .. }
+                | BlocklistAIHistoryEvent::SplitConversation { .. }
+                | BlocklistAIHistoryEvent::RestoredConversations { .. }
+                | BlocklistAIHistoryEvent::UpdatedConversationMetadata { .. }
+                | BlocklistAIHistoryEvent::UpdatedConversationTitle { .. }
+                | BlocklistAIHistoryEvent::UpdatedConversationArtifacts { .. }
+                | BlocklistAIHistoryEvent::ConversationServerTokenAssigned { .. }
+                | BlocklistAIHistoryEvent::ConversationTransferredBetweenTerminalSurfaces {
+                    ..
+                }
+                | BlocklistAIHistoryEvent::NewConversationRequestComplete { .. }
+                | BlocklistAIHistoryEvent::OrchestrationConfigUpdated { .. }
+                | BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated { .. }
+                | BlocklistAIHistoryEvent::LocalSharedSessionEstablished { .. } => {}
+            },
+        );
+    }
+
+    /// Drops everything remembered about a conversation that no longer exists. A dispatch still
+    /// running for it is told to stop.
+    fn forget_conversation(&mut self, conversation_id: AIConversationId) {
+        self.forget_cleared_conversation(conversation_id);
+        self.turn_stops.forget(conversation_id);
+    }
+
+    /// Drops what is remembered about a conversation its surface cleared. The conversation still
+    /// exists, so a turn whose success is held keeps its hold: the surface's cancellation settles
+    /// it when the conversation was the active one, and otherwise the hooks' answer does.
+    fn forget_cleared_conversation(&mut self, conversation_id: AIConversationId) {
+        self.turn_ids.remove(&conversation_id);
+        self.session_starts.forget(conversation_id);
+        self.pending_prompts.forget(conversation_id);
+        self.shell_completions.forget(conversation_id);
+    }
+
+    /// The turn `conversation_id` is in, once a prompt has started one.
+    pub fn turn_id_for(&self, conversation_id: AIConversationId) -> Option<HookTurnId> {
+        self.turn_ids.get(&conversation_id).copied()
+    }
+
+    /// Starts a new turn for `conversation_id` and returns its id.
+    fn start_turn(&mut self, conversation_id: AIConversationId) -> HookTurnId {
+        let turn_id = HookTurnId::new();
+        self.turn_ids.insert(conversation_id, turn_id);
+        turn_id
+    }
+
+    /// The variables `conversation_id`'s `session.start` hooks asked to set, once they have run.
+    pub fn session_env_for(&self, conversation_id: AIConversationId) -> Vec<(String, String)> {
+        self.session_starts.env_for(conversation_id)
     }
 
     /// Whether this process has no interactive surface where a user can respond.
@@ -200,6 +302,20 @@ impl Entity for HookRuntime {
 }
 
 impl SingletonEntity for HookRuntime {}
+
+/// The longest timeout among the bindings in `snapshot` that would run for `envelope`, which is
+/// how long a boundary that waits for its hooks waits. `None` when no binding would run.
+fn longest_matching_timeout(
+    snapshot: &RegistrySnapshot,
+    envelope: &HookEnvelope,
+) -> Option<Duration> {
+    snapshot
+        .bindings_for(envelope.boundary(), envelope.execution_host)
+        .into_iter()
+        .filter(|active| active.adapter.matches(&active.binding, envelope))
+        .map(|active| active.binding.timeout)
+        .max()
+}
 
 // Driver checks. Unknown conversations fail every check.
 
