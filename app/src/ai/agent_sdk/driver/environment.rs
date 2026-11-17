@@ -254,6 +254,9 @@ pub(crate) struct WorkspaceConfiguration {
     /// The server-provided Factory definition folders within `factory_skill_dirs`, before
     /// configured-skill folders are merged in. Only these are scanned for skill reference files.
     pub definition_skill_dirs: Option<Vec<PathBuf>>,
+    /// The commit a Factory branch run checks its run-scoped definition clone out at. `None` keeps
+    /// the clone on the definition repository's default branch.
+    pub factory_definition_sha: Option<String>,
     /// Retains an explicitly selected environment even when it has no repositories or commands.
     pub has_environment: bool,
     pub(super) preparation_policy: Option<PreparationPolicy>,
@@ -321,6 +324,7 @@ impl WorkspaceConfiguration {
         self.source_repos == other.source_repos
             && self.setup_commands == other.setup_commands
             && self.clone_requests == other.clone_requests
+            && self.factory_definition_sha == other.factory_definition_sha
     }
 
     /// Reports whether the workspace requires setup before harness startup.
@@ -351,6 +355,7 @@ impl WorkspaceConfiguration {
             setup_commands,
             factory_skill_dirs: None,
             definition_skill_dirs: None,
+            factory_definition_sha: None,
             has_environment: environment.is_some(),
             clone_requests,
             preparation_policy: None,
@@ -374,6 +379,7 @@ impl WorkspaceConfiguration {
             setup_commands,
             factory_skill_dirs: None,
             definition_skill_dirs: None,
+            factory_definition_sha: None,
             has_environment: false,
             clone_requests,
             preparation_policy: None,
@@ -462,6 +468,7 @@ pub(crate) fn prepare_environment(
             setup_commands,
             factory_skill_dirs: _,
             definition_skill_dirs: _,
+            factory_definition_sha: _,
             clone_requests,
             has_environment: _,
             deferred_repos: _,
@@ -550,9 +557,11 @@ pub(crate) const FACTORY_REPO_DIR_ENV_VAR: &str = "WARP_FACTORY_REPO_DIR";
 
 /// Prepends the setup command that clones a Factory's definition repository
 /// when the dispatch attached the clone variables to this run, so the checkout
-/// exists before user-declared setup commands run.
+/// exists before user-declared setup commands run. `checkout_sha` additionally
+/// moves the clone to that commit.
 pub(super) fn prepend_factory_definition_clone(
     setup_commands: &mut Vec<String>,
+    checkout_sha: Option<&str>,
     shell_type: Option<ShellType>,
 ) {
     let clone_url = std::env::var(FACTORY_REPO_CLONE_URL_ENV_VAR).unwrap_or_default();
@@ -560,15 +569,18 @@ pub(super) fn prepend_factory_definition_clone(
     prepend_factory_definition_clone_for_values(
         &clone_url,
         &clone_dir,
+        checkout_sha,
         shell_type.unwrap_or(ShellType::Bash),
         setup_commands,
     );
 }
 
-/// Adds the Factory clone command from supplied variables without reading process state.
+/// Adds the Factory clone command, and a checkout of `checkout_sha` directly after it, from
+/// supplied variables without reading process state.
 pub(crate) fn prepend_factory_definition_clone_for_values(
     clone_url: &str,
     clone_dir: &str,
+    checkout_sha: Option<&str>,
     shell_type: ShellType,
     setup_commands: &mut Vec<String>,
 ) {
@@ -577,32 +589,52 @@ pub(crate) fn prepend_factory_definition_clone_for_values(
     }
     // Environments provisioned before run-scoped cloning still persist their
     // own copy of the clone command; leave that copy in charge rather than
-    // attempting the checkout twice.
-    if setup_commands
+    // cloning twice.
+    let checkout_position = match setup_commands
         .iter()
-        .any(|command| command.contains(FACTORY_REPO_CLONE_URL_ENV_VAR))
+        .position(|command| command.contains(FACTORY_REPO_CLONE_URL_ENV_VAR))
     {
-        return;
+        Some(persisted_clone) => persisted_clone + 1,
+        None => {
+            // The command expands the variables in the session shell instead of
+            // inlining their values so the credential-bearing URL never appears in
+            // command text. There is deliberately no existence guard: a bare clone
+            // into an already-present target directory fails, which is treated as a
+            // fatal setup-command error upstream.
+            setup_commands.insert(0, factory_definition_clone_command(shell_type));
+            1
+        }
+    };
+    if let Some(sha) = checkout_sha {
+        setup_commands.insert(
+            checkout_position,
+            factory_definition_checkout_command(shell_type, sha),
+        );
     }
-    // The command expands the variables in the session shell instead of
-    // inlining their values so the credential-bearing URL never appears in
-    // command text. There is deliberately no existence guard: a bare clone
-    // into an already-present target directory fails, which is treated as a
-    // fatal setup-command error upstream.
-    setup_commands.insert(0, factory_definition_clone_command(shell_type));
+}
+
+fn shell_env_var_reference(shell_type: ShellType, name: &str) -> String {
+    // PowerShell reads environment variables through the `env:` drive; a bare `$NAME` there is
+    // an unset PowerShell variable that expands to an empty string.
+    match shell_type {
+        ShellType::PowerShell => format!("$env:{name}"),
+        ShellType::Zsh | ShellType::Bash | ShellType::Fish => format!("${name}"),
+    }
 }
 
 fn factory_definition_clone_command(shell_type: ShellType) -> String {
-    // PowerShell reads environment variables through the `env:` drive; a bare `$NAME` there is
-    // an unset PowerShell variable that expands to an empty string.
-    let env_var_reference = |name: &str| match shell_type {
-        ShellType::PowerShell => format!("$env:{name}"),
-        ShellType::Zsh | ShellType::Bash | ShellType::Fish => format!("${name}"),
-    };
     format!(
         "git clone \"{}\" \"{}\"",
-        env_var_reference(FACTORY_REPO_CLONE_URL_ENV_VAR),
-        env_var_reference(FACTORY_REPO_DIR_ENV_VAR)
+        shell_env_var_reference(shell_type, FACTORY_REPO_CLONE_URL_ENV_VAR),
+        shell_env_var_reference(shell_type, FACTORY_REPO_DIR_ENV_VAR)
+    )
+}
+
+/// A missing commit fails setup rather than leaving the run on the default branch's definition.
+fn factory_definition_checkout_command(shell_type: ShellType, sha: &str) -> String {
+    format!(
+        "git -C \"{}\" -c advice.detachedHead=false checkout --quiet --detach {sha}",
+        shell_env_var_reference(shell_type, FACTORY_REPO_DIR_ENV_VAR)
     )
 }
 

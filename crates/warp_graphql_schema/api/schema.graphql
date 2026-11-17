@@ -5333,6 +5333,14 @@ type ExecutionSkillSpec {
   spec: String!
 }
 
+type FactoryBranchExecutionConfig {
+  factoryId: ID!
+  branchId: ID!
+  branch: String!
+  sourceSha: String!
+  repositoryUrl: String!
+}
+
 enum ExecutionRepositoryRefType {
   COMMIT_SHA
   BRANCH
@@ -5411,6 +5419,7 @@ type ExecutionConfiguration {
   mcpServersJson: String!
   skills: [ExecutionSkillSpec!]!
   factorySkillDirs: [String!]!
+  factoryBranch: FactoryBranchExecutionConfig
   computerUseEnabled: Boolean!
   computerUseModelId: String
   inferenceProviders: InferenceProviderClientConfigs

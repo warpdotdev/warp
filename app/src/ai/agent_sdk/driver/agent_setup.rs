@@ -101,6 +101,7 @@ impl AgentDriver {
                 prepend_factory_definition_clone_for_values(
                     env_value(FACTORY_REPO_CLONE_URL_ENV_VAR),
                     env_value(FACTORY_REPO_DIR_ENV_VAR),
+                    workspace.factory_definition_sha.as_deref(),
                     shell_type,
                     &mut workspace.setup_commands,
                 );

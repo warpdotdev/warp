@@ -5,7 +5,9 @@ use chrono::TimeDelta;
 #[cfg(not(feature = "skip_login"))]
 use mockito::Matcher;
 use session_sharing_protocol::common::ParticipantId;
-use warp_graphql::queries::execution_config::{CodeForge, ExecutionRepository};
+use warp_graphql::queries::execution_config::{
+    CodeForge, ExecutionRepository, FactoryBranchExecutionConfig,
+};
 use warp_multi_agent_api as api;
 use warpui::App;
 
@@ -422,6 +424,9 @@ fn prewarmed_config_conversion_and_state_binding_preserve_run_settings() {
         configuration.idle_on_complete_seconds = Some(17);
         configuration.idle_on_fail_seconds = Some(23);
         configuration.factory_skill_dirs = vec![".agents/skills".into()];
+        configuration.factory_branch = Some(FactoryBranchExecutionConfig {
+            source_sha: "0123456789abcdef0123456789abcdef01234567".into(),
+        });
         configuration.snapshot_disabled = true;
         let runtime_env = HashMap::from([
             ("WARP_API_KEY".into(), "assigned-key".into()),
@@ -450,6 +455,10 @@ fn prewarmed_config_conversion_and_state_binding_preserve_run_settings() {
         });
         assert_eq!(task.profile.as_deref(), Some("run-profile"));
         assert!(matches!(task.prompt, AgentRunPrompt::ServerSide { .. }));
+        assert_eq!(
+            options.workspace.factory_definition_sha.as_deref(),
+            Some("0123456789abcdef0123456789abcdef01234567")
+        );
         options.team_scope = Some(HeadlessTeamScope::Personal);
         options.environment_variables = runtime_env;
         let deadline = Utc::now() + TimeDelta::hours(1);
@@ -608,6 +617,9 @@ fn prewarmed_workspace_reuse_checks_setup_and_checkouts() {
     assert!(first.same_preparation(&second));
     second.setup_commands.push("different-setup".into());
     assert!(!first.same_preparation(&second));
+    let mut branch_run = first.clone();
+    branch_run.factory_definition_sha = Some("0123456789abcdef0123456789abcdef01234567".into());
+    assert!(!first.same_preparation(&branch_run));
 }
 
 fn completed_conversation(working_dir: &Path) -> AIConversation {

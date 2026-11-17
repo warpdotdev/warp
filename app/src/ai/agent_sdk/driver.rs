@@ -2497,6 +2497,7 @@ impl AgentDriver {
                     // independent of which environment the run executes in.
                     environment::prepend_factory_definition_clone(
                         &mut workspace.setup_commands,
+                        workspace.factory_definition_sha.as_deref(),
                         session_shell_type,
                     );
                     let cloud_env_mcp_scan = if workspace.needs_preparation() {
