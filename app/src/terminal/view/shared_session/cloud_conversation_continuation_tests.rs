@@ -755,10 +755,8 @@ fn retained_setup_failure_with_debug_agent_available_enables_debug_routing() {
     });
 }
 
-/// PRODUCT.md §7: once the first bootstrap persists a conversation ID, every later prompt must
-/// still go through the authenticated run follow-up service. An attached viewer must therefore
-/// keep resolving to the retained-debug route rather than falling back to the direct
-/// `LiveRemoteVm` viewer path the moment a conversation exists.
+/// In-session debug prompts stay in the retained sandbox rather than taking the ordinary
+/// server follow-up path, which starts a replacement execution.
 #[test]
 fn retained_setup_failure_with_a_conversation_still_routes_to_the_debug_followup() {
     App::test((), |mut app| async move {
@@ -788,8 +786,11 @@ fn retained_setup_failure_with_a_conversation_still_routes_to_the_debug_followup
             let attached_viewer = ambient_pane_model(task_id, SharedSessionStatus::executor());
             assert_eq!(
                 resolve_ai_query_routing(terminal_view_id, None, &attached_viewer, ctx),
-                AIQueryRouting::RetainedSetupFailureDebug { task_id },
-                "a later prompt on a retained failure that already has a conversation must not fall back to the direct viewer path"
+                AIQueryRouting::LiveRemoteVm {
+                    is_executor: true,
+                    ambient_agent_task_id: Some(task_id),
+                },
+                "an attached debug prompt must reach the retained sandbox"
             );
         });
     });

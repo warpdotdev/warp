@@ -1,8 +1,12 @@
 use std::collections::HashMap;
+use std::future::Future;
+use std::time::Duration;
 
+use futures::future::{Either, select};
 use session_sharing_protocol::common::{AgentAttachment, ParticipantId, ServerConversationToken};
 use warp_core::features::FeatureFlag;
 use warp_errors::report_error;
+use warpui::r#async::Timer;
 use warpui::{ModelContext, SingletonEntity};
 
 use super::BlocklistAIController;
@@ -11,7 +15,8 @@ use super::shared_session::SharedSessionPromptTarget;
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::{AIAgentAttachment, BaseUserQuery};
 use crate::ai::attachment_utils::{
-    build_file_attachment_map, download_task_file_attachments, resolve_agent_attachments,
+    DownloadedAttachment, build_file_attachment_map, download_task_file_attachments,
+    resolve_agent_attachments,
 };
 use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
 use crate::ai::blocklist::orchestration_events::OrchestrationEventService;
@@ -19,6 +24,21 @@ use crate::ai::blocklist::{
     BlocklistAIHistoryModel, QueuedPromptDeliveryMode, QueuedQuery, QueuedQueryId, QueuedQueryModel,
 };
 use crate::server::server_api::ServerApiProvider;
+
+pub(super) const ATTACHMENT_PREPARATION_TIMEOUT: Duration = Duration::from_secs(30);
+
+pub(super) async fn await_attachment_preparation(
+    downloads: impl Future<Output = Vec<DownloadedAttachment>>,
+    deadline: impl Future,
+) -> Vec<DownloadedAttachment> {
+    match select(Box::pin(downloads), Box::pin(deadline)).await {
+        Either::Left((downloaded, _)) => downloaded,
+        Either::Right(_) => {
+            log::warn!("Queued follow-up attachment preparation timed out");
+            Vec::new()
+        }
+    }
+}
 
 impl BlocklistAIController {
     /// Binds this controller to a native conversation before session sharing can begin
@@ -199,6 +219,9 @@ impl BlocklistAIController {
         query_id: Option<QueuedQueryId>,
         ctx: &mut ModelContext<Self>,
     ) {
+        if self.rejects_shared_session_prompts(ctx) {
+            return;
+        }
         if query_id.is_none() && !self.can_dispatch_queued_warp_agent_prompt(conversation_id, ctx) {
             return;
         }
@@ -318,12 +341,15 @@ impl BlocklistAIController {
         let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
         let http_client = ServerApiProvider::as_ref(ctx).get_http_client();
         ctx.spawn(
-            download_task_file_attachments(
-                ai_client,
-                http_client,
-                task_id,
-                directory,
-                file_downloads,
+            await_attachment_preparation(
+                download_task_file_attachments(
+                    ai_client,
+                    http_client,
+                    task_id,
+                    directory,
+                    file_downloads,
+                ),
+                Timer::after(ATTACHMENT_PREPARATION_TIMEOUT),
             ),
             move |_, downloaded, ctx| {
                 QueuedQueryModel::handle(ctx).update(ctx, |queue, ctx| {

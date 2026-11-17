@@ -8,8 +8,8 @@ use futures::poll;
 use serde_json::json;
 
 use super::super::{
-    CLIAgentSessionStatus, HarnessIdleAction, IdleTimeoutSender, SDKConversationOutputStatus,
-    SetupFailureRetention, harness_idle_action_for_conversation_status,
+    CLIAgentSessionStatus, DebugWindowController, HarnessIdleAction, IdleTimeoutSender,
+    SDKConversationOutputStatus, harness_idle_action_for_conversation_status,
     idle_window_for_cli_session_status, idle_window_for_terminal_status,
 };
 use super::*;
@@ -278,7 +278,8 @@ fn setup_failure_retention_does_not_wait_for_previews() {
         || panic!("setup inspection expiry must bypass previews"),
         |_| unreachable!(),
     ));
-    let _retention = SetupFailureRetention::new(sender, Duration::from_secs(900));
+    let retention = DebugWindowController::new(sender);
+    retention.refresh_idle((), Duration::from_secs(900));
     block_on(rx).unwrap();
 }
 

@@ -54,7 +54,7 @@ use crate::persistence::ModelEvent;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::telemetry::{TelemetryAgentViewEntryOrigin, TelemetryEvent};
 use crate::terminal::cli_agent_sessions::{
-    CLIAgentInputState, CLIAgentSessionsModel, CLIAgentSessionsModelEvent,
+    CLIAgentInputState, CLIAgentSessionStatus, CLIAgentSessionsModel, CLIAgentSessionsModelEvent,
 };
 use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
 use crate::terminal::session_settings::{SessionSettings, SessionSettingsChangedEvent};
@@ -137,6 +137,17 @@ fn accept_agent_prompt(
     ctx: &mut AppContext,
 ) {
     let terminal_view_id = terminal_view.id();
+    if CLIAgentSessionsModel::as_ref(ctx)
+        .session(terminal_view_id)
+        .is_some_and(|session| matches!(session.status, CLIAgentSessionStatus::Cancelled))
+        || terminal_view
+            .as_ref(ctx)
+            .ai_controller()
+            .as_ref(ctx)
+            .rejects_shared_session_prompts(ctx)
+    {
+        return;
+    }
     let has_active_cli_agent = CLIAgentSessionsModel::as_ref(ctx)
         .session(terminal_view_id)
         .is_some();
@@ -1569,11 +1580,11 @@ impl TerminalManager<TerminalView> {
                         return;
                     }
 
-                    // REMOTE-2661: a no-token prompt is how a debug conversation bootstraps
-                    // into a retained setup-failure session. The sharer only knows the
+                    // A restored viewer may still send the original conversation token.
+                    // Every retained setup-debug prompt needs authorization. The sharer knows the
                     // participant's firebase_uid from presence, not a credential, so this must
                     // be authorized by the server before being honored.
-                    if request.server_conversation_token.is_none() {
+                    {
                         let task_id = model.lock().ambient_agent_task_id().filter(|task_id| {
                             AgentConversationsModel::as_ref(ctx)
                                 .get_task_data(task_id)

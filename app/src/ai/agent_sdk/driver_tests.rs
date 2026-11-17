@@ -24,6 +24,7 @@ use warp_cli::{
     SESSION_SHARING_SERVER_URL_OVERRIDE_ENV, WS_SERVER_URL_OVERRIDE_ENV,
 };
 use warp_core::channel::ChannelState;
+use warp_graphql::ai::AgentTaskState;
 use warp_graphql::platform_error::PlatformErrorMessageFormat;
 use warp_managed_secrets::ManagedSecretValue;
 use warp_multi_agent_api::response_event;
@@ -32,12 +33,12 @@ use warpui::r#async::Timer;
 use warpui::{App, SingletonEntity as _};
 
 use super::{
-    AgentDriver, AgentDriverError, AgentRunPrompt, CLIAgentSessionStatus, HarnessIdleAction,
-    IdleTimeoutSender, LEGACY_OZ_PARENT_LISTENER_MANAGED_EXTERNALLY_ENV,
+    AgentDriver, AgentDriverError, AgentRunPrompt, CLIAgentSessionStatus, DebugWindowController,
+    HarnessIdleAction, IdleTimeoutSender, LEGACY_OZ_PARENT_LISTENER_MANAGED_EXTERNALLY_ENV,
     LEGACY_OZ_PARENT_STATE_ROOT_ENV, OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV,
-    OZ_MESSAGE_LISTENER_STATE_ROOT_ENV, PlatformErrorCode, PluginInstallError,
-    SDKConversationOutputStatus, SetupFailureRetention, WARP_MESSAGE_LISTENER_STATE_ROOT_ENV,
-    build_secret_env_vars, harness_idle_action_for_conversation_status,
+    OZ_MESSAGE_LISTENER_STATE_ROOT_ENV, PendingNativeStart, PlatformErrorCode, PluginInstallError,
+    SDKConversationOutputStatus, WARP_MESSAGE_LISTENER_STATE_ROOT_ENV, build_secret_env_vars,
+    debug_turn_task_state, harness_idle_action_for_conversation_status,
     idle_window_for_cli_session_status, idle_window_for_terminal_status,
     setup_failure_status_update, terminal_status_log_outcome,
 };
@@ -247,53 +248,75 @@ fn idle_timeout_sender_complete_with_optional_idle_some_then_cancel_invalidates_
     assert_eq!(rx.try_recv().unwrap(), None);
 }
 
-// ── Setup inspection retention tests ──────────────────────────────────────────────
-
 #[test]
-fn setup_failure_retention_stays_open_and_refreshes_before_agent_start() {
-    let (tx, mut rx) = oneshot::channel();
-    let (wait, _release) = manual_idle_wait();
-    let sender = IdleTimeoutSender::new(tx).with_wait(wait);
-    let retention = SetupFailureRetention::new(sender, Duration::from_secs(900));
-
-    assert_eq!(rx.try_recv().unwrap(), None);
-    assert_eq!(retention.refresh(), Some(Duration::from_secs(900)));
-    assert_eq!(rx.try_recv().unwrap(), None);
+fn pending_native_start_is_bounded_without_idle_and_queue_churn_does_not_reset_it() {
+    for status in [
+        SDKConversationOutputStatus::Success,
+        SDKConversationOutputStatus::Blocked {
+            blocked_action: "approval".into(),
+        },
+    ] {
+        let (tx, mut rx) = oneshot::channel();
+        let (wait, release) = manual_idle_wait();
+        let sender = IdleTimeoutSender::new(tx).with_wait(wait);
+        let pending = PendingNativeStart::default();
+        pending.settle(&sender, status.clone(), true, None);
+        let generation = sender.generation.load(Ordering::SeqCst);
+        assert!(pending.is_armed());
+        for _ in 0..3 {
+            pending.settle(&sender, status.clone(), true, None);
+        }
+        assert_eq!(sender.generation.load(Ordering::SeqCst), generation);
+        assert!(rx.try_recv().unwrap().is_none());
+        release.send(()).unwrap();
+        block_on(async {
+            assert_eventually!(
+                rx.try_recv().unwrap().is_some(),
+                "accepted work never started and lost its bounded exit"
+            );
+        });
+    }
 }
 
 #[test]
-fn setup_failure_retention_expires_without_agent_start() {
+fn pending_native_start_removal_restores_terminal_idle_policy() {
+    for status in [
+        SDKConversationOutputStatus::Success,
+        SDKConversationOutputStatus::Blocked {
+            blocked_action: "approval".into(),
+        },
+    ] {
+        let (tx, mut rx) = oneshot::channel();
+        let (wait, _release) = manual_idle_wait();
+        let sender = IdleTimeoutSender::new(tx).with_wait(wait);
+        let pending = PendingNativeStart::default();
+        pending.settle(&sender, status.clone(), true, None);
+        pending.settle(&sender, status, false, None);
+        assert!(!pending.is_armed());
+        assert!(rx.try_recv().unwrap().is_some());
+    }
+}
+
+#[test]
+fn pending_native_start_only_actual_start_cancels_watchdog() {
     let (tx, mut rx) = oneshot::channel();
     let (wait, release) = manual_idle_wait();
     let sender = IdleTimeoutSender::new(tx).with_wait(wait);
-    let _retention = SetupFailureRetention::new(sender, Duration::from_secs(900));
-
-    assert_eq!(rx.try_recv().unwrap(), None);
+    let pending = PendingNativeStart::default();
+    pending.settle(&sender, SDKConversationOutputStatus::Success, true, None);
+    pending.started(&sender);
+    assert!(!pending.is_armed());
     release.send(()).unwrap();
-    block_on(async {
-        assert_eventually!(
-            rx.try_recv().unwrap() == Some(()),
-            "setup inspection did not end when its deadline elapsed"
-        );
-    });
+    assert!(rx.try_recv().unwrap().is_none());
+    pending.settle(&sender, error_status(), false, None);
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(Some(SDKConversationOutputStatus::Error { .. }))
+    ));
 }
 
 #[test]
-fn setup_failure_retention_ends_at_agent_start_and_cannot_refresh_again() {
-    let (tx, mut rx) = oneshot::channel();
-    let (wait, _release) = manual_idle_wait();
-    let sender = IdleTimeoutSender::new(tx).with_wait(wait);
-    let retention = SetupFailureRetention::new(sender, Duration::from_secs(900));
-    let viewer = retention.clone();
-
-    retention.agent_started();
-    assert_eq!(rx.try_recv().unwrap(), Some(()));
-    assert_eq!(viewer.refresh(), None);
-    retention.agent_started();
-}
-
-#[test]
-fn setup_failure_retention_subscription_ends_on_first_agent_turn() {
+fn retained_setup_debug_turns_pin_and_rearm_after_debug_errors() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
         let terminal = add_window_with_terminal(&mut app, None);
@@ -311,30 +334,196 @@ fn setup_failure_retention_subscription_ends_on_first_agent_turn() {
         });
         let (tx, mut rx) = oneshot::channel();
         let (wait, _release) = manual_idle_wait();
-        let retention = SetupFailureRetention::new(
-            IdleTimeoutSender::new(tx).with_wait(wait),
-            Duration::from_secs(900),
-        );
-        let viewer = retention.clone();
+        let controller = DebugWindowController::new(IdleTimeoutSender::new(tx).with_wait(wait));
+        let observer = controller.clone();
         driver.update(&mut app, |driver, ctx| {
-            driver.arm_setup_failure_debug_window(retention, ctx);
+            driver.arm_setup_failure_debug_window(controller, Duration::from_secs(900), ctx);
         });
-        assert_eq!(rx.try_recv().unwrap(), None);
-        BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
-            history.update_conversation_status(
-                terminal_id,
-                id,
-                ConversationStatus::InProgress,
-                ctx,
+        assert_eq!(
+            observer.refresh_from_last_armed(),
+            Some(Duration::from_secs(900))
+        );
+        for terminal_status in [
+            ConversationStatus::Error,
+            ConversationStatus::Success,
+            ConversationStatus::Blocked {
+                blocked_action: "approval".into(),
+            },
+        ] {
+            BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
+                history.update_conversation_status(
+                    terminal_id,
+                    id,
+                    ConversationStatus::InProgress,
+                    ctx,
+                );
+            });
+            assert!(observer.is_pinned());
+            assert_eq!(observer.refresh_from_last_armed(), None);
+            assert_eq!(rx.try_recv().unwrap(), None);
+            BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
+                history.update_conversation_status(terminal_id, id, terminal_status, ctx);
+            });
+            assert!(!observer.is_pinned());
+            assert_eq!(
+                observer.refresh_from_last_armed(),
+                Some(Duration::from_secs(900))
             );
-        });
-        assert_eq!(rx.try_recv().unwrap(), Some(()));
-        assert_eq!(viewer.refresh(), None);
-        BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
-            history.update_conversation_status(terminal_id, id, ConversationStatus::Error, ctx);
-        });
-        assert_eq!(viewer.refresh(), None);
+            assert_eq!(rx.try_recv().unwrap(), None);
+        }
+        observer.idle_timeout.end_run_now(());
     });
+}
+
+// ── DebugWindowController tests ───────────────────────────────────────────────────
+
+#[test]
+fn debug_window_controller_pin_blocks_refresh_and_finish_rearms() {
+    let (tx, mut rx) = oneshot::channel::<()>();
+    let controller = DebugWindowController::new(IdleTimeoutSender::new(tx));
+    let turn_id = AIConversationId::new();
+
+    // A short window so an unpinned controller would fire almost immediately.
+    controller.refresh_idle((), Duration::from_millis(30));
+    assert!(
+        controller.pin_for_turn(turn_id),
+        "first pin must be accepted"
+    );
+
+    std::thread::sleep(Duration::from_millis(80));
+    assert_eq!(
+        rx.try_recv().unwrap(),
+        None,
+        "a pinned debug turn must not let the idle window expire, however long it runs"
+    );
+
+    assert!(
+        controller.finish_turn(turn_id, (), Duration::from_millis(30)),
+        "finishing a tracked turn must report a real transition"
+    );
+    std::thread::sleep(Duration::from_millis(80));
+    assert_eq!(
+        rx.try_recv().unwrap(),
+        Some(()),
+        "finishing the last active turn must re-arm the full idle window"
+    );
+}
+
+#[test]
+fn debug_window_controller_duplicate_pin_is_idempotent() {
+    let (tx, _rx) = oneshot::channel::<()>();
+    let controller = DebugWindowController::new(IdleTimeoutSender::new(tx));
+    let turn_id = AIConversationId::new();
+
+    assert!(
+        controller.pin_for_turn(turn_id),
+        "first pin is a real transition"
+    );
+    assert!(
+        !controller.pin_for_turn(turn_id),
+        "a duplicate pin for the same turn id must be a no-op"
+    );
+}
+
+#[test]
+fn debug_window_controller_overlapping_turns_stay_pinned_until_the_last_turn_finishes() {
+    let (tx, _rx) = oneshot::channel::<()>();
+    let controller = DebugWindowController::new(IdleTimeoutSender::new(tx));
+    let first_turn = AIConversationId::new();
+    let second_turn = AIConversationId::new();
+
+    assert!(controller.pin_for_turn(first_turn));
+    assert!(controller.pin_for_turn(second_turn));
+    assert!(controller.finish_turn(first_turn, (), Duration::from_secs(60)));
+    assert!(controller.is_pinned());
+    assert!(controller.finish_turn(second_turn, (), Duration::from_secs(60)));
+    assert!(!controller.is_pinned());
+}
+
+#[test]
+fn debug_turn_task_state_maps_timeline_states() {
+    let blocked = ConversationStatus::Blocked {
+        blocked_action: "approval".to_string(),
+    };
+    let cases = [
+        (
+            ConversationStatus::InProgress,
+            Some(AgentTaskState::InProgress),
+        ),
+        (ConversationStatus::Success, Some(AgentTaskState::Succeeded)),
+        (ConversationStatus::Error, Some(AgentTaskState::Error)),
+        (
+            ConversationStatus::Cancelled,
+            Some(AgentTaskState::Cancelled),
+        ),
+        (blocked, Some(AgentTaskState::Blocked)),
+        (ConversationStatus::TransientError, None),
+        (ConversationStatus::WaitingForEvents, None),
+    ];
+
+    for (status, expected) in cases {
+        assert_eq!(debug_turn_task_state(&status), expected);
+    }
+}
+#[test]
+fn debug_window_controller_duplicate_finish_is_idempotent() {
+    let (tx, mut rx) = oneshot::channel::<()>();
+    let controller = DebugWindowController::new(IdleTimeoutSender::new(tx));
+    let turn_id = AIConversationId::new();
+
+    controller.pin_for_turn(turn_id);
+    assert!(controller.finish_turn(turn_id, (), Duration::from_millis(30)));
+    assert!(
+        !controller.finish_turn(turn_id, (), Duration::from_millis(30)),
+        "a duplicate terminal event for the same turn id must be a no-op"
+    );
+
+    std::thread::sleep(Duration::from_millis(80));
+    assert_eq!(
+        rx.try_recv().unwrap(),
+        Some(()),
+        "the single real finish must still re-arm exactly one full window"
+    );
+}
+
+#[test]
+fn debug_window_controller_finish_of_unknown_turn_is_a_no_op() {
+    let (tx, mut rx) = oneshot::channel::<()>();
+    let controller = DebugWindowController::new(IdleTimeoutSender::new(tx));
+
+    controller.refresh_idle((), Duration::from_millis(30));
+    assert!(
+        !controller.finish_turn(AIConversationId::new(), (), Duration::from_millis(30)),
+        "finishing a turn id that was never pinned must be a no-op"
+    );
+
+    // The unrelated finish_turn call must not have disturbed the already-armed window.
+    std::thread::sleep(Duration::from_millis(80));
+    assert_eq!(rx.try_recv().unwrap(), Some(()));
+}
+
+#[test]
+fn debug_window_controller_refresh_is_inert_while_pinned() {
+    // Both refresh entry points — the viewer-input keystroke path and the general re-arm path —
+    // must be no-ops while a debug turn is pinning the window, for the same reason: neither may
+    // move a deadline that finish_turn is about to race by re-arming the full interval anyway.
+    let (tx, _rx) = oneshot::channel::<()>();
+    let controller = DebugWindowController::new(IdleTimeoutSender::new(tx));
+
+    controller.refresh_idle((), Duration::from_secs(60));
+    controller.pin_for_turn(AIConversationId::new());
+    assert_eq!(
+        controller.refresh_from_last_armed(),
+        None,
+        "a viewer-input refresh must not move the deadline while a debug turn is pinning it"
+    );
+
+    let controller = DebugWindowController::new(IdleTimeoutSender::new(oneshot::channel::<()>().0));
+    controller.pin_for_turn(AIConversationId::new());
+    assert!(
+        !controller.refresh_idle((), Duration::from_millis(30)),
+        "refreshing while pinned must not arm a deadline that finish_turn would then race"
+    );
 }
 
 #[test]
@@ -1931,6 +2120,72 @@ fn driver_wired_for_terminal(
         driver.execute_run(AgentRunPrompt::Local(String::new()), ctx)
     });
     driver_handle
+}
+
+#[test]
+fn unstarted_terminal_followup_and_selection_keep_bounded_exit() {
+    for status in [
+        ConversationStatus::Blocked {
+            blocked_action: "approval".into(),
+        },
+        ConversationStatus::Cancelled,
+    ] {
+        for clear_queue in [false, true] {
+            let status = status.clone();
+            App::test((), |mut app| async move {
+                initialize_app_for_terminal_view(&mut app);
+                let terminal = add_window_with_terminal(&mut app, None);
+                let terminal_id = terminal.id();
+                let controller = terminal.read(&app, |view, _| view.ai_controller().clone());
+                let (id, stream) =
+                    conversation_with_in_progress_mock_stream(&mut app, terminal_id, &controller);
+                controller.update(&mut app, |controller, ctx| {
+                    controller.bind_native_prompt_conversation(Some(id), ctx);
+                });
+                let (wait, release) = manual_idle_wait();
+                set_test_idle_wait_override(Some(wait));
+                let _driver =
+                    driver_wired_for_terminal(&mut app, terminal, Some(Duration::from_secs(900)));
+                set_test_idle_wait_override(None);
+                complete_mock_stream_successfully(&mut app, &stream);
+                BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
+                    history.update_conversation_status(terminal_id, id, status, ctx);
+                });
+                QueuedQueryModel::handle(&app).update(&mut app, |queue, ctx| {
+                    queue.append(
+                        id,
+                        QueuedQuery::new_shared_session_prompt(
+                            "not prepared".into(),
+                            ParticipantId::new(),
+                            vec![AgentAttachment::FileReference {
+                                attachment_id: "file".into(),
+                                file_name: "file.txt".into(),
+                            }],
+                            None,
+                        ),
+                        ctx,
+                    );
+                    if clear_queue {
+                        queue.clear_queue(id, ctx);
+                    }
+                });
+                BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
+                    history.mark_active_conversation_id(id, terminal_id, ctx);
+                });
+                assert!(
+                    !OrchestrationEventService::handle(&app)
+                        .read(&app, |service, _| service.is_conversation_exiting(id))
+                );
+                // Closing the gate releases every superseded timer as well as the current one.
+                drop(release);
+                assert_eventually!(
+                    OrchestrationEventService::handle(&app)
+                        .read(&app, |service, _| service.is_conversation_exiting(id)),
+                    "an unstarted terminal follow-up or selection orphaned the idle timer"
+                );
+            });
+        }
+    }
 }
 
 #[test]

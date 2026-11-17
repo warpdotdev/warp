@@ -3352,8 +3352,17 @@ impl BlocklistAIController {
                         && (conversation.exchange_count() == 0
                             || matches!(
                                 conversation.status(),
-                                ConversationStatus::Success | ConversationStatus::WaitingForEvents
-                            ))
+                                ConversationStatus::Success
+                                    | ConversationStatus::Blocked { .. }
+                                    | ConversationStatus::WaitingForEvents
+                            )
+                            || (conversation
+                                .task_sync_mode()
+                                .suppresses_task_lifecycle_updates()
+                                && matches!(
+                                    conversation.status(),
+                                    ConversationStatus::Error | ConversationStatus::Cancelled
+                                )))
                 })
     }
 

@@ -223,22 +223,20 @@ pub(crate) fn resolve_ai_query_routing(
     let ambient_agent_task_id =
         resolve_ambient_agent_task_id(ambient_agent_view_model, terminal_model, app);
 
-    // Takes priority over live-viewer routing below: an already-attached viewer must still
-    // submit through the authenticated follow-up service, not the direct viewer prompt path.
-    if let Some(task_id) = ambient_agent_task_id
-        && let Some(task) = AgentConversationsModel::as_ref(app).get_task_data(&task_id)
-        && is_retained_setup_failure_debug_editable(&task, app)
-    {
-        return AIQueryRouting::RetainedSetupFailureDebug { task_id };
-    }
-
-    // A live shared-session viewer forwards its follow-up to the sharer via the viewer prompt
-    // path, whether the shared session is an ambient cloud run or a shared local session.
+    // Attached viewers debug the retained sandbox through its authorized session path.
+    // Ordinary server follow-ups are a separate operation that can create a replacement.
     if status.is_active_viewer() {
         return AIQueryRouting::LiveRemoteVm {
             is_executor: status.is_executor(),
             ambient_agent_task_id,
         };
+    }
+
+    if let Some(task_id) = ambient_agent_task_id
+        && let Some(task) = AgentConversationsModel::as_ref(app).get_task_data(&task_id)
+        && is_retained_setup_failure_debug_editable(&task, app)
+    {
+        return AIQueryRouting::RetainedSetupFailureDebug { task_id };
     }
 
     // Ordinary local pane, or a sharer running locally (e.g. a local orchestration child).
