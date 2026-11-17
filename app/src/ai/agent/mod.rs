@@ -125,6 +125,11 @@ pub enum CancellationReason {
     /// finalized as a terminal `Error` (with a shell-exit message) by the
     /// controller rather than reported as a user cancellation.
     AgentExitedShell,
+
+    /// An agent hook asked to stop the run (a hook's `ask` in a run configured to fail when no
+    /// one can answer). Like [`Self::AgentExitedShell`], the in-flight work is cancelled to stop
+    /// it and the controller finalizes the conversation as a terminal `Error`.
+    HookEndedRun,
 }
 
 /// How a [`CancellationReason`] maps to the conversation's resulting status.
@@ -166,6 +171,7 @@ impl Display for CancellationReason {
             CancellationReason::AgentExitedShell => {
                 write!(f, "agent command exited the shell")
             }
+            CancellationReason::HookEndedRun => write!(f, "agent hook ended the run"),
         }
     }
 }
@@ -209,9 +215,12 @@ impl CancellationReason {
             // successful completions rather than cancellations.
             CancellationReason::CommandFinishedDuringInlineAgentView
             | CancellationReason::Reverted => CancellationOutcome::Succeeded,
-            // The shell died under the agent; a dedicated path finalizes this as a
-            // terminal `Error`, so the cancellation machinery must not stamp a status.
-            CancellationReason::AgentExitedShell => CancellationOutcome::FinalizedExternally,
+            // The shell died under the agent, or a hook ended the run; a dedicated path
+            // finalizes this as a terminal `Error`, so the cancellation machinery must not
+            // stamp a status.
+            CancellationReason::AgentExitedShell | CancellationReason::HookEndedRun => {
+                CancellationOutcome::FinalizedExternally
+            }
             CancellationReason::ManuallyCancelled
             | CancellationReason::AutomaticCloudHandoff
             | CancellationReason::UserCommandExecuted

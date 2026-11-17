@@ -548,6 +548,40 @@ fn fresh_assignment_fixture_decodes_nullable_control_fields() {
     assert_eq!(expires_at.to_rfc3339(), "2026-01-01T00:00:00+00:00");
 }
 
+fn assignment_hook_sources(fixture: serde_json::Value) -> usize {
+    let event: PrewarmedSandboxControlEvent = serde_json::from_value(fixture).unwrap();
+    let PrewarmedSandboxControlEvent::Assignment {
+        execution_config, ..
+    } = event
+    else {
+        panic!("expected assignment event");
+    };
+    execution_config.agent_hook_sources.len()
+}
+
+/// A server that predates agent hooks sends no `agentHookSources`; the assignment still decodes,
+/// with no hook sources.
+#[test]
+fn an_assignment_without_hook_sources_decodes_with_none() {
+    let mut fixture: serde_json::Value =
+        serde_json::from_str(include_str!("testdata/prewarmed_assignment_fresh_run.json")).unwrap();
+    assert_eq!(assignment_hook_sources(fixture.clone()), 0);
+    fixture["execution_config"]
+        .as_object_mut()
+        .unwrap()
+        .remove("agentHookSources");
+    assert_eq!(assignment_hook_sources(fixture.clone()), 0);
+    fixture["execution_config"]["agentHookSources"] = serde_json::json!([{
+        "format": "CURSOR",
+        "repository": null,
+        "path": "/etc/hooks",
+        "level": "FACTORY",
+        "strict": false,
+        "onAsk": "DENY"
+    }]);
+    assert_eq!(assignment_hook_sources(fixture), 1);
+}
+
 #[test]
 fn assignment_debug_omits_run_credentials_and_embedded_config_values() {
     let mut event: PrewarmedSandboxControlEvent =

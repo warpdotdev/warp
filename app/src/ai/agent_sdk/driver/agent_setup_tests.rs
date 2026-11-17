@@ -1,18 +1,25 @@
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::fs;
+use std::path::Path;
 use std::sync::Arc;
 
+use ai::hooks::test_util::RecordingMessenger;
+use ai::hooks::{DiagnosticSeverity, HookFormat, HookRegistry, HookSourceKind, HookSourcePolicy};
+use cloud_object_models::CodeForge;
 use tempfile::TempDir;
-use warpui::App;
+use warpui::{App, ModelHandle};
 
 use super::super::AgentDriverOptions;
 use super::super::cloud_provider::{
     CloudProvider, CloudProviderSetupError, Result as ProviderResult,
 };
 use super::super::environment::WorkspaceConfiguration;
+use super::super::hooks::{ConfiguredHookLocation, ConfiguredHookSource};
 use super::super::terminal::TerminalDriver;
 use super::*;
+use crate::ai::blocklist::hooks::RunSurface;
+use crate::ai::blocklist::hooks::test_utils::install_test_hooks;
 use crate::server::server_api::ai::MockAIClient;
 use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
 use crate::workspace::view::tests::initialize_app as initialize_workspace_test_app;
@@ -283,5 +290,408 @@ fn configured_skills_load_without_environment_or_global_repositories() {
         .await
         .unwrap_err();
         assert!(matches!(error, AgentDriverError::SkillResolutionFailed(_)));
+    });
+}
+
+const SHELL_HOOK: &str =
+    r#"{"version":1,"hooks":{"beforeShellExecution":[{"command":"./check.sh"}]}}"#;
+
+fn write_hooks_file(dir: &Path) {
+    fs::create_dir_all(dir).unwrap();
+    fs::write(dir.join("hooks.json"), SHELL_HOOK).unwrap();
+}
+
+/// A driver whose hook runtime records notices and diagnostics instead of writing them.
+fn driver_with_test_hooks(
+    app: &mut App,
+    working_dir: &Path,
+) -> (ModelHandle<AgentDriver>, Arc<RecordingMessenger>) {
+    initialize_app_for_terminal_view(app);
+    let hooks = app.update(install_test_hooks);
+    let terminal = add_window_with_terminal(app, None);
+    let working_dir = working_dir.to_path_buf();
+    let driver = app.add_model(|ctx| {
+        let terminal_driver = TerminalDriver::create_from_existing_view(terminal, ctx);
+        AgentDriver::new_for_test(working_dir, terminal_driver, ctx)
+    });
+    (driver, hooks.messenger)
+}
+
+fn repository_source(repo: &str, path: &str, strict: bool) -> ConfiguredHookSource {
+    ConfiguredHookSource {
+        format: HookFormat::Cursor,
+        location: ConfiguredHookLocation::Repository {
+            repo: SourceRepo::new(CodeForge::GitHub, "acme".to_owned(), repo.to_owned()),
+            path: path.to_owned(),
+        },
+        kind: HookSourceKind::FactoryAgent,
+        policy: HookSourcePolicy {
+            strict,
+            ..Default::default()
+        },
+    }
+}
+
+fn worker_source(path: &str, strict: bool) -> ConfiguredHookSource {
+    ConfiguredHookSource {
+        format: HookFormat::Cursor,
+        location: ConfiguredHookLocation::Worker {
+            path: path.to_owned(),
+        },
+        kind: HookSourceKind::FactoryWide,
+        policy: HookSourcePolicy {
+            strict,
+            ..Default::default()
+        },
+    }
+}
+
+fn cloned(repo: &str) -> SourceRepo {
+    SourceRepo::new(CodeForge::GitHub, "acme".to_owned(), repo.to_owned())
+}
+
+/// A repository source is found in its clone at `working_dir/<name>` and runs from the clone's
+/// root; a worker source runs from its own directory. Agent entries come before factory entries.
+#[test]
+fn repository_and_worker_sources_load_where_the_run_put_them() {
+    App::test((), |mut app| async move {
+        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
+        let root = TempDir::new().unwrap();
+        let working_dir = dunce::canonicalize(root.path()).unwrap();
+        write_hooks_file(&working_dir.join("api/.cursor"));
+        let outside = TempDir::new().unwrap();
+        let worker_dir = dunce::canonicalize(outside.path()).unwrap().join("hooks");
+        write_hooks_file(&worker_dir);
+        let (driver, messenger) = driver_with_test_hooks(&mut app, &working_dir);
+
+        let result = driver.update(&mut app, |driver, ctx| {
+            driver.hooks.sources = vec![
+                worker_source(&worker_dir.display().to_string(), true),
+                repository_source("API", ".cursor", true),
+            ];
+            driver.load_hook_sources_for_run(&[cloned("api")], ctx)
+        });
+
+        assert!(result.is_ok(), "{result:?}");
+        assert!(
+            messenger.diagnostics().is_empty(),
+            "{:?}",
+            messenger.diagnostics()
+        );
+        let bindings = app.read(|ctx| HookRegistry::as_ref(ctx).snapshot().bindings.clone());
+        assert_eq!(bindings.len(), 2);
+        let repository = bindings
+            .iter()
+            .find(|active| active.binding.id.source.kind == HookSourceKind::FactoryAgent)
+            .expect("the repository source loaded");
+        assert_eq!(repository.working_directory, working_dir.join("api"));
+        assert_eq!(
+            repository.project_dir.as_deref(),
+            Some(working_dir.join("api").as_path())
+        );
+        let worker = bindings
+            .iter()
+            .find(|active| active.binding.id.source.kind == HookSourceKind::FactoryWide)
+            .expect("the worker source loaded");
+        assert_eq!(worker.working_directory, worker_dir);
+        assert_eq!(worker.project_dir, None);
+    });
+}
+
+/// A source that cannot be found or loaded is reported. Only a strict one fails the run, and the
+/// failure names only the strict sources.
+#[test]
+fn only_a_strict_source_that_cannot_load_fails_the_run() {
+    App::test((), |mut app| async move {
+        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
+        let root = TempDir::new().unwrap();
+        let (driver, messenger) = driver_with_test_hooks(&mut app, root.path());
+
+        let result = driver.update(&mut app, |driver, ctx| {
+            driver.hooks.sources = vec![
+                repository_source("not-cloned", ".cursor", false),
+                worker_source("/no/such/hook/dir", true),
+            ];
+            driver.load_hook_sources_for_run(&[], ctx)
+        });
+
+        let Err(AgentDriverError::HookSourcesUnavailable { details }) = result else {
+            panic!("expected the strict source to fail the run, got {result:?}");
+        };
+        assert_eq!(details.len(), 1, "{details:?}");
+        assert!(details[0].contains("/no/such/hook/dir"), "{details:?}");
+        let diagnostics = messenger.diagnostics();
+        assert_eq!(diagnostics.len(), 2, "{diagnostics:?}");
+        assert!(
+            diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error)
+        );
+        assert!(
+            diagnostics[0].message.contains("not checked out"),
+            "{diagnostics:?}"
+        );
+    });
+}
+
+#[test]
+fn a_source_that_is_not_strict_is_reported_and_the_run_goes_on() {
+    App::test((), |mut app| async move {
+        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
+        let root = TempDir::new().unwrap();
+        let (driver, messenger) = driver_with_test_hooks(&mut app, root.path());
+
+        let result = driver.update(&mut app, |driver, ctx| {
+            driver.hooks.sources = vec![worker_source("/no/such/hook/dir", false)];
+            driver.load_hook_sources_for_run(&[], ctx)
+        });
+
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(messenger.diagnostics().len(), 1);
+        assert!(app.read(|ctx| HookRegistry::as_ref(ctx).is_finalized()));
+    });
+}
+
+/// A path the server should never send is a failure of that entry alone, under its own `strict`.
+#[test]
+fn a_malformed_path_fails_only_its_own_entry() {
+    App::test((), |mut app| async move {
+        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
+        let root = TempDir::new().unwrap();
+        let working_dir = dunce::canonicalize(root.path()).unwrap();
+        write_hooks_file(&working_dir.join("api/.cursor"));
+        let (driver, messenger) = driver_with_test_hooks(&mut app, &working_dir);
+
+        let result = driver.update(&mut app, |driver, ctx| {
+            driver.hooks.sources = vec![
+                repository_source("api", "../outside", false),
+                repository_source("api", "/etc", false),
+                worker_source("relative/hooks", false),
+                repository_source("api", ".cursor", false),
+            ];
+            driver.load_hook_sources_for_run(&[cloned("api")], ctx)
+        });
+
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(
+            messenger.diagnostics().len(),
+            3,
+            "{:?}",
+            messenger.diagnostics()
+        );
+        assert_eq!(
+            app.read(|ctx| HookRegistry::as_ref(ctx).snapshot().bindings.len()),
+            1
+        );
+    });
+}
+
+/// A build that cannot run hooks fails a run that has any, strict or not, rather than running
+/// without them. A run with none goes on.
+#[test]
+fn a_build_that_cannot_run_hooks_fails_a_run_that_has_them() {
+    App::test((), |mut app| async move {
+        let _flag = FeatureFlag::AgentHooks.override_enabled(false);
+        let root = TempDir::new().unwrap();
+        let (driver, messenger) = driver_with_test_hooks(&mut app, root.path());
+        for strict in [true, false] {
+            let result = driver.update(&mut app, |driver, ctx| {
+                driver.hooks.sources = vec![worker_source("/no/such/hook/dir", strict)];
+                driver.load_hook_sources_for_run(&[], ctx)
+            });
+            assert!(
+                matches!(result, Err(AgentDriverError::HooksUnsupportedByThisBuild)),
+                "strict {strict}: {result:?}"
+            );
+        }
+        let result = driver.update(&mut app, |driver, ctx| {
+            driver.hooks.sources.clear();
+            driver.load_hook_sources_for_run(&[], ctx)
+        });
+        assert!(result.is_ok(), "{result:?}");
+        assert!(messenger.diagnostics().is_empty());
+    });
+}
+
+/// Load warnings reach the run's output beside the failures. Two entries that reach one file but
+/// would run it from different directories produce a warning naming both directories.
+#[test]
+fn a_file_selected_from_two_locations_is_reported_as_a_warning() {
+    App::test((), |mut app| async move {
+        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
+        let root = TempDir::new().unwrap();
+        let working_dir = dunce::canonicalize(root.path()).unwrap();
+        let cursor_dir = working_dir.join("api/.cursor");
+        write_hooks_file(&cursor_dir);
+        let (driver, messenger) = driver_with_test_hooks(&mut app, &working_dir);
+
+        let result = driver.update(&mut app, |driver, ctx| {
+            driver.hooks.sources = vec![
+                repository_source("api", ".cursor", false),
+                worker_source(&cursor_dir.display().to_string(), false),
+            ];
+            driver.load_hook_sources_for_run(&[cloned("api")], ctx)
+        });
+
+        assert!(result.is_ok(), "{result:?}");
+        let diagnostics = messenger.diagnostics();
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert_eq!(diagnostics[0].severity, DiagnosticSeverity::Warning);
+        assert!(
+            diagnostics[0].message.contains("selected more than once")
+                && diagnostics[0]
+                    .message
+                    .contains(&working_dir.join("api").display().to_string())
+                && diagnostics[0]
+                    .message
+                    .contains(&cursor_dir.display().to_string()),
+            "{diagnostics:?}"
+        );
+    });
+}
+
+/// Only load warnings that describe something that already changed what a source does reach the
+/// run's output. A prediction of what a hook might emit (`sessionStart` may return model context,
+/// which is not delivered yet) is recorded as `Info` and stays in the log.
+#[test]
+fn only_definite_load_warnings_reach_the_run_output() {
+    App::test((), |mut app| async move {
+        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
+        let root = TempDir::new().unwrap();
+        let working_dir = dunce::canonicalize(root.path()).unwrap();
+        let dir = working_dir.join("hooks");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("hooks.json"),
+            r#"{"version":1,"hooks":{
+                "sessionStart":[{"command":"./start.sh"}],
+                "beforeShellExecution":[{"command":"./check.sh","matcher":"("}]
+            }}"#,
+        )
+        .unwrap();
+        let (driver, messenger) = driver_with_test_hooks(&mut app, &working_dir);
+
+        let result = driver.update(&mut app, |driver, ctx| {
+            driver.hooks.sources = vec![worker_source(&dir.display().to_string(), true)];
+            driver.load_hook_sources_for_run(&[], ctx)
+        });
+
+        assert!(result.is_ok(), "{result:?}");
+        let snapshot = app.read(|ctx| HookRegistry::as_ref(ctx).snapshot());
+        assert!(
+            snapshot.diagnostics.iter().any(|diagnostic| {
+                diagnostic.severity == DiagnosticSeverity::Info
+                    && diagnostic
+                        .message
+                        .contains("model context is not supported yet")
+            }),
+            "{:?}",
+            snapshot.diagnostics
+        );
+        let forwarded = messenger.diagnostics();
+        assert_eq!(forwarded.len(), 1, "{forwarded:?}");
+        assert_eq!(forwarded[0].severity, DiagnosticSeverity::Warning);
+        assert!(
+            forwarded[0]
+                .message
+                .contains("matcher is not a valid regex"),
+            "{forwarded:?}"
+        );
+    });
+}
+
+/// A run on a harness other than Oz fails when its execution configuration selected hooks, and
+/// goes on when it selected none.
+#[test]
+fn hooks_on_another_harness_fail_the_run() {
+    App::test((), |mut app| async move {
+        let root = TempDir::new().unwrap();
+        let (driver, _) = driver_with_test_hooks(&mut app, root.path());
+        let foreground = driver.update(&mut app, |_, ctx| ctx.spawner());
+        let harness = HarnessKind::Unsupported(Harness::OpenCode);
+
+        refuse_hooks_for_other_harness(&foreground, &harness)
+            .await
+            .expect("a run with no hooks goes on");
+        driver.update(&mut app, |driver, _| {
+            driver.hooks.sources = vec![worker_source("/opt/hooks", false)];
+        });
+        let error = refuse_hooks_for_other_harness(&foreground, &harness)
+            .await
+            .unwrap_err();
+        let AgentDriverError::HooksRequireOzHarness { harness: name } = error else {
+            panic!("expected the hooks to be refused, got {error:?}");
+        };
+        assert_eq!(name, Harness::OpenCode.to_string());
+    });
+}
+
+/// The setup step the run calls after environment preparation loads the run's sources and
+/// finalizes the registry.
+#[test]
+fn setup_hooks_for_run_loads_the_runs_sources() {
+    App::test((), |mut app| async move {
+        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
+        let root = TempDir::new().unwrap();
+        let working_dir = dunce::canonicalize(root.path()).unwrap();
+        write_hooks_file(&working_dir.join("api/.cursor"));
+        let (driver, _) = driver_with_test_hooks(&mut app, &working_dir);
+        let foreground = driver.update(&mut app, |driver, ctx| {
+            driver.hooks.surface = RunSurface::Oz;
+            driver.hooks.sources = vec![repository_source("api", ".cursor", true)];
+            ctx.spawner()
+        });
+
+        setup_hooks_for_run(&foreground, vec![cloned("api")])
+            .await
+            .expect("the strict source loads");
+        app.read(|ctx| {
+            let registry = HookRegistry::as_ref(ctx);
+            assert!(registry.is_finalized());
+            assert_eq!(registry.snapshot().bindings.len(), 1);
+        });
+    });
+}
+
+#[test]
+fn setup_hooks_for_run_fails_when_a_strict_source_cannot_load() {
+    App::test((), |mut app| async move {
+        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
+        let root = TempDir::new().unwrap();
+        let (driver, _) = driver_with_test_hooks(&mut app, root.path());
+        let foreground = driver.update(&mut app, |driver, ctx| {
+            driver.hooks.sources = vec![repository_source("api", ".cursor", true)];
+            ctx.spawner()
+        });
+
+        let error = setup_hooks_for_run(&foreground, Vec::new())
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(error, AgentDriverError::HookSourcesUnavailable { .. }),
+            "{error:?}"
+        );
+        assert!(app.read(|ctx| HookRegistry::as_ref(ctx).is_finalized()));
+    });
+}
+
+#[test]
+fn an_empty_hook_source_list_finalizes_the_registry() {
+    App::test((), |mut app| async move {
+        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
+        let root = TempDir::new().unwrap();
+        let (driver, messenger) = driver_with_test_hooks(&mut app, root.path());
+
+        let result = driver.update(&mut app, |driver, ctx| {
+            driver.load_hook_sources_for_run(&[], ctx)
+        });
+
+        assert!(result.is_ok(), "{result:?}");
+        assert!(messenger.diagnostics().is_empty());
+        app.read(|ctx| {
+            let registry = HookRegistry::as_ref(ctx);
+            assert!(registry.is_finalized());
+            assert!(registry.snapshot().is_empty());
+        });
     });
 }

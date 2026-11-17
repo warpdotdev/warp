@@ -4024,7 +4024,7 @@ type Task {
   """
   Configuration for the active cloud execution. Requires the execution's workload token.
   """
-  executionConfig(executionId: ID!, supportsDeferredRepositories: Boolean = false): ExecutionConfiguration!
+  executionConfig(executionId: ID!, supportsDeferredRepositories: Boolean = false, supportsAgentHooks: Boolean = false): ExecutionConfiguration!
 
   """The ID of the task."""
   taskId: ID!
@@ -5422,6 +5422,57 @@ type ExecutionConfiguration {
   idleOnCompleteSeconds: Int
   idleOnFailSeconds: Int
   snapshotDisabled: Boolean!
+  """
+  Hook directories the run loads: the agent's entries first, then the
+  factory's, each in declared order. Duplicates are not merged.
+  """
+  agentHookSources: [AgentHookSource!]!
+}
+
+"""
+The file format of an agent hook directory. It selects how the client reads the
+directory.
+"""
+enum AgentHookFormat {
+  CURSOR
+}
+
+"""The part of the factory configuration that declared an agent hook source."""
+enum AgentHookLevel {
+  FACTORY
+  AGENT
+}
+
+"""
+What a run with no human does after a hook from this source asks for approval.
+The tool call is denied either way.
+"""
+enum AgentHookOnAsk {
+  DENY
+  FAIL_RUN
+}
+
+type AgentHookRepository {
+  forge: CodeForge!
+  owner: String!
+  name: String!
+}
+
+type AgentHookSource {
+  format: AgentHookFormat!
+  """
+  The repository that contains the hook directory, or null when path is an
+  absolute directory on the worker.
+  """
+  repository: AgentHookRepository
+  """
+  A directory relative to the repository root when repository is set;
+  otherwise an absolute directory on the worker.
+  """
+  path: String!
+  level: AgentHookLevel!
+  strict: Boolean!
+  onAsk: AgentHookOnAsk!
 }
 
 enum CodeForge {

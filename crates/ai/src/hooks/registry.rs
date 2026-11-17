@@ -259,8 +259,9 @@ impl HookRegistry {
 }
 
 /// Turns a parsed source into bindings that apply everywhere on the local host and run where
-/// `source` says, plus the source's parse warnings and one warning per capability the boundary
-/// cannot honor yet.
+/// `source` says, plus the source's parse warnings and one `Info` diagnostic per capability the
+/// boundary cannot honor yet. Those are `Info` because they only predict what a hook might emit;
+/// `Warning` is for something that has already changed what the source does.
 #[cfg(feature = "local_fs")]
 fn activate(
     adapter: &Arc<dyn HookFormatAdapter>,
@@ -273,7 +274,7 @@ fn activate(
         for warning in validate_capabilities(binding.boundary, &binding.capabilities) {
             diagnostics.push(HookDiagnostic {
                 source: config.source.clone(),
-                severity: DiagnosticSeverity::Warning,
+                severity: DiagnosticSeverity::Info,
                 message: format!("{}: {}", binding.id, warning.message),
             });
         }

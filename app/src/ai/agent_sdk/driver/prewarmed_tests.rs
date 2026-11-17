@@ -498,6 +498,104 @@ fn prewarmed_config_conversion_and_state_binding_preserve_run_settings() {
     });
 }
 
+/// A standby driver takes its assignment in place. Nothing before the claim loads or finalizes
+/// hooks: the standby's own preparation (`prepare_resources`, run here with no repositories, setup
+/// commands, MCP servers, or skills) loads none, the assignment's sources only reach the driver
+/// with the run configuration, and the single load happens after that, in the setup step the
+/// claimed run calls (`run_internal`).
+#[test]
+fn a_standby_loads_hooks_only_after_it_claims_a_task() {
+    App::test((), |mut app| async move {
+        let _hooks = FeatureFlag::AgentHooks.override_enabled(true);
+        initialize_app_for_terminal_view(&mut app);
+        app.update(crate::ai::blocklist::hooks::test_utils::install_test_hooks);
+        let root = tempfile::tempdir().unwrap();
+        let hooks_dir = root.path().join("worker-hooks");
+        std::fs::create_dir_all(&hooks_dir).unwrap();
+        std::fs::write(
+            hooks_dir.join("hooks.json"),
+            r#"{"version":1,"hooks":{"beforeShellExecution":[{"command":"true"}]}}"#,
+        )
+        .unwrap();
+        let terminal = add_window_with_terminal(&mut app, None);
+        let terminal_driver = app.update(|ctx| {
+            terminal::TerminalDriver::create_from_existing_view(terminal.clone(), ctx)
+        });
+        let driver = app
+            .add_model(|ctx| AgentDriver::new_for_test(root.path().into(), terminal_driver, ctx));
+        let is_finalized =
+            |app: &App| app.read(|ctx| ai::hooks::HookRegistry::as_ref(ctx).is_finalized());
+        let foreground = driver.update(&mut app, |_, ctx| ctx.spawner());
+        let setup_events =
+            crate::ai::agent_sdk::setup_observability::SetupClientEventReporter::standby(
+                std::sync::Arc::new(MockAIClient::new()),
+                app.background_executor(),
+            );
+        AgentDriver::prepare_resources(
+            &foreground,
+            warp_cli::agent::Harness::Oz,
+            Vec::new(),
+            super::agent_setup::GlobalSkillResolution {
+                specs: Vec::new(),
+                repos: Vec::new(),
+            },
+            &setup_events,
+        )
+        .await
+        .expect("the standby prepares");
+        assert!(!is_finalized(&app), "standby preparation loads no hooks");
+
+        let mut configuration = config();
+        configuration.agent_hook_sources = serde_json::from_value(serde_json::json!([{
+            "format": "CURSOR",
+            "repository": null,
+            "path": hooks_dir.display().to_string(),
+            "level": "AGENT",
+            "strict": true,
+            "onAsk": "DENY"
+        }]))
+        .unwrap();
+        let (mut options, ..) = app.update(|ctx| {
+            build_execution_task_and_options(
+                None,
+                HarnessTransport::Pty,
+                configuration,
+                RepositoryContract {
+                    supports_deferred_repositories: true,
+                    use_factory_repositories: false,
+                },
+                root.path().into(),
+                None,
+                Vec::new(),
+                ctx,
+            )
+            .unwrap()
+        });
+        options.team_scope = Some(HeadlessTeamScope::Personal);
+        let (_, run_config) = split_run_options(options).unwrap();
+        driver.update(&mut app, |driver, ctx| {
+            driver.apply_run_configuration(run_config, ctx);
+        });
+        assert!(
+            !is_finalized(&app),
+            "taking the assignment hands the driver its sources but loads nothing"
+        );
+        driver.read(&app, |driver, _| assert_eq!(driver.hooks.sources.len(), 1));
+
+        super::agent_setup::setup_hooks_for_run(&foreground, Vec::new())
+            .await
+            .expect("the claimed run loads its hooks");
+        assert!(is_finalized(&app));
+        assert_eq!(
+            app.read(|ctx| ai::hooks::HookRegistry::as_ref(ctx)
+                .snapshot()
+                .bindings
+                .len()),
+            1
+        );
+    });
+}
+
 #[test]
 fn prewarmed_workspace_reuse_checks_setup_and_checkouts() {
     let first = environment::WorkspaceConfiguration::from_resolved(

@@ -24,7 +24,7 @@ use std::time::Duration;
 #[cfg(feature = "local_tty")]
 use ai::hooks::runner::command::CommandHookRunner;
 use ai::hooks::{
-    HookDispatcher, HookEnvelope, HookMessenger, HookRegistry, HookRunner, HookTurnId,
+    HookDispatcher, HookEnvelope, HookMessenger, HookRegistry, HookRunner, HookSurface, HookTurnId,
     RegistrySnapshot, RunMetadata,
 };
 #[cfg(feature = "local_tty")]
@@ -48,14 +48,48 @@ use crate::process_environment::InitialProcessEnvironment;
 #[cfg(feature = "local_tty")]
 use crate::terminal::local_shell::LocalShellState;
 
+/// Which kind of headless run this process is.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum RunSurface {
+    /// A run the server dispatched: an Oz cloud run, or a task resumed with `--task-id`.
+    #[cfg_attr(
+        target_family = "wasm",
+        expect(dead_code, reason = "Oz runs are unavailable in WASM builds")
+    )]
+    Oz,
+    /// A `warp agent run` started from a command line.
+    #[default]
+    CommandLine,
+}
+
+impl RunSurface {
+    pub fn hook_surface(self) -> HookSurface {
+        match self {
+            Self::Oz => HookSurface::OzRun,
+            Self::CommandLine => HookSurface::CliRun,
+        }
+    }
+}
+
+/// The run this process belongs to and the surface its envelopes report.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RunIdentity {
+    pub metadata: RunMetadata,
+    pub surface: RunSurface,
+}
+
 /// Something the hook runtime did that the owner of the run may want to act on.
-// No production subscriber yet: the run driver that ends a run on an unanswerable `ask` is
-// later work.
-#[allow(dead_code)]
 pub enum HookRuntimeEvent {
     /// A hook asked for confirmation on a surface with no one to ask, and a hook that asked
     /// comes from a source set to end the run when that happens. The action was already denied
     /// with a reason the model can read; the run's owner ends the run.
+    #[cfg_attr(
+        target_family = "wasm",
+        expect(
+            dead_code,
+            reason = "the Oz driver that consumes this event is unavailable in WASM builds"
+        )
+    )]
     ApprovalUnavailable {
         conversation_id: AIConversationId,
         action_id: AIAgentActionId,
@@ -68,7 +102,7 @@ pub struct HookRuntime {
     registry: ModelHandle<HookRegistry>,
     dispatcher: Arc<HookDispatcher>,
     messenger: Arc<dyn HookMessenger>,
-    run_metadata: Option<RunMetadata>,
+    run: Option<RunIdentity>,
     pre_tool_verdicts: PreToolVerdictCache,
     stream_observer: StreamObserverState,
     /// The turn each conversation is in, allocated when a prompt starts a turn.
@@ -92,7 +126,7 @@ impl HookRuntime {
             registry: HookRegistry::handle(ctx),
             dispatcher: Arc::new(HookDispatcher::new(runner, messenger.clone())),
             messenger,
-            run_metadata: None,
+            run: None,
             pre_tool_verdicts: PreToolVerdictCache::default(),
             stream_observer: StreamObserverState::default(),
             turn_ids: HashMap::new(),
@@ -188,6 +222,11 @@ impl HookRuntime {
         self.session_starts.env_for(conversation_id)
     }
 
+    /// The surface of the run this process belongs to, once one was recorded.
+    pub(crate) fn run_surface(&self) -> Option<RunSurface> {
+        self.run.as_ref().map(|run| run.surface)
+    }
+
     /// Whether this process has no interactive surface where a user can respond.
     pub fn is_headless(&self, ctx: &AppContext) -> bool {
         AppExecutionMode::as_ref(ctx).is_headless()
@@ -219,7 +258,7 @@ impl HookRuntime {
     }
 
     pub fn run_metadata(&self) -> Option<&RunMetadata> {
-        self.run_metadata.as_ref()
+        self.run.as_ref().map(|run| &run.metadata)
     }
 
     /// Replaces the runner. Dispatches already in flight keep the runner they started with.
@@ -262,17 +301,24 @@ impl HookRuntime {
         });
     }
 
-    // No production caller yet: later work installs a surface-specific messenger, run metadata,
-    // and the run's hook policies through these setters.
-
-    /// Records the run this process belongs to. Envelopes built afterwards carry it.
-    #[allow(dead_code)]
-    pub fn set_run_metadata(&mut self, run_metadata: Option<RunMetadata>) {
-        self.run_metadata = run_metadata;
+    /// Records the run this process belongs to. Envelopes built afterwards carry it and report
+    /// its surface.
+    #[cfg_attr(
+        target_family = "wasm",
+        expect(dead_code, reason = "Oz runs are unavailable in WASM builds")
+    )]
+    pub(crate) fn set_run(&mut self, run: Option<RunIdentity>) {
+        self.run = run;
     }
 
     /// Replaces the messenger for notices and diagnostics, including those the dispatcher routes.
-    #[allow(dead_code)]
+    #[cfg_attr(
+        target_family = "wasm",
+        expect(
+            dead_code,
+            reason = "the Oz output messenger is unavailable in WASM builds"
+        )
+    )]
     pub fn set_messenger(&mut self, messenger: Arc<dyn HookMessenger>) {
         self.dispatcher = Arc::new(HookDispatcher::new(
             self.dispatcher.runner().clone(),
