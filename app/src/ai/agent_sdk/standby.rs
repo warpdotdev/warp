@@ -656,7 +656,23 @@ async fn prepare(
     supports_deferred_repositories: bool,
     setup_events: &SetupClientEventReporter,
 ) -> Result<ModelSpawner<AgentDriver>, AgentDriverError> {
+    let runner_preparation = config.runner_preparation;
     let preparation = config.preparation;
+    if runner_preparation
+        && (!preparation.repositories.is_empty()
+            || !preparation.deferred_repositories.is_empty()
+            || !preparation.skills.is_empty()
+            || !preparation.factory_skill_dirs.is_empty()
+            || !preparation.mcp_servers.is_empty()
+            || preparation.providers.is_some()
+            || !config.environment_variables.is_empty()
+            || !config.managed_secrets.is_empty()
+            || !config.git_credentials.is_empty())
+    {
+        return Err(AgentDriverError::ConfigBuildFailed(anyhow::anyhow!(
+            "Runner standby contains run resources"
+        )));
+    }
     if !supports_deferred_repositories && !preparation.deferred_repositories.is_empty() {
         return Err(AgentDriverError::ConfigBuildFailed(anyhow::anyhow!(
             "Pre-warmed preparation has deferred repositories this client cannot prepare"
@@ -708,12 +724,19 @@ async fn prepare(
     let preparation_repositories =
         merge_repos_deduped(workspace.source_repos.clone(), skill_repositories)
             .map_err(|error| AgentDriverError::ConfigBuildFailed(error.into()))?;
-    let global_skills = setup_events
-        .record_result(
-            SetupStep::GlobalSkillResolution,
-            resolve_global_skills(foreground),
-        )
-        .await?;
+    let global_skills = if runner_preparation {
+        super::driver::agent_setup::GlobalSkillResolution {
+            specs: Vec::new(),
+            repos: Vec::new(),
+        }
+    } else {
+        setup_events
+            .record_result(
+                SetupStep::GlobalSkillResolution,
+                resolve_global_skills(foreground),
+            )
+            .await?
+    };
     merge_repos_deduped(
         preparation_repositories,
         global_skills.repos.iter().map(SourceRepo::from).collect(),
@@ -722,34 +745,35 @@ async fn prepare(
     let secrets = config.managed_secrets;
     let working_dir = workspace_root().map_err(AgentDriverError::ConfigBuildFailed)?;
 
-    setup_events
-        .record_result(SetupStep::TeamMetadataRefresh, async {
-            foreground
-                .spawn(|_, ctx| {
-                    Box::pin(super::common::refresh_workspace_metadata(ctx))
-                        as std::pin::Pin<
-                            Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send>,
-                        >
-                })
-                .await?
-                .await
-                .map_err(AgentDriverError::TeamMetadataRefreshFailed)
-        })
-        .await?;
-    setup_events
-        .record_result(SetupStep::WarpDriveSync, async {
-            if foreground
-                .spawn(|_, ctx| super::common::refresh_warp_drive(ctx))
-                .await?
-                .await
-                .is_err()
-            {
-                return Err(AgentDriverError::WarpDriveSyncFailed);
-            }
-            Ok(())
-        })
-        .await?;
-
+    if !runner_preparation {
+        setup_events
+            .record_result(SetupStep::TeamMetadataRefresh, async {
+                foreground
+                    .spawn(|_, ctx| {
+                        Box::pin(super::common::refresh_workspace_metadata(ctx))
+                            as std::pin::Pin<
+                                Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send>,
+                            >
+                    })
+                    .await?
+                    .await
+                    .map_err(AgentDriverError::TeamMetadataRefreshFailed)
+            })
+            .await?;
+        setup_events
+            .record_result(SetupStep::WarpDriveSync, async {
+                if foreground
+                    .spawn(|_, ctx| super::common::refresh_warp_drive(ctx))
+                    .await?
+                    .await
+                    .is_err()
+                {
+                    return Err(AgentDriverError::WarpDriveSyncFailed);
+                }
+                Ok(())
+            })
+            .await?;
+    }
     setup_events
         .record_result(SetupStep::AgentCredentialsFetch, async {
             if config.github_credential_mode == GitHubCredentialMode::Legacy {
@@ -808,6 +832,7 @@ async fn prepare(
         mcp_specs,
         global_skills,
         setup_events,
+        runner_preparation,
     )
     .await?;
     Ok(driver_spawner)
