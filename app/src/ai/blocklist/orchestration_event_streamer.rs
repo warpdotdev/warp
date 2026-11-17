@@ -2879,17 +2879,8 @@ fn convert_lifecycle_events(events: &[AgentRunEvent], self_run_id: &str) -> Vec<
                 | AgentRunEventKind::WaitedOn
                 | AgentRunEventKind::Unknown => LifecycleEventDetailPayload::default(),
             };
-            let event_id = if lifecycle_type == api::LifecycleEventType::Waiting {
-                Uuid::new_v5(
-                    &Uuid::NAMESPACE_URL,
-                    format!("agent-run-event:{self_run_id}:{}", event.sequence).as_bytes(),
-                )
-                .to_string()
-            } else {
-                Uuid::new_v4().to_string()
-            };
             Some(build_lifecycle_event(
-                event_id,
+                Uuid::new_v4().to_string(),
                 sender_run_id.to_string(),
                 lifecycle_type,
                 timestamp,

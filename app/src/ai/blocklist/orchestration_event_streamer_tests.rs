@@ -116,30 +116,6 @@ fn waited_on_without_waiter_is_not_actionable() {
 }
 
 #[test]
-fn waited_on_replay_preserves_event_identity() {
-    let events = [make_seq_event(
-        "run_waited_on",
-        "self-run",
-        Some("waiter"),
-        42,
-    )];
-    assert_eq!(
-        convert_lifecycle_events(&events, "self-run"),
-        convert_lifecycle_events(&events, "self-run")
-    );
-    let distinct = [make_seq_event(
-        "run_waited_on",
-        "self-run",
-        Some("waiter"),
-        43,
-    )];
-    assert_ne!(
-        convert_lifecycle_events(&events, "self-run")[0].event_id,
-        convert_lifecycle_events(&distinct, "self-run")[0].event_id
-    );
-}
-
-#[test]
 fn waited_on_does_not_change_conversation_status() {
     assert_eq!(
         conversation_status_from_lifecycle_event_type(api::LifecycleEventType::Waiting),
