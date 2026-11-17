@@ -2936,6 +2936,7 @@ union PopulateMerkleTreeCacheResult = PopulateMerkleTreeCacheOutput | UserFacing
 input PrewarmedSandboxConfigInput {
   githubCredentialContractVersion: Int
   sandboxId: ID!
+  supportsAgentHooks: Boolean
   supportsDeferredRepositories: Boolean
 }
 
