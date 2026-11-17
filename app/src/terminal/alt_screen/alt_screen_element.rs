@@ -29,12 +29,13 @@ use crate::settings::EnforceMinimumContrast;
 use crate::terminal::blockgrid_renderer::GridRenderParams;
 use crate::terminal::find::TerminalFindModel;
 use crate::terminal::grid_renderer::CellGlyphCache;
+use crate::terminal::links::should_directly_open_link;
 use crate::terminal::meta_shortcuts::handle_keystroke_despite_composing;
 use crate::terminal::model::SecretHandle;
 use crate::terminal::model::escape_sequences::{
     KeystrokeWithDetails, ToEscapeSequence, maybe_kitty_keyboard_escape_sequence,
 };
-use crate::terminal::model::grid::grid_handler::{Link, TermMode};
+use crate::terminal::model::grid::grid_handler::{ContainsPoint as _, Link, TermMode};
 use crate::terminal::model::grid::{Dimensions, RespectDisplayedOutput};
 use crate::terminal::model::index::Point;
 use crate::terminal::model::mouse::{MouseAction, MouseButton, MouseState};
@@ -282,7 +283,7 @@ impl AltScreenElement {
                 selection_type,
                 position: local_position,
             }));
-        } else {
+        } else if !self.opens_link_directly(&mouse_state, point) {
             ctx.dispatch_typed_action(TerminalAction::MaybeClearAltSelect);
             ctx.dispatch_typed_action(TerminalAction::AltMouseAction(mouse_state.set_point(point)));
         }
@@ -371,6 +372,26 @@ impl AltScreenElement {
         false
     }
 
+    /// Mouse-move events don't carry Ctrl, so the link-open modifier is tracked from here. It
+    /// lets file paths be detected in mouse-reporting apps while the modifier is held.
+    fn modifier_state_changed(
+        &self,
+        modifiers: &ModifiersState,
+        local_position: Option<Vector2F>,
+        ctx: &mut EventContext,
+    ) -> bool {
+        if self.active_session_state != ActiveSessionState::Active {
+            return false;
+        }
+        let position =
+            local_position.map(|position| WithinModel::AltScreen(self.coord_to_point(position)));
+        ctx.dispatch_typed_action(TerminalAction::LinkModifierChanged {
+            held: should_directly_open_link(modifiers),
+            position,
+        });
+        false
+    }
+
     /// Called when the mouse is moved outside of the element.
     fn mouse_out(&self, ctx: &mut EventContext) -> bool {
         ctx.dispatch_typed_action(TerminalAction::MaybeLinkHover {
@@ -405,7 +426,9 @@ impl AltScreenElement {
             ctx.dispatch_typed_action(TerminalAction::AltSelect(SelectAction::End));
         }
 
-        if !should_intercept_mouse(&self.model.lock(), mouse_state.modifiers().shift, app) {
+        if !should_intercept_mouse(&self.model.lock(), mouse_state.modifiers().shift, app)
+            && !self.opens_link_directly(&mouse_state, point)
+        {
             ctx.dispatch_typed_action(TerminalAction::AltMouseAction(mouse_state.set_point(point)));
         }
 
@@ -506,6 +529,16 @@ impl AltScreenElement {
             .max(0.)
             .min(total_height as f32 - 1.) as usize;
         Point::new(row, column)
+    }
+
+    /// Whether this click opens the highlighted link at `point` in Warp. Such clicks are not
+    /// reported to a mouse-reporting app, which would otherwise open the link a second time.
+    fn opens_link_directly(&self, mouse_state: &MouseState, point: Point) -> bool {
+        should_directly_open_link(mouse_state.modifiers())
+            && self
+                .highlighted_url
+                .as_ref()
+                .is_some_and(|link| link.contains(point))
     }
 
     /// Renders our own selection.
@@ -954,6 +987,15 @@ impl Element for AltScreenElement {
                 selected_range,
             } => self.set_marked_text(marked_text, selected_range, ctx),
             Event::ClearMarkedText => self.clear_marked_text(ctx),
+            Event::ModifierStateChanged {
+                mouse_position,
+                modifiers,
+                ..
+            } => self.modifier_state_changed(
+                modifiers,
+                in_bounds.then(|| to_local(*mouse_position)),
+                ctx,
+            ),
             Event::ModifierKeyChanged { key_code, state } => {
                 if self.is_terminal_focused {
                     let is_press = matches!(state, KeyState::Pressed);
