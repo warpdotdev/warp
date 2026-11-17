@@ -36,7 +36,7 @@ use warpui::{
     AppContext, Entity, EntityId, ModelContext, ModelHandle, ModelSpawner, SingletonEntity,
 };
 
-use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
+use crate::ai::agent::conversation::{AIConversationId, ConversationDriver, ConversationStatus};
 use crate::ai::agent::{
     AIAgentActionResultType, AIAgentExchange, AIAgentInput, AIAgentOutput, AIAgentOutputStatus,
     BaseUserQuery, CancellationReason, FinishedAIAgentOutput, RenderableAIError,
@@ -1624,7 +1624,16 @@ impl AgentDriver {
             let terminal = self.terminal_driver.as_ref(ctx).terminal_view().clone();
             terminal.update(ctx, |terminal, ctx| {
                 terminal.ai_controller().update(ctx, |controller, ctx| {
-                    controller.bind_native_prompt_conversation(self.restored_conversation_id, ctx);
+                    let conversation_id = controller
+                        .bind_native_prompt_conversation(self.restored_conversation_id, ctx);
+                    if selected_harness != Harness::Oz {
+                        BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, _| {
+                            history.set_driver_for_conversation(
+                                conversation_id,
+                                ConversationDriver::ExternalHarness,
+                            );
+                        });
+                    }
                 });
             });
         }

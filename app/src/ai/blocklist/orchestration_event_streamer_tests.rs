@@ -3570,8 +3570,8 @@ fn drain_family_events_primary_routes_mixed_batch_and_delivers_inbox() {
 #[test]
 fn drain_family_events_primary_does_not_queue_delivery_for_an_external_harness_owner() {
     // The owner's turns are authored by an external harness (e.g. an ACP agent), so nothing
-    // may be queued for native injection into it; the server wakes such runs itself. Child
-    // tracking, watched-run status fan-out, and the Primary cursor all still advance.
+    // may be queued for native injection into it. Child tracking, watched-run status fan-out,
+    // and the Primary cursor all still advance.
     App::test((), |mut app| async move {
         initialize_settings_for_tests(&mut app);
         let (sender, _receiver) = std::sync::mpsc::sync_channel::<ModelEvent>(4);
@@ -3609,9 +3609,20 @@ fn drain_family_events_primary_does_not_queue_delivery_for_an_external_harness_o
             OrchestrationEventStreamer::new_with_clients_for_test(ai_client, server_api, ctx)
         });
         let watched_statuses = Rc::new(RefCell::new(Vec::new()));
+        let waited_on = Rc::new(RefCell::new(Vec::new()));
         app.update(|ctx| {
             let watched_statuses = Rc::clone(&watched_statuses);
+            let waited_on = Rc::clone(&waited_on);
             ctx.subscribe_to_model(&streamer, move |_, event, _| {
+                if let OrchestrationEventStreamerEvent::ExternalHarnessWaitedOn {
+                    conversation_id,
+                    waiter_run_id,
+                } = event
+                {
+                    waited_on
+                        .borrow_mut()
+                        .push((*conversation_id, waiter_run_id.clone()));
+                }
                 if let OrchestrationEventStreamerEvent::WatchedRunStatusChanged {
                     run_id,
                     status,
@@ -3632,6 +3643,12 @@ fn drain_family_events_primary_does_not_queue_delivery_for_an_external_harness_o
             make_seq_event("run_in_progress", &child, None, 21),
             make_seq_event("new_message", &parent_run_id, Some("msg-1"), 22),
             make_seq_event("run_blocked", &child, None, 23),
+            make_seq_event("run_waited_on", &parent_run_id, Some(&child), 24),
+            make_seq_event("run_waited_on", &parent_run_id, Some(&child), 24),
+            make_seq_event("run_waited_on", &child, Some(&parent_run_id), 25),
+            make_seq_event("run_waited_on", &parent_run_id, None, 26),
+            make_seq_event("run_waited_on", &parent_run_id, Some(""), 27),
+            make_seq_event("run_waited_on", &parent_run_id, Some("old-waiter"), 19),
         ];
         let messages = vec![ReceivedMessageInput {
             message_id: "msg-1".to_string(),
@@ -3648,7 +3665,7 @@ fn drain_family_events_primary_does_not_queue_delivery_for_an_external_harness_o
                 &parent_run_id,
                 FamilyDrainMode::Primary,
                 tracker,
-                0,
+                19,
                 events,
                 messages,
                 ctx,
@@ -3665,6 +3682,11 @@ fn drain_family_events_primary_does_not_queue_delivery_for_an_external_harness_o
                 "neither the inbox message nor the child lifecycle may be queued for injection"
             );
         });
+        assert_eq!(
+            *waited_on.borrow(),
+            vec![(conversation_id, child.clone())],
+            "only a new, well-formed notification for the owner reaches the ACP route"
+        );
         assert_eq!(
             *watched_statuses.borrow(),
             vec![
@@ -3683,7 +3705,7 @@ fn drain_family_events_primary_does_not_queue_delivery_for_an_external_harness_o
                 model
                     .conversation(&conversation_id)
                     .and_then(|c| c.last_event_sequence()),
-                Some(23),
+                Some(27),
                 "the Primary cursor must still advance past the dropped events"
             );
         });

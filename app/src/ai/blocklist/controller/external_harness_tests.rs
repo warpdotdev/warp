@@ -189,6 +189,59 @@ fn begin_turn_with_query(
 }
 
 #[test]
+fn waited_on_follows_the_bound_acp_conversation_before_and_after_sink_readiness() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let (sink, prompts) = async_channel::unbounded();
+        terminal.update(&mut app, |terminal, ctx| {
+            terminal.ai_controller().update(ctx, |controller, ctx| {
+                let id = controller.bind_native_prompt_conversation(None, ctx);
+                begin_turn_with_query(controller, id, "work", ctx);
+                controller.handle_external_harness_waited_on(
+                    AIConversationId::new(),
+                    "unrelated",
+                    ctx,
+                );
+                controller.handle_external_harness_waited_on(id, "first-waiter", ctx);
+                assert_eq!(QueuedQueryModel::as_ref(ctx).queue(id).len(), 1);
+
+                controller.set_external_harness_prompt_sink(sink, ctx);
+                controller.handle_external_harness_waited_on(id, "second-waiter", ctx);
+                for waiter in ["first-waiter", "second-waiter"] {
+                    let prompt = prompts.try_recv().unwrap();
+                    assert!(prompt.text.ends_with(&format!(
+                        "Another agent (run {waiter}) is waiting for output from you. Report output when done with your work, or coordinate with that agent if it is unclear what is needed from you."
+                    )));
+                    assert!(prompt.attachments.is_empty());
+                    let base = prompt.base.unwrap().to_proto();
+                    assert!(base.author.is_none());
+                    assert!(matches!(
+                        base.origin.unwrap().variant,
+                        Some(api::user_query_origin::Variant::ServerSynthesized(origin))
+                            if origin.reason == "run_waited_on"
+                    ));
+                }
+                assert!(prompts.is_empty());
+                assert!(!QueuedQueryModel::as_ref(ctx).has_queue(id));
+                assert_eq!(
+                    BlocklistAIHistoryModel::as_ref(ctx)
+                        .conversation(&id)
+                        .unwrap()
+                        .exchange_count(),
+                    1,
+                    "only the ACP driver may open follow-up turns"
+                );
+                controller.unbind_native_prompt_conversation(ctx);
+                controller.handle_external_harness_waited_on(id, "after-unbind", ctx);
+                assert!(prompts.is_closed());
+                assert!(!QueuedQueryModel::as_ref(ctx).has_queue(id));
+            });
+        });
+    });
+}
+
+#[test]
 fn shared_session_injections_go_to_the_prompt_sink_instead_of_the_queue() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);

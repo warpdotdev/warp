@@ -68,6 +68,28 @@ impl ExternalHarnessPrompt {
 pub(crate) struct ExternalHarnessCancel;
 
 impl BlocklistAIController {
+    pub(super) fn handle_external_harness_waited_on(
+        &mut self,
+        conversation_id: AIConversationId,
+        waiter_run_id: &str,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if self.native_prompt_conversation_id != Some(conversation_id) {
+            return;
+        }
+        let prompt = format!(
+            "Another agent (run {waiter_run_id}) is waiting for output from you. Report output when done with your work, or coordinate with that agent if it is unclear what is needed from you."
+        );
+        self.route_native_startup_injection(
+            &prompt,
+            None,
+            &[],
+            &ParticipantId::new(),
+            Some(&BaseUserQuery::unattributed("run_waited_on")),
+            ctx,
+        );
+    }
+
     /// Diverts prompts injected into the bound native conversation to an external harness.
     /// Shared-session prompts that were queued for the conversation before the sink existed
     /// (the conversation is bound at driver construction, long before the harness is up) are

@@ -755,6 +755,12 @@ impl BlocklistAIController {
             } => {
                 me.handle_dormant_claude_wake_ready(*conversation_id, wake_message.clone(), ctx);
             }
+            OrchestrationEventStreamerEvent::ExternalHarnessWaitedOn {
+                conversation_id,
+                waiter_run_id,
+            } => {
+                me.handle_external_harness_waited_on(*conversation_id, waiter_run_id, ctx);
+            }
             OrchestrationEventStreamerEvent::LocalChildHistoryPrepared { .. } => {}
             // Viewer-mode events are handled by `OrchestrationViewerModel`.
             OrchestrationEventStreamerEvent::ChildSpawned { .. }

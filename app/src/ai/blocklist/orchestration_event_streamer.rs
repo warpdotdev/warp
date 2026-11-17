@@ -316,6 +316,10 @@ pub enum OrchestrationEventStreamerEvent {
         conversation_id: AIConversationId,
         wake_message: AgentMessageEventMetadata,
     },
+    ExternalHarnessWaitedOn {
+        conversation_id: AIConversationId,
+        waiter_run_id: String,
+    },
     /// First time the streamer has seen a particular `run_id` under
     /// `parent_task_id`. Emitted exactly once per child.
     ChildSpawned {
@@ -2127,9 +2131,8 @@ impl OrchestrationEventStreamer {
 
     /// True iff this client authors `conversation_id`'s turns, so orchestration events can be
     /// injected into it as a native MAA request. An external harness (e.g. an ACP agent) owns
-    /// its conversation's task tree client-side; the server has no task to attach injected
-    /// events to and wakes such runs itself, so nothing is queued for them here. Child
-    /// discovery, status tracking, and cursor advancement are unaffected.
+    /// its conversation's task tree client-side; events cannot be injected into a native
+    /// request for it. Child discovery, status tracking, and cursor advancement are unaffected.
     fn owns_turn_lifecycle(
         &self,
         conversation_id: AIConversationId,
@@ -2657,18 +2660,25 @@ impl OrchestrationEventStreamer {
             });
         }
 
-        let lifecycle_events = convert_lifecycle_events(&events, self_run_id);
-        if messages.is_empty() && lifecycle_events.is_empty() {
+        if !self.owns_turn_lifecycle(conversation_id, ctx) {
+            let mut delivered_sequences = HashSet::new();
+            for event in &events {
+                if event.sequence <= previous_cursor || !delivered_sequences.insert(event.sequence)
+                {
+                    continue;
+                }
+                if let Some(waiter_run_id) = event.waited_on_by(self_run_id) {
+                    ctx.emit(OrchestrationEventStreamerEvent::ExternalHarnessWaitedOn {
+                        conversation_id,
+                        waiter_run_id: waiter_run_id.to_owned(),
+                    });
+                }
+            }
             return;
         }
-        if !self.owns_turn_lifecycle(conversation_id, ctx) {
-            log::info!(
-                "[orch-external-harness] Not queueing {} message(s) and {} lifecycle event(s) \
-                 for conversation {conversation_id:?}: an external harness drives its turns, \
-                 so they cannot be injected into Warp's agent loop",
-                messages.len(),
-                lifecycle_events.len()
-            );
+
+        let lifecycle_events = convert_lifecycle_events(&events, self_run_id);
+        if messages.is_empty() && lifecycle_events.is_empty() {
             return;
         }
 
