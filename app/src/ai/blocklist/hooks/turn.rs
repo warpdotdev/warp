@@ -205,9 +205,10 @@ pub(crate) fn start_turn_stop(
         let held = runtime.turn_stops.held.get_mut(&conversation_id)?;
         let PendingTurnStop { envelope, timeout } = held.pending.take()?;
         let ticket = held.cancel.clone();
-        let dispatch = runtime
-            .dispatcher()
-            .dispatch(envelope, snapshot, is_headless, ticket.clone());
+        let dispatch =
+            runtime
+                .dispatcher()
+                .dispatch(envelope, snapshot, is_headless, ticket.clone());
         let future: BoxFuture<'static, TurnStopOutcome> = Box::pin(async move {
             let outcome = futures::select_biased! {
                 outcome = dispatch.fuse() => Some(outcome),
