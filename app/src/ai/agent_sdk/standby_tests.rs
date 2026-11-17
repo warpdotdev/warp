@@ -20,6 +20,27 @@ use crate::server::server_api::prewarmed_sandbox::tests::parse_configuration;
 mod support;
 
 #[test]
+fn unsupported_deferred_preparation_fails_before_workspace_setup() {
+    App::test((), |mut app| async move {
+        let runner = app.add_singleton_model(|_| AgentDriverRunner);
+        let foreground = runner.update(&mut app, |_, ctx| ctx.spawner());
+        let setup_events = SetupClientEventReporter::standby(
+            Arc::new(MockAIClient::new()),
+            app.background_executor(),
+        );
+        let error = prepare(&foreground, parse_configuration(), false, &setup_events)
+            .await
+            .err()
+            .expect("unsupported preparation must fail");
+        let AgentDriverError::ConfigBuildFailed(source) = error else {
+            panic!("expected unsupported preparation");
+        };
+        assert!(source.to_string().contains("deferred repositories"));
+        assert!(!app.update(|ctx| ctx.has_singleton_model::<AgentDriver>()));
+    });
+}
+
+#[test]
 fn preparation_validates_the_workspace_before_metadata_access() {
     App::test((), |mut app| async move {
         let runner = app.add_singleton_model(|_| AgentDriverRunner);
@@ -31,7 +52,7 @@ fn preparation_validates_the_workspace_before_metadata_access() {
         let mut claude = parse_configuration();
         claude.preparation.harness = "claude".into();
         claude.preparation.factory_skill_dirs = vec!["../outside".into()];
-        let error = prepare(&foreground, claude, &setup_events)
+        let error = prepare(&foreground, claude, true, &setup_events)
             .await
             .err()
             .unwrap();
@@ -46,7 +67,7 @@ fn preparation_validates_the_workspace_before_metadata_access() {
         let mut codex = parse_configuration();
         codex.preparation.harness = "codex".into();
         codex.preparation.factory_skill_dirs = vec!["../outside".into()];
-        let error = prepare(&foreground, codex, &setup_events)
+        let error = prepare(&foreground, codex, true, &setup_events)
             .await
             .err()
             .unwrap();
@@ -96,7 +117,7 @@ fn invalid_preparation_inputs_fail_before_driver_creation_or_metadata_access() {
             unknown_repository,
             unknown_deferred_repository,
         ] {
-            let error = prepare(&foreground, config, &setup_events)
+            let error = prepare(&foreground, config, true, &setup_events)
                 .await
                 .err()
                 .expect("preparation should fail");
@@ -124,7 +145,7 @@ fn skill_checkout_collisions_fail_before_cloning_or_metadata_access() {
         ] {
             let mut config = parse_configuration();
             config.preparation.skills = specs.into_iter().map(str::to_owned).collect();
-            let error = prepare(&foreground, config, &setup_events)
+            let error = prepare(&foreground, config, true, &setup_events)
                 .await
                 .err()
                 .expect("preparation should fail");
@@ -171,7 +192,7 @@ fn global_skill_checkout_collisions_fail_before_cloning_or_metadata_access() {
             });
             let mut config = parse_configuration();
             config.preparation.skills = configured.into_iter().map(str::to_owned).collect();
-            let error = prepare(&foreground, config, &setup_events)
+            let error = prepare(&foreground, config, true, &setup_events)
                 .await
                 .err()
                 .expect("preparation should fail");

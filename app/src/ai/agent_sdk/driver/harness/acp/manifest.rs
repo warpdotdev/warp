@@ -52,6 +52,8 @@ pub(super) struct HarnessManifest {
     /// manifest, which means the worker mounted the terminal CLI image for an ACP run. Always
     /// `false` for a sidecar.
     pub(super) sidecar_without_manifest: bool,
+    /// The directory a sidecar's manifest was read from; `None` for a built-in default.
+    pub(super) sidecar_dir: Option<PathBuf>,
     pub(super) auth_check_command: Option<String>,
     pub(super) runtime_error_patterns: Vec<String>,
 }
@@ -63,6 +65,15 @@ impl HarnessManifest {
             Some(adapter) => adapter.programs().map(str::to_owned).collect(),
             None => vec![self.launch.program.clone()],
         }
+    }
+
+    /// The directories the launch loads its files from: a sidecar installs its runtime, adapter
+    /// and CLI under `usr/local`. Empty for a built-in default, whose files could be anywhere.
+    pub(super) fn launch_file_roots(&self) -> Vec<PathBuf> {
+        self.sidecar_dir
+            .iter()
+            .map(|dir| dir.join("usr/local"))
+            .collect()
     }
 }
 
@@ -174,6 +185,7 @@ fn discover(
         launch: manifest.acp,
         default: None,
         sidecar_without_manifest: false,
+        sidecar_dir: Some(dir),
         auth_check_command: manifest.auth.check_command,
         runtime_error_patterns: manifest.auth.runtime_error_patterns,
     })
@@ -190,6 +202,7 @@ fn default_manifest(harness: Harness) -> Option<HarnessManifest> {
         },
         default: Some(adapter),
         sidecar_without_manifest: false,
+        sidecar_dir: None,
         auth_check_command: pty.and_then(ThirdPartyHarness::auth_check_command),
         runtime_error_patterns: pty
             .map(ThirdPartyHarness::runtime_error_patterns_for_run)

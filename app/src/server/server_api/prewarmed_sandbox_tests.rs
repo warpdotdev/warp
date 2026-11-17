@@ -135,7 +135,7 @@ fn configuration_errors_return_after_one_request() {
             .create();
         drop(server);
 
-        let error = block_on(api.fetch_configuration("sandbox")).unwrap_err();
+        let error = block_on(api.fetch_configuration("sandbox", true)).unwrap_err();
         assert_eq!(
             match error
                 .downcast_ref::<warp_graphql::client::GraphQLError>()
@@ -286,7 +286,9 @@ fn configuration_uses_default_graphql_timeout_and_authentication() {
             payload["variables"]["input"],
             serde_json::json!({
                 "sandboxId": "11111111-2222-3333-4444-555555555555",
-                "githubCredentialContractVersion": 1
+                "githubCredentialContractVersion": 1,
+                "supportsDeferredRepositories": true,
+                "supportsAgentHooks": true
             })
         );
     }));
@@ -300,7 +302,7 @@ fn configuration_uses_default_graphql_timeout_and_authentication() {
         .create();
     drop(server);
     assert_eq!(
-        block_on(api.fetch_configuration("11111111-2222-3333-4444-555555555555"))
+        block_on(api.fetch_configuration("11111111-2222-3333-4444-555555555555", true))
             .unwrap()
             .generation,
         "abc123"
@@ -338,7 +340,7 @@ fn configuration_rejects_user_errors_unknown_results_and_missing_data() {
             .with_body(body.to_string())
             .create();
         drop(server);
-        let error = block_on(api.fetch_configuration("sandbox")).unwrap_err();
+        let error = block_on(api.fetch_configuration("sandbox", true)).unwrap_err();
         assert_eq!(error.to_string(), expected);
         assert!(!format!("{error:#}").contains("private-server-detail"));
         request.assert();
@@ -547,6 +549,40 @@ fn fresh_assignment_fixture_decodes_nullable_control_fields() {
     assert_eq!(expires_at.to_rfc3339(), "2026-01-01T00:00:00+00:00");
 }
 
+fn assignment_hook_sources(fixture: serde_json::Value) -> usize {
+    let event: PrewarmedSandboxControlEvent = serde_json::from_value(fixture).unwrap();
+    let PrewarmedSandboxControlEvent::Assignment {
+        execution_config, ..
+    } = event
+    else {
+        panic!("expected assignment event");
+    };
+    execution_config.agent_hook_sources.len()
+}
+
+/// A server that predates agent hooks sends no `agentHookSources`; the assignment still decodes,
+/// with no hook sources.
+#[test]
+fn an_assignment_without_hook_sources_decodes_with_none() {
+    let mut fixture: serde_json::Value =
+        serde_json::from_str(include_str!("testdata/prewarmed_assignment_fresh_run.json")).unwrap();
+    assert_eq!(assignment_hook_sources(fixture.clone()), 0);
+    fixture["execution_config"]
+        .as_object_mut()
+        .unwrap()
+        .remove("agentHookSources");
+    assert_eq!(assignment_hook_sources(fixture.clone()), 0);
+    fixture["execution_config"]["agentHookSources"] = serde_json::json!([{
+        "format": "CURSOR",
+        "repository": null,
+        "path": "/etc/hooks",
+        "level": "FACTORY",
+        "strict": false,
+        "onAsk": "DENY"
+    }]);
+    assert_eq!(assignment_hook_sources(fixture), 1);
+}
+
 #[test]
 fn assignment_debug_omits_run_credentials_and_embedded_config_values() {
     let mut event: PrewarmedSandboxControlEvent =
@@ -614,7 +650,10 @@ fn all_endpoints_use_cached_credentials_and_expected_payloads() {
         .match_header("authorization", "Bearer test-access-token")
         .match_body(Matcher::PartialJson(serde_json::json!({
             "variables": {
-                "input": { "sandboxId": "11111111-2222-3333-4444-555555555555" }
+                "input": {
+                    "sandboxId": "11111111-2222-3333-4444-555555555555",
+                    "supportsAgentHooks": true
+                }
             }
         })))
         .with_status(200)
@@ -635,7 +674,7 @@ fn all_endpoints_use_cached_credentials_and_expected_payloads() {
     drop(server);
     block_on(async {
         assert_eq!(
-            api.fetch_configuration("11111111-2222-3333-4444-555555555555")
+            api.fetch_configuration("11111111-2222-3333-4444-555555555555", true)
                 .await
                 .unwrap()
                 .generation,
@@ -818,7 +857,7 @@ fn config_gone_requires_the_structured_lifecycle_marker() {
             .with_body(response.to_string())
             .create();
         drop(server);
-        let error = block_on(api.fetch_configuration("sandbox")).unwrap_err();
+        let error = block_on(api.fetch_configuration("sandbox", true)).unwrap_err();
         assert_eq!(is_prewarmed_sandbox_unavailable(&error), expected);
         assert!(!format!("{error:#}").contains("private-server-detail"));
         request.assert();

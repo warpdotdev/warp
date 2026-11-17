@@ -18,6 +18,7 @@ use warp_graphql::ai::PlatformErrorCode;
 use warp_graphql::client::GraphQLError;
 use warp_graphql::queries::task_restricted_git_credentials::{
     GitHubCredentialMode, RestrictedTaskGitCredential, RestrictedTaskGitCredentialsOutput,
+    TaskGitCredentialProvider,
 };
 use warpui::r#async::Timer;
 
@@ -41,6 +42,11 @@ const AUTH_ENV: &[&str] = &[
 ];
 pub(super) const REFRESH_FALLBACK_INTERVAL: Duration = Duration::from_secs(60);
 const REFRESH_EXPIRY_BUFFER: TimeDelta = TimeDelta::minutes(10);
+const SUPPORTED_PROVIDERS: [TaskGitCredentialProvider; 3] = [
+    TaskGitCredentialProvider::Github,
+    TaskGitCredentialProvider::Gitlab,
+    TaskGitCredentialProvider::AzureDevops,
+];
 
 const GIT_OVERRIDE_ENV: &[&str] = &[
     "GIT_CONFIG_PARAMETERS",
@@ -120,12 +126,14 @@ struct ManagedStore {
     owner: ManagedStoreOwner,
     directory: PathBuf,
     refresh_at: Option<Instant>,
+    provider_refresh_at: HashMap<TaskGitCredentialProvider, Instant>,
     expires_at: Option<Instant>,
 }
 
 struct ValidatedCredentials {
     credentials: Vec<GitCredential>,
     refresh_at: Instant,
+    provider_refresh_at: HashMap<TaskGitCredentialProvider, Instant>,
     expires_at: Option<Instant>,
 }
 
@@ -281,6 +289,7 @@ fn prepare(owner: impl Into<ManagedStoreOwner>) -> Result<PathBuf> {
         owner,
         directory: directory.clone(),
         refresh_at: None,
+        provider_refresh_at: HashMap::new(),
         expires_at: None,
     });
     Ok(directory)
@@ -331,6 +340,15 @@ fn install_helper(directory: &Path, credentials: &[GitCredential]) -> Result<()>
     Ok(())
 }
 
+fn provider_for_host(host: &str) -> Option<TaskGitCredentialProvider> {
+    match host {
+        GITHUB_HOST => Some(TaskGitCredentialProvider::Github),
+        "gitlab.com" => Some(TaskGitCredentialProvider::Gitlab),
+        "dev.azure.com" => Some(TaskGitCredentialProvider::AzureDevops),
+        _ => None,
+    }
+}
+
 fn validate_response(
     response: RestrictedTaskGitCredentialsOutput,
     now: DateTime<Utc>,
@@ -346,15 +364,11 @@ fn validate_response(
     );
     let mut credentials = Vec::new();
     let mut refresh_interval = GIT_CREDENTIALS_REFRESH_INTERVAL;
+    let mut provider_refresh_at = HashMap::new();
     let mut expires_at = None;
     for credential in response.credentials {
-        ensure!(
-            matches!(
-                credential.host.as_str(),
-                GITHUB_HOST | "gitlab.com" | "dev.azure.com"
-            ),
-            "Unexpected forge in restricted credential response",
-        );
+        let provider = provider_for_host(&credential.host)
+            .context("Unexpected forge in restricted credential response")?;
         if credential.host == GITHUB_HOST {
             ensure!(
                 credential
@@ -383,15 +397,22 @@ fn validate_response(
             expires_at = Some(expires_at.map_or(received_at + remaining, |old: Instant| {
                 old.min(received_at + remaining)
             }));
-            let interval = (credential_expiry.utc() - now - REFRESH_EXPIRY_BUFFER)
-                .to_std()
-                .unwrap_or_default()
-                .max(REFRESH_FALLBACK_INTERVAL);
-            refresh_interval = refresh_interval.min(interval);
-        } else {
-            // Other forges do not yet supply expiry, so keep their existing refresh cadence.
-            refresh_interval = REFRESH_FALLBACK_INTERVAL;
         }
+        let interval = credential
+            .expires_at
+            .map_or(REFRESH_FALLBACK_INTERVAL, |expiry| {
+                (expiry.utc() - now - REFRESH_EXPIRY_BUFFER)
+                    .to_std()
+                    .unwrap_or_default()
+                    .clamp(REFRESH_FALLBACK_INTERVAL, GIT_CREDENTIALS_REFRESH_INTERVAL)
+            });
+        refresh_interval = refresh_interval.min(interval);
+        provider_refresh_at
+            .entry(provider)
+            .and_modify(|deadline: &mut Instant| {
+                *deadline = (*deadline).min(received_at + interval)
+            })
+            .or_insert(received_at + interval);
         credentials.push(GitCredential {
             token: credential.token,
             username: credential.username,
@@ -406,6 +427,7 @@ fn validate_response(
     Ok(ValidatedCredentials {
         credentials,
         refresh_at: received_at + refresh_interval,
+        provider_refresh_at,
         expires_at,
     })
 }
@@ -415,23 +437,58 @@ async fn fetch(
     ai_client: &Arc<dyn AIClient>,
     accepts_partial_refresh: bool,
     use_factory_repositories: bool,
-) -> Result<RestrictedTaskGitCredentialsOutput, TaskGitCredentialsError> {
+    providers: Option<Vec<TaskGitCredentialProvider>>,
+) -> Result<
+    (
+        RestrictedTaskGitCredentialsOutput,
+        Option<Vec<TaskGitCredentialProvider>>,
+    ),
+    TaskGitCredentialsError,
+> {
     ensure_workload_token_available()?;
     let token = warp_isolation_platform::issue_workload_token(Some(Duration::from_secs(300)))
         .await
         .map_err(|error| TaskGitCredentialsError::Request(error.into()))?
         .token;
-    ai_client
+    let response = ai_client
         .get_restricted_task_git_credentials(
             task_id.to_owned(),
-            token,
+            token.clone(),
             accepts_partial_refresh,
             use_factory_repositories,
+            providers.clone(),
         )
-        .await
+        .await;
+    match response {
+        Err(error) if providers.is_some() && is_unknown_provider_schema_error(&error) => {
+            let response = ai_client
+                .get_restricted_task_git_credentials(
+                    task_id.to_owned(),
+                    token,
+                    accepts_partial_refresh,
+                    use_factory_repositories,
+                    None,
+                )
+                .await?;
+            Ok((response, None))
+        }
+        response => response.map(|response| (response, providers)),
+    }
 }
 
-fn apply(store: &mut ManagedStore, response: &ValidatedCredentials) -> Result<()> {
+fn is_unknown_provider_schema_error(error: &TaskGitCredentialsError) -> bool {
+    let TaskGitCredentialsError::Request(error) = error else {
+        return false;
+    };
+    let message = error.to_string();
+    message.contains("providers")
+        && message.contains("TaskGitCredentialsInput")
+        && (message.contains("is not defined by type")
+            || message.contains("unknown field")
+            || message.contains("field not defined"))
+}
+
+fn apply_github(store: &mut ManagedStore, response: &ValidatedCredentials) -> Result<()> {
     ensure!(
         response
             .expires_at
@@ -454,8 +511,14 @@ fn apply(store: &mut ManagedStore, response: &ValidatedCredentials) -> Result<()
         }
         return Err(error);
     }
-    store.refresh_at = Some(response.refresh_at);
     store.expires_at = response.expires_at;
+    Ok(())
+}
+
+fn apply(store: &mut ManagedStore, response: &ValidatedCredentials) -> Result<()> {
+    apply_github(store, response)?;
+    store.refresh_at = Some(response.refresh_at);
+    store.provider_refresh_at = response.provider_refresh_at.clone();
     let other = response
         .credentials
         .iter()
@@ -546,9 +609,9 @@ async fn bootstrap_task(
     let mut guard = CredentialStoreGuard::new(owner.clone());
     let result = async {
         // Preparation is single-use. Retry only the raw fetch, never validation or installation.
-        let response = with_retry(
+        let (response, _) = with_retry(
             "Restricted Git credentials bootstrap",
-            || fetch(task_id, ai_client, false, use_factory_repositories),
+            || fetch(task_id, ai_client, false, use_factory_repositories, None),
             is_retryable,
             |delay| async move {
                 Timer::after(delay).await;
@@ -665,14 +728,25 @@ pub(crate) async fn refresh_restricted_credentials(
     use_factory_repositories: bool,
 ) -> Result<(), TaskGitCredentialsError> {
     let owner = ManagedStoreOwner::from(task_id);
+    let providers = with_store(&owner, |store| Ok(due_providers(store, Instant::now())))
+        .map_err(TaskGitCredentialsError::Request)?;
+    if providers.is_empty() {
+        return Ok(());
+    }
     let fetched = with_expiry(
         &owner,
-        fetch(task_id, ai_client, true, use_factory_repositories),
+        fetch(
+            task_id,
+            ai_client,
+            true,
+            use_factory_repositories,
+            Some(providers),
+        ),
     )
     .await
     .map_err(TaskGitCredentialsError::Request)?;
     match fetched {
-        Ok(response) => apply_partial_response(&owner, response),
+        Ok((response, providers)) => apply_partial_response(&owner, response, providers.as_deref()),
         Err(error) => apply_refresh(&owner, Err(error)),
     }
 }
@@ -699,69 +773,96 @@ pub(crate) fn apply_standby_refresh(
 fn apply_partial_response(
     owner: &ManagedStoreOwner,
     response: RestrictedTaskGitCredentialsOutput,
+    providers: Option<&[TaskGitCredentialProvider]>,
 ) -> Result<(), TaskGitCredentialsError> {
-    if response.failed_hosts.iter().any(|host| {
-        !matches!(host.as_str(), GITHUB_HOST | "gitlab.com" | "dev.azure.com")
-            || response
+    let providers = providers.unwrap_or(&SUPPORTED_PROVIDERS);
+    if response.github_credential_mode != GitHubCredentialMode::RestrictedInstallation
+        || response
+            .credentials
+            .iter()
+            .map(|credential| &credential.host)
+            .chain(response.failed_hosts.iter())
+            .any(|host| {
+                provider_for_host(host).is_none_or(|provider| !providers.contains(&provider))
+            })
+        || response.failed_hosts.iter().any(|host| {
+            response
                 .credentials
                 .iter()
                 .any(|credential| credential.host == *host)
-    }) {
+        })
+    {
         return apply_refresh(
             owner,
             Err(TaskGitCredentialsError::Request(anyhow::anyhow!(
-                "Restricted credential response has unknown or contradictory failed forges"
+                "Restricted credential response has invalid mode, unrequested, or contradictory forges"
             ))),
         );
     }
-    let github_failed = response.failed_hosts.iter().any(|host| host == GITHUB_HOST);
-    let partial = !response.failed_hosts.is_empty();
-    let (github, other): (Vec<_>, Vec<_>) = response
-        .credentials
+    let now = Instant::now();
+    let wall_now = Utc::now();
+    let mut first_error = None;
+    for provider in SUPPORTED_PROVIDERS
         .into_iter()
-        .partition(|credential| credential.host == GITHUB_HOST);
-    let github_response = RestrictedTaskGitCredentialsOutput {
-        github_credential_mode: response.github_credential_mode,
-        credentials: github,
-        failed_hosts: if github_failed {
-            vec![GITHUB_HOST.into()]
-        } else {
-            Vec::new()
-        },
-    };
-    let github_result = apply_refresh(
-        owner,
-        validate_response(github_response, Utc::now(), Instant::now())
-            .map_err(TaskGitCredentialsError::Request),
-    );
-    // Other forge failures must not revoke a successfully installed GitHub result.
-    let other_result = (|| {
+        .filter(|provider| providers.contains(provider))
+    {
         let validated = validate_response(
             RestrictedTaskGitCredentialsOutput {
                 github_credential_mode: response.github_credential_mode,
-                credentials: other,
-                failed_hosts: Vec::new(),
+                credentials: response
+                    .credentials
+                    .iter()
+                    .filter(|credential| provider_for_host(&credential.host) == Some(provider))
+                    .cloned()
+                    .collect(),
+                failed_hosts: response
+                    .failed_hosts
+                    .iter()
+                    .filter(|host| provider_for_host(host) == Some(provider))
+                    .cloned()
+                    .collect(),
             },
-            Utc::now(),
-            Instant::now(),
-        )?;
-        if !validated.credentials.is_empty() {
-            with_store(owner, |store| {
-                store.refresh_at = Some(validated.refresh_at);
-                Ok(())
-            })?;
+            wall_now,
+            now,
+        );
+        let result = with_store(owner, |store| {
+            let result = match &validated {
+                Ok(validated) => {
+                    if provider == TaskGitCredentialProvider::Github {
+                        apply_github(store, validated)
+                    } else {
+                        write_git_credentials(&validated.credentials)
+                    }
+                }
+                Err(_) if provider == TaskGitCredentialProvider::Github => clear_store(store),
+                Err(_) => Ok(()),
+            };
+            if result.is_err() || validated.is_err() {
+                store
+                    .provider_refresh_at
+                    .insert(provider, now + REFRESH_FALLBACK_INTERVAL);
+            } else if let Some(deadline) = validated
+                .as_ref()
+                .ok()
+                .and_then(|validated| validated.provider_refresh_at.get(&provider))
+            {
+                store.provider_refresh_at.insert(provider, *deadline);
+            } else {
+                store.provider_refresh_at.remove(&provider);
+            }
+            update_refresh_at(store, now);
+            result?;
+            validated.map(|_| ())
+        })
+        .map_err(TaskGitCredentialsError::Request);
+        if let Err(error) = result {
+            if is_fatal_cleanup_error(&error) {
+                return Err(error);
+            }
+            first_error.get_or_insert(error);
         }
-        write_git_credentials(&validated.credentials)
-    })()
-    .map_err(TaskGitCredentialsError::Request);
-    github_result?;
-    other_result?;
-    if partial {
-        return Err(TaskGitCredentialsError::Request(anyhow::anyhow!(
-            "Git credential refresh was incomplete"
-        )));
     }
-    Ok(())
+    first_error.map_or(Ok(()), Err)
 }
 
 fn apply_refresh(
@@ -792,12 +893,59 @@ pub(crate) fn credential_fetch_failed(
     now: Instant,
 ) -> Result<()> {
     with_store(owner, |store| {
-        store.refresh_at = Some(now + REFRESH_FALLBACK_INTERVAL);
+        retry_due_providers(store, now);
         if !transient || store.expires_at.is_none_or(|expiry| expiry <= now) {
             clear_store(store)?;
+            store.provider_refresh_at.insert(
+                TaskGitCredentialProvider::Github,
+                now + REFRESH_FALLBACK_INTERVAL,
+            );
         }
+        update_refresh_at(store, now);
         Ok(())
     })
+}
+
+fn due_providers(store: &ManagedStore, now: Instant) -> Vec<TaskGitCredentialProvider> {
+    if !store.provider_refresh_at.is_empty()
+        && store
+            .provider_refresh_at
+            .values()
+            .all(|deadline| *deadline > now)
+    {
+        return Vec::new();
+    }
+    SUPPORTED_PROVIDERS
+        .into_iter()
+        .filter(|provider| {
+            store
+                .provider_refresh_at
+                .get(provider)
+                .is_none_or(|deadline| *deadline <= now)
+        })
+        .collect()
+}
+
+fn update_refresh_at(store: &mut ManagedStore, now: Instant) {
+    store.refresh_at = Some(
+        store
+            .provider_refresh_at
+            .values()
+            .copied()
+            .min()
+            .unwrap_or(now + REFRESH_FALLBACK_INTERVAL),
+    );
+}
+
+fn retry_due_providers(store: &mut ManagedStore, now: Instant) {
+    for deadline in store
+        .provider_refresh_at
+        .values_mut()
+        .filter(|deadline| **deadline <= now)
+    {
+        *deadline = now + REFRESH_FALLBACK_INTERVAL;
+    }
+    update_refresh_at(store, now);
 }
 
 fn clear_store(store: &mut ManagedStore) -> Result<()> {
@@ -832,7 +980,7 @@ fn clear_restricted_credentials(owner: impl Into<ManagedStoreOwner>) -> Result<(
 
 pub(crate) fn schedule_refresh_retry(owner: &ManagedStoreOwner, now: Instant) -> Result<()> {
     with_store(owner, |store| {
-        store.refresh_at = Some(now + REFRESH_FALLBACK_INTERVAL);
+        retry_due_providers(store, now);
         Ok(())
     })
 }
@@ -988,3 +1136,7 @@ mod tests;
 #[cfg(all(test, not(target_family = "wasm")))]
 #[path = "restricted_lifecycle_tests.rs"]
 mod lifecycle_tests;
+
+#[cfg(all(test, not(target_family = "wasm")))]
+#[path = "restricted_provider_tests.rs"]
+mod provider_tests;

@@ -120,6 +120,7 @@ ashpd = { version = "0.11", default-features = false, features = ["async-std"] }
 async-channel = "2.3.1"
 async-compat = "0.2.5"
 async-io = "2.4.0"
+async-lock = "3.4.0"
 async-process = "2.3.0"
 async-stream = "0.3.5"
 async-task = "4.2.0"
@@ -351,7 +352,7 @@ version-compare = "0.1"
 vte = { git = "https://github.com/warpdotdev/vte.git", rev = "4b399c87b63ba88f45709edaa6383fc519f6c900", default-features = false }
 walkdir = "2"
 warp-workflows = { git = "https://github.com/warpdotdev/workflows", rev = "793a98ddda6ef19682aed66364faebd2829f0e01" }
-warp_multi_agent_api = { git = "https://github.com/warpdotdev/warp-proto-apis.git", rev = "7d7b57774fe349e51734fd9537457eaeb1082f2c" }
+warp_multi_agent_api = { git = "https://github.com/warpdotdev/warp-proto-apis.git", rev = "7e78c26ae5e1b93807c3db81ee009e25a57d9c9b" }
 wasm-bindgen = "0.2.89"
 wasm-bindgen-futures = "0.4.42"
 web-sys = { version = "0.3.69", features = [

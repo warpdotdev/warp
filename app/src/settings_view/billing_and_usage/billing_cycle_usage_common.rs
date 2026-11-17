@@ -22,7 +22,7 @@ use crate::ui_components::blended_colors;
 use crate::workspaces::team::Team;
 use crate::workspaces::workspace::{
     AiCreditsUsageAndCostSubjectType, AiCreditsUsageAndCostType, AiCreditsUsageBucket,
-    BillingCycleUsageEntry, WorkspaceMember,
+    BillingCycleUsageEntry, ChargeUnit, WorkspaceMember,
 };
 
 // for a bunch of this (min fill ratio, cost type order, ... )
@@ -272,12 +272,16 @@ pub fn format_cost_cents(cents: f64) -> String {
     }
 }
 
-pub fn format_usage_cost(credits: f64, cost_cents: f64) -> String {
-    format_cost_cents(if FeatureFlag::CreditEquivalentBillingUsage.is_enabled() {
-        credits * CENTS_PER_CREDIT
-    } else {
-        cost_cents
-    })
+pub fn format_usage_cost(credits: f64, cost_cents: f64, charge_unit: ChargeUnit) -> String {
+    format_cost_cents(
+        if FeatureFlag::CreditEquivalentBillingUsage.is_enabled()
+            && charge_unit == ChargeUnit::Cents
+        {
+            credits * CENTS_PER_CREDIT
+        } else {
+            cost_cents
+        },
+    )
 }
 
 /// Section subheader (e.g. "Team totals", "Member usage"). One step below
@@ -294,6 +298,7 @@ pub fn render_section_subheader(label: &str, appearance: &Appearance) -> Box<dyn
 pub fn render_breakdown_tooltip(
     segments: &[BarSegment],
     total_credits: f64,
+    charge_unit: ChargeUnit,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
@@ -320,7 +325,10 @@ pub fn render_breakdown_tooltip(
         column.add_child(render_tooltip_row(
             Some(cost_type_color(&line.cost_type)),
             label,
-            (line.credits, line.cost_cents),
+            (
+                line.credits,
+                format_usage_cost(line.credits, line.cost_cents, charge_unit),
+            ),
             sub,
             main,
             font_family,
@@ -341,7 +349,11 @@ pub fn render_breakdown_tooltip(
         "Total usage".to_string(),
         (
             total_credits,
-            segments.iter().map(|segment| segment.cost_cents).sum(),
+            format_usage_cost(
+                total_credits,
+                segments.iter().map(|segment| segment.cost_cents).sum(),
+                charge_unit,
+            ),
         ),
         main,
         main,
@@ -371,7 +383,7 @@ pub fn render_breakdown_tooltip(
 fn render_tooltip_row(
     swatch_color: Option<ColorU>,
     label: String,
-    (credits, cost_cents): (f64, f64),
+    (credits, cost): (f64, String),
     label_color: ColorU,
     value_color: ColorU,
     font_family: warpui::fonts::FamilyId,
@@ -410,7 +422,7 @@ fn render_tooltip_row(
         .with_color(value_color)
         .with_style(style)
         .finish();
-    let cost_text = Text::new_inline(format_usage_cost(credits, cost_cents), font_family, 12.)
+    let cost_text = Text::new_inline(cost, font_family, 12.)
         .with_color(value_color)
         .with_style(style)
         .finish();

@@ -121,7 +121,7 @@ impl Drop for Proxy {
 
 impl Proxy {
     pub async fn bind(port: u16, source: Arc<impl PortSource + 'static>) -> Result<Self> {
-        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, port))
+        let listener = TcpListener::bind((Ipv4Addr::UNSPECIFIED, port))
             .await
             .context("Failed to bind preview listener")?;
         let port = listener.local_addr()?.port();

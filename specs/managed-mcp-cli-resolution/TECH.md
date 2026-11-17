@@ -192,7 +192,7 @@ Merge Agent A first because Agent B needs the `ManagedMcpClient` trait and Graph
 - **Secret leakage:** server-returned config can contain proxy headers or unresolved placeholders. Keep all resolution in memory, avoid logging `mcpConfigJson`, and do not write resolved config back to snapshots or config files.
 - **Parser mismatch:** managed command configs can contain placeholders outside env/headers. Add the managed-specific synthesis helper instead of weakening the general user-json parser behavior.
 - **UUID ambiguity:** a UUID could theoretically exist both locally and as a managed MCP. Resolve local first to preserve current behavior and avoid surprising users with network-dependent resolution for existing local installs.
-- **Proxy token expiry:** this change mints proxy config once per run. Do not add token refresh in v1; document failures as MCP startup/runtime failures and revisit if long-running managed URL MCPs need refresh.
+- **Proxy token expiry:** resolution mints proxy config once per run, and a URL-backed config carries a credential that expires. Behind `ManagedMcpCredentialRefresh`, the Oz harness replaces that credential on the open connection shortly before it expires and when the proxy rejects it as expired or stale (`app/src/ai/agent_sdk/driver/managed_mcp_refresh.rs`). A refresh that fails never fails the run. Third-party harnesses still receive the credential statically.
 
 ## Follow-ups
 

@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "hooks": {
+    "beforeShellExecution": [
+      {
+        "type": "prompt",
+        "prompt": "Does this command delete files outside the repository? $ARGUMENTS",
+        "timeout": 10
+      },
+      { "command": "./hooks/check.sh" }
+    ]
+  }
+}

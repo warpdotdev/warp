@@ -31,6 +31,8 @@ pub struct RestrictedTaskGitCredentialsInput {
     pub accepts_partial_refresh: Option<bool>,
     pub use_factory_repositories: Option<bool>,
     pub github_credential_contract_version: Option<i32>,
+    #[cynic(skip_serializing_if = "Option::is_none")]
+    pub providers: Option<Vec<TaskGitCredentialProvider>>,
 }
 
 #[derive(cynic::InlineFragments, Debug)]
@@ -68,6 +70,13 @@ pub struct RestrictedTaskGitCredential {
     pub repository_scope: Option<String>,
 }
 
+#[derive(cynic::Enum, Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum TaskGitCredentialProvider {
+    Github,
+    Gitlab,
+    AzureDevops,
+    CodeStorage,
+}
 impl std::fmt::Debug for RestrictedTaskGitCredential {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RestrictedTaskGitCredential")
@@ -75,3 +84,7 @@ impl std::fmt::Debug for RestrictedTaskGitCredential {
             .finish_non_exhaustive()
     }
 }
+
+#[cfg(test)]
+#[path = "task_restricted_git_credentials_tests.rs"]
+mod tests;

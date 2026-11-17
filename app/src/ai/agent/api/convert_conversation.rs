@@ -1532,10 +1532,18 @@ pub(crate) fn convert_tool_call_result_to_input(
             None
         }
         Some(ToolCallResultType::Cancel(_)) => {
-            // Cancel results indicate the tool call was explicitly cancelled
-            // Look up the original tool call to determine the correct result type
             create_cancelled_result_for_tool_call(task_id, &tool_call_id, tool_call_map, context)
         }
+        Some(ToolCallResultType::DeniedByHook(denied)) => Some(AIAgentInput::ActionResult {
+            result: AIAgentActionResult {
+                id: tool_call_id.into(),
+                task_id: task_id.clone(),
+                result: AIAgentActionResultType::DeniedByHook {
+                    reason: denied.reason.clone(),
+                },
+            },
+            context,
+        }),
         Some(ToolCallResultType::Subagent(_)) => None,
         Some(ToolCallResultType::AskUserQuestion(result)) => {
             let ask_result = match &result.result {

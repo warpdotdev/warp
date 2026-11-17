@@ -45,6 +45,7 @@ use crate::ai::agent::{
 use crate::ai::agent_sdk::driver::harness::exit_escalation::{
     ExitEscalation, ExitEscalationAction, ExitEscalationEvent, driver_result_after_harness_run,
 };
+use crate::ai::agent_sdk::driver::harness::launch_warmup::LaunchFileWarmup;
 use crate::ai::agent_sdk::driver::harness::{
     HarnessCleanupDisposition, HarnessKind, HarnessRunner, ResumePayload, SavePoint,
     ThirdPartyHarness, ThirdPartyHarnessTelemetryEvent, harness_env_vars, renders_natively,
@@ -117,6 +118,8 @@ mod failure_output;
 pub(crate) mod git_credentials;
 pub(crate) mod harness;
 mod harness_output_monitor;
+pub(crate) mod hooks;
+pub(crate) mod managed_mcp_refresh;
 pub(crate) mod mcp_startup;
 pub(super) mod output;
 mod preview_proxy;
@@ -140,20 +143,24 @@ use termination::{Interrupt, InterruptWatch, RunEndCause};
 /// Races `run_future` against optional background credential refresh loops,
 /// dropping the loops automatically when `run_future` resolves.
 ///
-/// Both refresh loops run forever when active; they are dropped when
+/// The refresh loops run forever when active; they are dropped when
 /// `futures::select!` picks the `run_future` arm. This consolidates the
 /// otherwise-repeated 4-arm `match (git, bedrock)` pattern that would
 /// otherwise appear once per harness type.
-async fn with_credential_refreshes<F, T>(
+///
+/// `managed_mcp_refresh` keeps managed MCP credentials valid and must never resolve.
+async fn with_credential_refreshes<F, T, M>(
     run_future: F,
     git_task_id: Option<String>,
     ai_client: Arc<dyn AIClient>,
     use_factory_repositories: bool,
     bedrock_oidc_credentials: Option<(BedrockOidcCredentialsConfig, Option<RequestTeamScope>)>,
+    managed_mcp_refresh: M,
     foreground: &ModelSpawner<AgentDriver>,
 ) -> Result<T, AgentDriverError>
 where
     F: Future<Output = Result<T, AgentDriverError>>,
+    M: Future<Output = ()>,
 {
     let mode = foreground
         .spawn(|me, _| me.github_credential_mode)
@@ -180,8 +187,14 @@ where
     }
     .fuse();
 
+    let managed_mcp_refresh = managed_mcp_refresh.fuse();
     let run_future = run_future.fuse();
-    futures::pin_mut!(run_future, git_refresh, bedrock_refresh);
+    futures::pin_mut!(
+        run_future,
+        git_refresh,
+        bedrock_refresh,
+        managed_mcp_refresh
+    );
     futures::select! {
         result = run_future => result,
         result = git_refresh => {
@@ -189,6 +202,7 @@ where
             Err(AgentDriverError::InvalidRuntimeState)
         },
         _ = bedrock_refresh => unreachable!("Bedrock credentials refresh loop resolved unexpectedly"),
+        _ = managed_mcp_refresh => unreachable!("managed MCP credentials refresh loop resolved unexpectedly"),
     }
 }
 
@@ -755,7 +769,7 @@ pub struct AgentDriverOptions {
     pub use_factory_repositories: bool,
     pub github_credential_mode: GitHubCredentialMode,
     pub(crate) credential_store_owner: Option<ManagedStoreOwner>,
-    /// Server-owned experiments retained without client interpretation.
+    /// Server-provided experiments for this run.
     pub experimental: Option<serde_json::Map<String, serde_json::Value>>,
     /// Parent run ID for child orchestration flows, if this task was spawned by another run.
     pub parent_run_id: Option<String>,
@@ -803,6 +817,8 @@ pub struct AgentDriverOptions {
     pub strict_mcp_startup: bool,
     /// MCP server startup timeout override.
     pub mcp_startup_timeout: Option<Duration>,
+    /// The agent hooks the run's execution configuration selected.
+    pub(crate) hooks: hooks::RunHooks,
 }
 
 /// Terminal setup for a new session or a pre-warmed assignment.
@@ -835,6 +851,7 @@ struct RunConfiguration {
     workspace: environment::WorkspaceConfiguration,
     skill_dirs: Vec<PathBuf>,
     skill_reference_dirs: Vec<PathBuf>,
+    hooks: hooks::RunHooks,
     computer_use_config: Option<(bool, Option<LLMId>)>,
     third_party_harness_model_config: Option<HarnessModelConfig>,
     team_scope: Option<HeadlessTeamScope>,
@@ -888,6 +905,7 @@ fn split_run_options(
         skip_initial_turn,
         strict_mcp_startup,
         mcp_startup_timeout,
+        hooks,
     } = options;
     if !working_dir.is_absolute() {
         return Err(AgentDriverError::ConfigBuildFailed(anyhow!(
@@ -1025,6 +1043,7 @@ fn split_run_options(
             workspace,
             skill_dirs,
             skill_reference_dirs,
+            hooks,
             computer_use_config,
             third_party_harness_model_config,
             team_scope,
@@ -1092,10 +1111,6 @@ pub struct AgentDriver {
     use_factory_repositories: bool,
     github_credential_mode: GitHubCredentialMode,
     credential_store_owner: Option<ManagedStoreOwner>,
-    #[allow(
-        dead_code,
-        reason = "the driver retains server-owned experiments without interpreting them"
-    )]
     pub experimental: Option<serde_json::Map<String, serde_json::Value>>,
     team_scope: Option<HeadlessTeamScope>,
     bedrock_oidc_credentials: Option<BedrockOidcCredentialsConfig>,
@@ -1135,6 +1150,7 @@ pub struct AgentDriver {
     /// Whether a skill name in an earlier `skill_dirs` entry hides the same name in later ones.
     /// Set once skill references add generated folders, which rely on folder order.
     skill_dirs_first_name_wins: bool,
+    hooks: hooks::RunHooks,
     factory_repository_contract: bool,
     computer_use_configured: bool,
 
@@ -1179,6 +1195,9 @@ pub struct AgentDriver {
     /// `AgentDriverOptions::harness_transport_fallback`.
     harness_transport_fallback: Option<harness::TransportFallbackReason>,
     sandbox_deadline: Option<SystemTime>,
+    /// The replaceable credentials of the managed MCP servers started for the run, until the
+    /// run takes them to keep them valid.
+    managed_mcp_refresh: Option<managed_mcp_refresh::ManagedMcpRefresh>,
 }
 
 #[derive(Clone)]
@@ -1278,6 +1297,17 @@ pub enum AgentDriverError {
     MCPServerNotFound(uuid::Uuid),
     #[error("Failed to resolve managed MCP server {uid}: {message}")]
     ManagedMcpResolutionFailed { uid: Uuid, message: String },
+    #[error("Strict agent hook sources could not be loaded: {}", .details.join("; "))]
+    HookSourcesUnavailable {
+        /// One line per strict source that could not take part in the run.
+        details: Vec<String>,
+    },
+    #[error(
+        "This run has agent hooks, which only the Oz harness runs, but its harness is {harness}"
+    )]
+    HooksRequireOzHarness { harness: String },
+    #[error("This run has agent hooks, but this build of Warp cannot run them")]
+    HooksUnsupportedByThisBuild,
     #[error("Failed to start MCP servers: {}", .details.join("; "))]
     MCPStartupFailed {
         /// One line per unavailable server (e.g. "'datadog' failed to start:
@@ -1516,6 +1546,16 @@ impl From<PrepareEnvironmentError> for AgentDriverError {
 }
 
 impl AgentDriver {
+    fn cwd_scoped_cloud_skills_enabled(&self) -> bool {
+        FeatureFlag::CwdScopedCloudSkills.is_enabled()
+            || self
+                .experimental
+                .as_ref()
+                .and_then(|experiments| experiments.get("skillsListingDeltas"))
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false)
+    }
+
     fn idle_timeout_sender<T: Send + 'static>(
         &self,
         tx: oneshot::Sender<T>,
@@ -1662,6 +1702,7 @@ impl AgentDriver {
             skill_dirs: parse_skills_dirs_env(),
             skill_reference_dirs: Vec::new(),
             skill_dirs_first_name_wins: false,
+            hooks: hooks::RunHooks::default(),
             factory_repository_contract: false,
             computer_use_configured: false,
             snapshot_disabled: false,
@@ -1677,6 +1718,7 @@ impl AgentDriver {
             mcp_startup_timeout: MCP_SERVER_STARTUP_TIMEOUT,
             harness_transport_fallback: None,
             sandbox_deadline: sandbox_deadline(),
+            managed_mcp_refresh: None,
         }
     }
 
@@ -1708,6 +1750,7 @@ impl AgentDriver {
             workspace,
             skill_dirs,
             skill_reference_dirs,
+            hooks,
             computer_use_config,
             third_party_harness_model_config,
             team_scope,
@@ -1762,6 +1805,7 @@ impl AgentDriver {
         self.skill_dirs = skill_dirs;
         self.skill_reference_dirs = skill_reference_dirs;
         self.skill_dirs_first_name_wins = false;
+        self.hooks = hooks;
         self.third_party_harness_model_config = third_party_harness_model_config;
         self.team_scope = team_scope;
         self.bedrock_oidc_credentials = bedrock_oidc_credentials;
@@ -2371,6 +2415,15 @@ impl AgentDriver {
                 })
                 .await?;
 
+            // The server rejects hooks on an agent whose harness is not Oz; a run that still has
+            // them fails before any setup work rather than running without them.
+            match &task.harness {
+                HarnessKind::Oz => {}
+                HarnessKind::ThirdParty(_) | HarnessKind::Unsupported(_) => {
+                    agent_setup::refuse_hooks_for_other_harness(&foreground, &task.harness).await?;
+                }
+            }
+
             foreground
                 .spawn(|me, _| me.check_working_dir())
                 .await?
@@ -2461,6 +2514,12 @@ impl AgentDriver {
                     )
                 }
                 WorkspaceState::Pending(mut workspace) => {
+                    let launch_file_warmup = match &task.harness {
+                        HarnessKind::ThirdParty(harness) => {
+                            LaunchFileWarmup::start(harness.launch_file_roots(), &setup_events)
+                        }
+                        HarnessKind::Oz | HarnessKind::Unsupported(_) => None,
+                    };
                     Self::initialize_setup_vars(&foreground, true).await?;
                     let global_skill_resolution =
                         agent_setup::prepare_global_skills(&foreground, &setup_events).await?;
@@ -2519,6 +2578,11 @@ impl AgentDriver {
                             return Err(error);
                         }
                     };
+                    // The harness launch is next, and an unfinished warm-up would compete with
+                    // it for the same storage.
+                    if let Some(warmup) = &launch_file_warmup {
+                        warmup.stop();
+                    }
                     Self::read_setup_vars(
                         &foreground,
                         true,
@@ -2579,20 +2643,30 @@ impl AgentDriver {
                 );
             }
 
-            // Skill loading is Oz-only; third-party harnesses have their own skill systems.
-            if matches!(&task.harness, HarnessKind::Oz) {
-                // Load skills from repos synchronously so the initial message includes them.
-                // File trees are ready after prepare_environment and global skill repo cloning above.
-                agent_setup::load_skills(
-                    &foreground,
-                    prepared_workspace.repositories,
-                    global_skill_resolution,
-                    &setup_events,
-                )
-                .await;
-                if factory_repository_contract {
-                    agent_setup::load_factory_deferred_repositories_skill(&foreground).await;
+            // Skill and hook loading are Oz-only; third-party harnesses have their own, and a run
+            // on one with hooks was refused above.
+            match &task.harness {
+                HarnessKind::Oz => {
+                    // After environment preparation, so the login shell's PATH includes what the
+                    // setup commands added to its startup files; it overlaps skill loading.
+                    agent_setup::start_login_shell_path_capture(&foreground).await?;
+                    let cloned_repositories = prepared_workspace.repositories.clone();
+                    // Load skills from repos synchronously so the initial message includes them.
+                    // File trees are ready after prepare_environment and global skill repo
+                    // cloning above.
+                    agent_setup::load_skills(
+                        &foreground,
+                        prepared_workspace.repositories,
+                        global_skill_resolution,
+                        &setup_events,
+                    )
+                    .await;
+                    if factory_repository_contract {
+                        agent_setup::load_factory_deferred_repositories_skill(&foreground).await;
+                    }
+                    agent_setup::setup_hooks_for_run(&foreground, cloned_repositories).await?;
                 }
+                HarnessKind::ThirdParty(_) | HarnessKind::Unsupported(_) => {}
             }
 
             let (
@@ -2677,6 +2751,7 @@ impl AgentDriver {
                     ai_client_for_refresh,
                     use_factory_repositories,
                     bedrock_config_for_refresh,
+                    managed_mcp_refresh::keep_run_credentials_valid(&foreground),
                     &foreground,
                 )
                 .await?;
@@ -2747,6 +2822,7 @@ impl AgentDriver {
                     ai_client_for_refresh,
                     use_factory_repositories,
                     bedrock_config_for_refresh,
+                    future::pending(),
                     &foreground,
                 )
                 .await
@@ -3946,6 +4022,8 @@ impl AgentDriver {
         task_prompt: AgentRunPrompt,
         ctx: &mut ModelContext<Self>,
     ) -> Receiver<SDKConversationOutputStatus> {
+        self.subscribe_to_hook_runtime_events(ctx);
+
         // Create a oneshot channel to signal task completion. This is `run_exit`'s
         // internal signal, not the receiver returned to the caller: see the
         // `internal_rx` wiring at the end of this function for why.

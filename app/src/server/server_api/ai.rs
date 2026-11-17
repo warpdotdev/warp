@@ -139,7 +139,7 @@ use warp_graphql::queries::task_git_credentials::{
 use warp_graphql::queries::task_restricted_git_credentials::{
     RestrictedTaskGitCredentials, RestrictedTaskGitCredentialsInput,
     RestrictedTaskGitCredentialsOutput, RestrictedTaskGitCredentialsResult,
-    RestrictedTaskGitCredentialsVariables,
+    RestrictedTaskGitCredentialsVariables, TaskGitCredentialProvider,
 };
 #[cfg(not(target_family = "wasm"))]
 use warp_graphql::queries::task_secrets::{ManagedSecretValue, TaskSecretsInput};
@@ -298,6 +298,8 @@ impl TaskStatusUpdate {
 /// JSON payload sent to the public `POST /agent/run` API.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SpawnAgentRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delegated_github_coauthor_user_uid: Option<String>,
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub metadata: HashMap<String, String>,
     /// None for skill-only or conversation-only invocations; omitted on the wire.
@@ -431,6 +433,8 @@ pub struct RunFollowupRequest {
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SendAgentMessageRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delegated_github_coauthor_user_uid: Option<String>,
     pub to: Vec<String>,
     pub subject: String,
     pub body: String,
@@ -1900,6 +1904,7 @@ pub trait AIClient: 'static + Send + Sync {
         workload_token: String,
         accepts_partial_refresh: bool,
         use_factory_repositories: bool,
+        providers: Option<Vec<TaskGitCredentialProvider>>,
     ) -> Result<RestrictedTaskGitCredentialsOutput, TaskGitCredentialsError>;
 
     /// Authorizes a REMOTE-2661 debug agent prompt against a retained environment-setup-failure
@@ -3486,6 +3491,7 @@ impl AIClient for ServerApi {
         workload_token: String,
         accepts_partial_refresh: bool,
         use_factory_repositories: bool,
+        providers: Option<Vec<TaskGitCredentialProvider>>,
     ) -> Result<RestrictedTaskGitCredentialsOutput, TaskGitCredentialsError> {
         let variables = RestrictedTaskGitCredentialsVariables {
             input: RestrictedTaskGitCredentialsInput {
@@ -3494,6 +3500,7 @@ impl AIClient for ServerApi {
                 accepts_partial_refresh: Some(accepts_partial_refresh),
                 use_factory_repositories: use_factory_repositories.then_some(true),
                 github_credential_contract_version: Some(1),
+                providers,
             },
             request_context: get_request_context(),
         };

@@ -927,7 +927,9 @@ fn partial_refresh_keeps_valid_github_when_other_forge_write_fails() -> Result<(
             response
                 .credentials
                 .push(other_forge_credential("gitlab.com"));
-            assert!(apply_partial_response(&ManagedStoreOwner::from("task"), response).is_err());
+            assert!(
+                apply_partial_response(&ManagedStoreOwner::from("task"), response, None).is_err()
+            );
             assert!(!fs::read_to_string(directory.join("credentials"))?.is_empty());
             Ok(())
         },
@@ -947,7 +949,9 @@ fn partial_refresh_clears_failed_github_and_updates_other_forge() -> Result<()> 
                 credentials: vec![other_forge_credential("gitlab.com")],
                 failed_hosts: vec!["github.com".into()],
             };
-            assert!(apply_partial_response(&ManagedStoreOwner::from("task"), response).is_err());
+            assert!(
+                apply_partial_response(&ManagedStoreOwner::from("task"), response, None).is_err()
+            );
             assert_eq!(fs::read_to_string(directory.join("credentials"))?, "");
             assert!(fs::read_to_string(home.join(".git-credentials"))?.contains("gitlab.com"));
             Ok(())
@@ -1033,7 +1037,7 @@ fn bootstrap_stops_after_bounded_temporary_failures() -> Result<()> {
             client
                 .expect_get_restricted_task_git_credentials()
                 .times(4)
-                .returning(|_, _, _, _| Err(temporary_error()));
+                .returning(|_, _, _, _, _| Err(temporary_error()));
             let client: Arc<dyn AIClient> = Arc::new(client);
 
             assert!(
@@ -1067,8 +1071,8 @@ fn bootstrap_does_not_install_partial_credentials() -> Result<()> {
             client
                 .expect_get_restricted_task_git_credentials()
                 .times(1)
-                .withf(|_, _, partial, _| !partial)
-                .returning(|_, _, _, _| {
+                .withf(|_, _, partial, _, providers| !partial && providers.is_none())
+                .returning(|_, _, _, _, _| {
                     let mut response = live_response();
                     response.failed_hosts.push("gitlab.com".into());
                     Ok(response)
@@ -1111,8 +1115,8 @@ fn failed_gitlab_refresh_still_updates_github() -> Result<()> {
             client
                 .expect_get_restricted_task_git_credentials()
                 .times(1)
-                .withf(|task, _, partial, factory| task == "task" && *partial && *factory)
-                .returning(|_, _, _, _| {
+                .withf(|task, _, partial, factory, _| task == "task" && *partial && *factory)
+                .returning(|_, _, _, _, _| {
                     let mut response = live_response();
                     response.failed_hosts.push("gitlab.com".into());
                     Ok(response)

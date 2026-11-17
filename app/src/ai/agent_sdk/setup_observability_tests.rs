@@ -37,6 +37,7 @@ const EXPECTED: &[(SetupStep, SetupScope)] = &[
     (SetupStep::EnvironmentSkillLoading, SetupScope::Agent),
     (SetupStep::GlobalSkillLoading, SetupScope::Agent),
     (SetupStep::SkillsDirsLoading, SetupScope::Agent),
+    (SetupStep::HarnessLaunchFileWarmup, SetupScope::Agent),
     (SetupStep::TaskDataFetch, SetupScope::Run),
     (SetupStep::SharedSessionEstablishment, SetupScope::Run),
     (SetupStep::ConversationResumeLoading, SetupScope::Run),

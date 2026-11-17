@@ -12,24 +12,63 @@ use uuid::Uuid;
 use super::super::super::claude_transcript::{
     ClaudeTranscriptEnvelope, claude_config_dir, session_transcript_path,
 };
+use super::super::connection::InboundNotification;
 use super::super::connection::tests::{FakeAgent, connect, rejecting_handler};
-use super::super::protocol::{InitializeResponse, SessionCapabilities};
+use super::super::protocol::InitializeResponse;
 use super::*;
 use crate::ai::agent_sdk::test_support::EnvVarGuard;
 use crate::server::server_api::harness_support::MockHarnessSupportClient;
 
-fn capabilities(resume: bool) -> SessionCapabilities {
-    let agent_capabilities = if resume {
-        json!({ "sessionCapabilities": { "resume": {} } })
-    } else {
-        json!({})
-    };
+/// The capabilities of an agent whose `initialize` answer carried `agent_capabilities`.
+fn announced(agent_capabilities: Value) -> AgentCapabilities {
     let response: InitializeResponse = serde_json::from_value(json!({
         "protocolVersion": 1,
         "agentCapabilities": agent_capabilities,
     }))
     .unwrap();
-    response.agent_capabilities.session_capabilities
+    response.agent_capabilities
+}
+
+fn capabilities(resume: bool, load: bool) -> AgentCapabilities {
+    let session_capabilities = if resume {
+        json!({ "resume": {} })
+    } else {
+        json!({})
+    };
+    announced(json!({ "loadSession": load, "sessionCapabilities": session_capabilities }))
+}
+
+const RESUME_ONLY: (bool, bool) = (true, false);
+const LOAD_ONLY: (bool, bool) = (false, true);
+const RESUME_AND_LOAD: (bool, bool) = (true, true);
+const NEITHER: (bool, bool) = (false, false);
+
+fn reopen(method: ReopenMethod) -> SessionPlan {
+    SessionPlan::Reopen {
+        method,
+        session_id: "prior-session".to_owned(),
+    }
+}
+
+fn session_update(text: &str) -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+            "sessionId": "prior-session",
+            "update": {
+                "sessionUpdate": "agent_message_chunk",
+                "content": { "type": "text", "text": text },
+            },
+        },
+    })
+}
+
+fn update_text(notification: &InboundNotification) -> &str {
+    assert_eq!(notification.method, "session/update");
+    notification.params["update"]["content"]["text"]
+        .as_str()
+        .unwrap()
 }
 
 fn conversation_id() -> ServerConversationToken {
@@ -228,50 +267,92 @@ fn pending_rehydration() -> (
 
 #[test]
 fn a_new_conversation_has_nothing_to_resume() {
-    let plan = block_on(plan_session(None, &capabilities(true))).unwrap();
-    assert_eq!(plan, SessionPlan::New);
+    for (resume, load) in [RESUME_ONLY, LOAD_ONLY, RESUME_AND_LOAD, NEITHER] {
+        let plan = block_on(plan_session(None, &capabilities(resume, load))).unwrap();
+        assert_eq!(plan, SessionPlan::New);
+    }
 }
 
 #[test]
 fn a_miss_decided_before_launch_is_kept_whatever_the_agent_supports() {
-    for resume in [true, false] {
+    for (resume, load) in [RESUME_ONLY, LOAD_ONLY, RESUME_AND_LOAD, NEITHER] {
         let miss = ResumeMiss::TranscriptRootUnresolved(CliTranscriptKind::Claude);
-        let plan = block_on(plan_session(Some(Err(miss.clone())), &capabilities(resume))).unwrap();
+        let plan = block_on(plan_session(
+            Some(Err(miss.clone())),
+            &capabilities(resume, load),
+        ))
+        .unwrap();
         assert_eq!(plan, SessionPlan::Missed(miss));
     }
 }
 
 #[test]
-fn a_rehydrated_session_is_resumed_when_the_agent_supports_it() {
-    let (pending, result_tx, _abort) = pending_rehydration();
-    result_tx.send(Ok("session".to_owned())).unwrap();
+fn a_rehydrated_session_is_reopened_through_the_method_the_agent_announces() {
+    for ((resume, load), method) in [
+        (RESUME_ONLY, ReopenMethod::Resume),
+        (LOAD_ONLY, ReopenMethod::Load),
+        (RESUME_AND_LOAD, ReopenMethod::Resume),
+    ] {
+        let (pending, result_tx, _abort) = pending_rehydration();
+        result_tx.send(Ok("session".to_owned())).unwrap();
 
-    let plan = block_on(plan_session(Some(Ok(pending)), &capabilities(true))).unwrap();
+        let plan = block_on(plan_session(Some(Ok(pending)), &capabilities(resume, load))).unwrap();
 
-    assert_eq!(plan, SessionPlan::Resume("session".to_owned()));
+        assert_eq!(
+            plan,
+            SessionPlan::Reopen {
+                method,
+                session_id: "session".to_owned(),
+            },
+            "resume={resume} load={load}"
+        );
+    }
 }
 
 #[test]
-fn the_download_is_abandoned_when_the_agent_cannot_resume() {
+fn the_reopening_method_follows_what_real_adapters_announce() {
+    let pi_acp = announced(json!({
+        "loadSession": true,
+        "sessionCapabilities": { "list": {}, "delete": {} },
+    }));
+    assert_eq!(ReopenMethod::for_agent(&pi_acp), Some(ReopenMethod::Load));
+
+    let claude_agent_acp = announced(json!({
+        "loadSession": true,
+        "sessionCapabilities": { "resume": {}, "list": {}, "close": {} },
+    }));
+    assert_eq!(
+        ReopenMethod::for_agent(&claude_agent_acp),
+        Some(ReopenMethod::Resume)
+    );
+
+    assert_eq!(ReopenMethod::for_agent(&announced(json!({}))), None);
+}
+
+#[test]
+fn the_download_is_abandoned_when_the_agent_cannot_reopen_a_session() {
     let (pending, _result_tx, abort) = pending_rehydration();
+    let (resume, load) = NEITHER;
 
     // The sender never fires, so waiting for the download would hang.
-    let plan = block_on(plan_session(Some(Ok(pending)), &capabilities(false))).unwrap();
+    let plan = block_on(plan_session(Some(Ok(pending)), &capabilities(resume, load))).unwrap();
 
-    assert_eq!(plan, SessionPlan::Missed(ResumeMiss::AgentCannotResume));
+    assert_eq!(plan, SessionPlan::Missed(ResumeMiss::AgentCannotReopen));
     assert!(abort.is_aborted());
 }
 
 #[test]
 fn a_transcript_found_missing_after_launch_is_a_miss() {
-    let (pending, result_tx, _abort) = pending_rehydration();
-    result_tx
-        .send(Err(RehydrateError::Missed(ResumeMiss::NoTranscript)))
-        .unwrap();
+    for (resume, load) in [RESUME_ONLY, LOAD_ONLY] {
+        let (pending, result_tx, _abort) = pending_rehydration();
+        result_tx
+            .send(Err(RehydrateError::Missed(ResumeMiss::NoTranscript)))
+            .unwrap();
 
-    let plan = block_on(plan_session(Some(Ok(pending)), &capabilities(true))).unwrap();
+        let plan = block_on(plan_session(Some(Ok(pending)), &capabilities(resume, load))).unwrap();
 
-    assert_eq!(plan, SessionPlan::Missed(ResumeMiss::NoTranscript));
+        assert_eq!(plan, SessionPlan::Missed(ResumeMiss::NoTranscript));
+    }
 }
 
 #[test]
@@ -283,7 +364,7 @@ fn a_rehydration_failure_fails_the_handshake_with_its_own_error() {
         )))
         .unwrap();
 
-    let error = block_on(plan_session(Some(Ok(pending)), &capabilities(true))).unwrap_err();
+    let error = block_on(plan_session(Some(Ok(pending)), &capabilities(true, false))).unwrap_err();
 
     assert!(
         matches!(&error, AgentDriverError::ConversationLoadFailed(message) if message.contains("503")),
@@ -296,7 +377,7 @@ fn a_dropped_rehydration_fails_the_handshake() {
     let (pending, result_tx, _abort) = pending_rehydration();
     drop(result_tx);
 
-    let error = block_on(plan_session(Some(Ok(pending)), &capabilities(true))).unwrap_err();
+    let error = block_on(plan_session(Some(Ok(pending)), &capabilities(false, true))).unwrap_err();
 
     assert!(
         matches!(&error, AgentDriverError::ConfigBuildFailed(_)),
@@ -365,7 +446,7 @@ fn a_rehydrated_session_is_resumed_in_place_of_a_new_one() {
     block_on(async {
         let open = open_session(
             &connection,
-            SessionPlan::Resume("prior-session".to_owned()),
+            reopen(ReopenMethod::Resume),
             "/workspace".to_owned(),
             Vec::new(),
             &clock,
@@ -381,9 +462,253 @@ fn a_rehydrated_session_is_resumed_in_place_of_a_new_one() {
         let (opened, ()) = join!(open, agent);
         let (session, origin) = opened.unwrap();
         assert_eq!(session.session_id, "prior-session");
-        assert_eq!(origin, SessionOrigin::Resumed);
+        assert_eq!(origin, SessionOrigin::Resumed(ReopenMethod::Resume));
     });
     assert_eq!(clock.phase(), "opening");
+}
+
+#[test]
+fn a_resumed_session_keeps_the_notifications_around_its_answer() {
+    let (connection, notifications, mut agent) = connect(rejecting_handler());
+    let clock = PhaseClock::start(HarnessSetupStage::SessionOpen, "opening");
+    block_on(async {
+        let open = open_session(
+            &connection,
+            reopen(ReopenMethod::Resume),
+            "/workspace".to_owned(),
+            Vec::new(),
+            &clock,
+        );
+        let agent = async {
+            let request = agent.next_message().await;
+            agent.send(session_update("before the answer")).await;
+            agent
+                .send(json!({"jsonrpc": "2.0", "id": request["id"], "result": {}}))
+                .await;
+            agent.send(session_update("after the answer")).await;
+        };
+        let (opened, ()) = join!(open, agent);
+        opened.unwrap();
+        assert_eq!(
+            update_text(&notifications.recv().await.unwrap()),
+            "before the answer"
+        );
+        assert_eq!(
+            update_text(&notifications.recv().await.unwrap()),
+            "after the answer"
+        );
+    });
+}
+
+#[test]
+fn a_loaded_session_discards_its_replayed_history_and_keeps_what_follows() {
+    let (connection, notifications, mut agent) = connect(rejecting_handler());
+    let clock = PhaseClock::start(HarnessSetupStage::SessionOpen, "opening");
+    block_on(async {
+        let open = open_session(
+            &connection,
+            reopen(ReopenMethod::Load),
+            "/workspace".to_owned(),
+            Vec::new(),
+            &clock,
+        );
+        let agent = async {
+            let request = agent.next_message().await;
+            assert_eq!(request["method"], "session/load");
+            assert_eq!(
+                request["params"],
+                json!({"sessionId": "prior-session", "cwd": "/workspace", "mcpServers": []})
+            );
+            agent.send(session_update("replayed prompt")).await;
+            agent.send(session_update("replayed answer")).await;
+            agent
+                .send(json!({"jsonrpc": "2.0", "method": "_adapter/replayed", "params": {}}))
+                .await;
+            agent
+                .send(json!({"jsonrpc": "2.0", "id": request["id"], "result": null}))
+                .await;
+            // Written straight after the answer, before the client has acted on it.
+            agent.send(session_update("live")).await;
+        };
+        let (opened, ()) = join!(open, agent);
+        let (session, origin) = opened.unwrap();
+        assert_eq!(session.session_id, "prior-session");
+        assert!(session.config_options.is_empty());
+        assert_eq!(origin, SessionOrigin::Resumed(ReopenMethod::Load));
+
+        assert_eq!(update_text(&notifications.recv().await.unwrap()), "live");
+        assert!(notifications.try_recv().is_err());
+    });
+    assert_eq!(clock.phase(), "opening");
+}
+
+#[test]
+fn a_refused_load_discards_its_partial_replay_and_falls_back_to_a_new_session() {
+    let (connection, notifications, mut agent) = connect(rejecting_handler());
+    let clock = PhaseClock::start(HarnessSetupStage::SessionOpen, "opening");
+    block_on(async {
+        let open = open_session(
+            &connection,
+            reopen(ReopenMethod::Load),
+            "/workspace".to_owned(),
+            Vec::new(),
+            &clock,
+        );
+        let agent = async {
+            let load = agent.next_message().await;
+            assert_eq!(load["method"], "session/load");
+            agent.send(session_update("replayed prompt")).await;
+            agent
+                .send(json!({
+                    "jsonrpc": "2.0",
+                    "id": load["id"],
+                    "error": {"code": -32603, "message": "Session file is corrupt"},
+                }))
+                .await;
+            let new = answer_next(&mut agent, Some(json!({"sessionId": "fresh"}))).await;
+            assert_eq!(new["method"], "session/new");
+            assert_eq!(
+                new["params"],
+                json!({"cwd": "/workspace", "mcpServers": []})
+            );
+            agent.send(session_update("live")).await;
+        };
+        let (opened, ()) = join!(open, agent);
+        let (session, origin) = opened.unwrap();
+        assert_eq!(session.session_id, "fresh");
+        assert!(
+            matches!(
+                &origin,
+                SessionOrigin::ResumeMissed(ResumeMiss::Rejected { method: ReopenMethod::Load, error })
+                    if error.contains("Session file is corrupt")
+            ),
+            "unexpected origin: {origin:?}"
+        );
+
+        assert_eq!(update_text(&notifications.recv().await.unwrap()), "live");
+        assert!(notifications.try_recv().is_err());
+    });
+    assert_eq!(clock.phase(), FALLBACK_SESSION_PHASE);
+    assert_eq!(clock.stage(), HarnessSetupStage::SessionOpen);
+}
+
+#[test]
+fn a_load_the_agent_does_not_answer_fails_the_handshake() {
+    let (connection, _notifications, mut agent) = connect(rejecting_handler());
+    let clock = PhaseClock::start(HarnessSetupStage::SessionOpen, "opening");
+    block_on(async {
+        let open = open_session(
+            &connection,
+            reopen(ReopenMethod::Load),
+            "/workspace".to_owned(),
+            Vec::new(),
+            &clock,
+        );
+        let agent = async {
+            let request = agent.next_message().await;
+            assert_eq!(request["method"], "session/load");
+            agent.send(session_update("replayed prompt")).await;
+            agent.hang_up()
+        };
+        let (opened, _read_loop) = join!(open, agent);
+        let error = opened.unwrap_err();
+        assert!(error.downcast_ref::<RpcError>().is_none(), "{error:#}");
+        let message = format!("{error:#}");
+        assert!(message.contains("session/load failed"), "{message}");
+        assert!(message.contains("closed"), "{message}");
+    });
+    // No fallback was attempted.
+    assert_eq!(clock.phase(), "opening");
+}
+
+#[test]
+fn a_load_answer_that_cannot_be_read_fails_the_handshake() {
+    let (connection, _notifications, mut agent) = connect(rejecting_handler());
+    let clock = PhaseClock::start(HarnessSetupStage::SessionOpen, "opening");
+    block_on(async {
+        let open = open_session(
+            &connection,
+            reopen(ReopenMethod::Load),
+            "/workspace".to_owned(),
+            Vec::new(),
+            &clock,
+        );
+        let agent = async {
+            let request = answer_next(&mut agent, Some(json!("not a session"))).await;
+            assert_eq!(request["method"], "session/load");
+        };
+        let (opened, ()) = join!(open, agent);
+        let error = opened.unwrap_err();
+        assert!(error.downcast_ref::<RpcError>().is_none(), "{error:#}");
+        let message = format!("{error:#}");
+        assert!(message.contains("session/load failed"), "{message}");
+    });
+    assert_eq!(clock.phase(), "opening");
+}
+
+#[test]
+fn each_session_origin_has_its_own_metric_label() {
+    let rejected = |method| {
+        SessionOrigin::ResumeMissed(ResumeMiss::Rejected {
+            method,
+            error: "refused".to_owned(),
+        })
+    };
+    let labelled = [
+        (SessionOrigin::New, "new"),
+        (SessionOrigin::Resumed(ReopenMethod::Resume), "resumed"),
+        (SessionOrigin::Resumed(ReopenMethod::Load), "loaded"),
+        (
+            SessionOrigin::ResumeMissed(ResumeMiss::Unsupported),
+            "resume_missed_unsupported",
+        ),
+        (
+            SessionOrigin::ResumeMissed(ResumeMiss::TranscriptRootUnresolved(
+                CliTranscriptKind::Claude,
+            )),
+            "resume_missed_transcript_root_unresolved",
+        ),
+        (
+            SessionOrigin::ResumeMissed(ResumeMiss::NoTranscript),
+            "resume_missed_no_transcript",
+        ),
+        (
+            SessionOrigin::ResumeMissed(ResumeMiss::AgentCannotReopen),
+            "resume_missed_agent_cannot_reopen",
+        ),
+        (rejected(ReopenMethod::Resume), "resume_missed_rejected"),
+        (rejected(ReopenMethod::Load), "resume_missed_load_rejected"),
+    ];
+    for (origin, label) in &labelled {
+        assert_eq!(origin.metric_label(), *label, "{origin:?}");
+        // The server drops a metric whose outcome label is longer than this.
+        assert!(label.len() <= 64, "{label}");
+    }
+    let mut labels = labelled.iter().map(|(_, label)| *label).collect::<Vec<_>>();
+    labels.sort_unstable();
+    labels.dedup();
+    assert_eq!(labels.len(), labelled.len());
+}
+
+#[test]
+fn a_miss_names_the_method_the_agent_would_not_take() {
+    assert_eq!(
+        ResumeMiss::AgentCannotReopen.to_string(),
+        "the agent supports neither session/resume nor session/load"
+    );
+    for (method, name) in [
+        (ReopenMethod::Resume, "session/resume"),
+        (ReopenMethod::Load, "session/load"),
+    ] {
+        let miss = ResumeMiss::Rejected {
+            method,
+            error: "ACP error -32002: Resource not found".to_owned(),
+        };
+        assert_eq!(
+            miss.to_string(),
+            format!("the agent refused {name}: ACP error -32002: Resource not found")
+        );
+    }
 }
 
 #[test]
@@ -393,7 +718,7 @@ fn a_refused_resume_falls_back_to_a_new_session_with_a_fresh_phase() {
     block_on(async {
         let open = open_session(
             &connection,
-            SessionPlan::Resume("prior-session".to_owned()),
+            reopen(ReopenMethod::Resume),
             "/workspace".to_owned(),
             Vec::new(),
             &clock,
@@ -408,7 +733,11 @@ fn a_refused_resume_falls_back_to_a_new_session_with_a_fresh_phase() {
         let (session, origin) = opened.unwrap();
         assert_eq!(session.session_id, "fresh");
         assert!(
-            matches!(&origin, SessionOrigin::ResumeMissed(ResumeMiss::Rejected(error)) if error.contains("Resource not found")),
+            matches!(
+                &origin,
+                SessionOrigin::ResumeMissed(ResumeMiss::Rejected { method: ReopenMethod::Resume, error })
+                    if error.contains("Resource not found")
+            ),
             "unexpected origin: {origin:?}"
         );
     });
@@ -423,7 +752,7 @@ fn a_resume_the_agent_does_not_answer_fails_the_handshake() {
     block_on(async {
         let open = open_session(
             &connection,
-            SessionPlan::Resume("prior-session".to_owned()),
+            reopen(ReopenMethod::Resume),
             "/workspace".to_owned(),
             Vec::new(),
             &clock,
