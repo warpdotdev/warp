@@ -59,6 +59,75 @@ fn sse_backoff_escalates_then_caps() {
 }
 
 #[test]
+fn waited_on_notifies_parent_recipient_from_child_sender() {
+    let event = AgentRunEvent {
+        kind: AgentRunEventKind::WaitedOn,
+        run_id: "parent-run".into(),
+        ref_id: Some("child-run".into()),
+        execution_id: None,
+        occurred_at: "2026-01-01T00:00:00Z".into(),
+        sequence: 42,
+    };
+    assert_eq!(
+        classify_family_event(&event, "parent-run"),
+        FamilyEvent::ParentSelf(event.clone())
+    );
+    let result = convert_lifecycle_events(&[event], "parent-run");
+    assert_eq!(result.len(), 1);
+    let Some(api::agent_event::Event::LifecycleEvent(lifecycle)) = &result[0].event else {
+        panic!("expected lifecycle event");
+    };
+    assert_eq!(lifecycle.sender_agent_id, "child-run");
+    assert_eq!(lifecycle.detail, Some(Detail::Waiting(())));
+}
+
+#[test]
+fn waited_on_notifies_child_recipient_from_parent_sender() {
+    let event = make_seq_event("run_waited_on", "child-run", Some("parent-run"), 43);
+    let result = convert_lifecycle_events(&[event], "child-run");
+    assert_eq!(result.len(), 1);
+    let Some(api::agent_event::Event::LifecycleEvent(lifecycle)) = &result[0].event else {
+        panic!("expected lifecycle event");
+    };
+    assert_eq!(lifecycle.sender_agent_id, "parent-run");
+    assert_eq!(lifecycle.detail, Some(Detail::Waiting(())));
+}
+
+#[test]
+fn waited_on_does_not_leak_from_child_stream_to_parent() {
+    let event = make_seq_event("run_waited_on", "child-run", Some("parent-run"), 43);
+    assert_eq!(
+        classify_family_event(&event, "parent-run"),
+        FamilyEvent::Opaque
+    );
+    assert!(convert_lifecycle_events(&[event], "parent-run").is_empty());
+}
+
+#[test]
+fn waited_on_without_waiter_is_not_actionable() {
+    let event = make_run_event("run_waited_on", "self-run", None);
+    assert_eq!(
+        classify_family_event(&event, "self-run"),
+        FamilyEvent::Opaque
+    );
+    assert!(convert_lifecycle_events(&[event], "self-run").is_empty());
+    let empty = make_run_event("run_waited_on", "self-run", Some(""));
+    assert!(convert_lifecycle_events(&[empty], "self-run").is_empty());
+}
+
+#[test]
+fn waited_on_projects_as_in_progress() {
+    assert_eq!(
+        conversation_status_from_lifecycle_event_type(api::LifecycleEventType::Waiting),
+        ConversationStatus::InProgress
+    );
+    assert_eq!(
+        AgentRunEventKind::WaitedOn.lifecycle_type(),
+        Some(api::LifecycleEventType::Waiting)
+    );
+}
+
+#[test]
 fn restored_local_child_observer_seed_generation() {
     App::test((), |mut app| async move {
         app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
@@ -726,14 +795,14 @@ fn threshold_exceeded_at_and_above_limit() {
 }
 
 fn make_run_event(event_type: &str, run_id: &str, ref_id: Option<&str>) -> AgentRunEvent {
-    AgentRunEvent {
-        kind: serde_json::from_value(serde_json::json!({"event_type": event_type})).unwrap(),
-        run_id: run_id.to_string(),
-        ref_id: ref_id.map(|s| s.to_string()),
-        execution_id: None,
-        occurred_at: "2026-01-01T00:00:00Z".to_string(),
-        sequence: 1,
-    }
+    serde_json::from_value(serde_json::json!({
+        "event_type": event_type,
+        "run_id": run_id,
+        "ref_id": ref_id,
+        "occurred_at": "2026-01-01T00:00:00Z",
+        "sequence": 1
+    }))
+    .unwrap()
 }
 
 fn make_seq_event(
