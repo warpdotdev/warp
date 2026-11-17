@@ -12,8 +12,7 @@ use ai::hooks::{
     HookBoundary, HookDispatcher, HookEnvelope, HookMessenger, HookNotice, HookNoticeKind,
     HookVerdict, MergedEffects, PromptProvenance, RegistrySnapshot,
 };
-use futures::FutureExt;
-use futures::future::BoxFuture;
+use warpui::r#async::BoxFuture;
 use warpui::{AppContext, ModelHandle, SingletonEntity};
 
 use super::envelope::{EnvelopeSite, envelope_for_prompt_submit};
@@ -113,6 +112,7 @@ struct PromptDispatch {
     envelope: HookEnvelope,
     dispatcher: Arc<HookDispatcher>,
     snapshot: Arc<RegistrySnapshot>,
+    is_headless: bool,
     messenger: Arc<dyn HookMessenger>,
 }
 
@@ -154,22 +154,19 @@ pub(crate) fn prepare_turn(
     let cancel = runtime.update(ctx, |runtime, _| {
         runtime.pending_prompts.begin(conversation_id)
     });
-    TurnPreparation::Pending(
-        async move {
-            let env = match barrier {
-                Some(barrier) => Some(barrier.await),
-                None => None,
-            };
-            if cancel.load(Ordering::Acquire) {
-                return PromptDecision::Cancelled;
-            }
-            match dispatch {
-                Some(dispatch) => run_prompt_dispatch(dispatch, env, cancel, conversation_id).await,
-                None => PromptDecision::Proceed(PromptTicket(cancel)),
-            }
+    TurnPreparation::Pending(Box::pin(async move {
+        let env = match barrier {
+            Some(barrier) => Some(barrier.await),
+            None => None,
+        };
+        if cancel.load(Ordering::Acquire) {
+            return PromptDecision::Cancelled;
         }
-        .boxed(),
-    )
+        match dispatch {
+            Some(dispatch) => run_prompt_dispatch(dispatch, env, cancel, conversation_id).await,
+            None => PromptDecision::Proceed(PromptTicket(cancel)),
+        }
+    }))
 }
 
 /// Prepares the `prompt.submit` dispatch for `prompt`, or `None` when no binding would run.
@@ -193,6 +190,7 @@ fn prompt_dispatch(
         envelope,
         dispatcher: runtime.dispatcher(),
         snapshot,
+        is_headless: runtime.is_headless(ctx),
         messenger: runtime.messenger(),
     })
 }
@@ -208,13 +206,14 @@ async fn run_prompt_dispatch(
         mut envelope,
         dispatcher,
         snapshot,
+        is_headless,
         messenger,
     } = dispatch;
     if let Some(env) = session_env {
         envelope.session_env = env;
     }
     let outcome = dispatcher
-        .dispatch(envelope, snapshot, cancel.clone())
+        .dispatch(envelope, snapshot, is_headless, cancel.clone())
         .await;
     if outcome.cancelled || cancel.load(Ordering::Acquire) {
         return PromptDecision::Cancelled;

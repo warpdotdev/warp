@@ -32,8 +32,7 @@ use ai::hooks::{
     PromptProvenance, TurnStopStatus,
 };
 use futures::FutureExt;
-use futures::future::BoxFuture;
-use warpui::r#async::Timer;
+use warpui::r#async::{BoxFuture, Timer};
 use warpui::{AppContext, ModelHandle, SingletonEntity};
 
 use super::envelope::{EnvelopeSite, envelope_for_turn_stop};
@@ -202,29 +201,28 @@ pub(crate) fn start_turn_stop(
     }
     HookRuntime::handle(ctx).update(ctx, |runtime, ctx| {
         let snapshot = runtime.snapshot(ctx);
+        let is_headless = runtime.is_headless(ctx);
         let held = runtime.turn_stops.held.get_mut(&conversation_id)?;
         let PendingTurnStop { envelope, timeout } = held.pending.take()?;
         let ticket = held.cancel.clone();
         let dispatch = runtime
             .dispatcher()
-            .dispatch(envelope, snapshot, ticket.clone());
-        Some(
-            async move {
-                let outcome = futures::select_biased! {
-                    outcome = dispatch.fuse() => Some(outcome),
-                    _ = Timer::after(timeout).fuse() => {
-                        log::warn!(
-                            "turn.stop hooks for {conversation_id} did not finish within \
-                             {timeout:?}; the turn is finished without them"
-                        );
-                        ticket.store(true, Ordering::Release);
-                        None
-                    }
-                };
-                TurnStopOutcome { ticket, outcome }
-            }
-            .boxed(),
-        )
+            .dispatch(envelope, snapshot, is_headless, ticket.clone());
+        let future: BoxFuture<'static, TurnStopOutcome> = Box::pin(async move {
+            let outcome = futures::select_biased! {
+                outcome = dispatch.fuse() => Some(outcome),
+                _ = Timer::after(timeout).fuse() => {
+                    log::warn!(
+                        "turn.stop hooks for {conversation_id} did not finish within \
+                         {timeout:?}; the turn is finished without them"
+                    );
+                    ticket.store(true, Ordering::Release);
+                    None
+                }
+            };
+            TurnStopOutcome { ticket, outcome }
+        });
+        Some(future)
     })
 }
 

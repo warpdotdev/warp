@@ -59,10 +59,11 @@ fn an_interactive_sdk_launch_uses_the_gui_surface() {
             false,
         );
         app.update(install_test_hooks);
+        let active_session = mock_active_session(&mut app);
         let envelope = app.read(|ctx| {
             envelope_for_session_start(
                 true,
-                &EnvelopeSite::for_new_conversation(AIConversationId::new()),
+                &EnvelopeSite::new(AIConversationId::new(), &active_session),
                 ctx,
             )
         });

@@ -12,9 +12,9 @@ use std::time::Duration;
 use ai::hooks::HookBoundary;
 use futures::FutureExt;
 use futures::channel::oneshot;
-use futures::future::{BoxFuture, Shared};
+use futures::future::Shared;
 use warp_core::execution_mode::AppExecutionMode;
-use warpui::r#async::Timer;
+use warpui::r#async::{BoxFuture, Timer};
 use warpui::{AppContext, ModelHandle, SingletonEntity};
 
 use super::envelope::{EnvelopeSite, envelope_for_session_start};
@@ -136,8 +136,11 @@ pub(crate) fn barrier(
     };
 
     let (sender, receiver) = oneshot::channel();
-    let done: SessionDone = receiver.map(|env| env.unwrap_or_default()).boxed().shared();
+    let done: BoxFuture<'static, SessionEnv> =
+        Box::pin(receiver.map(|env| env.unwrap_or_default()));
+    let done = done.shared();
     let wait = wait_for(done.clone(), timeout);
+    let is_headless = runtime.as_ref(ctx).is_headless(ctx);
     runtime.update(ctx, |runtime, ctx| {
         runtime.session_starts.states.insert(
             conversation_id,
@@ -146,7 +149,12 @@ pub(crate) fn barrier(
         let dispatch =
             runtime
                 .dispatcher()
-                .dispatch(envelope, snapshot, Arc::new(AtomicBool::new(false)));
+                .dispatch(
+                    envelope,
+                    snapshot,
+                    is_headless,
+                    Arc::new(AtomicBool::new(false)),
+                );
         ctx.spawn(dispatch, move |runtime, outcome, _| {
             let env = if outcome.cancelled {
                 Vec::new()
@@ -169,7 +177,7 @@ const POLL_FOR_IN_FLIGHT: Duration = Duration::from_secs(5);
 
 /// The hooks' answer, or no environment once `timeout` has passed without one.
 fn wait_for(done: SessionDone, timeout: Duration) -> BoxFuture<'static, SessionEnv> {
-    async move {
+    Box::pin(async move {
         futures::select_biased! {
             env = done.fuse() => env,
             _ = Timer::after(timeout).fuse() => {
@@ -180,8 +188,7 @@ fn wait_for(done: SessionDone, timeout: Duration) -> BoxFuture<'static, SessionE
                 Vec::new()
             }
         }
-    }
-    .boxed()
+    })
 }
 
 /// Whether `conversation_id` is a conversation this client drives that has not sent a request
