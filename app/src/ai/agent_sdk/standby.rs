@@ -70,11 +70,12 @@ const DELIVERY_CONFIRMATION_WINDOW: Duration = Duration::from_secs(5 * 60);
 
 /// Starts the standby lifecycle and exits the app after expiry or a fatal error.
 pub(super) fn run(ctx: &mut AppContext, args: RunCloudStandbyArgs) -> anyhow::Result<()> {
+    let supports_deferred_repositories = FeatureFlag::FactoryDeferredRepositories.is_enabled();
     let runner = ctx.add_singleton_model(|_| AgentDriverRunner);
     runner.update(ctx, move |_, ctx| {
         let spawner = ctx.spawner();
         ctx.spawn(
-            prepare_and_wait(spawner, args.standby_id),
+            prepare_and_wait(spawner, args.standby_id, supports_deferred_repositories),
             |_, result, ctx| match result {
                 Ok(()) => ctx.terminate_app(TerminationMode::ForceTerminate, None),
                 Err(err) => super::report_fatal_error(err, ctx),
@@ -90,10 +91,8 @@ pub(super) fn run(ctx: &mut AppContext, args: RunCloudStandbyArgs) -> anyhow::Re
 async fn prepare_and_wait(
     foreground: ModelSpawner<AgentDriverRunner>,
     sandbox_id: String,
+    supports_deferred_repositories: bool,
 ) -> anyhow::Result<()> {
-    let supports_deferred_repositories = foreground
-        .spawn(|_, _| FeatureFlag::FactoryDeferredRepositories.is_enabled())
-        .await?;
     let api = foreground
         .spawn(|_, ctx| ServerApiProvider::as_ref(ctx).get_prewarmed_sandbox_client())
         .await?;
