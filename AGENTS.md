@@ -184,11 +184,11 @@ for itself.
 - Use `cargo nextest` for parallel test execution
 - Integration tests use the custom framework in `crates/integration/` — this is **GUI-only**. TUI elements/screens are covered by render-to-lines unit tests instead (see the `tui-testing` skill).
 - Follow the Implementation Validation Order above; do not add a full presubmit run after targeted tests unless it was explicitly required.
-- Unit tests should be placed in separate files using the naming convention `${filename}_tests.rs` or `mod_test.rs`
+- Unit tests should be placed in separate files using the naming convention `${filename}_tests.rs` or `mod_tests.rs`
 - Test files should be included at the end of their corresponding module with:
   ```rust
   #[cfg(test)]
-  #[path = "filename_tests.rs"]  // or "mod_test.rs"
+  #[path = "filename_tests.rs"]  // or "mod_tests.rs"
   mod tests;
   ```
 

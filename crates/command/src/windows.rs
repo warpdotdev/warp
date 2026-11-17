@@ -1,8 +1,18 @@
-use std::ffi::OsStr;
+use std::ffi::{OsStr, c_void};
+use std::io;
 use std::os::windows::process::CommandExt as _;
 
 use anyhow::{Context, Result};
 use warp_errors::report_error;
+use windows::Win32::Foundation::{CloseHandle, HANDLE};
+use windows::Win32::System::JobObjects::{
+    AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+    JobObjectBasicAccountingInformation, JobObjectExtendedLimitInformation,
+    QueryInformationJobObject, SetInformationJobObject, TerminateJobObject,
+};
+use windows::Win32::System::Threading::{OpenProcess, PROCESS_SET_QUOTA, PROCESS_TERMINATE};
+use windows::core::PCWSTR;
 
 #[derive(Debug, thiserror::Error)]
 pub enum JobObjectError {
@@ -119,6 +129,82 @@ pub fn init() {
         .context("Failed to create job object for the program")
     {
         report_error!(e);
+    }
+}
+
+/// Exit code the processes in a terminated job report; nonzero so an ended child is never mistaken
+/// for a successful one.
+const TERMINATED_EXIT_CODE: u32 = 1;
+
+/// A Job Object that holds one spawned process and everything it starts. The job is created with
+/// kill-on-close and no breakaway, so the whole tree ends when the job is terminated or when the
+/// last handle to it closes, including when this process exits without running destructors.
+///
+/// Unlike [`JobObject`], the handle is owned and closed on drop, which is what a job scoped to one
+/// short-lived child wants. It calls the `windows` crate directly because `win32job::Job` has no
+/// way to terminate a job.
+#[derive(Debug)]
+pub(crate) struct ProcessJob {
+    // Kept as an integer so the job can travel with a `Send` future; `HANDLE` wraps a raw pointer.
+    handle: isize,
+}
+
+impl ProcessJob {
+    /// Creates a job and assigns the process with id `pid` to it. The caller must still hold the
+    /// process alive (for example through its `Child`) so the id cannot be recycled before the
+    /// assignment.
+    pub(crate) fn create_for(pid: u32) -> io::Result<Self> {
+        // SAFETY: plain Win32 calls with valid arguments; every handle opened here is closed on
+        // every path (the job through `Drop`, the process handle right after assignment).
+        unsafe {
+            let job = Self {
+                handle: CreateJobObjectW(None, PCWSTR::null())?.0 as isize,
+            };
+            let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+            limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            SetInformationJobObject(
+                job.handle(),
+                JobObjectExtendedLimitInformation,
+                &limits as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION as *const c_void,
+                size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            )?;
+            let process = OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, false, pid)?;
+            let assigned = AssignProcessToJobObject(job.handle(), process);
+            let _ = CloseHandle(process);
+            assigned?;
+            Ok(job)
+        }
+    }
+
+    pub(crate) fn terminate(&self) -> io::Result<()> {
+        // SAFETY: the handle is a live job handle owned by `self`.
+        unsafe { TerminateJobObject(self.handle(), TERMINATED_EXIT_CODE) }.map_err(Into::into)
+    }
+
+    pub(crate) fn active_processes(&self) -> io::Result<u32> {
+        let mut accounting = JOBOBJECT_BASIC_ACCOUNTING_INFORMATION::default();
+        // SAFETY: `accounting` is a correctly sized, writable buffer for the requested class.
+        unsafe {
+            QueryInformationJobObject(
+                Some(self.handle()),
+                JobObjectBasicAccountingInformation,
+                &mut accounting as *mut JOBOBJECT_BASIC_ACCOUNTING_INFORMATION as *mut c_void,
+                size_of::<JOBOBJECT_BASIC_ACCOUNTING_INFORMATION>() as u32,
+                None,
+            )?;
+        }
+        Ok(accounting.ActiveProcesses)
+    }
+
+    fn handle(&self) -> HANDLE {
+        HANDLE(self.handle as *mut c_void)
+    }
+}
+
+impl Drop for ProcessJob {
+    fn drop(&mut self) {
+        // SAFETY: the handle is owned by `self` and closed exactly once.
+        let _ = unsafe { CloseHandle(self.handle()) };
     }
 }
 

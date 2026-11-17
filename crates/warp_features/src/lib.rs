@@ -672,6 +672,9 @@ pub enum FeatureFlag {
     /// Enables loading and returning bundled skills in the SkillManager.
     BundledSkills,
 
+    /// Scopes cloud repository skill listings to the active working directory.
+    CwdScopedCloudSkills,
+
     /// Enables the Oz launch modal for introducing cloud agent features.
     OzLaunchModal,
 
@@ -1011,6 +1014,10 @@ pub enum FeatureFlag {
     /// loading the selected skills from other repositories.
     FactorySkillReferences,
     CreditEquivalentBillingUsage,
+
+    /// Refreshes the short-lived proxy credentials of managed MCP servers during an agent run,
+    /// before they expire and on first use after they have expired.
+    ManagedMcpCredentialRefresh,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -1090,6 +1097,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::PreviewUrlsMcp,
     FeatureFlag::GitMirrorCache,
     FeatureFlag::AgentPromptSteering,
+    FeatureFlag::ManagedMcpCredentialRefresh,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).

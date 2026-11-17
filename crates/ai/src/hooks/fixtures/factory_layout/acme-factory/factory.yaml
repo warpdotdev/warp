@@ -1,0 +1,22 @@
+# The factory definition the end-to-end tests stand in for. The tests build the run's hook list
+# from these entries by hand; nothing parses this file.
+schemaVersion: v1alpha1
+name: acme
+agentDefaults:
+  model: auto
+
+repositories:
+  - owner: acme
+    name: acme-factory
+  - owner: acme
+    name: api
+
+hooks:
+  # Every agent: record each shell command. Commands in this directory run from the repository
+  # root, so they name their scripts as `hooks/...`.
+  - format: cursor
+    repo:
+      owner: acme
+      name: acme-factory
+    path: hooks
+    strict: true

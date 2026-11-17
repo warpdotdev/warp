@@ -118,7 +118,8 @@ fn execution_bootstrap_response() -> Value {
                         "skipInitialTurn": false,
                         "idleOnCompleteSeconds": null,
                         "idleOnFailSeconds": null,
-                        "snapshotDisabled": false
+                        "snapshotDisabled": false,
+                        "agentHookSources": []
                     },
                     "attachments": [{
                         "fileId": "file-one",

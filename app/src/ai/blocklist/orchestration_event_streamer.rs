@@ -2817,6 +2817,9 @@ pub(super) fn conversation_status_from_lifecycle_event_type(
         // Forward-compat catch-all: matches the viewer's
         // `AmbientAgentTaskState::Unknown` → `Error` behaviour.
         api::LifecycleEventType::Unspecified => ConversationStatus::Error,
+        // TODO(seemeroland): Replace this temporary placeholder with a proper
+        // implementation.
+        warp_multi_agent_api::LifecycleEventType::Waiting => ConversationStatus::InProgress,
     }
 }
 

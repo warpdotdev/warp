@@ -1005,11 +1005,9 @@ impl TurnDriver {
                 match error.downcast_ref::<RpcError>() {
                     Some(rejection) => {
                         log::warn!(
-                            "The ACP agent advertised steering but rejected {} ({}: {}); \
+                            "The ACP agent advertised steering but rejected {} ({rejection}); \
                              follow-ups will cancel the turn instead",
                             protocol::METHOD_SESSION_STEERING,
-                            rejection.code,
-                            rejection.message
                         );
                         self.steering_supported = false;
                     }

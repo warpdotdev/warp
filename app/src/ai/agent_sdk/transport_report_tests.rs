@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use instant::Instant;
+use warp_server_client::graphql_helpers::AUTH_REJECTED_MESSAGE;
 
 use super::*;
 use crate::server::server_api::harness_support::MockHarnessSupportClient;

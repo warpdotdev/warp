@@ -476,7 +476,7 @@ fn test_file_notebook_mermaid_context_menu_does_not_show_copy_image() {
             file_notebook.context_menu.show_context_menu(source, ctx);
 
             let item_names = file_notebook.context_menu.item_names(ctx);
-            assert!(!item_names.contains(&"Copy image"));
+            assert!(!item_names.iter().any(|name| name == "Copy image"));
         });
     });
 }

@@ -765,6 +765,11 @@ impl TryFrom<AIAgentActionResult> for api::request::input::user_inputs::user_inp
             AIAgentActionResultType::WaitForEvents(wait_for_events_result) => {
                 Some(wait_for_events_result.try_into()?)
             }
+            AIAgentActionResultType::DeniedByHook { reason } => {
+                Some(api::request::input::tool_call_result::Result::DeniedByHook(
+                    api::DeniedByHook { reason },
+                ))
+            }
         };
         Ok(
             api::request::input::user_inputs::user_input::Input::ToolCallResult(

@@ -14,6 +14,8 @@ fn serializes_configuration_mutation_without_workload_token_input() {
             sandbox_id: "sandbox".into(),
             github_credential_contract_version: Some(1),
             runner_preparation_contract_version: Some(1),
+            supports_deferred_repositories: Some(true),
+            supports_agent_hooks: Some(true),
         },
         request_context: RequestContext {
             client_context: ClientContext { version: None },
@@ -91,7 +93,13 @@ fn serializes_configuration_mutation_without_workload_token_input() {
     let request = serde_json::to_value(operation).unwrap();
     assert_eq!(
         request["variables"]["input"],
-        json!({"sandboxId": "sandbox", "githubCredentialContractVersion": 1, "runnerPreparationContractVersion": 1})
+        json!({
+            "sandboxId": "sandbox",
+            "githubCredentialContractVersion": 1,
+            "runnerPreparationContractVersion": 1,
+            "supportsDeferredRepositories": true,
+            "supportsAgentHooks": true
+        })
     );
     assert!(request["variables"]["requestContext"].is_object());
 }
@@ -189,6 +197,8 @@ fn rejects_invalid_workload_token_headers() {
                 sandbox_id: "sandbox".into(),
                 github_credential_contract_version: Some(1),
                 runner_preparation_contract_version: Some(1),
+                supports_deferred_repositories: Some(true),
+                supports_agent_hooks: Some(true),
             },
             request_context: get_request_context(),
         });

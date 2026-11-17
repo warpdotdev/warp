@@ -21,6 +21,8 @@ pub struct PrewarmedSandboxConfigInput {
     pub sandbox_id: cynic::Id,
     pub github_credential_contract_version: Option<i32>,
     pub runner_preparation_contract_version: Option<i32>,
+    pub supports_deferred_repositories: Option<bool>,
+    pub supports_agent_hooks: Option<bool>,
 }
 
 #[derive(cynic::QueryFragment)]

@@ -1,0 +1,1 @@
+{ "version": 1, "hooks": { "afterAgentThought": [ { "command": "./hooks/after-thought.sh" } ] } }
