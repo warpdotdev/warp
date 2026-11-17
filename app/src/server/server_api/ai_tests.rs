@@ -37,11 +37,14 @@ fn list_run_previews_uses_ambient_run_auth_and_reads_app_ports() {
     let task_id: AmbientAgentTaskId = "550e8400-e29b-41d4-a716-446655440000".parse().unwrap();
     let request = {
         let mut server = warp_core::channel::ChannelState::mock_server();
-        server.mock("GET", format!("/api/v1/agent/runs/{task_id}/previews").as_str())
+        server
+            .mock("GET", format!("/api/v1/agent/runs/{task_id}/previews").as_str())
             .match_header(CLOUD_AGENT_ID_HEADER, task_id.to_string().as_str())
             .match_header(AMBIENT_WORKLOAD_TOKEN_HEADER, "test-workload-token")
             .with_status(200)
-            .with_body(r#"{"execution_id":42,"previews":[{"expires_at":"2026-10-22T18:00:00Z","port":3000}]}"#)
+            .with_body(
+                r#"{"execution_id":42,"previews":[{"id":"550e8400-e29b-41d4-a716-446655440003","url":"https://preview.example.test","expires_at":"2030-10-22T18:00:00Z","port":3000}]}"#,
+            )
             .expect(1)
             .create()
     };
@@ -50,9 +53,17 @@ fn list_run_previews_uses_ambient_run_auth_and_reads_app_ports() {
     assert_eq!(response.execution_id, Some(42));
     assert_eq!(response.previews.len(), 1);
     assert_eq!(response.previews[0].port, 3000);
+    assert_eq!(
+        response.previews[0].id.as_deref(),
+        Some("550e8400-e29b-41d4-a716-446655440003")
+    );
+    assert_eq!(
+        response.previews[0].url.as_deref(),
+        Some("https://preview.example.test")
+    );
+    assert!(response.previews[0].expires_at.is_some());
     request.assert();
 }
-
 #[test]
 fn list_run_previews_no_execution_and_older_server() {
     let task_id: AmbientAgentTaskId = "550e8400-e29b-41d4-a716-446655440001".parse().unwrap();

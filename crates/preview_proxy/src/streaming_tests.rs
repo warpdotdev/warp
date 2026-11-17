@@ -59,6 +59,10 @@ async fn preserves_response_trailers_and_repeated_headers() {
         .uri("/")
         .header(HOST, "ingress.invalid")
         .header("x-warp-preview-port", app_port.to_string())
+        .header(
+            "x-warp-preview-id",
+            tests::preview(app_port).id.unwrap().to_string(),
+        )
         .header("te", "trailers")
         .body(Full::new(Bytes::new()))
         .unwrap();

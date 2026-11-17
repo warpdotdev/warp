@@ -1,12 +1,16 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::thread::JoinHandle;
+use std::time::SystemTime;
 
-use ::preview_proxy::Proxy;
-use anyhow::Context as _;
+use ::preview_proxy::{PortSource, PreviewRecord, Proxy};
+use anyhow::{Context as _, bail};
 use tokio_util::sync::CancellationToken;
+use url::Url;
+use uuid::Uuid;
 
 use crate::ai::ambient_agents::AmbientAgentTaskId;
-use crate::server::server_api::ai::AIClient;
+use crate::server::server_api::ai::{AIClient, ListRunPreviewsResponse};
 
 pub(super) struct Manager {
     cancel: CancellationToken,
@@ -79,23 +83,99 @@ impl Manager {
     }
 }
 
-impl ::preview_proxy::PortSource for Client {
-    async fn ports(&self) -> anyhow::Result<Vec<u16>> {
+impl PortSource for Client {
+    async fn previews(&self) -> anyhow::Result<Vec<PreviewRecord>> {
         let response = self.client.list_run_previews(&self.task_id).await?;
-        anyhow::ensure!(
-            response.execution_id == Some(self.execution_id),
-            "Preview execution mismatch: expected {}, received {:?}",
-            self.execution_id,
-            response.execution_id
-        );
-        Ok(response
-            .previews
-            .into_iter()
-            .map(|preview| preview.port)
-            .collect())
+        preview_records(response, self.execution_id)
     }
 }
 
+fn preview_records(
+    response: ListRunPreviewsResponse,
+    expected_execution_id: i64,
+) -> anyhow::Result<Vec<PreviewRecord>> {
+    anyhow::ensure!(
+        response.execution_id == Some(expected_execution_id),
+        "Preview execution mismatch: expected {}, received {:?}",
+        expected_execution_id,
+        response.execution_id
+    );
+
+    let mut ids = HashSet::new();
+    let mut ports = HashSet::new();
+    let mut origins = HashSet::new();
+    let now = SystemTime::now();
+    response
+        .previews
+        .into_iter()
+        .map(|preview| {
+            anyhow::ensure!(
+                preview.port >= 1024,
+                "Invalid preview app port {}",
+                preview.port
+            );
+            anyhow::ensure!(ports.insert(preview.port), "Duplicate preview app port");
+            match (preview.id, preview.url, preview.expires_at) {
+                (None, _, expiry) => {
+                    let expires_at = expiry.map(SystemTime::from);
+                    if let Some(expires_at) = expires_at {
+                        anyhow::ensure!(
+                            expires_at > now,
+                            "Legacy preview record is already expired"
+                        );
+                    }
+                    Ok(PreviewRecord {
+                        id: None,
+                        port: preview.port,
+                        origin: None,
+                        expires_at,
+                    })
+                }
+                (Some(id_string), Some(public_url), Some(expiry)) => {
+                    let id = Uuid::parse_str(&id_string).context("Invalid preview UUID")?;
+                    anyhow::ensure!(
+                        !id.is_nil() && id.to_string() == id_string,
+                        "Preview UUID must be non-nil and use canonical lowercase formatting"
+                    );
+                    anyhow::ensure!(ids.insert(id), "Duplicate preview UUID");
+                    let origin = preview_origin(&public_url)?;
+                    anyhow::ensure!(origins.insert(origin.clone()), "Duplicate preview origin");
+
+                    let expires_at: SystemTime = expiry.into();
+                    anyhow::ensure!(expires_at > now, "Preview record is already expired");
+                    Ok(PreviewRecord {
+                        id: Some(id),
+                        port: preview.port,
+                        origin: Some(origin),
+                        expires_at: Some(expires_at),
+                    })
+                }
+                (Some(_), _, _) => bail!("Preview record has incomplete identity metadata"),
+            }
+        })
+        .collect()
+}
+
+fn preview_origin(public_url: &str) -> anyhow::Result<String> {
+    let url = Url::parse(public_url).context("Invalid preview public URL")?;
+    anyhow::ensure!(
+        matches!(url.scheme(), "http" | "https"),
+        "Preview URL must use HTTP or HTTPS"
+    );
+    anyhow::ensure!(
+        url.username().is_empty() && url.password().is_none(),
+        "Preview URL must not contain credentials"
+    );
+    anyhow::ensure!(
+        url.path() == "/" && url.query().is_none() && url.fragment().is_none(),
+        "Preview URL must contain only an origin"
+    );
+    let origin = url.origin().ascii_serialization();
+    if origin == "null" {
+        bail!("Preview URL has no HTTP origin");
+    }
+    Ok(origin)
+}
 impl Drop for Manager {
     fn drop(&mut self) {
         self.cancel.cancel();

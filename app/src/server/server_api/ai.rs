@@ -1284,6 +1284,12 @@ pub struct ListRunPreviewsResponse {
 #[derive(Debug, serde::Deserialize)]
 pub struct RunPreview {
     pub port: u16,
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub expires_at: Option<DateTime<Utc>>,
 }
 
 impl<'de> serde::Deserialize<'de> for ListRunsResponse {
