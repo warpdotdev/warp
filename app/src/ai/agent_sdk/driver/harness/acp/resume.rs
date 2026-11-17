@@ -29,6 +29,7 @@ use futures::channel::oneshot;
 use futures::future::AbortHandle;
 use instant::Instant;
 use parking_lot::Mutex;
+use serde_json::Value;
 use warpui::r#async::Timer;
 use warpui::r#async::executor::Background;
 
@@ -395,6 +396,7 @@ pub(super) async fn open_session(
     plan: SessionPlan,
     cwd: String,
     mcp_servers: Vec<McpServer>,
+    meta: Option<Value>,
     clock: &PhaseClock,
 ) -> Result<(NewSessionResponse, SessionOrigin)> {
     let origin = match plan {
@@ -410,6 +412,7 @@ pub(super) async fn open_session(
                                 session_id: session_id.clone(),
                                 cwd: cwd.clone(),
                                 mcp_servers: mcp_servers.clone(),
+                                meta: meta.clone(),
                             },
                         )
                         .await
@@ -422,6 +425,7 @@ pub(super) async fn open_session(
                                 session_id: session_id.clone(),
                                 cwd: cwd.clone(),
                                 mcp_servers: mcp_servers.clone(),
+                                meta: meta.clone(),
                             },
                         )
                         .await
@@ -448,7 +452,11 @@ pub(super) async fn open_session(
     let session = connection
         .request(
             protocol::METHOD_SESSION_NEW,
-            NewSessionParams { cwd, mcp_servers },
+            NewSessionParams {
+                cwd,
+                mcp_servers,
+                meta,
+            },
         )
         .await
         .context("session/new failed")?;

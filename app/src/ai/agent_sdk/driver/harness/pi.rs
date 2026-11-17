@@ -14,6 +14,7 @@ use warp_managed_secrets::ManagedSecretValue;
 
 use super::JSONMCPServer;
 use super::json_utils::{read_json_file_or_default, write_json_file};
+use super::mcp_credential_broker::McpCredentialHelper;
 use super::skill_dirs_publish::{HarnessSupportSkills, publish_skills_for_harness};
 use crate::ai::ambient_agents::task::HarnessModelConfig;
 use crate::ai::mcp::JSONTransportType;
@@ -67,6 +68,7 @@ pub(super) fn prepare_pi_environment_config(
     system_prompt: Option<&str>,
     resolved_env_vars: &HashMap<OsString, OsString>,
     resolved_mcp_servers: &HashMap<String, JSONMCPServer>,
+    credential_helpers: &HashMap<String, McpCredentialHelper>,
     resolved_secrets: &HashMap<String, ManagedSecretValue>,
     third_party_harness_model_config: Option<&HarnessModelConfig>,
 ) -> Result<PathBuf> {
@@ -89,7 +91,7 @@ pub(super) fn prepare_pi_environment_config(
     }
     write_json_file(
         &agent_dir.join("mcp.json"),
-        &pi_mcp_config(resolved_mcp_servers),
+        &pi_mcp_config(resolved_mcp_servers, credential_helpers),
         "Failed to serialize Pi MCP configuration",
     )?;
     prepare_pi_credentials(&agent_dir, resolved_env_vars, resolved_secrets)?;
@@ -274,7 +276,13 @@ fn prepare_pi_system_prompt(agent_dir: &Path, cwd: &Path, prompt: &str) -> Resul
     fs::write(agent_dir.join(slot), prompt).context("Failed to write Pi system prompt")
 }
 
-fn pi_mcp_config(servers: &HashMap<String, JSONMCPServer>) -> Value {
+/// The MCP adapter's configuration for `servers`. A header with a credential helper is written
+/// as the adapter's command form, a value starting with `!`, which the adapter runs for the
+/// header's value whenever it connects.
+fn pi_mcp_config(
+    servers: &HashMap<String, JSONMCPServer>,
+    credential_helpers: &HashMap<String, McpCredentialHelper>,
+) -> Value {
     let servers: Map<String, Value> = servers
         .iter()
         .map(|(name, server)| {
@@ -285,6 +293,19 @@ fn pi_mcp_config(servers: &HashMap<String, JSONMCPServer>) -> Value {
                     json!({"command": command, "args": args, "env": env})
                 }
                 JSONTransportType::SSEServer { url, headers } => {
+                    let credential_helper = credential_helpers.get(name);
+                    let headers: HashMap<&String, String> = headers
+                        .iter()
+                        .map(|(header, value)| {
+                            let value = match credential_helper {
+                                Some(helper) if helper.header_name.eq_ignore_ascii_case(header) => {
+                                    format!("!{}", helper.value_command())
+                                }
+                                Some(_) | None => value.clone(),
+                            };
+                            (header, value)
+                        })
+                        .collect();
                     json!({"url": url, "headers": headers})
                 }
             };

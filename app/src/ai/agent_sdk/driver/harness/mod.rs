@@ -20,6 +20,8 @@ use warp_core::channel::ChannelState;
 use warp_managed_secrets::ManagedSecretValue;
 use warpui::{ModelHandle, ModelSpawner, SingletonEntity};
 
+use self::mcp_credential_broker::McpCredentialHelper;
+use super::managed_mcp_refresh::ManagedMcpLease;
 use super::terminal::{CommandHandle, TerminalDriver};
 use super::{
     AgentDriver, AgentDriverError, HarnessSetupStage,
@@ -53,6 +55,8 @@ mod gemini;
 mod harness_persistence;
 mod json_utils;
 pub(crate) mod launch_warmup;
+mod local_socket;
+pub(crate) mod mcp_credential_broker;
 mod pi;
 mod pi_transcript;
 mod pi_usage;
@@ -157,6 +161,12 @@ pub(crate) struct ResolvedMCPServers {
     /// The installation id of each server, which the native conversation records as
     /// `CallMCPTool.server_id`.
     pub(crate) installation_ids: HashMap<String, Uuid>,
+    /// The expiring credential in the config of each server that has one, until a credential
+    /// broker takes them to serve.
+    pub(crate) leases: HashMap<String, ManagedMcpLease>,
+    /// The command that prints the current credential of each server whose harness may run one
+    /// in place of the fixed credential in its config.
+    pub(crate) credential_helpers: HashMap<String, McpCredentialHelper>,
 }
 
 /// Trait for third-party agent harnesses that execute prompts via their own CLIs.
@@ -570,6 +580,14 @@ pub(crate) fn auth_check_command_for(harness: Harness) -> Option<String> {
         return None;
     };
     third_party.auth_check_command()
+}
+
+/// Parses a `major.minor.patch` release version, ignoring any pre-release or build suffix.
+pub(super) fn parse_release_version(version: &str) -> Option<(u64, u64, u64)> {
+    let release = version.trim().split(['-', '+']).next()?;
+    let mut parts = release.split('.').map(|part| part.parse::<u64>().ok());
+    let version = (parts.next()??, parts.next()??, parts.next()??);
+    parts.next().is_none().then_some(version)
 }
 
 /// Check that `cli` is installed and on PATH, returning a `HarnessSetupFailed`
