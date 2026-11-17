@@ -220,9 +220,7 @@ impl OrchestrationChildTracker {
         kind: api::LifecycleEventType,
         ctx: &mut ModelContext<OrchestrationEventStreamer>,
     ) {
-        let Some(status) = conversation_status_from_lifecycle_event_type(kind) else {
-            return;
-        };
+        let status = conversation_status_from_lifecycle_event_type(kind);
         let tracker_known = self.children.contains_key(&task_id);
         if tracker_known {
             if let Some(child) = self.children.get_mut(&task_id) {
@@ -495,7 +493,7 @@ impl OrchestrationChildTracker {
         let child = self.children.get(task_id)?;
         child
             .last_lifecycle
-            .and_then(conversation_status_from_lifecycle_event_type)
+            .map(conversation_status_from_lifecycle_event_type)
     }
 
     /// Test-only: number of metadata-fetch dispatches issued so far.

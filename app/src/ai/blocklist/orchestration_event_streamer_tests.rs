@@ -116,10 +116,10 @@ fn waited_on_without_waiter_is_not_actionable() {
 }
 
 #[test]
-fn waited_on_does_not_change_conversation_status() {
+fn waited_on_projects_as_in_progress() {
     assert_eq!(
         conversation_status_from_lifecycle_event_type(api::LifecycleEventType::Waiting),
-        None
+        ConversationStatus::InProgress
     );
     assert_eq!(
         AgentRunEventKind::WaitedOn.lifecycle_type(),
@@ -2081,7 +2081,7 @@ fn on_conversation_removed_prunes_killed_child_run_id_from_parent_but_keeps_tomb
 #[test]
 fn lifecycle_event_type_in_progress_maps_to_in_progress() {
     assert_eq!(
-        conversation_status_from_lifecycle_event_type(api::LifecycleEventType::InProgress).unwrap(),
+        conversation_status_from_lifecycle_event_type(api::LifecycleEventType::InProgress),
         ConversationStatus::InProgress
     );
 }
@@ -2089,7 +2089,7 @@ fn lifecycle_event_type_in_progress_maps_to_in_progress() {
 #[test]
 fn lifecycle_event_type_succeeded_maps_to_success() {
     assert_eq!(
-        conversation_status_from_lifecycle_event_type(api::LifecycleEventType::Succeeded).unwrap(),
+        conversation_status_from_lifecycle_event_type(api::LifecycleEventType::Succeeded),
         ConversationStatus::Success
     );
 }
@@ -2097,7 +2097,7 @@ fn lifecycle_event_type_succeeded_maps_to_success() {
 #[test]
 fn lifecycle_event_type_failed_maps_to_error() {
     assert_eq!(
-        conversation_status_from_lifecycle_event_type(api::LifecycleEventType::Failed).unwrap(),
+        conversation_status_from_lifecycle_event_type(api::LifecycleEventType::Failed),
         ConversationStatus::Error
     );
 }
@@ -2105,7 +2105,7 @@ fn lifecycle_event_type_failed_maps_to_error() {
 #[test]
 fn lifecycle_event_type_errored_maps_to_error() {
     assert_eq!(
-        conversation_status_from_lifecycle_event_type(api::LifecycleEventType::Errored).unwrap(),
+        conversation_status_from_lifecycle_event_type(api::LifecycleEventType::Errored),
         ConversationStatus::Error
     );
 }
@@ -2113,7 +2113,7 @@ fn lifecycle_event_type_errored_maps_to_error() {
 #[test]
 fn lifecycle_event_type_cancelled_maps_to_cancelled() {
     assert_eq!(
-        conversation_status_from_lifecycle_event_type(api::LifecycleEventType::Cancelled).unwrap(),
+        conversation_status_from_lifecycle_event_type(api::LifecycleEventType::Cancelled),
         ConversationStatus::Cancelled
     );
 }
@@ -2124,7 +2124,7 @@ fn lifecycle_event_type_blocked_maps_to_blocked_with_empty_action() {
     // `blocked_action`. The wire event does not currently carry a
     // `blocked_action` payload.
     assert_eq!(
-        conversation_status_from_lifecycle_event_type(api::LifecycleEventType::Blocked).unwrap(),
+        conversation_status_from_lifecycle_event_type(api::LifecycleEventType::Blocked),
         ConversationStatus::Blocked {
             blocked_action: String::new(),
         }
@@ -2135,7 +2135,7 @@ fn lifecycle_event_type_blocked_maps_to_blocked_with_empty_action() {
 #[allow(deprecated)]
 fn lifecycle_event_type_legacy_started_maps_to_in_progress() {
     assert_eq!(
-        conversation_status_from_lifecycle_event_type(api::LifecycleEventType::Started).unwrap(),
+        conversation_status_from_lifecycle_event_type(api::LifecycleEventType::Started),
         ConversationStatus::InProgress
     );
 }
@@ -2144,7 +2144,7 @@ fn lifecycle_event_type_legacy_started_maps_to_in_progress() {
 #[allow(deprecated)]
 fn lifecycle_event_type_legacy_restarted_maps_to_in_progress() {
     assert_eq!(
-        conversation_status_from_lifecycle_event_type(api::LifecycleEventType::Restarted).unwrap(),
+        conversation_status_from_lifecycle_event_type(api::LifecycleEventType::Restarted),
         ConversationStatus::InProgress
     );
 }
@@ -2153,7 +2153,7 @@ fn lifecycle_event_type_legacy_restarted_maps_to_in_progress() {
 #[allow(deprecated)]
 fn lifecycle_event_type_legacy_idle_maps_to_success() {
     assert_eq!(
-        conversation_status_from_lifecycle_event_type(api::LifecycleEventType::Idle).unwrap(),
+        conversation_status_from_lifecycle_event_type(api::LifecycleEventType::Idle),
         ConversationStatus::Success
     );
 }
@@ -2165,8 +2165,7 @@ fn unknown_lifecycle_maps_to_error() {
     // matching that keeps the pill bar in a defined state for any future
     // wire-level variant the client doesn't recognize.
     assert_eq!(
-        conversation_status_from_lifecycle_event_type(api::LifecycleEventType::Unspecified)
-            .unwrap(),
+        conversation_status_from_lifecycle_event_type(api::LifecycleEventType::Unspecified),
         ConversationStatus::Error
     );
 }

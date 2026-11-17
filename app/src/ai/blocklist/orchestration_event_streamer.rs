@@ -2649,9 +2649,7 @@ impl OrchestrationEventStreamer {
             let Some(lifecycle_type) = event.kind.lifecycle_type() else {
                 continue;
             };
-            let Some(status) = conversation_status_from_lifecycle_event_type(lifecycle_type) else {
-                continue;
-            };
+            let status = conversation_status_from_lifecycle_event_type(lifecycle_type);
             ctx.emit(OrchestrationEventStreamerEvent::WatchedRunStatusChanged {
                 owner_conversation_id: conversation_id,
                 run_id: event.run_id.clone(),
@@ -2799,19 +2797,19 @@ fn parse_occurred_at(s: &str) -> prost_types::Timestamp {
 ///
 /// `Blocked` is mapped with an empty `blocked_action`: the wire event does
 /// not currently carry a `blocked_action` payload, matching the REST path.
-/// Notifications that do not represent a status transition return `None`.
 #[allow(deprecated)]
 pub(super) fn conversation_status_from_lifecycle_event_type(
     event_type: api::LifecycleEventType,
-) -> Option<ConversationStatus> {
-    Some(match event_type {
+) -> ConversationStatus {
+    match event_type {
         // Working states. Legacy `Started` and `Restarted` collapse to
         // `InProgress`, matching `convert_lifecycle_events` above and the
         // viewer's `AmbientAgentTaskState::{Queued,Pending,Claimed,InProgress}`
         // → `InProgress` rule.
         api::LifecycleEventType::InProgress
         | api::LifecycleEventType::Started
-        | api::LifecycleEventType::Restarted => ConversationStatus::InProgress,
+        | api::LifecycleEventType::Restarted
+        | api::LifecycleEventType::Waiting => ConversationStatus::InProgress,
         // Terminals.
         api::LifecycleEventType::Succeeded | api::LifecycleEventType::Idle => {
             ConversationStatus::Success
@@ -2828,8 +2826,7 @@ pub(super) fn conversation_status_from_lifecycle_event_type(
         // Forward-compat catch-all: matches the viewer's
         // `AmbientAgentTaskState::Unknown` → `Error` behaviour.
         api::LifecycleEventType::Unspecified => ConversationStatus::Error,
-        api::LifecycleEventType::Waiting => return None,
-    })
+    }
 }
 
 fn convert_lifecycle_events(events: &[AgentRunEvent], self_run_id: &str) -> Vec<api::AgentEvent> {
