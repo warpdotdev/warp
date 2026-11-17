@@ -2496,7 +2496,20 @@ fn command_to_telemetry_event(command: &CliCommand) -> CliTelemetryEvent {
                         artifact_type: "pull_request",
                     }
                 }
+                ReportArtifactCommand::Screenshot(_) => {
+                    CliTelemetryEvent::HarnessSupportReportArtifact {
+                        artifact_type: "screenshot",
+                    }
+                }
+                ReportArtifactCommand::Video(_) => {
+                    CliTelemetryEvent::HarnessSupportReportArtifact {
+                        artifact_type: "video",
+                    }
+                }
             },
+            HarnessSupportCommand::PrMediaMarkdown => {
+                CliTelemetryEvent::HarnessSupportPrMediaMarkdown
+            }
             HarnessSupportCommand::ReportExternalReference(_) => {
                 CliTelemetryEvent::HarnessSupportReportArtifact {
                     artifact_type: "external_reference",

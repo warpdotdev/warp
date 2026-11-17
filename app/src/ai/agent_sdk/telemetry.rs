@@ -166,6 +166,8 @@ pub(super) enum CliTelemetryEvent {
     },
     /// Executing `warp harness-support report-shutdown`
     HarnessSupportReportShutdown,
+    /// Executing `warp harness-support pr-media-markdown`
+    HarnessSupportPrMediaMarkdown,
     /// Executing `warp runner list`
     RunnerList,
     /// Executing `warp runner create`
@@ -270,6 +272,7 @@ impl TelemetryEvent for CliTelemetryEvent {
                 Some(json!({ "success": success }))
             }
             CliTelemetryEvent::HarnessSupportReportShutdown => None,
+            CliTelemetryEvent::HarnessSupportPrMediaMarkdown => None,
             CliTelemetryEvent::RunnerList => None,
             CliTelemetryEvent::RunnerCreate => None,
             CliTelemetryEvent::RunnerUpdate => None,
@@ -401,6 +404,9 @@ impl TelemetryEventDesc for CliTelemetryEventDiscriminants {
             }
             CliTelemetryEventDiscriminants::HarnessSupportReportShutdown => {
                 "CLI.Execute.HarnessSupport.ReportShutdown"
+            }
+            CliTelemetryEventDiscriminants::HarnessSupportPrMediaMarkdown => {
+                "CLI.Execute.HarnessSupport.PrMediaMarkdown"
             }
             CliTelemetryEventDiscriminants::RunnerList => "CLI.Execute.Runner.List",
             CliTelemetryEventDiscriminants::RunnerCreate => "CLI.Execute.Runner.Create",
@@ -572,6 +578,9 @@ impl TelemetryEventDesc for CliTelemetryEventDiscriminants {
             CliTelemetryEventDiscriminants::HarnessSupportReportShutdown => {
                 "Reported agent shutdown via harness-support from the Warp CLI"
             }
+            CliTelemetryEventDiscriminants::HarnessSupportPrMediaMarkdown => {
+                "Rendered pull request media markdown via harness-support from the Warp CLI"
+            }
             CliTelemetryEventDiscriminants::RunnerList => "Listed runners from the Warp CLI",
             CliTelemetryEventDiscriminants::RunnerCreate => "Created a runner from the Warp CLI",
             CliTelemetryEventDiscriminants::RunnerUpdate => "Updated a runner from the Warp CLI",
@@ -587,7 +596,10 @@ impl TelemetryEventDesc for CliTelemetryEventDiscriminants {
             Self::HarnessSupportPing
             | Self::HarnessSupportReportArtifact
             | Self::HarnessSupportNotifyUser
-            | Self::HarnessSupportFinishTask => EnablementState::Flag(FeatureFlag::AgentHarness),
+            | Self::HarnessSupportFinishTask
+            | Self::HarnessSupportPrMediaMarkdown => {
+                EnablementState::Flag(FeatureFlag::AgentHarness)
+            }
             Self::ArtifactUpload | Self::ArtifactGet | Self::ArtifactDownload => {
                 EnablementState::Flag(FeatureFlag::ArtifactCommand)
             }
