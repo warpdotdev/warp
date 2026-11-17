@@ -313,44 +313,12 @@ fn default_timeouts_follow_the_boundary_class() {
 }
 
 #[test]
-fn runs_and_hidden_children_are_headless_and_interactive_surfaces_are_not() {
-    let headless = [
-        HookSurface::OzRun,
-        HookSurface::CliRun,
-        HookSurface::LocalChild,
-        HookSurface::Gui,
-        HookSurface::Tui,
-    ]
-    .into_iter()
-    .filter(HookSurface::is_headless)
-    .collect::<Vec<_>>();
-    assert_eq!(
-        headless,
-        vec![
-            HookSurface::OzRun,
-            HookSurface::CliRun,
-            HookSurface::LocalChild
-        ]
-    );
-}
-
-#[test]
 fn source_kind_priority_follows_the_documented_order() {
-    let mut kinds = [
-        HookSourceKind::ProjectCursorFile,
-        HookSourceKind::RunDelivered,
-        HookSourceKind::FactoryWide,
-        HookSourceKind::FactoryAgent,
-    ];
+    let mut kinds = [HookSourceKind::FactoryWide, HookSourceKind::FactoryAgent];
     kinds.sort_by_key(HookSourceKind::priority);
     assert_eq!(
         kinds,
-        [
-            HookSourceKind::FactoryAgent,
-            HookSourceKind::FactoryWide,
-            HookSourceKind::RunDelivered,
-            HookSourceKind::ProjectCursorFile,
-        ]
+        [HookSourceKind::FactoryAgent, HookSourceKind::FactoryWide]
     );
     let factory = test_source_id_of_kind("agent", HookSourceKind::FactoryAgent);
     assert_eq!(factory.to_string(), "agent");

@@ -11,7 +11,7 @@ use parking_lot::Mutex;
 use serde_json::{Value, json};
 use warpui::r#async::executor::Background;
 
-use super::{AcpConnection, AgentRequestHandler, Notifications, RpcError};
+use super::{AcpConnection, AgentRequestHandler, MAX_RENDERED_DATA_CHARS, Notifications, RpcError};
 
 /// One direction of an in-memory pipe.
 fn pipe() -> (PipeWriter, PipeReader) {
@@ -440,6 +440,55 @@ fn error_responses_surface_as_request_errors() {
         let error = response.unwrap_err().to_string();
         assert!(error.contains("bad request"), "{error}");
     });
+}
+
+#[test]
+fn error_data_survives_into_the_rendered_error() {
+    let (connection, _notifications, mut agent) = connect(rejecting_handler());
+    block_on(async {
+        let request = connection.request::<_, Value>("session/prompt", json!({}));
+        let agent = async {
+            let message = agent.next_message().await;
+            agent
+                .send(json!({
+                    "jsonrpc": "2.0",
+                    "id": message["id"],
+                    "error": {
+                        "code": -32603,
+                        "message": "Internal error",
+                        "data": {"codexErrorInfo": "usageLimitExceeded"},
+                    },
+                }))
+                .await;
+        };
+        let (response, ()) = join!(request, agent);
+        let error = format!(
+            "{:#}",
+            response.unwrap_err().context("session/prompt failed")
+        );
+        assert_eq!(
+            error,
+            r#"session/prompt failed: ACP error -32603: Internal error: {"codexErrorInfo":"usageLimitExceeded"}"#
+        );
+    });
+}
+
+#[test]
+fn error_detail_renders_string_data_bounded_and_without_repeating_the_message() {
+    let error = |data: Value| RpcError {
+        code: -32603,
+        message: "Internal error".to_owned(),
+        data: Some(data),
+    };
+    assert_eq!(
+        error(json!(" You've hit your usage limit.\n")).detail(),
+        "Internal error: You've hit your usage limit."
+    );
+    assert_eq!(error(json!("Internal error")).detail(), "Internal error");
+
+    let long = "é".repeat(MAX_RENDERED_DATA_CHARS + 1);
+    let expected = format!("Internal error: {}…", "é".repeat(MAX_RENDERED_DATA_CHARS));
+    assert_eq!(error(json!(long)).detail(), expected);
 }
 
 #[test]

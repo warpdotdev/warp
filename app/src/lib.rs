@@ -1405,9 +1405,10 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
             .detach();
 
         ctx.add_singleton_model(|ctx| {
-            AppExecutionMode::new(
+            AppExecutionMode::new_with_headlessness(
                 launch_mode.execution_mode(),
                 launch_mode.is_sandboxed(),
+                launch_mode.is_headless(),
                 ctx,
             )
         });

@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "hooks": {
+    "beforeShellExecution": [
+      { "command": "agents/reviewer/hooks/reviewer_policy.sh" }
+    ]
+  }
+}

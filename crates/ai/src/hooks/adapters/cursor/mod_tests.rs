@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
@@ -12,7 +13,7 @@ use crate::hooks::adapters::cursor::test_support::{
 };
 use crate::hooks::dispatch::HookDispatcher;
 use crate::hooks::model::{HookBoundary, HookVerdict, validate_capabilities};
-use crate::hooks::registry::{BindingScope, RegistrySnapshot};
+use crate::hooks::registry::RegistrySnapshot;
 use crate::hooks::runner::ProcessExit;
 use crate::hooks::test_util::{
     RecordingMessenger, ScriptedRunner, active_binding, test_binding, test_source_id,
@@ -28,6 +29,37 @@ fn parsed(text: &str) -> ParsedHookConfig {
 fn the_cursor_adapter_is_registered() {
     let adapter = adapter_for(HookFormat::Cursor).expect("registered");
     assert_eq!(adapter.format(), HookFormat::Cursor);
+}
+
+#[test]
+fn a_repository_hook_directory_runs_from_the_repository_root() {
+    let layout = source_layout(&HookDirectory::Repository {
+        root: PathBuf::from("/work/api"),
+        directory: PathBuf::from("/work/api/.cursor"),
+    });
+    assert_eq!(
+        layout,
+        HookSourceLayout {
+            config_file: PathBuf::from("/work/api/.cursor/hooks.json"),
+            working_directory: PathBuf::from("/work/api"),
+            project_dir: Some(PathBuf::from("/work/api")),
+        }
+    );
+}
+
+#[test]
+fn a_worker_hook_directory_runs_from_itself_with_no_fixed_project() {
+    let layout = source_layout(&HookDirectory::Worker {
+        directory: PathBuf::from("/etc/acme/warp-hooks"),
+    });
+    assert_eq!(
+        layout,
+        HookSourceLayout {
+            config_file: PathBuf::from("/etc/acme/warp-hooks/hooks.json"),
+            working_directory: PathBuf::from("/etc/acme/warp-hooks"),
+            project_dir: None,
+        }
+    );
 }
 
 #[test]
@@ -153,11 +185,7 @@ fn an_undocumented_control_field_reaches_the_messenger_as_a_diagnostic() {
     let dispatcher = HookDispatcher::new(runner, messenger.clone());
     let snapshot = Arc::new(RegistrySnapshot {
         revision: 1,
-        bindings: vec![active_binding(
-            binding.clone(),
-            adapter.clone(),
-            BindingScope::Everywhere,
-        )],
+        bindings: vec![active_binding(binding.clone(), adapter.clone())],
         diagnostics: Vec::new(),
     });
     let envelope = fixture_envelope(tool_result(
@@ -167,7 +195,7 @@ fn an_undocumented_control_field_reaches_the_messenger_as_a_diagnostic() {
     ));
 
     let outcome =
-        block_on(dispatcher.dispatch(envelope, snapshot, Arc::new(AtomicBool::new(false))));
+        block_on(dispatcher.dispatch(envelope, snapshot, false, Arc::new(AtomicBool::new(false))));
     assert_eq!(outcome.effects.verdict, HookVerdict::NoOpinion);
     assert_eq!(outcome.effects.unsupported.len(), 1);
 

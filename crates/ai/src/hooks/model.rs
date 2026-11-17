@@ -152,12 +152,12 @@ impl Display for HookBoundary {
     }
 }
 
-/// Where a hook configuration came from.
+/// Which part of the factory configuration selected a hook source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum HookSourceKind {
-    ProjectCursorFile,
-    RunDelivered,
+    /// The agent's own definition.
     FactoryAgent,
+    /// The factory's top-level definition, shared by its agents.
     FactoryWide,
 }
 
@@ -167,8 +167,41 @@ impl HookSourceKind {
         match self {
             Self::FactoryAgent => 0,
             Self::FactoryWide => 1,
-            Self::RunDelivered => 2,
-            Self::ProjectCursorFile => 3,
+        }
+    }
+}
+
+/// What a run with nobody to answer does after one of a source's hooks asks for approval. The
+/// tool call is denied either way.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum HookOnAsk {
+    /// The run continues.
+    #[default]
+    Deny,
+    /// The run ends as failed.
+    FailRun,
+}
+
+/// The settings the configuration chose for one hook source. They are frozen with the source's
+/// bindings when the registry is finalized.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct HookSourcePolicy {
+    /// The source must load, and a hook from it that crashes, times out, or prints empty or
+    /// malformed output denies instead of letting the action through.
+    pub strict: bool,
+    pub on_ask: HookOnAsk,
+}
+
+impl HookSourcePolicy {
+    /// The stricter of each setting, for a source selected more than once.
+    pub fn stricter(self, other: Self) -> Self {
+        let on_ask = match (self.on_ask, other.on_ask) {
+            (HookOnAsk::FailRun, _) | (_, HookOnAsk::FailRun) => HookOnAsk::FailRun,
+            (HookOnAsk::Deny, HookOnAsk::Deny) => HookOnAsk::Deny,
+        };
+        Self {
+            strict: self.strict || other.strict,
+            on_ask,
         }
     }
 }
@@ -176,7 +209,7 @@ impl HookSourceKind {
 /// Where a resolved hook source lives.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum HookSourceLocation {
-    /// Canonical file path for a file discovered on disk.
+    /// Canonical file path for a configured source on disk.
     CanonicalPath(PathBuf),
     /// Name an explicit source was delivered under.
     Named(String),
@@ -228,17 +261,6 @@ pub enum HookSurface {
     LocalChild,
     Gui,
     Tui,
-}
-
-impl HookSurface {
-    /// Whether the surface has no one who can answer a confirmation request. A hidden local
-    /// child counts: its parent cannot see or approve its actions.
-    pub fn is_headless(&self) -> bool {
-        match self {
-            Self::OzRun | Self::CliRun | Self::LocalChild => true,
-            Self::Gui | Self::Tui => false,
-        }
-    }
 }
 
 /// Where the operation the hook describes is executing.
@@ -530,11 +552,29 @@ pub struct MergedEffects {
     pub continuation_binding: Option<HookBindingId>,
     pub conflicts: Vec<String>,
     pub unsupported: Vec<UnsupportedEffect>,
+    /// Every hook whose own verdict was `ask`, in merge order, with its source's on-ask setting.
+    /// The dispatcher fills this in; [`reduce_effects`] leaves it empty because it does not see
+    /// sources.
+    pub askers: Vec<HookAsker>,
+}
+
+/// A hook that asked for approval, and what its source wants done when nobody can answer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HookAsker {
+    pub binding: HookBindingId,
+    pub on_ask: HookOnAsk,
 }
 
 impl MergedEffects {
     pub fn no_opinion() -> Self {
         Self::default()
+    }
+
+    /// Whether a hook that asked belongs to a source that ends the run when nobody can answer.
+    pub fn an_asker_fails_the_run(&self) -> bool {
+        self.askers
+            .iter()
+            .any(|asker| asker.on_ask == HookOnAsk::FailRun)
     }
 }
 

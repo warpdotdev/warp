@@ -10568,6 +10568,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tower",
+ "uuid",
 ]
 
 [[package]]

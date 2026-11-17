@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use bytes::Bytes;
-use http::header::{CONNECTION, HOST, TE, UPGRADE};
+use http::header::{CONNECTION, HOST, ORIGIN, TE, UPGRADE};
 use http::{HeaderMap, HeaderName, HeaderValue, Method, Request, Response, StatusCode, Uri};
 use http_body_util::combinators::BoxBody;
 use http_body_util::{BodyExt, Full};
@@ -24,6 +24,7 @@ use tokio::task::{JoinHandle, JoinSet};
 use tokio::time::{Instant, timeout};
 use tokio_util::sync::CancellationToken;
 use upstream::UpstreamClient;
+use uuid::Uuid;
 
 mod upstream;
 
@@ -32,78 +33,244 @@ const WARP_RESERVED_PORTS: [u16; 6] = [9277, 9278, 9279, 9280, 9281, 9282];
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const HEADER_TIMEOUT: Duration = Duration::from_secs(10);
 const PORT_FETCH_TIMEOUT: Duration = Duration::from_secs(15);
+const PREVIEW_CACHE_TTL: Duration = Duration::from_secs(15 * 60);
+const MISS_REFRESH_BACKOFF: Duration = Duration::from_secs(1);
 const ACCEPT_RETRY_DELAY: Duration = Duration::from_millis(100);
 const MAX_CONNECTIONS: usize = 256;
 
 type Body = BoxBody<Bytes, hyper::Error>;
+#[derive(Clone, Debug)]
+pub struct PreviewRecord {
+    pub id: Uuid,
+    pub port: u16,
+    pub origin: String,
+}
 
 pub trait PortSource: Send + Sync {
-    fn ports(&self) -> impl Future<Output = Result<Vec<u16>>> + Send;
+    fn previews(&self) -> impl Future<Output = Result<Vec<PreviewRecord>>> + Send;
 }
 
 #[derive(Default)]
-struct PortCache {
-    allowed: HashSet<u16>,
-    generation: u64,
+struct PreviewCache {
+    previews: Vec<PreviewRecord>,
+    refreshed_at: Option<Instant>,
+    last_attempt_at: Option<Instant>,
+    refresh_generation: u64,
+}
+
+impl PreviewCache {
+    fn is_fresh(&self, now: Instant) -> bool {
+        self.refreshed_at
+            .is_some_and(|refreshed_at| now.duration_since(refreshed_at) < PREVIEW_CACHE_TTL)
+    }
+
+    fn miss_refresh_due(&self, now: Instant) -> bool {
+        self.last_attempt_at.is_none_or(|last_attempt_at| {
+            now.duration_since(last_attempt_at) >= MISS_REFRESH_BACKOFF
+        })
+    }
+}
+
+struct ParsedRoute {
+    port: u16,
+    id: Uuid,
+    origin: Option<String>,
+}
+
+struct AuthorizedRoute {
+    port: u16,
+    translated_origin: Option<String>,
 }
 
 struct Routing<S> {
     listener_port: u16,
     source: Arc<S>,
     upstream: UpstreamClient,
-    cache: RwLock<PortCache>,
+    cache: RwLock<PreviewCache>,
     refreshing: Mutex<()>,
 }
 
 impl<S: PortSource> Routing<S> {
-    fn resolve(&self, headers: &HeaderMap) -> Option<u16> {
-        let port = headers
-            .get("x-warp-preview-port")?
-            .to_str()
-            .ok()?
-            .parse::<u16>()
-            .ok()?;
-        if port < 1024 || WARP_RESERVED_PORTS.contains(&port) || port == self.listener_port {
-            return None;
+    async fn authorize(&self, route: &ParsedRoute) -> Option<AuthorizedRoute> {
+        let refresh_generation = self.cache.read().await.refresh_generation;
+        if let Some(authorized) = self.authorize_from_cache(route).await {
+            return Some(authorized);
         }
-        Some(port)
+        self.refresh_after_miss(refresh_generation).await;
+        self.authorize_from_cache(route).await
     }
 
-    async fn allows(&self, port: u16) -> bool {
-        let generation = {
-            let cache = self.cache.read().await;
-            if cache.allowed.contains(&port) {
-                return true;
-            }
-            cache.generation
-        };
-        let _refresh = self.refreshing.lock().await;
-        {
-            let cache = self.cache.read().await;
-            if cache.generation != generation {
-                return cache.allowed.contains(&port);
-            }
+    async fn authorize_from_cache(&self, route: &ParsedRoute) -> Option<AuthorizedRoute> {
+        let now = Instant::now();
+        let cache = self.cache.read().await;
+        if !cache.is_fresh(now) {
+            return None;
         }
-        let result = timeout(PORT_FETCH_TIMEOUT, self.source.ports()).await;
-        let mut cache = self.cache.write().await;
-        cache.generation = cache.generation.wrapping_add(1);
-        match result {
-            Ok(Ok(ports)) => {
-                cache.allowed = ports.into_iter().collect();
-                cache.allowed.contains(&port)
+        let preview = cache
+            .previews
+            .iter()
+            .find(|preview| preview.port == route.port && preview.id == route.id)?;
+        let translated_origin = match &route.origin {
+            Some(origin) => {
+                if preview.origin != *origin {
+                    return None;
+                }
+                Some(format!("http://localhost:{}", preview.port))
             }
+            None => None,
+        };
+        Some(AuthorizedRoute {
+            port: preview.port,
+            translated_origin,
+        })
+    }
+
+    async fn refresh_after_miss(&self, observed_generation: u64) {
+        let _refresh = self.refreshing.lock().await;
+        let now = Instant::now();
+        let cache = self.cache.read().await;
+        if cache.refresh_generation != observed_generation || !cache.miss_refresh_due(now) {
+            return;
+        }
+        drop(cache);
+        self.refresh_locked().await;
+    }
+
+    async fn refresh_locked(&self) {
+        let result = timeout(PORT_FETCH_TIMEOUT, self.source.previews()).await;
+        let previews = match result {
+            Ok(Ok(previews)) => match validate_previews(previews, self.listener_port) {
+                Ok(previews) => Some(previews),
+                Err(error) => {
+                    log::warn!("Preview proxy received an invalid preview list: {error:#}");
+                    None
+                }
+            },
             Ok(Err(error)) => {
-                log::warn!("Preview proxy allowlist fetch failed for app port {port}: {error:#}");
-                false
+                log::warn!("Preview proxy preview-list fetch failed: {error:#}");
+                None
             }
             Err(error) => {
-                log::warn!(
-                    "Preview proxy allowlist fetch timed out for app port {port}: {error:#}"
-                );
-                false
+                log::warn!("Preview proxy preview-list fetch timed out: {error:#}");
+                None
+            }
+        };
+        let mut cache = self.cache.write().await;
+        cache.last_attempt_at = Some(Instant::now());
+        cache.refresh_generation = cache.refresh_generation.wrapping_add(1);
+        if let Some(previews) = previews {
+            cache.previews = previews;
+            cache.refreshed_at = Some(Instant::now());
+        }
+    }
+}
+
+fn validate_previews(
+    previews: Vec<PreviewRecord>,
+    listener_port: u16,
+) -> Result<Vec<PreviewRecord>> {
+    let mut ids = HashSet::new();
+    let mut ports = HashSet::new();
+    let mut origins = HashSet::new();
+    for preview in &previews {
+        anyhow::ensure!(
+            preview.port >= 1024
+                && !WARP_RESERVED_PORTS.contains(&preview.port)
+                && preview.port != listener_port,
+            "invalid preview app port {}",
+            preview.port
+        );
+        anyhow::ensure!(ports.insert(preview.port), "duplicate preview app port");
+        anyhow::ensure!(!preview.id.is_nil(), "preview UUID must not be nil");
+        anyhow::ensure!(valid_origin(&preview.origin), "invalid preview origin");
+        anyhow::ensure!(ids.insert(preview.id), "duplicate preview UUID");
+        anyhow::ensure!(origins.insert(&preview.origin), "duplicate preview origin");
+    }
+    Ok(previews)
+}
+
+fn valid_origin(origin: &str) -> bool {
+    let Ok(uri) = origin.parse::<Uri>() else {
+        return false;
+    };
+    let Some(scheme) = uri.scheme_str() else {
+        return false;
+    };
+    let Some(authority) = uri.authority() else {
+        return false;
+    };
+    if !matches!(scheme, "http" | "https") || authority.as_str().contains('@') {
+        return false;
+    }
+    let path = uri.path_and_query().map_or("", |path| path.as_str());
+    (path.is_empty() || path == "/") && origin == format!("{scheme}://{authority}")
+}
+
+fn unique_header<'a>(
+    headers: &'a HeaderMap,
+    name: &str,
+) -> std::result::Result<Option<&'a HeaderValue>, ()> {
+    let mut values = headers.get_all(name).iter();
+    let value = values.next();
+    if values.next().is_some() {
+        return Err(());
+    }
+    Ok(value)
+}
+
+fn parse_route(headers: &HeaderMap, listener_port: u16) -> Option<ParsedRoute> {
+    let port_header = unique_header(headers, "x-warp-preview-port").ok()??;
+    let port_text = port_header.to_str().ok()?;
+    if !port_text.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    let port = port_text.parse::<u16>().ok()?;
+    if port < 1024 || WARP_RESERVED_PORTS.contains(&port) || port == listener_port {
+        return None;
+    }
+
+    let id_value = unique_header(headers, "x-warp-preview-id").ok()??;
+    let id_text = id_value.to_str().ok()?;
+    let id = Uuid::parse_str(id_text).ok()?;
+    if id.is_nil() || id.to_string() != id_text {
+        return None;
+    }
+    let origin = match unique_header(headers, "origin").ok()? {
+        Some(value) => Some(value.to_str().ok()?.to_owned()),
+        None => None,
+    };
+    Some(ParsedRoute { port, id, origin })
+}
+
+fn connection_nominates_identity(headers: &HeaderMap) -> bool {
+    const IDENTITY_HEADERS: [&str; 11] = [
+        "host",
+        "origin",
+        "forwarded",
+        "x-forwarded-host",
+        "x-forwarded-proto",
+        "x-forwarded-port",
+        "x-original-host",
+        "x-original-url",
+        "x-original-uri",
+        "x-warp-preview-id",
+        "x-warp-preview-port",
+    ];
+    for value in headers.get_all(CONNECTION).iter() {
+        let Ok(value) = value.to_str() else {
+            return true;
+        };
+        for token in value.split(',') {
+            let token = token.trim();
+            let Ok(name) = HeaderName::from_bytes(token.as_bytes()) else {
+                return true;
+            };
+            if IDENTITY_HEADERS.contains(&name.as_str()) {
+                return true;
             }
         }
     }
+    false
 }
 
 pub struct Proxy {
@@ -130,7 +297,7 @@ impl Proxy {
             listener_port: port,
             source,
             upstream: upstream::new_client(cancel.clone()),
-            cache: RwLock::new(PortCache::default()),
+            cache: RwLock::new(PreviewCache::default()),
             refreshing: Mutex::new(()),
         });
         let task = tokio::spawn(serve(
@@ -215,7 +382,10 @@ async fn forward<S: PortSource + 'static>(
     cancel: CancellationToken,
     permit: Arc<OwnedSemaphorePermit>,
 ) -> Result<Response<Body>, Infallible> {
-    let Some(app_port) = routing.resolve(request.headers()) else {
+    if connection_nominates_identity(request.headers()) {
+        return Ok(empty(StatusCode::BAD_REQUEST));
+    }
+    let Some(route) = parse_route(request.headers(), routing.listener_port) else {
         return Ok(empty(StatusCode::FORBIDDEN));
     };
     if request.method() == Method::CONNECT
@@ -231,11 +401,16 @@ async fn forward<S: PortSource + 'static>(
     {
         return Ok(empty(StatusCode::BAD_REQUEST));
     }
-    if !routing.allows(app_port).await {
+    let Some(authorized) = routing.authorize(&route).await else {
         return Ok(empty(StatusCode::FORBIDDEN));
-    }
+    };
+    let app_port = authorized.port;
     let downstream_upgrade = upgrade.as_ref().map(|_| hyper::upgrade::on(&mut request));
-    prepare_headers(request.headers_mut(), app_port);
+    prepare_headers(
+        request.headers_mut(),
+        app_port,
+        authorized.translated_origin,
+    );
     if let Some(value) = upgrade {
         request.headers_mut().insert(UPGRADE, value);
         request
@@ -310,7 +485,7 @@ async fn connect(port: u16) -> Result<TcpStream> {
     .context("Failed to connect to preview app")
 }
 
-fn prepare_headers(headers: &mut HeaderMap, port: u16) {
+fn prepare_headers(headers: &mut HeaderMap, port: u16, translated_origin: Option<String>) {
     let trailers = headers
         .get_all(TE)
         .iter()
@@ -323,19 +498,33 @@ fn prepare_headers(headers: &mut HeaderMap, port: u16) {
         headers.insert(CONNECTION, HeaderValue::from_static("te"));
     }
     strip_credentials(headers);
+    for name in ["x-warp-cloud-agent-id", "x-warp-ambient-task-token"] {
+        headers.remove(name);
+    }
     for name in [
-        "x-warp-cloud-agent-id",
-        "x-warp-ambient-task-token",
         "forwarded",
         "x-original-host",
         "x-original-url",
+        "x-original-uri",
         "x-forwarded-prefix",
     ] {
         headers.remove(name);
     }
     let host = HeaderValue::from_str(&format!("localhost:{port}"))
         .expect("loopback host is a valid header");
-    headers.insert(HOST, host);
+    headers.insert(HOST, host.clone());
+    if let Some(origin) = translated_origin {
+        headers.insert(
+            ORIGIN,
+            HeaderValue::from_str(&origin).expect("translated loopback origin is valid"),
+        );
+    }
+    headers.insert("x-forwarded-host", host);
+    headers.insert("x-forwarded-proto", HeaderValue::from_static("http"));
+    headers.insert(
+        "x-forwarded-port",
+        HeaderValue::from_str(&port.to_string()).expect("port is a valid header value"),
+    );
 }
 
 fn strip_credentials(headers: &mut HeaderMap) {

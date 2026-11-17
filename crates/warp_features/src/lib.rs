@@ -675,6 +675,9 @@ pub enum FeatureFlag {
     /// Enables loading and returning bundled skills in the SkillManager.
     BundledSkills,
 
+    /// Scopes cloud repository skill listings to the active working directory.
+    CwdScopedCloudSkills,
+
     /// Enables the Oz launch modal for introducing cloud agent features.
     OzLaunchModal,
 
@@ -1003,9 +1006,6 @@ pub enum FeatureFlag {
     /// replace inline computer-use screenshot bytes with references to
     /// Warp-managed object storage.
     StoredScreenshots,
-
-    /// Runs user-configured agent hooks at fixed points in Warp's agent loop.
-    AgentHooks,
 
     /// Lets cloud agent environment checkouts build repositories from bare git
     /// mirrors kept in the persistent build cache instead of cloning each one
