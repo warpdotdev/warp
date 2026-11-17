@@ -129,15 +129,64 @@ pub struct GalleryData {
     pub version: i32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Default)]
 pub struct TemplatableMCPServer {
     pub uuid: uuid::Uuid,
     pub name: String,
     pub description: Option<String>,
     pub template: JsonTemplate,
-    #[serde(default)]
     pub version: i64, // This will default to 0 if stored objects have no version
     pub gallery_data: Option<GalleryData>,
+}
+
+/// Namespace UUID used to derive a stable fallback uuid (via UUID v5, i.e. a hash of the
+/// record's own JSON) for `TemplatableMCPServer` records whose stored JSON is missing the
+/// `uuid` field (e.g. legacy data predating this field). Fixed and arbitrary; only its
+/// stability across builds matters.
+const TEMPLATABLE_MCP_SERVER_FALLBACK_NAMESPACE: Uuid =
+    Uuid::from_u128(0x8d26b45e_5a5d_47a2_88c3_cbc4118c00d3);
+
+impl<'de> Deserialize<'de> for TemplatableMCPServer {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct Raw {
+            uuid: Option<Uuid>,
+            name: String,
+            description: Option<String>,
+            template: JsonTemplate,
+            #[serde(default)]
+            version: i64,
+            gallery_data: Option<GalleryData>,
+        }
+
+        let value = serde_json::Value::deserialize(deserializer)?;
+        let raw: Raw = serde_json::from_value(value.clone()).map_err(serde::de::Error::custom)?;
+
+        // Missing uuid: derive a stable id by hashing the record's own JSON (UUID v5), so
+        // the same broken record gets the same id on every reload (unlike Uuid::new_v4,
+        // which churns every load and defeats TemplatableMCPServerManager's orphan-
+        // installation matching), while two different broken records still get different
+        // ids (unlike Uuid::nil, which collides every such record onto the same key).
+        let uuid = raw.uuid.unwrap_or_else(|| {
+            let canonical = serde_json::to_string(&value).unwrap_or_default();
+            Uuid::new_v5(
+                &TEMPLATABLE_MCP_SERVER_FALLBACK_NAMESPACE,
+                canonical.as_bytes(),
+            )
+        });
+
+        Ok(TemplatableMCPServer {
+            uuid,
+            name: raw.name,
+            description: raw.description,
+            template: raw.template,
+            version: raw.version,
+            gallery_data: raw.gallery_data,
+        })
+    }
 }
 
 #[derive(Debug)]
