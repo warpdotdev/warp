@@ -9,6 +9,7 @@ use async_trait::async_trait;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use shell_words::quote as shell_quote;
 use tempfile::NamedTempFile;
 use uuid::Uuid;
 use warp_cli::agent::Harness;
@@ -34,15 +35,15 @@ use super::transcript_persistence::{
     UploadedTranscriptUsage, capture_transcript_with_retry, upload_captured_transcript,
 };
 use super::{
-    HarnessRunner, ResolvedMCPServers, ResumePayload, SavePoint, ThirdPartyHarness,
-    install_docs_url, write_temp_file,
+    HarnessMcpSettings, HarnessRunner, ResolvedMCPServers, ResumePayload, SavePoint,
+    ThirdPartyHarness, install_docs_url, write_temp_file,
 };
 use crate::ai::agent::BaseUserQuery;
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::ambient_agents::task::HarnessModelConfig;
-use crate::ai::mcp::JSONTransportType;
+use crate::ai::mcp::{JSONMCPServer, JSONTransportType};
 use crate::server::server_api::ServerApi;
 use crate::server::server_api::harness_support::HarnessSupportClient;
 use crate::terminal::CLIAgent;
@@ -190,6 +191,7 @@ impl ThirdPartyHarness for CodexHarness {
         let client: Arc<dyn HarnessSupportClient> = server_api;
         Ok(Box::new(CodexHarnessRunner::new(
             self.cli_agent().command_prefix(),
+            &codex_config_overrides(resolved_mcp_servers),
             &owned_prompt,
             system_prompt,
             harness_working_dir,
@@ -207,17 +209,27 @@ impl ThirdPartyHarness for CodexHarness {
 /// `--dangerously-bypass-hook-trust` allows the orchestration plugin hooks installed by
 /// Warp to run without a manual hook review in unattended driver sessions. Driver setup
 /// verifies the Codex platform plugin before launching commands with this flag.
+/// `config_overrides` are passed as `-c` options.
 /// `Some(session_id)` indicates that we want to resume that prior session. Unlike claude,
 /// codex does not support assigning a session_id to a new conversation.
-fn codex_command(cli_name: &str, session_id: Option<&Uuid>, prompt_path: &str) -> String {
+fn codex_command(
+    cli_name: &str,
+    config_overrides: &[String],
+    session_id: Option<&Uuid>,
+    prompt_path: &str,
+) -> String {
+    let overrides: String = config_overrides
+        .iter()
+        .map(|config_override| format!("-c {} ", shell_quote(config_override)))
+        .collect();
     match session_id {
         Some(session_id) => format!(
-            "{cli_name} resume --dangerously-bypass-approvals-and-sandbox {CODEX_BYPASS_HOOK_TRUST_FLAG} {session_id} \
+            "{cli_name} resume {overrides}--dangerously-bypass-approvals-and-sandbox {CODEX_BYPASS_HOOK_TRUST_FLAG} {session_id} \
              \"$(cat '{prompt_path}')\""
         ),
         None => {
             format!(
-                "{cli_name} --dangerously-bypass-approvals-and-sandbox {CODEX_BYPASS_HOOK_TRUST_FLAG} \"$(cat '{prompt_path}')\""
+                "{cli_name} {overrides}--dangerously-bypass-approvals-and-sandbox {CODEX_BYPASS_HOOK_TRUST_FLAG} \"$(cat '{prompt_path}')\""
             )
         }
     }
@@ -255,6 +267,7 @@ impl CodexHarnessRunner {
     #[allow(clippy::too_many_arguments)]
     fn new(
         cli_command: &str,
+        config_overrides: &[String],
         prompt: &str,
         _system_prompt: Option<&str>,
         harness_working_dir: &Path,
@@ -282,7 +295,12 @@ impl CodexHarnessRunner {
             None => (None, None, None),
         };
 
-        let command = codex_command(cli_command, session_id.as_ref(), &prompt_path);
+        let command = codex_command(
+            cli_command,
+            config_overrides,
+            session_id.as_ref(),
+            &prompt_path,
+        );
 
         let session_id_cell: OnceLock<Uuid> = OnceLock::new();
         if let Some(id) = session_id {
@@ -546,6 +564,7 @@ const CODEX_TRUST_LEVEL_TRUSTED: &str = "trusted";
 /// (codex `core/src/config/mod.rs`).
 const CODEX_OPENAI_BASE_URL_KEY: &str = "openai_base_url";
 const CODEX_CHECK_FOR_UPDATE_ON_STARTUP_KEY: &str = "check_for_update_on_startup";
+const CODEX_MCP_SERVERS_KEY: &str = "mcp_servers";
 const CODEX_MODEL_KEY: &str = "model";
 const CODEX_MODEL_REASONING_EFFORT_KEY: &str = "model_reasoning_effort";
 /// Target model for the `[notice.model_migrations]` table that suppresses Codex's
@@ -969,18 +988,23 @@ fn set_codex_project_trust_level(
     proj_tbl["trust_level"] = toml_edit::value(trust_level);
 }
 
-/// Write resolved MCP servers into `[mcp_servers.<name>]` sections in the Codex config.
+/// Write resolved MCP servers into `[mcp_servers.<name>]` sections in the Codex config, except for
+/// run-scoped servers, which [`codex_config_overrides`] passes to the invocation instead.
 fn write_codex_mcp_servers(doc: &mut toml_edit::DocumentMut, resolved: &ResolvedMCPServers) {
-    let servers = &resolved.configs;
-    if servers.is_empty() {
+    let mut servers = resolved
+        .configs
+        .iter()
+        .filter(|(name, _)| !resolved.is_run_scoped(name))
+        .peekable();
+    if servers.peek().is_none() {
         return;
     }
-    if !doc.contains_table("mcp_servers") {
+    if !doc.contains_table(CODEX_MCP_SERVERS_KEY) {
         let mut tbl = toml_edit::Table::new();
         tbl.set_implicit(true);
-        doc.insert("mcp_servers", toml_edit::Item::Table(tbl));
+        doc.insert(CODEX_MCP_SERVERS_KEY, toml_edit::Item::Table(tbl));
     }
-    let mcp_tbl = doc["mcp_servers"]
+    let mcp_tbl = doc[CODEX_MCP_SERVERS_KEY]
         .as_table_mut()
         .expect("mcp_servers table inserted above");
 
@@ -991,59 +1015,93 @@ fn write_codex_mcp_servers(doc: &mut toml_edit::DocumentMut, resolved: &Resolved
             .as_table_mut()
             .expect("mcp_servers entry is a table");
         entry.set_implicit(false);
+        set_codex_mcp_server_fields(entry, server, resolved.harness_settings.get(name));
+    }
+}
 
-        match &server.transport_type {
-            JSONTransportType::CLIServer {
-                command,
-                args,
-                env,
-                working_directory,
-            } => {
-                entry["command"] = toml_edit::value(command.as_str());
-                if !args.is_empty() {
-                    let mut arr = toml_edit::Array::new();
-                    for arg in args {
-                        arr.push(arg.as_str());
-                    }
-                    entry["args"] = toml_edit::value(arr);
-                }
-                if !env.is_empty() {
-                    let mut env_tbl = toml_edit::InlineTable::new();
-                    for (k, v) in env {
-                        env_tbl.insert(k, v.as_str().into());
-                    }
-                    entry["env"] = toml_edit::value(env_tbl);
-                }
-                if let Some(cwd) = working_directory {
-                    entry["cwd"] = toml_edit::value(cwd.as_str());
-                }
+/// Returns `-c` config overrides that give a single Codex invocation the run-scoped MCP servers,
+/// so they aren't left in config.toml after the run.
+fn codex_config_overrides(resolved: &ResolvedMCPServers) -> Vec<String> {
+    let mut overrides: Vec<_> = resolved
+        .configs
+        .iter()
+        .filter(|(name, _)| resolved.is_run_scoped(name))
+        .map(|(name, server)| {
+            let mut entry = toml_edit::InlineTable::new();
+            set_codex_mcp_server_fields(&mut entry, server, resolved.harness_settings.get(name));
+            format!("{CODEX_MCP_SERVERS_KEY}.{name}={entry}")
+        })
+        .collect();
+    overrides.sort();
+    overrides
+}
+
+/// Sets the keys of a Codex `[mcp_servers.<name>]` entry that configure `server`.
+fn set_codex_mcp_server_fields(
+    entry: &mut dyn toml_edit::TableLike,
+    server: &JSONMCPServer,
+    settings: Option<&HarnessMcpSettings>,
+) {
+    match &server.transport_type {
+        JSONTransportType::CLIServer {
+            command,
+            args,
+            env,
+            working_directory,
+        } => {
+            entry.insert("command", toml_edit::value(command.as_str()));
+            if !args.is_empty() {
+                entry.insert(
+                    "args",
+                    toml_edit::value(
+                        args.iter()
+                            .map(String::as_str)
+                            .collect::<toml_edit::Array>(),
+                    ),
+                );
             }
-            JSONTransportType::SSEServer { url, headers } => {
-                entry["url"] = toml_edit::value(url.as_str());
-                if !headers.is_empty() {
-                    let mut hdrs_tbl = toml_edit::InlineTable::new();
-                    for (k, v) in headers {
-                        hdrs_tbl.insert(k, v.as_str().into());
-                    }
-                    entry["http_headers"] = toml_edit::value(hdrs_tbl);
+            if !env.is_empty() {
+                let mut env_tbl = toml_edit::InlineTable::new();
+                for (k, v) in env {
+                    env_tbl.insert(k, v.as_str().into());
                 }
+                entry.insert("env", toml_edit::value(env_tbl));
+            }
+            if let Some(cwd) = working_directory {
+                entry.insert("cwd", toml_edit::value(cwd.as_str()));
             }
         }
+        JSONTransportType::SSEServer { url, headers } => {
+            entry.insert("url", toml_edit::value(url.as_str()));
+            if !headers.is_empty() {
+                let mut hdrs_tbl = toml_edit::InlineTable::new();
+                for (k, v) in headers {
+                    hdrs_tbl.insert(k, v.as_str().into());
+                }
+                entry.insert("http_headers", toml_edit::value(hdrs_tbl));
+            }
+        }
+    }
 
-        if let Some(settings) = resolved.harness_settings.get(name) {
-            // Codex gives stdio MCP servers only an allowlist of its environment plus these.
-            if !settings.forwarded_env_vars.is_empty() {
-                entry["env_vars"] = toml_edit::value(
+    if let Some(settings) = settings {
+        // Codex gives stdio MCP servers only an allowlist of its environment plus these.
+        if !settings.forwarded_env_vars.is_empty() {
+            entry.insert(
+                "env_vars",
+                toml_edit::value(
                     settings
                         .forwarded_env_vars
                         .iter()
                         .map(String::as_str)
                         .collect::<toml_edit::Array>(),
-                );
-            }
-            if let Some(timeout) = settings.tool_timeout {
-                entry["tool_timeout_sec"] = toml_edit::value(timeout.as_secs() as i64);
-            }
+                ),
+            );
+        }
+        if let Some(timeout) = settings.tool_timeout {
+            entry.insert(
+                "tool_timeout_sec",
+                toml_edit::value(timeout.as_secs() as i64),
+            );
         }
     }
 }

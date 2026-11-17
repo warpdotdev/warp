@@ -467,6 +467,7 @@ fn write_codex_mcp_servers_applies_harness_settings() {
         HarnessMcpSettings {
             forwarded_env_vars: vec!["WARP_API_KEY".to_string()],
             tool_timeout: Some(std::time::Duration::from_secs(600)),
+            run_scoped: false,
         },
     );
     prepare_codex_config_toml(&config_path, &working_dir, &servers, None, None).unwrap();
@@ -481,6 +482,81 @@ fn write_codex_mcp_servers_applies_harness_settings() {
         .collect();
     assert_eq!(forwarded, ["WARP_API_KEY"]);
     assert_eq!(mcp["tool_timeout_sec"].as_integer(), Some(600));
+}
+
+fn run_scoped_computer_use_servers() -> ResolvedMCPServers {
+    let mut servers = resolved(HashMap::from([
+        (
+            "warp-computer-use".to_string(),
+            JSONMCPServer {
+                transport_type: JSONTransportType::CLIServer {
+                    command: "/opt/oz".to_string(),
+                    args: vec!["computer-use-mcp".to_string(), "--run-id".to_string()],
+                    env: HashMap::from([("DISPLAY".to_string(), ":99".to_string())]),
+                    working_directory: None,
+                },
+            },
+        ),
+        (
+            "my-mcp".to_string(),
+            JSONMCPServer {
+                transport_type: JSONTransportType::SSEServer {
+                    url: "https://example.com/mcp".to_string(),
+                    headers: HashMap::new(),
+                },
+            },
+        ),
+    ]));
+    servers.harness_settings.insert(
+        "warp-computer-use".to_string(),
+        HarnessMcpSettings {
+            forwarded_env_vars: vec!["WARP_API_KEY".to_string()],
+            tool_timeout: Some(std::time::Duration::from_secs(600)),
+            run_scoped: true,
+        },
+    );
+    servers
+}
+
+#[test]
+fn run_scoped_mcp_servers_are_not_written_to_config_toml() {
+    let tmp = TempDir::new().unwrap();
+    let config_path = tmp.path().join("config.toml");
+    let working_dir = tmp.path().join("workspace");
+    fs::create_dir_all(&working_dir).unwrap();
+
+    let servers = run_scoped_computer_use_servers();
+    prepare_codex_config_toml(&config_path, &working_dir, &servers, None, None).unwrap();
+
+    let cfg = read_codex_config(&config_path);
+    let mcp = cfg["mcp_servers"].as_table().unwrap();
+    assert!(mcp.contains_key("my-mcp"));
+    assert!(!mcp.contains_key("warp-computer-use"));
+}
+
+#[test]
+fn run_scoped_mcp_servers_become_config_overrides() {
+    let overrides = codex_config_overrides(&run_scoped_computer_use_servers());
+    let [config_override] = overrides.as_slice() else {
+        panic!("expected one override, got {overrides:?}");
+    };
+    let value = config_override
+        .strip_prefix("mcp_servers.warp-computer-use=")
+        .unwrap_or_else(|| panic!("unexpected override key: {config_override}"));
+
+    let parsed: toml::Table = toml::from_str(&format!("entry = {value}")).unwrap();
+    let entry = &parsed["entry"];
+    assert_eq!(entry["command"].as_str(), Some("/opt/oz"));
+    let args: Vec<_> = entry["args"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|arg| arg.as_str().unwrap())
+        .collect();
+    assert_eq!(args, ["computer-use-mcp", "--run-id"]);
+    assert_eq!(entry["env"]["DISPLAY"].as_str(), Some(":99"));
+    assert_eq!(entry["env_vars"][0].as_str(), Some("WARP_API_KEY"));
+    assert_eq!(entry["tool_timeout_sec"].as_integer(), Some(600));
 }
 
 #[test]
@@ -770,7 +846,7 @@ fn find_child_git_repos_returns_empty_when_dir_missing() {
 #[test]
 fn codex_command_with_session_id_invokes_resume_subcommand() {
     let uuid = Uuid::new_v4();
-    let cmd = codex_command("codex", Some(&uuid), "/tmp/prompt.txt");
+    let cmd = codex_command("codex", &[], Some(&uuid), "/tmp/prompt.txt");
     assert!(
         cmd.contains(&format!(
             "resume --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust {uuid}"
@@ -785,7 +861,7 @@ fn codex_command_with_session_id_invokes_resume_subcommand() {
 
 #[test]
 fn codex_command_without_session_id_bypasses_hook_trust() {
-    let cmd = codex_command("codex", None, "/tmp/prompt.txt");
+    let cmd = codex_command("codex", &[], None, "/tmp/prompt.txt");
     assert!(
         cmd.contains("--dangerously-bypass-approvals-and-sandbox"),
         "command should bypass approvals and sandbox: {cmd}"
@@ -974,5 +1050,35 @@ async fn fetch_resume_payload_returns_codex_variant_on_success() {
             assert_eq!(info.envelope.codex_version.as_deref(), Some("0.55.0"));
         }
         other => panic!("expected ResumePayload::Codex, got {other:?}"),
+    }
+}
+
+#[test]
+fn codex_command_passes_config_overrides_to_new_and_resumed_sessions() {
+    let config_override = r#"mcp_servers.warp-computer-use={ command = "/opt/o'z" }"#.to_string();
+    let uuid = Uuid::new_v4();
+    for session_id in [None, Some(&uuid)] {
+        let cmd = codex_command(
+            "codex",
+            std::slice::from_ref(&config_override),
+            session_id,
+            "/tmp/prompt.txt",
+        );
+        let words = shell_words::split(&cmd).unwrap();
+        let flag = words
+            .iter()
+            .position(|word| word == "-c")
+            .unwrap_or_else(|| panic!("command should pass -c: {cmd}"));
+        assert_eq!(words[flag + 1], config_override, "{cmd}");
+        assert_eq!(
+            words[flag + 2],
+            "--dangerously-bypass-approvals-and-sandbox",
+            "{cmd}"
+        );
+        let expected_prefix: &[&str] = match session_id {
+            Some(_) => &["codex", "resume"],
+            None => &["codex"],
+        };
+        assert_eq!(&words[..flag], expected_prefix, "{cmd}");
     }
 }

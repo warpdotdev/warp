@@ -2458,17 +2458,14 @@ fn computer_use_server(harness: Harness) -> Option<JSONMCPServer> {
 
 #[test]
 fn computer_use_mcp_server_matches_the_harness_model_family() {
-    for (harness, model_family) in [
-        (Harness::Claude, "anthropic"),
-        (Harness::Gemini, "anthropic"),
-        (Harness::Codex, "openai"),
-    ] {
+    for (harness, model_family) in [(Harness::Claude, "anthropic"), (Harness::Codex, "openai")] {
         let server = computer_use_server(harness).expect("harness takes MCP servers");
         let (command, args, _) = stdio_server(&server);
         assert_eq!(command, "/opt/oz");
         assert_eq!(args, ["computer-use-mcp", "--model-family", model_family]);
     }
     for harness in [
+        Harness::Gemini,
         Harness::Oz,
         Harness::OpenCode,
         Harness::Pi,
@@ -2560,8 +2557,16 @@ fn configured_servers_take_precedence_over_the_computer_use_mcp() {
         servers.installation_ids[COMPUTER_USE_MCP_SERVER_NAME],
         COMPUTER_USE_MCP_INSTALLATION_UUID
     );
+    let settings = &servers.harness_settings[COMPUTER_USE_MCP_SERVER_NAME];
     assert_eq!(
-        servers.harness_settings[COMPUTER_USE_MCP_SERVER_NAME].forwarded_env_vars,
-        ["WARP_API_KEY"]
+        settings.forwarded_env_vars,
+        [
+            "WARP_API_KEY",
+            "WARP_SERVER_ROOT_URL",
+            "WARP_WS_SERVER_URL",
+            "WARP_SESSION_SHARING_SERVER_URL"
+        ]
     );
+    assert!(settings.run_scoped);
+    assert!(servers.is_run_scoped(COMPUTER_USE_MCP_SERVER_NAME));
 }

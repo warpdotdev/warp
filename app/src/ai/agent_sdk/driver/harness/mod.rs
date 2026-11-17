@@ -158,11 +158,19 @@ pub(crate) struct ResolvedMCPServers {
     /// The installation id of each server, which the native conversation records as
     /// `CallMCPTool.server_id`.
     pub(crate) installation_ids: HashMap<String, Uuid>,
-    /// Settings that only some harnesses' config formats can express, keyed by server name.
+    /// Settings that only matter to some harnesses, keyed by server name.
     pub(crate) harness_settings: HashMap<String, HarnessMcpSettings>,
 }
 
-/// MCP server settings that only some harnesses' config formats can express.
+impl ResolvedMCPServers {
+    pub(crate) fn is_run_scoped(&self, name: &str) -> bool {
+        self.harness_settings
+            .get(name)
+            .is_some_and(|settings| settings.run_scoped)
+    }
+}
+
+/// MCP server settings that only matter to some harnesses.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct HarnessMcpSettings {
     /// Variables to forward from the harness's environment, for harnesses that don't give MCP
@@ -170,6 +178,9 @@ pub(crate) struct HarnessMcpSettings {
     pub(crate) forwarded_env_vars: Vec<String>,
     /// How long the harness waits for one of the server's tool calls to finish.
     pub(crate) tool_timeout: Option<Duration>,
+    /// Whether the server must not outlive the run, so harnesses whose MCP config persists across
+    /// runs pass it per invocation instead.
+    pub(crate) run_scoped: bool,
 }
 
 /// Trait for third-party agent harnesses that execute prompts via their own CLIs.

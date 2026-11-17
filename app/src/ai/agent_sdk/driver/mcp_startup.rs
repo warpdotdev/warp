@@ -19,6 +19,10 @@ use oneshot::Canceled;
 use uuid::Uuid;
 use warp_cli::agent::Harness;
 use warp_cli::mcp::MCPSpec;
+use warp_cli::{
+    SERVER_ROOT_URL_OVERRIDE_ENV, SESSION_SHARING_SERVER_URL_OVERRIDE_ENV,
+    WS_SERVER_URL_OVERRIDE_ENV,
+};
 use warp_core::execution_mode::AppExecutionMode;
 use warp_core::features::FeatureFlag;
 use warp_graphql::mutations::create_managed_mcp_client_config::CreateManagedMcpClientConfigOutput;
@@ -1539,7 +1543,22 @@ impl AgentDriver {
 /// Whether a run on `harness` carries the run's computer use configuration. Third-party harnesses
 /// only use it to decide whether to get the computer use MCP server.
 pub(crate) fn harness_takes_computer_use_config(harness: Harness) -> bool {
-    harness == Harness::Oz || FeatureFlag::ComputerUseMcp.is_enabled()
+    harness == Harness::Oz
+        || (FeatureFlag::ComputerUseMcp.is_enabled()
+            && computer_use_model_family(harness).is_some())
+}
+
+/// The model family whose conventions the computer use MCP server follows for `harness`, or `None`
+/// when `harness` can't be given the server.
+fn computer_use_model_family(harness: Harness) -> Option<&'static str> {
+    match harness {
+        Harness::Claude => Some("anthropic"),
+        Harness::Codex => Some("openai"),
+        // Gemini only reads MCP servers from settings files that outlive the run, which would
+        // leave it in control of the computer after the run ends.
+        Harness::Gemini => None,
+        Harness::Oz | Harness::OpenCode | Harness::Pi | Harness::Unknown => None,
+    }
 }
 
 /// Display-server variables the computer use MCP server needs to reach the screen. Harnesses don't
@@ -1553,9 +1572,18 @@ const COMPUTER_USE_MCP_ENV_VARS: &[&str] = &[
     "DBUS_SESSION_BUS_ADDRESS",
 ];
 
-/// How long a harness waits for a computer use tool call. Stopping a recording uploads it, which
-/// can take minutes.
-const COMPUTER_USE_MCP_TOOL_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+/// Variables the computer use MCP server needs from the harness's environment: the Warp CLI that
+/// uploads recordings authenticates with the API key and honors the server URL overrides.
+const COMPUTER_USE_MCP_FORWARDED_ENV_VARS: &[&str] = &[
+    "WARP_API_KEY",
+    SERVER_ROOT_URL_OVERRIDE_ENV,
+    WS_SERVER_URL_OVERRIDE_ENV,
+    SESSION_SHARING_SERVER_URL_OVERRIDE_ENV,
+];
+
+/// How long a harness waits for a computer use tool call, with headroom over the longest call.
+const COMPUTER_USE_MCP_TOOL_TIMEOUT: Duration =
+    Duration::from_secs(computer_use_mcp::STOP_RECORDING_TIMEOUT.as_secs() + 60);
 
 impl AgentDriver {
     /// Adds the built-in computer use MCP server to a third-party harness's MCP servers when
@@ -1644,9 +1672,14 @@ fn attach_computer_use_mcp(servers: &mut ResolvedMCPServers, server: JSONMCPServ
             servers.harness_settings.insert(
                 builtin::COMPUTER_USE_MCP_SERVER_NAME.to_owned(),
                 HarnessMcpSettings {
-                    // The Warp CLI that uploads recordings authenticates with this variable.
-                    forwarded_env_vars: vec!["WARP_API_KEY".to_owned()],
+                    forwarded_env_vars: COMPUTER_USE_MCP_FORWARDED_ENV_VARS
+                        .iter()
+                        .map(|name| (*name).to_owned())
+                        .collect(),
                     tool_timeout: Some(COMPUTER_USE_MCP_TOOL_TIMEOUT),
+                    // The server controls the computer, so it must not stay configured once the
+                    // run that was allowed to use it ends.
+                    run_scoped: true,
                 },
             );
         }
@@ -1654,8 +1687,8 @@ fn attach_computer_use_mcp(servers: &mut ResolvedMCPServers, server: JSONMCPServ
 }
 
 /// Builds the stdio MCP server entry that serves computer use to `harness` from the CLI at
-/// `cli_path`, or `None` when `harness` doesn't take MCP servers. Screen recordings are attached to
-/// `run_id` when there is one, and saved locally otherwise.
+/// `cli_path`, or `None` when `harness` can't be given the server. Screen recordings are attached
+/// to `run_id` when there is one, and saved locally otherwise.
 fn computer_use_mcp_server(
     harness: Harness,
     cli_path: String,
@@ -1663,11 +1696,7 @@ fn computer_use_mcp_server(
     recording_enabled: bool,
     env: HashMap<String, String>,
 ) -> Option<JSONMCPServer> {
-    let model_family = match harness {
-        Harness::Claude | Harness::Gemini => "anthropic",
-        Harness::Codex => "openai",
-        Harness::Oz | Harness::OpenCode | Harness::Pi | Harness::Unknown => return None,
-    };
+    let model_family = computer_use_model_family(harness)?;
     let mut args: Vec<String> = ["computer-use-mcp", "--model-family", model_family]
         .map(str::to_owned)
         .to_vec();
