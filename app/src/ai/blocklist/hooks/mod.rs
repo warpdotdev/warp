@@ -27,10 +27,12 @@ use ai::hooks::{
 };
 #[cfg(feature = "local_tty")]
 use parking_lot::Mutex;
+use warp_core::execution_mode::AppExecutionMode;
 use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 
 use self::pre_tool::PreToolVerdictCache;
 use self::stream::StreamObserverState;
+use crate::ai::agent::AIAgentActionId;
 use crate::ai::agent::conversation::{AIConversationId, ConversationDriver};
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::features::FeatureFlag;
@@ -38,6 +40,21 @@ use crate::features::FeatureFlag;
 use crate::process_environment::InitialProcessEnvironment;
 #[cfg(feature = "local_tty")]
 use crate::terminal::local_shell::LocalShellState;
+
+/// Something the hook runtime did that the owner of the run may want to act on.
+// No production subscriber yet: the run driver that ends a run on an unanswerable `ask` is
+// later work.
+#[allow(dead_code)]
+pub enum HookRuntimeEvent {
+    /// A hook asked for confirmation on a surface with no one to ask, and a hook that asked
+    /// comes from a source set to end the run when that happens. The action was already denied
+    /// with a reason the model can read; the run's owner ends the run.
+    ApprovalUnavailable {
+        conversation_id: AIConversationId,
+        action_id: AIAgentActionId,
+        reason: String,
+    },
+}
 
 /// Process-wide hook state shared by every conversation and surface.
 pub struct HookRuntime {
@@ -67,6 +84,11 @@ impl HookRuntime {
             #[cfg(test)]
             observed_terminal_results: Vec::new(),
         }
+    }
+
+    /// Whether this process has no interactive surface where a user can respond.
+    pub fn is_headless(&self, ctx: &AppContext) -> bool {
+        AppExecutionMode::as_ref(ctx).is_headless()
     }
 
     /// Whether the flag is on and the runtime is registered. True even when no binding is active.
@@ -138,8 +160,8 @@ impl HookRuntime {
         });
     }
 
-    // No production caller yet: later work installs a surface-specific messenger and run metadata
-    // through these setters.
+    // No production caller yet: later work installs a surface-specific messenger, run metadata,
+    // and the run's hook policies through these setters.
 
     /// Records the run this process belongs to. Envelopes built afterwards carry it.
     #[allow(dead_code)]
@@ -162,6 +184,7 @@ impl HookRuntime {
         let future = self.dispatcher.dispatch(
             envelope,
             self.snapshot(ctx),
+            self.is_headless(ctx),
             Arc::new(AtomicBool::new(false)),
         );
         ctx.background_executor()
@@ -173,7 +196,7 @@ impl HookRuntime {
 }
 
 impl Entity for HookRuntime {
-    type Event = ();
+    type Event = HookRuntimeEvent;
 }
 
 impl SingletonEntity for HookRuntime {}

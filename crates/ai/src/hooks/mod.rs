@@ -24,7 +24,7 @@ pub use dispatch::{DispatchOutcome, HookDispatcher, InvocationRecord};
 pub use model::{
     BindingCapabilities, CapabilityWarning, ContinuationRequest, DiagnosticSeverity,
     ENVELOPE_SCHEMA_VERSION, EffectKind, EmptyOutputPolicy, FailurePolicy, FollowUpChainId,
-    HOOK_FOLLOW_UP_CAP, HOOK_PROTOCOL_VERSION, HandlerKind, HookBindingId, HookBoundary,
+    HOOK_FOLLOW_UP_CAP, HOOK_PROTOCOL_VERSION, HandlerKind, HookAsker, HookBindingId, HookBoundary,
     HookDiagnostic, HookEffects, HookEnvelope, HookExecutionHost, HookFormat, HookOnAsk,
     HookPayload, HookReason, HookSourceId, HookSourceKind, HookSourceLocation, HookSourcePolicy,
     HookSurface, HookTurnId, HookVerdict, MalformedOutputPolicy, MatcherTarget, MergedEffects,
@@ -33,8 +33,9 @@ pub use model::{
 };
 pub use notices::{HookMessenger, HookNotice, HookNoticeKind, LogOnlyMessenger};
 pub use permission::{
-    DEFAULT_DENY_REASON, DenyCause, HookPermissionPolicy, PermissionDecision, PermissionFloors,
-    REWRITE_UNSUPPORTED_DENY_REASON, RunFacts, WarpPermissionResult,
+    APPROVAL_UNAVAILABLE_PREFIX, DEFAULT_ASK_REASON, DEFAULT_DENY_REASON,
+    DEFERRAL_UNSUPPORTED_DENY_REASON, DenyCause, HookPermissionPolicy, PermissionDecision,
+    PermissionFloors, REWRITE_UNSUPPORTED_DENY_REASON, RunFacts, WarpPermissionResult,
 };
 pub use registry::{ActiveBinding, HookRegistry, HookRegistryEvent, RegistrySnapshot};
 pub use runner::{

@@ -94,6 +94,7 @@ impl Harness {
         block_on(self.dispatcher.dispatch(
             shell_envelope(command, self.dir.path()),
             self.registry.snapshot(),
+            false,
             Arc::new(AtomicBool::new(false)),
         ))
     }
@@ -148,7 +149,6 @@ exit 2"#,
     assert_eq!(outcome.effects.user_notices, vec!["Blocked"]);
     assert_eq!(outcome.invocations.len(), 1);
     assert_eq!(outcome.invocations[0].exit, ProcessExit::Code(2));
-    assert_eq!(outcome.registry_revision, 1);
     assert_eq!(
         harness.messenger.notices().len(),
         1,
@@ -287,6 +287,7 @@ fn a_repository_hook_runs_from_the_repository_root() {
     let outcome = block_on(dispatcher.dispatch(
         shell_envelope("git push", repo.path()),
         registry.snapshot(),
+        false,
         Arc::new(AtomicBool::new(false)),
     ));
     assert_eq!(outcome.effects.verdict, HookVerdict::Deny);

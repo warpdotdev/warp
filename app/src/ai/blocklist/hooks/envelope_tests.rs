@@ -9,7 +9,10 @@ use crate::ai::blocklist::hooks::test_utils::{
     add_child_conversation, hook_test_app, install_test_hooks, shell_action,
 };
 use crate::features::FeatureFlag;
-use crate::test_util::settings::initialize_settings_for_tests_with_mode;
+use crate::test_util::settings::{
+    initialize_settings_for_tests_with_mode,
+    initialize_settings_for_tests_with_mode_and_headlessness,
+};
 
 #[test]
 fn tool_pre_envelope_carries_the_action_and_common_fields() {
@@ -42,6 +45,29 @@ fn tool_pre_envelope_carries_the_action_and_common_fields() {
             panic!("expected a tool.pre payload");
         };
         assert_eq!(payload_action, &action.action);
+    });
+}
+
+#[test]
+fn an_interactive_sdk_launch_uses_the_gui_surface() {
+    App::test((), |mut app| async move {
+        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
+        initialize_settings_for_tests_with_mode_and_headlessness(
+            &mut app,
+            ExecutionMode::Sdk,
+            false,
+            false,
+        );
+        app.update(install_test_hooks);
+        let envelope = app.read(|ctx| {
+            envelope_for_session_start(
+                true,
+                &EnvelopeSite::for_new_conversation(AIConversationId::new()),
+                ctx,
+            )
+        });
+
+        assert_eq!(envelope.surface, HookSurface::Gui);
     });
 }
 
@@ -134,7 +160,6 @@ fn a_child_conversation_in_a_desktop_process_is_a_local_child() {
         });
         assert_eq!(parent_surface, HookSurface::Gui);
         assert_eq!(child_surface, HookSurface::LocalChild);
-        assert!(child_surface.is_headless());
     });
 }
 

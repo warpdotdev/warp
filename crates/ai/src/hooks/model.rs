@@ -263,17 +263,6 @@ pub enum HookSurface {
     Tui,
 }
 
-impl HookSurface {
-    /// Whether the surface has no one who can answer a confirmation request. A hidden local
-    /// child counts: its parent cannot see or approve its actions.
-    pub fn is_headless(&self) -> bool {
-        match self {
-            Self::OzRun | Self::CliRun | Self::LocalChild => true,
-            Self::Gui | Self::Tui => false,
-        }
-    }
-}
-
 /// Where the operation the hook describes is executing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum HookExecutionHost {
@@ -563,11 +552,29 @@ pub struct MergedEffects {
     pub continuation_binding: Option<HookBindingId>,
     pub conflicts: Vec<String>,
     pub unsupported: Vec<UnsupportedEffect>,
+    /// Every hook whose own verdict was `ask`, in merge order, with its source's on-ask setting.
+    /// The dispatcher fills this in; [`reduce_effects`] leaves it empty because it does not see
+    /// sources.
+    pub askers: Vec<HookAsker>,
+}
+
+/// A hook that asked for approval, and what its source wants done when nobody can answer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HookAsker {
+    pub binding: HookBindingId,
+    pub on_ask: HookOnAsk,
 }
 
 impl MergedEffects {
     pub fn no_opinion() -> Self {
         Self::default()
+    }
+
+    /// Whether a hook that asked belongs to a source that ends the run when nobody can answer.
+    pub fn an_asker_fails_the_run(&self) -> bool {
+        self.askers
+            .iter()
+            .any(|asker| asker.on_ask == HookOnAsk::FailRun)
     }
 }
 
