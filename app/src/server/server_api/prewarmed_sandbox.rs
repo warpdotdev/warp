@@ -475,6 +475,7 @@ impl PrewarmedSandboxClient for ServerApi {
                 sandbox_id: sandbox_id.into(),
                 github_credential_contract_version: Some(1),
                 supports_deferred_repositories: Some(supports_deferred_repositories),
+                supports_agent_hooks: Some(true),
             },
             request_context: get_request_context(),
         });

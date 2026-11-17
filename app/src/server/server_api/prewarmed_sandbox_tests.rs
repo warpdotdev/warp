@@ -287,7 +287,8 @@ fn configuration_uses_default_graphql_timeout_and_authentication() {
             serde_json::json!({
                 "sandboxId": "11111111-2222-3333-4444-555555555555",
                 "githubCredentialContractVersion": 1,
-                "supportsDeferredRepositories": true
+                "supportsDeferredRepositories": true,
+                "supportsAgentHooks": true
             })
         );
     }));
@@ -649,7 +650,10 @@ fn all_endpoints_use_cached_credentials_and_expected_payloads() {
         .match_header("authorization", "Bearer test-access-token")
         .match_body(Matcher::PartialJson(serde_json::json!({
             "variables": {
-                "input": { "sandboxId": "11111111-2222-3333-4444-555555555555" }
+                "input": {
+                    "sandboxId": "11111111-2222-3333-4444-555555555555",
+                    "supportsAgentHooks": true
+                }
             }
         })))
         .with_status(200)
