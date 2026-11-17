@@ -673,7 +673,7 @@ impl HarnessSupportClient for ServerApi {
 
     async fn pull_request_media_markdown(&self) -> Result<PullRequestMediaMarkdown> {
         self.post_public_api(
-            "harness-support/pr-media-markdown",
+            "harness-support/publish-pr-media",
             &serde_json::Map::<String, serde_json::Value>::new(),
         )
         .await
