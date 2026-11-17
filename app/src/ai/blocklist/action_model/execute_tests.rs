@@ -236,8 +236,9 @@ mod hooks {
     use ai::hooks::test_util::{ScriptedRunner, test_binding, test_source_id};
     use ai::hooks::{APPROVAL_UNAVAILABLE_PREFIX, HookBoundary, HookNoticeKind};
     use parking_lot::FairMutex;
+    use warp_core::execution_mode::{AppExecutionMode, ExecutionMode};
     use warp_multi_agent_api::{self as api};
-    use warpui::{App, ModelHandle};
+    use warpui::{App, ModelHandle, SingletonEntity};
 
     use super::super::{
         BlocklistAIActionExecutor, BlocklistAIActionExecutorEvent, NotExecutedReason,
@@ -248,8 +249,8 @@ mod hooks {
     use crate::ai::blocklist::RecordingController;
     use crate::ai::blocklist::hooks::pre_tool::{PreToolHookState, cached_state};
     use crate::ai::blocklist::hooks::test_utils::{
-        HookTestApp, add_child_conversation, hook_test_app, init_project_action,
-        let_background_work_settle, settle, shell_action,
+        HookTestApp, hook_test_app, init_project_action, let_background_work_settle, settle,
+        shell_action,
     };
     use crate::ai::blocklist::hooks::{pre_tool, tool_result};
     use crate::ai::get_relevant_files::controller::GetRelevantFilesController;
@@ -711,11 +712,16 @@ mod hooks {
     }
 
     #[test]
-    fn a_hook_ask_for_a_hidden_child_is_denied_by_hook_with_approval_unavailable() {
+    fn a_hook_ask_in_a_headless_launch_is_denied_by_hook_with_approval_unavailable() {
         App::test((), |mut app| async move {
             let _flag = FeatureFlag::AgentHooks.override_enabled(true);
             let harness = hook_test_app(&mut app);
-            let child = add_child_conversation(&mut app, &harness);
+            let headless_mode = app.add_model(|ctx| {
+                AppExecutionMode::new_with_headlessness(ExecutionMode::App, false, true, ctx)
+            });
+            AppExecutionMode::handle(&app).update(&mut app, |mode, ctx| {
+                *mode = headless_mode.as_ref(ctx).clone();
+            });
             install_shell_binding(
                 &harness,
                 &mut app,
@@ -725,8 +731,15 @@ mod hooks {
             let (executor, events) = build_executor(&mut app, &harness);
             let shell = shell_action("id-shell", "ls");
 
-            let outcome =
-                execute_through_hooks(&mut app, &executor, &events, &shell, child, false).await;
+            let outcome = execute_through_hooks(
+                &mut app,
+                &executor,
+                &events,
+                &shell,
+                harness.conversation_id,
+                false,
+            )
+            .await;
             assert!(matches!(outcome, TryExecuteResult::ExecutedSync));
             let finished = events
                 .borrow()
