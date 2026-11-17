@@ -281,6 +281,7 @@ fn dispatch(
     block_on(dispatcher.dispatch(
         envelope,
         registry.snapshot(),
+        false,
         Arc::new(AtomicBool::new(false)),
     ))
 }
@@ -603,6 +604,7 @@ printf '{"permission":"deny"}'"#;
     let outcome = block_on(dispatcher.dispatch(
         shell_envelope("ls", &fixture.root, Some(&fixture.root)),
         registry.snapshot(),
+        false,
         cancel,
     ));
     assert!(
