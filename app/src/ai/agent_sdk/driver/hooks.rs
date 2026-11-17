@@ -172,7 +172,8 @@ impl AgentDriver {
     /// Records the run this process belongs to and installs the messenger that writes to the
     /// run's output.
     pub(super) fn prepare_hooks_for_run(&self, ctx: &mut ModelContext<Self>) {
-        if !HookRuntime::is_installed(ctx) {
+        // A run with no hooks has nothing to record or report.
+        if self.hooks.sources.is_empty() || !HookRuntime::is_installed(ctx) {
             return;
         }
         let run = self.task_id.map(|task_id| RunIdentity {

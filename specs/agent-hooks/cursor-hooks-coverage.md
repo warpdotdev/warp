@@ -892,7 +892,7 @@ Sizes: small is days, medium is one to three weeks, large is more. "Client" mean
 | G19. Prompt-hook evaluation endpoint and client `PromptHookExecutor` | Medium (server) + small (client) | Server + client | Prompt hooks on every event |
 | G20. Factory-selected sources: a `hooks` field in `factory.yaml` and in agent definitions, delivered by warp-server as `agentHookSources` on the execution configuration | Small (client) + small server | Client + server | Oz, CLI, and child surfaces |
 | G21. Observability: Phase 1 is one `log::` line per invocation (event, source, exit code, duration, stderr tail); telemetry event, diagnostics ring, and optional settings page are Phase 2 | Small (Phase 1) / Small to medium (Phase 2) | Client | All |
-| G22. Feature flag in Phase 1; settings toggles (hooks on/off and strict hook policy) and command palette pairs in Phase 1.5; source selection remains explicit | Small | Client | Rollout |
+| G22. No client switch in Phase 1; the server's `FactoryHooksEnabled` flag controls rollout; settings toggles (hooks on/off and strict hook policy) and command palette pairs in Phase 1.5; source selection remains explicit | Small | Client | Rollout |
 | G23. Windows descendant cleanup via Job Objects in the `command` crate (kill-on-close job, child assigned, no `CREATE_BREAKAWAY_FROM_JOB` for hook children), in Phase 1 | Small to medium | Client | Hooks on Windows |
 | G24. Post-`afterFileEdit` snapshot refresh so formatter changes are picked up before the next edit | Small | Client | `afterFileEdit` correctness |
 

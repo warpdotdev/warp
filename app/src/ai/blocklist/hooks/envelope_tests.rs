@@ -9,7 +9,6 @@ use crate::ai::blocklist::hooks::RunIdentity;
 use crate::ai::blocklist::hooks::test_utils::{
     add_child_conversation, hook_test_app, install_test_hooks, mock_active_session, shell_action,
 };
-use crate::features::FeatureFlag;
 use crate::test_util::settings::{
     initialize_settings_for_tests_with_mode,
     initialize_settings_for_tests_with_mode_and_headlessness,
@@ -18,7 +17,6 @@ use crate::test_util::settings::{
 #[test]
 fn tool_pre_envelope_carries_the_action_and_common_fields() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let harness = hook_test_app(&mut app);
         let action = shell_action("a1", "ls -la");
         let envelope = app.read(|ctx| {
@@ -52,7 +50,6 @@ fn tool_pre_envelope_carries_the_action_and_common_fields() {
 #[test]
 fn an_interactive_sdk_launch_uses_the_gui_surface() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         initialize_settings_for_tests_with_mode_and_headlessness(
             &mut app,
             ExecutionMode::Sdk,
@@ -76,7 +73,6 @@ fn an_interactive_sdk_launch_uses_the_gui_surface() {
 #[test]
 fn result_and_failure_envelopes_carry_the_result_and_cancellation_reason() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let harness = hook_test_app(&mut app);
         let action = shell_action("a1", "ls");
         let result = AIAgentActionResultType::RequestCommandOutput(
@@ -149,7 +145,6 @@ fn cancellation_reason_names_are_stable() {
 #[test]
 fn a_child_conversation_in_a_desktop_process_is_a_local_child() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let harness = hook_test_app(&mut app);
         let child_id = add_child_conversation(&mut app, &harness);
         let action = shell_action("a1", "ls");
@@ -169,7 +164,6 @@ fn a_child_conversation_in_a_desktop_process_is_a_local_child() {
 #[test]
 fn envelopes_carry_the_conversations_turn_id_once_a_turn_started() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let harness = hook_test_app(&mut app);
         let action = shell_action("a1", "ls");
         let before = app.read(|ctx| {
@@ -201,7 +195,6 @@ fn envelopes_carry_the_conversations_turn_id_once_a_turn_started() {
 #[test]
 fn run_metadata_reaches_the_envelope_and_the_run_surface_decides_oz_or_cli() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         initialize_settings_for_tests_with_mode(&mut app, ExecutionMode::Sdk, false);
         app.update(install_test_hooks);
         let active_session = mock_active_session(&mut app);

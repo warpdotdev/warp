@@ -28,7 +28,6 @@ use warp_cli::{
 };
 use warp_core::channel::ChannelState;
 use warp_core::execution_mode::{AppExecutionMode, ExecutionMode};
-use warp_core::features::FeatureFlag;
 use warp_graphql::ai::AgentTaskState;
 use warp_graphql::platform_error::PlatformErrorMessageFormat;
 use warp_managed_secrets::ManagedSecretValue;
@@ -1458,7 +1457,8 @@ fn skill_delta_experiment_scopes_repo_skills_and_keeps_global_selection() {
 
 fn load_overlap_repo_as_env_and_global(flag_enabled: bool, skill_deltas: bool) {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::CwdScopedCloudSkills.override_enabled(flag_enabled);
+        let _flag =
+            warp_core::features::FeatureFlag::CwdScopedCloudSkills.override_enabled(flag_enabled);
         initialize_app_for_terminal_view(&mut app);
 
         let temp = TempDir::new().unwrap();
@@ -1603,7 +1603,7 @@ fn write_flat_skill(skills_dir: &Path, name: &str) {
 #[test]
 fn factory_reference_folders_remain_home_skills_across_cwd_changes() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::CwdScopedCloudSkills.override_enabled(true);
+        let _flag = warp_core::features::FeatureFlag::CwdScopedCloudSkills.override_enabled(true);
         initialize_app_for_terminal_view(&mut app);
         let temp = TempDir::new().unwrap();
         let working_dir = dunce::canonicalize(temp.path()).unwrap();
@@ -1881,7 +1881,6 @@ fn driver_with_hooks(
 #[test]
 fn hook_setup_records_the_run_and_its_surface() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let temp = TempDir::new().unwrap();
         let (driver, _terminal, _hooks) = driver_with_hooks(&mut app, temp.path());
         let task_id: AmbientAgentTaskId = HOOK_TASK_ID.parse().unwrap();
@@ -1891,6 +1890,7 @@ fn hook_setup_records_the_run_and_its_surface() {
                 driver.task_id = Some(task_id);
                 driver.parent_run_id = Some("parent-run".to_owned());
                 driver.hooks.surface = surface;
+                driver.hooks.sources = vec![worker_hook_source(temp.path())];
                 driver.prepare_hooks_for_run(ctx);
             });
             app.read(|ctx| {
@@ -1902,6 +1902,29 @@ fn hook_setup_records_the_run_and_its_surface() {
                 assert_eq!(runtime.run_surface(), Some(surface));
             });
         }
+    });
+}
+
+/// A run with no hooks records nothing on the hook runtime and keeps its messenger, so it adds no
+/// subscription and writes nothing to the run's output.
+#[test]
+fn hook_setup_does_nothing_for_a_run_with_no_hooks() {
+    App::test((), |mut app| async move {
+        let temp = TempDir::new().unwrap();
+        let (driver, _terminal, hooks) = driver_with_hooks(&mut app, temp.path());
+        driver.update(&mut app, |driver, ctx| {
+            driver.task_id = Some(HOOK_TASK_ID.parse().unwrap());
+            driver.hooks.surface = RunSurface::Oz;
+            driver.prepare_hooks_for_run(ctx);
+        });
+        app.read(|ctx| {
+            let runtime = HookRuntime::as_ref(ctx);
+            assert!(runtime.run_metadata().is_none());
+            assert!(std::ptr::addr_eq(
+                Arc::as_ptr(&runtime.messenger()),
+                Arc::as_ptr(&hooks.messenger),
+            ));
+        });
     });
 }
 
@@ -1920,7 +1943,6 @@ fn worker_hook_source(dir: &Path) -> hooks::ConfiguredHookSource {
 #[test]
 fn hook_sources_finalize_once_and_a_second_load_fails() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let temp = TempDir::new().unwrap();
         let working_dir = dunce::canonicalize(temp.path()).unwrap();
         for dir in ["early", "late"] {
@@ -1974,7 +1996,6 @@ fn hook_sources_finalize_once_and_a_second_load_fails() {
 #[test]
 fn execute_run_does_not_fire_session_start() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let temp = TempDir::new().unwrap();
         let (driver, terminal, hooks) = driver_with_hooks(&mut app, temp.path());
         app.update(|ctx| {
@@ -2008,7 +2029,6 @@ fn execute_run_does_not_fire_session_start() {
 #[test]
 fn a_scripted_ask_from_a_fail_run_source_ends_the_run_with_the_hook_reason() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let harness = test_utils::controller_harness(&mut app);
         let headless_mode = app.add_model(|ctx| {
             AppExecutionMode::new_with_headlessness(ExecutionMode::Sdk, false, true, ctx)

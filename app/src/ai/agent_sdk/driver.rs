@@ -2616,6 +2616,9 @@ impl AgentDriver {
             // on one with hooks was refused above.
             match &task.harness {
                 HarnessKind::Oz => {
+                    // After environment preparation, so the login shell's PATH includes what the
+                    // setup commands added to its startup files; it overlaps skill loading.
+                    agent_setup::start_login_shell_path_capture(&foreground).await?;
                     let cloned_repositories = prepared_workspace.repositories.clone();
                     // Load skills from repos synchronously so the initial message includes them.
                     // File trees are ready after prepare_environment and global skill repo

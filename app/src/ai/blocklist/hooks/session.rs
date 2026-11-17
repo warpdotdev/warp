@@ -80,8 +80,8 @@ impl SessionStarts {
 /// Starts `conversation_id`'s `session.start` hooks if they have not run yet and returns what the
 /// conversation's first request must wait for: the hook-session environment, available once the
 /// hooks finish or the longest matching timeout passes, whichever comes first. `None` means there
-/// is nothing to wait for: hooks are off, no session hook applies, the hooks already ran, or the
-/// conversation is not new.
+/// is nothing to wait for: no binding is active, no session hook applies, the hooks already ran,
+/// or the conversation is not new.
 pub(crate) fn barrier(
     conversation_id: AIConversationId,
     active_session: &ModelHandle<ActiveSession>,

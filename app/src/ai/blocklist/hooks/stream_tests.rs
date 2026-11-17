@@ -13,7 +13,6 @@ use super::*;
 use crate::ai::blocklist::hooks::test_utils::{
     controller_harness, hook_test_app, root_task_id, settle, stream_init_event, text_message,
 };
-use crate::features::FeatureFlag;
 use crate::server::server_api::AIApiError;
 
 fn stream_id() -> ResponseStreamId {
@@ -253,7 +252,6 @@ fn message(id: &str, body: Message) -> api::Message {
 #[test]
 fn a_stream_that_errors_still_reports_the_text_it_streamed() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let harness = controller_harness(&mut app);
         app.update(|ctx| {
             harness.hooks.install_bindings(
@@ -302,7 +300,6 @@ fn a_stream_that_errors_still_reports_the_text_it_streamed() {
 #[test]
 fn an_update_to_an_earlier_tool_call_does_not_end_the_streaming_text() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let harness = hook_test_app(&mut app);
         app.update(|ctx| {
             harness.hooks.install_bindings(
@@ -390,7 +387,6 @@ fn an_update_to_an_earlier_tool_call_does_not_end_the_streaming_text() {
 #[test]
 fn collect_observations_reads_text_reasoning_and_splits_from_client_actions() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let harness = hook_test_app(&mut app);
         let actions = vec![
             api::ClientAction {
