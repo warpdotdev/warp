@@ -2516,6 +2516,7 @@ impl AgentDriver {
                                 environment::prepend_factory_definition_clone_for_values(
                                     value(environment::FACTORY_REPO_CLONE_URL_ENV_VAR),
                                     value(environment::FACTORY_REPO_DIR_ENV_VAR),
+                                    workspace.factory_definition_sha.as_deref(),
                                     session_shell_type.unwrap_or(ShellType::Bash),
                                     &mut workspace.setup_commands,
                                 );
@@ -2525,6 +2526,7 @@ impl AgentDriver {
                     } else {
                         environment::prepend_factory_definition_clone(
                             &mut workspace.setup_commands,
+                            workspace.factory_definition_sha.as_deref(),
                             session_shell_type,
                         );
                     }

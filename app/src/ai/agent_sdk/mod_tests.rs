@@ -89,7 +89,7 @@ fn paired_execution_launch_keeps_inventory_separate_from_eager_membership() {
                 "inferenceProviders": null, "providers": null,
                 "idleOnCompleteSeconds": 120, "idleOnFailSeconds": 60,
                 "mcpServersJson": "{}", "skills": [], "factorySkillDirs": [".agents/skills"],
-                "computerUseEnabled": false, "repositories": eager,
+                "factoryBranch": null, "computerUseEnabled": false, "repositories": eager,
                 "deferredRepositories": [{
                     "forge": deferred_forge, "owner": "platform/backend", "name": "api",
                     "ref": {"type": "BRANCH", "value": "benchmark-base"},
@@ -220,7 +220,8 @@ fn paired_execution_rejects_a_different_task_or_execution() {
                 "inferenceProviders": null, "providers": null,
                 "idleOnCompleteSeconds": null, "idleOnFailSeconds": null,
                 "mcpServersJson": "{}", "skills": [], "factorySkillDirs": [],
-                "computerUseEnabled": false, "repositories": [], "deferredRepositories": [],
+                "factoryBranch": null, "computerUseEnabled": false, "repositories": [],
+                "deferredRepositories": [],
                 "setupCommands": [], "sessionSharingAcls": [],
                 "skipInitialTurn": false, "snapshotDisabled": false, "agentHookSources": [],
             }))
@@ -252,7 +253,7 @@ fn execution_config_with_hooks(hooks: serde_json::Value) -> serde_json::Value {
         "reasoningLevel": null, "profileId": null, "computerUseModelId": null,
         "inferenceProviders": null, "providers": null,
         "idleOnCompleteSeconds": null, "idleOnFailSeconds": null,
-        "mcpServersJson": "{}", "skills": [], "factorySkillDirs": [],
+        "mcpServersJson": "{}", "skills": [], "factorySkillDirs": [], "factoryBranch": null,
         "computerUseEnabled": false, "repositories": [], "deferredRepositories": [],
         "setupCommands": [], "sessionSharingAcls": [],
         "skipInitialTurn": false, "snapshotDisabled": false, "agentHookSources": hooks,
@@ -441,7 +442,7 @@ fn deferred_capability_bootstrap_subprocess() {
         "inferenceProviders": null, "providers": null,
         "idleOnCompleteSeconds": null, "idleOnFailSeconds": null,
         "mcpServersJson": "{}", "skills": [], "factorySkillDirs": [],
-        "computerUseEnabled": false, "repositories": eager,
+        "factoryBranch": null, "computerUseEnabled": false, "repositories": eager,
         "setupCommands": [], "sessionSharingAcls": [],
         "skipInitialTurn": false, "snapshotDisabled": false, "agentHookSources": [],
     });

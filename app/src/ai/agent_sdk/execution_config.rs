@@ -10,8 +10,9 @@ use warp_cli::share::{ShareAccessLevel, ShareRequest, ShareSubject};
 use warp_graphql::ai::AgentHarness;
 use warp_graphql::queries::execution_config::{
     AgentHookFormat, AgentHookLevel, AgentHookOnAsk, AgentHookSource, CloudProviderClientConfigs,
-    CodeForge, ExecutionRepository, ExecutionRepositoryRefType, SessionSharingAccessLevel,
-    SessionSharingAclSpec, SessionSharingSubjectType, SourceRepo as ConfigSourceRepo,
+    CodeForge, ExecutionRepository, ExecutionRepositoryRefType, FactoryBranchExecutionConfig,
+    SessionSharingAccessLevel, SessionSharingAclSpec, SessionSharingSubjectType,
+    SourceRepo as ConfigSourceRepo,
 };
 
 use super::driver::environment::ResolvedRepository;
@@ -280,6 +281,25 @@ pub(crate) fn hook_worker_path(path: &str) -> anyhow::Result<PathBuf> {
         );
     }
     Ok(path)
+}
+
+pub(super) fn factory_definition_sha(
+    branch: Option<FactoryBranchExecutionConfig>,
+) -> anyhow::Result<Option<String>> {
+    branch
+        .map(|branch| {
+            let sha = branch.source_sha;
+            // The commit is inlined into a setup command, so only a full commit ID is accepted.
+            if sha.len() != 40
+                || !sha
+                    .bytes()
+                    .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+            {
+                bail!("Execution Factory branch commit is not a full commit SHA");
+            }
+            Ok(sha)
+        })
+        .transpose()
 }
 
 #[cfg(test)]
