@@ -222,10 +222,7 @@ fn a_worker_source_must_be_absolute() {
         &[],
     );
     assert_eq!(sources.len(), 1);
-    assert_eq!(
-        sources[0].working_directory,
-        PathBuf::from(absolute_path)
-    );
+    assert_eq!(sources[0].working_directory, PathBuf::from(absolute_path));
     assert_eq!(sources[0].project_dir, None);
     assert_eq!(failures.len(), 1);
     assert!(!failures[0].strict);
