@@ -52,6 +52,10 @@ use crate::terminal::local_shell::LocalShellState;
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) enum RunSurface {
     /// A run the server dispatched: an Oz cloud run, or a task resumed with `--task-id`.
+    #[cfg_attr(
+        target_family = "wasm",
+        expect(dead_code, reason = "Oz runs are unavailable in WASM builds")
+    )]
     Oz,
     /// A `warp agent run` started from a command line.
     #[default]
@@ -79,6 +83,13 @@ pub enum HookRuntimeEvent {
     /// A hook asked for confirmation on a surface with no one to ask, and a hook that asked
     /// comes from a source set to end the run when that happens. The action was already denied
     /// with a reason the model can read; the run's owner ends the run.
+    #[cfg_attr(
+        target_family = "wasm",
+        expect(
+            dead_code,
+            reason = "the Oz driver that consumes this event is unavailable in WASM builds"
+        )
+    )]
     ApprovalUnavailable {
         conversation_id: AIConversationId,
         action_id: AIAgentActionId,
@@ -292,11 +303,22 @@ impl HookRuntime {
 
     /// Records the run this process belongs to. Envelopes built afterwards carry it and report
     /// its surface.
+    #[cfg_attr(
+        target_family = "wasm",
+        expect(dead_code, reason = "Oz runs are unavailable in WASM builds")
+    )]
     pub(crate) fn set_run(&mut self, run: Option<RunIdentity>) {
         self.run = run;
     }
 
     /// Replaces the messenger for notices and diagnostics, including those the dispatcher routes.
+    #[cfg_attr(
+        target_family = "wasm",
+        expect(
+            dead_code,
+            reason = "the Oz output messenger is unavailable in WASM builds"
+        )
+    )]
     pub fn set_messenger(&mut self, messenger: Arc<dyn HookMessenger>) {
         self.dispatcher = Arc::new(HookDispatcher::new(
             self.dispatcher.runner().clone(),
