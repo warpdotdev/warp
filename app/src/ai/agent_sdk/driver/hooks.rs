@@ -4,25 +4,35 @@
 
 use std::collections::HashMap;
 use std::io::{self, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use ai::hooks::{
-    DiagnosticSeverity, ExplicitHookSource, HookDiagnostic, HookDirectory, HookFormat,
-    HookMessenger, HookNotice, HookNoticeKind, HookSourceId, HookSourceKind, HookSourceLocation,
-    HookSourcePolicy, LogOnlyMessenger, RunMetadata, SourceLoadFailure,
+    DiagnosticSeverity, ExplicitHookSource, HookBoundary, HookDiagnostic, HookDirectory,
+    HookExecutionHost, HookFormat, HookMessenger, HookNotice, HookNoticeKind, HookSourceId,
+    HookSourceKind, HookSourceLocation, HookSourcePolicy, LogOnlyMessenger, RunMetadata,
+    SourceLoadFailure,
 };
+use ai::skills::ParsedSkill;
 use anyhow::Context as _;
 use warp_cli::agent::OutputFormat;
-use warp_errors::report_if_error;
+use warp_errors::{report_error, report_if_error};
 use warpui::{AppContext, ModelContext, SingletonEntity as _};
 
-use super::{AgentDriver, AgentDriverError, output};
-use crate::ai::agent::AIAgentActionId;
+use super::{
+    AgentDriver, AgentDriverError, IdleTimeoutSender, SDKConversationOutputStatus,
+    idle_window_for_terminal_status, output,
+};
 use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent::{AIAgentActionId, AIAgentInput, RenderableAIError, ResolvedRunPrompt};
+use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::hooks::{HookRuntime, HookRuntimeEvent, RunIdentity, RunSurface};
 use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 use crate::ai::cloud_environments::SourceRepo;
+use crate::server::server_api::ServerApiProvider;
+use crate::server::server_api::harness_support::{
+    ResolvePromptAttachedSkill, ResolvePromptRequest,
+};
 
 /// The hooks a run's execution configuration selected, and the kind of run it is.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -280,6 +290,135 @@ impl AgentDriver {
         });
     }
 
+    /// Sends the prompt the run starts with. The server resolves that prompt itself from the
+    /// stored task, so the client never needs its text, except for the `prompt.submit` hooks:
+    /// when one is active the prompt is fetched first and sent along for them to see. A prompt
+    /// that could not be fetched is sent anyway, without the hooks, unless a strict source owns
+    /// one of them, in which case the run ends as failed.
+    pub(super) fn send_run_prompt(
+        &self,
+        task_id: AmbientAgentTaskId,
+        skill: Option<ParsedSkill>,
+        attachments_dir: Option<String>,
+        run_exit: IdleTimeoutSender<SDKConversationOutputStatus>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if !prompt_hooks_are_active(ctx) {
+            self.send_run_start_input(task_id, skill, attachments_dir, None, ctx);
+            return;
+        }
+        let server_api = ServerApiProvider::as_ref(ctx).get();
+        let request = ResolvePromptRequest {
+            skill: skill.as_ref().map(|skill| ResolvePromptAttachedSkill {
+                name: skill.name.clone(),
+                content: skill.content.clone(),
+                path: Some(skill.path.display_path()),
+            }),
+            attachments_dir: attachments_dir.clone(),
+        };
+        let attachments_root = attachments_dir.clone();
+        ctx.spawn(
+            async move {
+                let resolved = server_api.resolve_prompt_for_task(&task_id, request).await;
+                resolved.map(|resolved| ResolvedRunPrompt {
+                    text: resolved.prompt,
+                    attachments: attachments_root
+                        .as_deref()
+                        .map(attachment_files)
+                        .unwrap_or_default(),
+                })
+            },
+            move |me, resolved, ctx| match resolved {
+                Ok(prompt) => {
+                    me.send_run_start_input(task_id, skill, attachments_dir, Some(prompt), ctx);
+                }
+                Err(error) => {
+                    let sources = prompt_hook_sources(ctx);
+                    if sources.iter().any(|(_, strict)| *strict) {
+                        let error = RenderableAIError::other(
+                            format!(
+                                "The run was ended because its prompt could not be fetched for \
+                                 a strict source's beforeSubmitPrompt hooks: {error:#}"
+                            ),
+                            true,
+                        );
+                        me.end_run_before_conversation(run_exit, error, ctx);
+                        return;
+                    }
+                    let messenger = HookRuntime::as_ref(ctx).messenger();
+                    for (source, _) in sources {
+                        messenger.diagnostic(HookDiagnostic {
+                            source,
+                            severity: DiagnosticSeverity::Warning,
+                            message: format!(
+                                "the run's first prompt could not be fetched, so its \
+                                 beforeSubmitPrompt hooks did not run for it: {error:#}"
+                            ),
+                        });
+                    }
+                    me.send_run_start_input(task_id, skill, attachments_dir, None, ctx);
+                }
+            },
+        );
+    }
+
+    fn send_run_start_input(
+        &self,
+        task_id: AmbientAgentTaskId,
+        skill: Option<ParsedSkill>,
+        attachments_dir: Option<String>,
+        resolved_prompt: Option<ResolvedRunPrompt>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let ambient_run_id = task_id.to_string();
+        self.terminal_driver.update(ctx, |td, ctx| {
+            td.with_terminal_view(ctx, |terminal, ctx| {
+                terminal.ai_controller().update(ctx, |controller, ctx| {
+                    controller.send_ai_input_with_context(
+                        |context| AIAgentInput::StartFromAmbientRunPrompt {
+                            ambient_run_id: ambient_run_id.clone(),
+                            context,
+                            runtime_skill: skill.clone(),
+                            attachments_dir: attachments_dir.clone(),
+                            resolved_prompt: resolved_prompt.clone(),
+                        },
+                        ctx,
+                    );
+                });
+            })
+        });
+    }
+
+    /// Ends the run as failed because a hook stopped its first prompt, with the hook's reason.
+    pub(super) fn end_run_for_halted_prompt(
+        &mut self,
+        run_exit: IdleTimeoutSender<SDKConversationOutputStatus>,
+        reason: &str,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let error = RenderableAIError::other(
+            format!("The run was ended because an agent hook stopped its first prompt. {reason}"),
+            true,
+        );
+        self.end_run_before_conversation(run_exit, error, ctx);
+    }
+
+    /// Ends the run as failed with `error` before its conversation has started, holding the
+    /// process open for the `--idle-on-fail` window the way a failed conversation does.
+    fn end_run_before_conversation(
+        &mut self,
+        run_exit: IdleTimeoutSender<SDKConversationOutputStatus>,
+        error: RenderableAIError,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        report_error!("{error}");
+        let status = SDKConversationOutputStatus::Error { error };
+        match idle_window_for_terminal_status(&status, self.idle_on_complete, self.idle_on_fail) {
+            Some(window) => self.arm_debug_window(run_exit, status, window, ctx),
+            None => run_exit.end_run_now(status),
+        }
+    }
+
     /// Fails the conversation where the hook denied an action, or the run's own conversation if
     /// the denial happened on a hidden child's surface.
     fn fail_run_for_hook(
@@ -312,6 +451,45 @@ impl AgentDriver {
             controller.fail_conversation_due_to_hook(target, message, ctx);
         });
     }
+}
+
+/// Whether a `prompt.submit` hook is active, so the run's first prompt must be fetched for it.
+fn prompt_hooks_are_active(ctx: &AppContext) -> bool {
+    HookRuntime::is_active(ctx)
+        && HookRuntime::as_ref(ctx)
+            .snapshot(ctx)
+            .has_bindings_for(HookBoundary::PromptSubmit)
+}
+
+/// Each source that owns a `prompt.submit` binding, once, with whether it is strict.
+fn prompt_hook_sources(ctx: &AppContext) -> Vec<(HookSourceId, bool)> {
+    let mut sources: Vec<(HookSourceId, bool)> = Vec::new();
+    for active in HookRuntime::as_ref(ctx)
+        .snapshot(ctx)
+        .bindings_for(HookBoundary::PromptSubmit, HookExecutionHost::Local)
+    {
+        let source = &active.binding.id.source;
+        match sources.iter_mut().find(|(seen, _)| seen == source) {
+            Some((_, strict)) => *strict |= active.policy.strict,
+            None => sources.push((source.clone(), active.policy.strict)),
+        }
+    }
+    sources
+}
+
+/// The task's attachment files: the regular files directly in `attachments_dir`, in name order.
+/// Anything else in the directory (the handoff snapshot's subdirectory) is not an attachment.
+fn attachment_files(attachments_dir: &str) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(attachments_dir) else {
+        return Vec::new();
+    };
+    let mut files = entries
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
+        .map(|entry| entry.path())
+        .collect::<Vec<_>>();
+    files.sort();
+    files
 }
 
 /// Loads `sources` into the registry, finalizing it, and returns the sources that failed.

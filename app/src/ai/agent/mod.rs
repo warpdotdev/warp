@@ -18,6 +18,7 @@ pub(super) mod util;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Display;
 use std::ops::{AddAssign, Deref, DerefMut, Range};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -2977,6 +2978,14 @@ pub fn display_user_query_with_mode(mode: UserQueryMode, query: &str) -> String 
     }
 }
 
+/// The prompt an ambient agent run starts with, as the server resolved it for this client.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResolvedRunPrompt {
+    pub text: String,
+    /// The task's attachment files, where the client downloaded them.
+    pub attachments: Vec<PathBuf>,
+}
+
 // TODO(zachbai): Refactor this to consolidate with `LongRunningCommandSnapshot` and `Snapshot`
 // variants of `ReadShellCommandOutputResult` and `WriteToLongRunningShellCommandResult`.
 #[derive(Clone, Debug, PartialEq)]
@@ -3095,6 +3104,10 @@ pub enum AIAgentInput {
         /// Optional directory path where the client downloaded task attachments.
         /// Passed to the server so it can construct correct file paths for the LLM.
         attachments_dir: Option<String>,
+        /// The run's prompt as the server resolved it, fetched ahead of the request so the
+        /// prompt hooks can see it. It is not sent: the server resolves the prompt itself from
+        /// the stored task.
+        resolved_prompt: Option<ResolvedRunPrompt>,
     },
 
     /// The result of an `AIAgentAction`, relayed back to the LLM for it to continue answering a

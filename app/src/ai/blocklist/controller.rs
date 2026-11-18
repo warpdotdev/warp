@@ -205,6 +205,13 @@ pub enum BlocklistAIControllerEvent {
     ExecuteLocalHarnessCommand {
         command: String,
     },
+
+    /// An agent hook stopped the prompt an ambient agent run starts with, so the run has nothing
+    /// to do. `reason` is what the hook said, or Warp's default when it said nothing.
+    RunPromptHalted {
+        conversation_id: AIConversationId,
+        reason: String,
+    },
 }
 
 #[derive(Debug)]
@@ -869,10 +876,23 @@ impl BlocklistAIController {
             input_query.input_query,
             InputQueryType::UserSubmittedQueryFromInput { .. }
         );
-        // Hooks see the prompt as it was typed, including any mode prefix. The copy is only made
-        // when a hook could fire, so the inactive path adds nothing beyond the check.
-        let prompt_text =
-            (is_user_submitted_prompt && hooks::HookRuntime::is_active(ctx)).then(|| query.clone());
+        // Hooks see a typed prompt as it was typed, including any mode prefix, and a run's
+        // first prompt as the server resolved it, when the driver fetched it for them. The copy
+        // is only made when a hook could fire, so the inactive path adds nothing beyond the
+        // check.
+        let prompt_text = hooks::HookRuntime::is_active(ctx)
+            .then(|| match &input_query.input_query {
+                InputQueryType::UserSubmittedQueryFromInput { .. } => Some(query.clone()),
+                InputQueryType::AIInputType {
+                    ai_input:
+                        AIAgentInput::StartFromAmbientRunPrompt {
+                            resolved_prompt: Some(prompt),
+                            ..
+                        },
+                } => Some(prompt.text.clone()),
+                InputQueryType::AIInputType { .. } => None,
+            })
+            .flatten();
         let (query, user_query_mode) = if is_hook_follow_up {
             (query, UserQueryMode::Normal)
         } else {
@@ -1039,7 +1059,8 @@ impl BlocklistAIController {
 
     /// Sends a query whose wait ended in its favor, or puts back what a query that is not sent
     /// took. A turn whose finalization was left to this query is finished if the query does not
-    /// go out.
+    /// go out. A halted prompt that would have started an ambient agent run is announced, since
+    /// the run's owner has to end the run.
     fn conclude_prepared_query(
         &mut self,
         prepared: PreparedQuery,
@@ -1051,7 +1072,19 @@ impl BlocklistAIController {
         let sent = if outcome.send {
             self.send_prepared_query(prepared, ctx)
         } else {
+            let starts_run = prepared
+                .inputs
+                .iter()
+                .any(|input| matches!(input, AIAgentInput::StartFromAmbientRunPrompt { .. }));
             Self::restore_dirty_events(conversation_id, prepared.taken_dirty_events, ctx);
+            if let (true, hooks::prompt::PromptDecision::Halted { reason, .. }) =
+                (starts_run, &decision)
+            {
+                ctx.emit(BlocklistAIControllerEvent::RunPromptHalted {
+                    conversation_id,
+                    reason: reason.clone(),
+                });
+            }
             false
         };
         if !sent && outcome.owes_earlier_turn {
