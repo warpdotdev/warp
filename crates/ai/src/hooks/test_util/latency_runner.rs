@@ -66,6 +66,7 @@ impl HookRunner for LatencyRunner {
                         stdout_truncated: false,
                         stderr_tail: String::new(),
                         duration: Duration::ZERO,
+                        queued: Duration::ZERO,
                     },
                 )
             });
@@ -86,6 +87,7 @@ impl HookRunner for LatencyRunner {
                         stdout_truncated: false,
                         stderr_tail: String::new(),
                         duration: started.elapsed(),
+                        queued: Duration::ZERO,
                     };
                 }
                 if started.elapsed() >= latency {

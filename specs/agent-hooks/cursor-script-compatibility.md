@@ -48,11 +48,11 @@ compatibility layer.
 - `Shell`: `{ command, cwd?, is_read_only?, is_risky?, wait_until_completion, uses_pager?,
   rationale? }`. The command is the model's command, before any pager or shell decoration Warp
   adds when it runs it.
-- `Read` (a file read): `{ files: [ { path, lines: [[start, end], ...] } ] }`. Warp reads a
-  batch of files in one call, so there is no single `file_path` yet; this changes in the pull
-  request that fires one event per file.
+- `Read` (a file read): `{ file_path, lines: [[start, end], ...] }`, one event per file (see
+  "Batched reads and edits" below).
 - `Write` and `Delete`: `{ file_path?, title?, edits: [ ... ] }`. `file_path` is present when
-  every edit in the batch is to one file. Each edit is one of
+  every edit in the event is to one file, which is always the case once a batch over several
+  files has been split into one event per file. Each edit is one of
   `{ kind: "edit", file_path, old_string, new_string }`,
   `{ kind: "edit", file_path, move_to, hunks }` (a V4A patch),
   `{ kind: "create", file_path, content, allow_overwrite }`, or
@@ -65,6 +65,31 @@ compatibility layer.
 - `MCPResource:<name>`: `{ name, uri? }`, with `mcp_server_id` beside it.
 - `Task` (`run_agents`): the batch's `summary`, `base_prompt`, `model_id`, `harness_type`,
   `execution_mode`, `plan_id`, `skills`, `metadata`, and one entry per child under `agents`.
+
+## Batched reads and edits
+
+Warp's agent reads several files in one tool call and can edit several files in one call.
+Cursor's `Read`, `Write`, and `Delete` work on one file at a time, so on `preToolUse`,
+`postToolUse`, and `postToolUseFailure` Warp presents such a call as one event per file: each
+event has that file's `file_path` (and, for edits, only that file's `edits`, named `Delete` when
+they are all deletes), that file's slice of the result in `tool_output`, and the call's one
+`tool_use_id`. Things to know:
+
+- Your hook runs once per file. The matcher is tested per file, so a `^Delete$` matcher sees the
+  delete in a batch that also writes.
+- A deny (or an `ask`, which a cloud run cannot answer) from any file's run denies the whole
+  call, and the reason the model reads starts with that file's path.
+- The events of one call share a `tool_use_id` and report the batch's `duration`, so a script
+  that counts spans by event counts one per file.
+- A read of one file is one event in the same shape with no special marking; an edit batch to
+  one file is one event.
+
+## Timeouts
+
+A hook's `timeout` is a budget for its own run: the clock starts when the hook starts, not when
+it was queued. At most four hooks run at once; a hook waiting for a slot keeps its whole timeout
+and waits until a slot frees or the firing is cancelled. A large batch (many files times many
+hooks) therefore takes longer to finish, but no hook times out because of the queue.
 
 ## `tool_output`
 
@@ -116,3 +141,5 @@ with the run. `architecture.md` §7.1 has the rules.
 - Cursor-faithful `tool_input` shapes: `ReadSkill` as `Read`, `file_path` and
   `old_string`/`new_string` on edits, MCP arguments as the whole input with `mcp_server_id`
   beside it.
+- One event per file for batched reads and edits, and per-command timeouts that start when the
+  hook starts.

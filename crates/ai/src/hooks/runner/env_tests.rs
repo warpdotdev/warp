@@ -361,6 +361,7 @@ mod subprocess {
         let session_env = session(&[("FROM_SESSION", "yes"), ("WARP_PROJECT_DIR", "/hijacked")]);
         let outcome = block_on(runner.run(HookInvocation {
             binding: test_binding_id(test_source_id("hooks.json"), "sessionStart", 0),
+            label: None,
             command: "./env.sh".to_owned(),
             cwd: dir.path().to_path_buf(),
             env: invocation_environment(&cursor_hook(), &session_env),

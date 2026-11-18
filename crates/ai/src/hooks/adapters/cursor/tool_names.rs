@@ -13,13 +13,7 @@ pub(super) fn tool_name(action: &AIAgentActionType) -> Cow<'static, str> {
     let name = match action {
         AIAgentActionType::RequestCommandOutput { .. } => "Shell",
         AIAgentActionType::ReadFiles(_) => "Read",
-        AIAgentActionType::RequestFileEdits { file_edits, .. } => {
-            let all_deletes = !file_edits.is_empty()
-                && file_edits
-                    .iter()
-                    .all(|edit| matches!(edit, FileEdit::Delete { .. }));
-            if all_deletes { "Delete" } else { "Write" }
-        }
+        AIAgentActionType::RequestFileEdits { file_edits, .. } => edits_tool_name(file_edits),
         AIAgentActionType::Grep { .. } => "Grep",
         AIAgentActionType::RunAgents(_) => "Task",
         AIAgentActionType::CallMCPTool { name, .. } => return Cow::Owned(format!("MCP:{name}")),
@@ -54,6 +48,17 @@ pub(super) fn tool_name(action: &AIAgentActionType) -> Cow<'static, str> {
         AIAgentActionType::InsertCodeReviewComments { .. } => "InsertCodeReviewComments",
     };
     Cow::Borrowed(name)
+}
+
+/// `Delete` for a batch made only of deletes, `Write` otherwise.
+pub(super) fn edits_tool_name<'a>(edits: impl IntoIterator<Item = &'a FileEdit>) -> &'static str {
+    let mut edits = edits.into_iter().peekable();
+    let non_empty = edits.peek().is_some();
+    if non_empty && edits.all(|edit| matches!(edit, FileEdit::Delete { .. })) {
+        "Delete"
+    } else {
+        "Write"
+    }
 }
 
 #[cfg(test)]

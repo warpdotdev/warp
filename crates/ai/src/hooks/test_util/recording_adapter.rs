@@ -5,7 +5,7 @@ use serde_json::json;
 
 use crate::agent::action::AIAgentActionType;
 use crate::hooks::adapters::{
-    DeclaredBinding, DecodePolicy, HookConfigError, HookFormatAdapter, ParsedHookConfig,
+    DeclaredBinding, DecodePolicy, HookConfigError, HookFormatAdapter, HookInput, ParsedHookConfig,
 };
 use crate::hooks::model::{
     ContinuationRequest, HookEffects, HookEnvelope, HookFormat, HookPayload, HookReason,
@@ -35,12 +35,15 @@ struct TestHookOutput {
 /// An adapter for tests. Matching compares the binding's matcher text to [`test_tool_name`]
 /// exactly; an absent, empty, or `*` matcher matches everything. Decoding treats exit code 2 as a
 /// deny (stdout is the reason), exit code 0 with JSON stdout as a scripted verdict, and anything
-/// else as no opinion. A scripted continuation carries the binding's own loop limit.
+/// else as no opinion. A scripted continuation carries the binding's own loop limit. With
+/// [`fan_out`](Self::fan_out) set, every firing is split into one labeled input per label, the
+/// way a real adapter splits a batched read into one input per file.
 #[derive(Default)]
 pub struct RecordingAdapter {
     bindings: Mutex<Vec<DeclaredBinding>>,
     encoded: Mutex<Vec<HookEnvelope>>,
     decode_policies: Mutex<Vec<DecodePolicy>>,
+    fan_out: Mutex<Vec<String>>,
 }
 
 impl RecordingAdapter {
@@ -51,12 +54,17 @@ impl RecordingAdapter {
     pub fn with_bindings(bindings: Vec<DeclaredBinding>) -> Self {
         Self {
             bindings: Mutex::new(bindings),
-            encoded: Mutex::new(Vec::new()),
-            decode_policies: Mutex::new(Vec::new()),
+            ..Self::default()
         }
     }
 
-    /// Every envelope passed to `encode_input`, in order.
+    /// Makes every firing from now on produce one input per label, in this order.
+    pub fn fan_out(&self, labels: Vec<&str>) {
+        *self.fan_out.lock().expect("adapter lock") =
+            labels.into_iter().map(str::to_owned).collect();
+    }
+
+    /// Every envelope passed to `encode_inputs`, in order.
     pub fn encoded_envelopes(&self) -> Vec<HookEnvelope> {
         self.encoded.lock().expect("adapter lock").clone()
     }
@@ -110,11 +118,7 @@ impl HookFormatAdapter for RecordingAdapter {
         }
     }
 
-    fn encode_input(
-        &self,
-        binding: &DeclaredBinding,
-        envelope: &HookEnvelope,
-    ) -> serde_json::Value {
+    fn encode_inputs(&self, binding: &DeclaredBinding, envelope: &HookEnvelope) -> Vec<HookInput> {
         self.encoded
             .lock()
             .expect("adapter lock")
@@ -135,7 +139,21 @@ impl HookFormatAdapter for RecordingAdapter {
         if let HookPayload::ToolPre { action } = &envelope.payload {
             input["tool_input"] = json!(action.to_string());
         }
-        input
+        let labels = self.fan_out.lock().expect("adapter lock").clone();
+        if labels.is_empty() {
+            return vec![HookInput::whole(input)];
+        }
+        labels
+            .into_iter()
+            .map(|label| {
+                let mut payload = input.clone();
+                payload["part"] = json!(label);
+                HookInput {
+                    label: Some(label),
+                    payload,
+                }
+            })
+            .collect()
     }
 
     fn decode_output(

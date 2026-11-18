@@ -20,6 +20,9 @@ pub type PathCapture = Arc<dyn Fn() -> Option<OsString> + Send + Sync>;
 #[derive(Debug, Clone)]
 pub struct HookInvocation {
     pub binding: HookBindingId,
+    /// The part of the operation this run is for, when the firing was split into several runs
+    /// of the binding.
+    pub label: Option<String>,
     pub command: String,
     pub cwd: PathBuf,
     pub env: Vec<(OsString, OsString)>,
@@ -51,7 +54,11 @@ pub struct HookProcessOutcome {
     pub stdout_truncated: bool,
     /// The end of stderr, bounded so it can be logged safely.
     pub stderr_tail: String,
+    /// How long the hook ran, from the moment it was started. Time spent waiting for one of the
+    /// runner's slots is not included; see `queued`.
     pub duration: Duration,
+    /// How long the invocation waited for a slot before it was started.
+    pub queued: Duration,
 }
 
 /// Runs hook processes. Implementations own spawning, deadlines, output limits, and cleanup.
@@ -75,6 +82,7 @@ impl HookRunner for UnavailableRunner {
             stdout_truncated: false,
             stderr_tail: String::new(),
             duration: Duration::ZERO,
+            queued: Duration::ZERO,
         }))
     }
 }
