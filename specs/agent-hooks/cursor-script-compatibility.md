@@ -111,8 +111,11 @@ It is not Cursor's result shape. Binary file content is summarized as `is_binary
   resolves that prompt. It fires for later prompts. `attachments` is currently always `[]`.
 - `stop` fires only for a turn that completed (`status: "completed"`); a cancelled or failed turn
   does not fire it.
-- `postToolUse.duration` is usually absent; only an interact-mode shell command's completion
-  measures one. `afterShellExecution` computes `duration` from the command's timestamps.
+- `postToolUse.duration` and `postToolUseFailure.duration` are the time the tool ran, in
+  milliseconds, from when Warp started it (after every check and confirmation, so approval wait
+  is not counted) to its result. A result known at once (a hook denial, a tool with no work to
+  wait for) reports `0`; a pending action cancelled before it started reports no `duration`.
+  `afterShellExecution` takes its `duration` from the command's own timestamps when it has them.
 - `postToolUseFailure.failure_type` is `permission_denied` or `error`; Warp tools do not time
   out, so `timeout` never appears. `cancellation_reason` is a Warp addition naming why a tool was
   cancelled.
@@ -143,3 +146,4 @@ with the run. `architecture.md` §7.1 has the rules.
   beside it.
 - One event per file for batched reads and edits, and per-command timeouts that start when the
   hook starts.
+- `duration` on `postToolUse` and `postToolUseFailure` for every tool.

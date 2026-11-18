@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use ai::agent::action_result::RequestCommandOutputResult;
 use ai::hooks::{HOOK_PROTOCOL_VERSION, HookBoundary, HookPayload, HookSurface, RunMetadata};
 use warp_core::execution_mode::ExecutionMode;
@@ -81,11 +83,12 @@ fn result_and_failure_envelopes_carry_the_result_and_cancellation_reason() {
         let (result_envelope, failure_envelope) = app.read(|ctx| {
             let site = EnvelopeSite::new(harness.conversation_id, &harness.active_session);
             (
-                envelope_for_tool_result(&action, &result, &site, ctx),
+                envelope_for_tool_result(&action, &result, None, &site, ctx),
                 envelope_for_tool_failure(
                     &action,
                     &result,
                     Some(CancellationReason::ManuallyCancelled),
+                    Some(Duration::from_millis(40)),
                     &site,
                     ctx,
                 ),
@@ -96,12 +99,14 @@ fn result_and_failure_envelopes_carry_the_result_and_cancellation_reason() {
         assert_eq!(failure_envelope.action_id, Some(action.id.clone()));
         let HookPayload::ToolFailure {
             cancellation_reason,
+            duration,
             ..
         } = &failure_envelope.payload
         else {
             panic!("expected a tool.failure payload");
         };
         assert_eq!(cancellation_reason.as_deref(), Some("user_cancelled"));
+        assert_eq!(*duration, Some(Duration::from_millis(40)));
     });
 }
 

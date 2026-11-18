@@ -221,7 +221,7 @@ trait HookFormat { fn parse(&self, bytes: &[u8]) -> Result<Vec<HookDef>>;
 | --- | --- | --- |
 | `tool_name`, `tool_input`, `tool_use_id`, `cwd` | As in 3.3 | The action is retained in `AsyncExecutingAction` until completion. |
 | `tool_output` | Available with work | JSON string of `AIAgentActionResultType`. The result types convert to proto for the server (`crates/ai/src/agent/action_result/convert.rs`) but do not all derive `Serialize`; a JSON encoder is needed. |
-| `duration` | Available with work | Shell results carry `start_ts`/`completed_ts`. Other tools need a timer between `ExecutingAction` and `FinishedAction`. |
+| `duration` | Available now | Built: the executor records when it starts an action, after every check and confirmation, and the completion funnel reports the elapsed time on `postToolUse` and `postToolUseFailure` for every tool, so approval wait is excluded as Cursor documents. A result known at once (a hook denial, a tool with no asynchronous work) reports zero; a pending action cancelled before it started reports none. `afterShellExecution` still takes the command's own `start_ts`/`completed_ts` when they are present. |
 
 **Output fields.**
 
@@ -821,7 +821,7 @@ Three places where the hypothesis needs qualification:
 | `sessionStart` | Agent | Partial | `additional_context` needs a `hook_context` field on the request proto plus server rendering; `env` and inputs are client-only |
 | `sessionEnd` | Agent | Partial | No session-end moment in GUI/TUI; must be defined |
 | `preToolUse` | Agent | Full as built (Partial as scoped) | The deny reason's wire result, `denied_by_hook`, shipped in Phase 1 for every tool with server rendering |
-| `postToolUse` | Agent | Partial | `additional_context` needs a `hook_context` field on `ToolCallResult` plus server rendering; encoder and timer are client work |
+| `postToolUse` | Agent | Partial | `additional_context` needs a `hook_context` field on `ToolCallResult` plus server rendering; the encoder and the per-action timer are built |
 | `postToolUseFailure` | Agent | Partial | Its only output, `additional_context`, needs the same server work; event and inputs are client-only |
 | `subagentStart` | Agent | Partial | No `subagent_id` before launch; server-side subagents invisible |
 | `subagentStop` | Agent | Partial | No counts for remote children; server-side subagents invisible |
