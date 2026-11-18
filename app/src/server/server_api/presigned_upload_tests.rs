@@ -140,7 +140,7 @@ fn upload_file_to_target_replays_headers_sets_content_length_and_returns_checksu
 
 #[cfg(feature = "local_fs")]
 #[test]
-fn upload_file_to_target_returns_status_and_body_for_failed_uploads() {
+fn upload_file_to_target_returns_status_without_storage_response_body() {
     let tempdir = tempdir().unwrap();
     let path = tempdir.path().join("artifact.bin");
     fs::write(&path, b"artifact payload").unwrap();
@@ -168,10 +168,88 @@ fn upload_file_to_target_returns_status_and_body_for_failed_uploads() {
     .unwrap_err();
 
     mock.assert();
-    assert!(
-        err.to_string()
-            .contains("Artifact upload failed with status 403 Forbidden: denied")
+    assert_eq!(
+        err.to_string(),
+        "Artifact upload failed with status 403 Forbidden"
     );
+    let status_error = err.downcast_ref::<HttpStatusError>().unwrap();
+    assert_eq!(status_error.status, 403);
+    assert!(status_error.body.is_empty());
+    assert!(!format!("{err:?}").contains("denied"));
+}
+
+#[test]
+fn upload_to_target_omits_storage_response_bodies_for_plain_and_multipart_uploads() {
+    block_on(async {
+        let mut server = Server::new();
+        for fields in [
+            Vec::new(),
+            vec![UploadField {
+                name: "file".to_string(),
+                value: UploadFieldValue::ContentData,
+            }],
+        ] {
+            let response_body =
+                "https://example.com/object?X-Goog-Signature=test-signature; form=test-credential";
+            let mock = server
+                .mock("POST", "/upload")
+                .match_query(Matcher::Any)
+                .with_status(403)
+                .with_body(response_body)
+                .create();
+            let target = UploadTarget {
+                url: format!("{}/upload?X-Goog-Signature=test-signature", server.url()),
+                method: "POST".to_string(),
+                headers: HashMap::new(),
+                fields,
+            };
+
+            let err = upload_to_target(
+                &http_client::Client::new_external(),
+                &target,
+                b"transcript".to_vec(),
+            )
+            .await
+            .unwrap_err();
+
+            mock.assert();
+            assert_eq!(err.to_string(), "Upload failed with status 403 Forbidden");
+            let status_error = err.downcast_ref::<HttpStatusError>().unwrap();
+            assert_eq!(status_error.status, 403);
+            assert!(status_error.body.is_empty());
+            let diagnostic = format!("{err:?}");
+            for sensitive in ["example.com", "test-signature", "test-credential"] {
+                assert!(!diagnostic.contains(sensitive), "unredacted upload error");
+            }
+        }
+    });
+}
+
+#[test]
+fn upload_to_target_transport_errors_do_not_retain_the_signed_url() {
+    block_on(async {
+        let target = UploadTarget {
+            url: "https://example.com/object?X-Goog-Signature=test-signature".to_string(),
+            method: "PUT".to_string(),
+            headers: HashMap::from([("x-test".to_string(), "\n".to_string())]),
+            fields: Vec::new(),
+        };
+
+        let err = upload_to_target(
+            &http_client::Client::new_external(),
+            &target,
+            b"transcript".to_vec(),
+        )
+        .await
+        .unwrap_err();
+
+        let request_error = err.downcast_ref::<reqwest::Error>().unwrap();
+        assert!(request_error.is_builder());
+        assert!(request_error.url().is_none());
+        let diagnostic = format!("{err:?}");
+        assert!(!diagnostic.contains("example.com"));
+        assert!(!diagnostic.contains("test-signature"));
+    });
 }
 
 /// Mockito matcher that captures the raw request body so individual fields of

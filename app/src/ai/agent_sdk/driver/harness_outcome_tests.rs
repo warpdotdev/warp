@@ -31,7 +31,13 @@ fn successful_command_cannot_hide_failed_save() {
     let (state, update) = classify_driver_error(&error);
     assert_eq!(state, AgentTaskState::Failed);
     assert_eq!(update.error_code, Some(PlatformErrorCode::InternalError));
-    assert!(update.message.contains("Follow-ups may be unavailable"));
+    assert_eq!(
+        update.message,
+        format!(
+            "The 'claude' agent finished its work successfully, but its conversation \
+             could not be saved. Follow-ups may be unavailable. Details: {detail}"
+        )
+    );
     let platform_error = update.platform_error.unwrap();
     assert!(!platform_error.retryable);
     assert_eq!(platform_error.detail.as_deref(), Some(detail.as_str()));
@@ -88,26 +94,19 @@ fn detected_runtime_failure_takes_precedence_over_command_and_save_failures() {
 }
 
 #[test]
-fn save_error_retains_context_without_signed_urls_or_credentials() {
+fn save_error_retains_context_without_credentials() {
     let error = final_save_error(
         "claude",
-        anyhow!(
-            "HTTP 403 uploading https://user:password@example.com/object?X-Goog-Signature=signed-secret \
-             with credential AKIAIOSFODNN7EXAMPLE"
-        )
-        .context("Harness transcript upload failed"),
+        anyhow!("HTTP 403 with credential AKIAIOSFODNN7EXAMPLE")
+            .context("Harness transcript upload failed"),
     );
     let debug = format!("{error:?}");
     assert!(debug.contains("Harness transcript upload failed"));
     assert!(debug.contains("HTTP 403"));
-    for sensitive in [
-        "password",
-        "example.com",
-        "signed-secret",
-        "AKIAIOSFODNN7EXAMPLE",
-    ] {
-        assert!(!debug.contains(sensitive), "unredacted diagnostic");
-    }
+    assert!(
+        !debug.contains("AKIAIOSFODNN7EXAMPLE"),
+        "unredacted diagnostic"
+    );
 }
 
 #[test]

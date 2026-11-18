@@ -235,7 +235,7 @@ fn build_upload_request<'a>(
     Ok(request)
 }
 
-async fn ensure_upload_succeeded(
+fn ensure_upload_succeeded(
     response: http_client::Response,
     error_context: UploadErrorContext,
 ) -> Result<()> {
@@ -244,10 +244,10 @@ async fn ensure_upload_succeeded(
     }
 
     let status = response.status();
-    let body = response.text().await.unwrap_or_default();
-    let status_err = HttpStatusError::new(status.as_u16(), body.clone());
+    // Storage response bodies can echo signed URLs or multipart credentials.
+    let status_err = HttpStatusError::new(status.as_u16(), String::new());
     Err(anyhow::Error::new(status_err).context(format!(
-        "{} failed with status {status}: {body}",
+        "{} failed with status {status}",
         error_context.failure
     )))
 }
@@ -266,7 +266,7 @@ async fn send_upload_request(
         .map_err(reqwest::Error::without_url)
         .context(error_context.transport)?;
 
-    ensure_upload_succeeded(response, error_context).await
+    ensure_upload_succeeded(response, error_context)
 }
 
 pub(crate) async fn upload_to_target(
@@ -334,7 +334,7 @@ async fn send_multipart_upload(
         .await
         .map_err(reqwest::Error::without_url)
         .context(error_context.transport)?;
-    ensure_upload_succeeded(response, error_context).await
+    ensure_upload_succeeded(response, error_context)
 }
 
 #[cfg(not(target_family = "wasm"))]

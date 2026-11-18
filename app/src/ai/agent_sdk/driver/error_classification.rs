@@ -395,14 +395,17 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
                 },
             )
         }
-        AgentDriverError::HarnessConversationSaveFailed { detail, .. } => {
+        AgentDriverError::HarnessConversationSaveFailed { harness, detail } => {
             let mut platform_error =
                 PlatformErrorInfo::new(PlatformErrorCode::InternalError, false);
             platform_error.detail = Some(detail.clone());
             (
                 AgentTaskState::Failed,
                 TaskStatusUpdate {
-                    message: error.to_string(),
+                    message: format!(
+                        "The '{harness}' agent finished its work successfully, but its conversation \
+                         could not be saved. Follow-ups may be unavailable. Details: {detail}"
+                    ),
                     error_code: Some(PlatformErrorCode::InternalError),
                     platform_error: Some(Box::new(platform_error)),
                 },
