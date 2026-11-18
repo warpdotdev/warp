@@ -2081,7 +2081,7 @@ impl AgentDriver {
                 {
                     report_error!(e);
                 }
-                let (finished, cause, interrupt_watch) =
+                let (mut finished, cause, interrupt_watch) =
                     match Self::run_until_end(task, &foreground, &background).await {
                         Ok(outcome) => outcome,
                         Err(error) => {
@@ -2109,6 +2109,17 @@ impl AgentDriver {
                             "Sandbox deadline approaching (WARP_SANDBOX_DEADLINE); aborting \
                              run_internal to allow recording finalization"
                         );
+                        if let Some(task_id) = task_id {
+                            finished = Some(
+                                Self::resolve_sandbox_deadline(
+                                    task_id,
+                                    finished.unwrap_or(Err(AgentDriverError::InvalidRuntimeState)),
+                                    &server_api,
+                                    &foreground,
+                                )
+                                .await,
+                            );
+                        }
                     }
                     RunEndCause::Signal(Interrupt::Terminate) => {
                         log::warn!(
@@ -2224,6 +2235,40 @@ impl AgentDriver {
         }
     }
 
+    async fn resolve_sandbox_deadline(
+        task_id: AmbientAgentTaskId,
+        result: Result<(), AgentDriverError>,
+        server_api: &Arc<dyn AIClient>,
+        foreground: &ModelSpawner<Self>,
+    ) -> Result<(), AgentDriverError> {
+        if !Self::flush_task_status_before_exit(task_id, false, server_api, foreground).await {
+            return result;
+        }
+        let latest_state = foreground
+            .spawn(move |_, ctx| {
+                LocalAgentTaskSyncModel::as_ref(ctx).latest_delivered_task_state(&task_id)
+            })
+            .await?;
+        match latest_state {
+            Some(
+                state @ (AgentTaskState::Succeeded
+                | AgentTaskState::Failed
+                | AgentTaskState::Error
+                | AgentTaskState::Cancelled
+                | AgentTaskState::Blocked),
+            ) => {
+                tracing::info!(
+                    tags.cloud_agent = true,
+                    %task_id,
+                    task_state = ?state,
+                    "sandbox deadline fired while idle; skipping task state report"
+                );
+                Ok(())
+            }
+            Some(AgentTaskState::InProgress | AgentTaskState::Claimed) | None => result,
+        }
+    }
+
     /// Flushes task-status reporting before the process may exit: waits
     /// (bounded by [`TASK_STATUS_FLUSH_TIMEOUT`]) for `LocalAgentTaskSyncModel`
     /// to finish delivering queued `update_agent_task` calls, then — for
@@ -2241,13 +2286,15 @@ impl AgentDriver {
     ///
     /// Failed runs only get the drain: the caller reports the error itself via
     /// `report_driver_error` after receiving the result.
+    ///
+    /// Returns whether queued status updates finished draining before the timeout.
     async fn flush_task_status_before_exit(
         task_id: AmbientAgentTaskId,
         run_succeeded: bool,
         server_api: &Arc<dyn AIClient>,
         foreground: &ModelSpawner<Self>,
-    ) {
-        match foreground
+    ) -> bool {
+        let drained = match foreground
             .spawn(move |_, ctx| {
                 LocalAgentTaskSyncModel::handle(ctx)
                     .update(ctx, |model, _| model.wait_for_idle(task_id))
@@ -2259,13 +2306,19 @@ impl AgentDriver {
                     log::warn!(
                         "Timed out waiting for queued task status updates to flush for task {task_id}"
                     );
+                    false
+                } else {
+                    true
                 }
             }
-            Err(err) => log::warn!("Could not wait for the task status flush: {err}"),
-        }
+            Err(err) => {
+                log::warn!("Could not wait for the task status flush: {err}");
+                false
+            }
+        };
 
         if !run_succeeded {
-            return;
+            return drained;
         }
 
         let confirmed_terminal_state = foreground
@@ -2277,7 +2330,7 @@ impl AgentDriver {
             .flatten();
         if let Some(state) = confirmed_terminal_state {
             log::debug!("Task {task_id} already reported terminal state {state:?} before exit");
-            return;
+            return drained;
         }
 
         log::warn!(
@@ -2300,6 +2353,7 @@ impl AgentDriver {
                 "Failed to report the fallback SUCCEEDED state for task {task_id}"
             )));
         }
+        drained
     }
 
     /// Log all valid environment IDs for the user.
