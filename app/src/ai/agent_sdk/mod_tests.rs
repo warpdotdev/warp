@@ -19,6 +19,7 @@ use warp_cli::agent::{
 use warp_cli::artifact::{
     ArtifactCommand, DownloadArtifactArgs, GetArtifactArgs, UploadArtifactArgs,
 };
+use warp_cli::mcp::MCPSpec;
 use warp_cli::task::{MessageCommand, MessageSendArgs, MessageWatchArgs, TaskCommand};
 use warp_cli::{Args, CliCommand, Command};
 use warp_core::features::FeatureFlag;
@@ -896,9 +897,9 @@ fn factory_experiment_bootstrap_subprocess() {
         if scenario == "local" {
             let mut ai_client = MockAIClient::new();
             ai_client
-                .expect_create_agent_task()
+                .expect_create_local_agent_task()
                 .times(1)
-                .returning(|_, _, _, _, _, _| Ok(TASK_ID.parse().unwrap()));
+                .returning(|_, _, _| Ok(local_task_output()));
             let ai_client: Arc<dyn AIClient> = Arc::new(ai_client);
             AgentDriverRunner::initialize_new_task(
                 &foreground,
@@ -1236,10 +1237,10 @@ fn multi_team_run_passes_selected_team_to_task_creation_and_headless_window() {
 
         let mut ai_client = MockAIClient::new();
         ai_client
-            .expect_create_agent_task()
+            .expect_create_local_agent_task()
             .times(1)
-            .withf(move |_, _, _, _, _, scope| scope.team_uid() == Some(selected_team_uid))
-            .returning(|_, _, _, _, _, _| Ok(TASK_ID.parse().unwrap()));
+            .withf(move |_, _, scope| scope.team_uid() == Some(selected_team_uid))
+            .returning(|_, _, _| Ok(local_task_output()));
         let ai_client: Arc<dyn AIClient> = Arc::new(ai_client);
         let mut driver_options = agent_driver_options();
         let runner = app.add_singleton_model(|_| AgentDriverRunner);
@@ -1596,6 +1597,122 @@ fn run_message_watch_telemetry_defaults_to_unknown_harness() {
     )));
 
     assert_eq!(event.payload(), Some(json!({ "harness": "unknown" })));
+}
+
+#[test]
+fn local_task_negotiation_fails_closed_without_retrying_creation() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| ServerApiProvider::new_for_test());
+        let runner = app.add_singleton_model(|_| AgentDriverRunner);
+        let foreground = runner.update(&mut app, |_, ctx| ctx.spawner());
+        for scenario in [
+            "creation-error",
+            "missing-mode",
+            "missing-mcp",
+            "invalid-mcp",
+            "restricted-mode",
+        ] {
+            let mut client = MockAIClient::new();
+            client.expect_create_agent_task().never();
+            client.expect_get_restricted_task_git_credentials().never();
+            client
+                .expect_create_local_agent_task()
+                .times(1)
+                .return_once(move |_, _, _| {
+                    let mut output = local_task_output();
+                    match scenario {
+                        "creation-error" => return Err(anyhow::anyhow!("creation unavailable")),
+                        "missing-mode" => output.github_credential_mode = None,
+                        "missing-mcp" => output.mcp_servers = None,
+                        "invalid-mcp" => output.mcp_servers = Some("invalid".into()),
+                        "restricted-mode" => {
+                            output.github_credential_mode =
+                                Some(super::GitHubCredentialMode::RestrictedInstallation)
+                        }
+                        _ => unreachable!(),
+                    }
+                    Ok(output)
+                });
+            let client: Arc<dyn AIClient> = Arc::new(client);
+            let mut options = AgentDriverOptions::default();
+            assert!(
+                AgentDriverRunner::initialize_new_task(
+                    &foreground,
+                    &client,
+                    "prompt".into(),
+                    AgentConfigSnapshot::default(),
+                    HeadlessTeamScope::Personal,
+                    &mut options,
+                )
+                .await
+                .is_err(),
+                "{scenario}"
+            );
+            assert!(options.task_id.is_none());
+        }
+    });
+}
+
+fn local_task_output() -> warp_graphql::mutations::create_agent_task::LocalAgentTaskOutput {
+    warp_graphql::mutations::create_agent_task::LocalAgentTaskOutput {
+        task_id: cynic::Id::new(TASK_ID),
+        github_credential_mode: Some(super::GitHubCredentialMode::Legacy),
+        mcp_servers: Some("{}".into()),
+    }
+}
+
+#[test]
+fn local_task_keeps_git_configuration_and_managed_mcp() {
+    App::test((), |mut app| async move {
+        let _well_known = FeatureFlag::WellKnownMcpIds.override_enabled(true);
+        app.add_singleton_model(|_| ServerApiProvider::new_for_test());
+        let runner = app.add_singleton_model(|_| AgentDriverRunner);
+        let foreground = runner.update(&mut app, |_, ctx| ctx.spawner());
+        let root = tempfile::TempDir::new().unwrap();
+        let git_config = root.path().join(".gitconfig");
+        let content = "[user]\nname = Developer\nemail = developer@example.com\n[credential]\nhelper = manager\n";
+        fs::write(&git_config, content).unwrap();
+        let mut client = MockAIClient::new();
+        client.expect_get_restricted_task_git_credentials().never();
+        client.expect_get_task_git_credentials().never();
+        client
+            .expect_create_local_agent_task()
+            .times(1)
+            .returning(|_, _, _| {
+                let mut output = local_task_output();
+                output.mcp_servers = Some(json!({"GitHub": {"warp_id": "github"}}).to_string());
+                Ok(output)
+            });
+        let client: Arc<dyn AIClient> = Arc::new(client);
+        let mut options = agent_driver_options();
+        options.working_dir = root.path().to_owned();
+        options.environment_variables.insert(
+            "GIT_CONFIG_GLOBAL".into(),
+            git_config.to_string_lossy().into_owned(),
+        );
+        let environment = options.environment_variables.clone();
+        let specs = AgentDriverRunner::initialize_new_task(
+            &foreground,
+            &client,
+            "prompt".into(),
+            AgentConfigSnapshot::default(),
+            HeadlessTeamScope::Personal,
+            &mut options,
+        )
+        .await
+        .unwrap();
+        assert!(matches!(specs.as_slice(), [MCPSpec::WellKnown(id)] if id == "github"));
+        assert_eq!(
+            options.github_credential_mode,
+            super::GitHubCredentialMode::Legacy
+        );
+        assert!(options.strict_mcp_startup);
+        assert!(options.execution_id.is_none());
+        assert!(options.credential_store_owner.is_none());
+        assert_eq!(options.environment_variables, environment);
+        assert_eq!(fs::read_to_string(&git_config).unwrap(), content);
+        assert_eq!(fs::read_dir(root.path()).unwrap().count(), 1);
+    });
 }
 
 /// Rung 4 of the local testing ladder: a canned execution configuration, no server. The

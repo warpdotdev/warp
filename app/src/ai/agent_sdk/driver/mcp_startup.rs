@@ -456,6 +456,7 @@ pub(crate) async fn start_task_and_profile_mcp_servers(
                 ephemeral_installations,
                 leases,
                 profile_allowlist,
+                mode,
                 ctx,
             )
         })
@@ -470,8 +471,26 @@ fn start_mcp_servers_concurrently(
     ephemeral_installations: Vec<TemplatableMCPServerInstallation>,
     leases: Vec<ManagedMcpLease>,
     profile_uuids: Vec<Uuid>,
+    mode: McpStartupMode,
     ctx: &mut ModelContext<AgentDriver>,
 ) -> impl Future<Output = Result<(), AgentDriverError>> + use<> {
+    if me.github_credential_mode == GitHubCredentialMode::RestrictedInstallation
+        && !matches!(mode, McpStartupMode::Standby)
+        && !ephemeral_installations
+            .iter()
+            .any(|installation| installation.warp_id() == Some("github"))
+        && !task_uuids.iter().any(|uuid| {
+            TemplatableMCPServerManager::as_ref(ctx)
+                .get_installed_server(uuid)
+                .is_some_and(|installation| installation.warp_id() == Some("github"))
+        })
+    {
+        return Either::Right(future::ready(Err(AgentDriverError::MCPStartupFailed {
+            details: vec![
+                "Restricted GitHub mode requires the managed GitHub MCP integration".into(),
+            ],
+        })));
+    }
     let task_servers = match get_mcp_servers_to_start(&task_uuids, ctx) {
         Ok(servers) => servers,
         Err(error) => return Either::Right(future::ready(Err(error))),
