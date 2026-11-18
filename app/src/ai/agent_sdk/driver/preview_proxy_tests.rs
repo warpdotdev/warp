@@ -2,6 +2,22 @@ use super::*;
 use crate::server::server_api::ai::RunPreview;
 
 #[test]
+#[cfg(not(target_family = "wasm"))]
+fn only_docker_sandbox_requires_viewer_credentials() {
+    assert!(matches!(
+        credential_policy(Some(IsolationPlatformType::DockerSandbox)).unwrap(),
+        CredentialPolicy::DockerSandbox
+    ));
+    assert!(matches!(
+        credential_policy(Some(IsolationPlatformType::Namespace)).unwrap(),
+        CredentialPolicy::Namespace
+    ));
+    assert!(credential_policy(Some(IsolationPlatformType::Docker)).is_err());
+    assert!(credential_policy(Some(IsolationPlatformType::Kubernetes)).is_err());
+    assert!(credential_policy(None).is_err());
+}
+
+#[test]
 fn parses_listener_port_configuration() {
     assert_eq!(listener_port("1").unwrap(), 1);
     assert_eq!(listener_port("65535").unwrap(), 65535);
