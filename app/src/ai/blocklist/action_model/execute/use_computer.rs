@@ -52,32 +52,17 @@ impl UseComputerExecutor {
         // only blocked/thinking gaps. A pointer-only group commits with empty
         // labels; a wait-only/no-op batch (e.g. a screenshot-only `Wait(0)`) is
         // not meaningful and is ignored. The finish offset is captured from the
-        // returned capture start instant when the actor future returns.
-        let recording_context = if meaningful {
+        // sink's capture start instant when the actor future returns. While a
+        // recording is live, the actor reports its resolved pointer events to the
+        // sink so the post-stop burn-in can draw click ripples and drag trails.
+        let pointer_sink = if meaningful {
             RecordingController::handle(ctx).update(ctx, |controller, _| {
                 controller.begin_action_group(conversation_id, labels)
             })
         } else {
             None
         };
-        // While a recording is live, collect the actor's resolved pointer events
-        // (capture-space coordinates + offsets) so the post-stop burn-in can draw
-        // click ripples and drag trails. The buffer is shared with the actor via
-        // the sink and drained after the batch completes.
-        let pointer_events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let (recording_started_at, pointer_sink) = match recording_context {
-            Some((started_at, recording_target, recording_geometry, pointer_session)) => (
-                Some(started_at),
-                Some(computer_use::PointerSink {
-                    started_at,
-                    recording_target,
-                    recording_geometry,
-                    events: pointer_events.clone(),
-                    session: pointer_session,
-                }),
-            ),
-            None => (None, None),
-        };
+        let recording_started_at = pointer_sink.as_ref().map(|sink| sink.started_at);
 
         let actions = request.actions.clone();
         let screenshot_params = request.screenshot_params;
@@ -115,24 +100,14 @@ impl UseComputerExecutor {
                 // recording's capture start instant.
                 let finish_offset = recording_started_at
                     .and_then(|started| instant::Instant::now().checked_duration_since(started));
-                // Drain the pointer events the actor resolved during dispatch.
-                let pointer_events = std::mem::take(
-                    &mut *pointer_events
-                        .lock()
-                        .expect("pointer event buffer poisoned"),
-                );
-                (result, finish_offset, pointer_events)
+                (result, finish_offset)
             },
-            move |(result, finish_offset, pointer_events), ctx| {
+            move |(result, finish_offset), ctx| {
                 if meaningful {
                     RecordingController::handle(ctx).update(ctx, |controller, _| match result {
                         UseComputerResult::Success { .. } => {
                             if let Some(finish_offset) = finish_offset {
-                                controller.commit_action_group(
-                                    conversation_id,
-                                    finish_offset,
-                                    pointer_events,
-                                );
+                                controller.commit_action_group(conversation_id, finish_offset);
                             } else {
                                 controller.discard_action_group(conversation_id);
                             }

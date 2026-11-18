@@ -3307,6 +3307,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "computer_use_mcp"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "base64 0.22.1",
+ "command",
+ "computer_use",
+ "libc",
+ "log",
+ "rmcp",
+ "schemars 1.0.4",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "concat-idents"
 version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -15341,6 +15360,7 @@ dependencies = [
  "command",
  "command-corrections",
  "computer_use",
+ "computer_use_mcp",
  "concat-idents",
  "console_error_panic_hook",
  "content_inspector",

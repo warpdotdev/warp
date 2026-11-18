@@ -929,6 +929,8 @@ fn run_worker_command(worker: &warp_cli::WorkerCommand) -> Result<()> {
             crate::ai::agent_sdk::driver::harness::acp::run_bridge(launch_file)
         }
         #[cfg(not(target_family = "wasm"))]
+        warp_cli::WorkerCommand::ComputerUseMcp(args) => run_computer_use_mcp(args),
+        #[cfg(not(target_family = "wasm"))]
         warp_cli::WorkerCommand::RipgrepSearch {
             parent,
             ignore_case,
@@ -953,6 +955,56 @@ fn run_worker_command(worker: &warp_cli::WorkerCommand) -> Result<()> {
             panic!("Worker process not supported on WASM: {worker:?}")
         }
     }
+}
+
+/// Serves computer-use tools to an external agent harness over MCP on stdin/stdout.
+#[cfg(not(target_family = "wasm"))]
+fn run_computer_use_mcp(args: &warp_cli::computer_use_mcp::ComputerUseMcpArgs) -> Result<()> {
+    use computer_use_mcp::{
+        ComputerUseMcpConfig, ImageConstraints, KeyDialect, RecordingDestination,
+    };
+    use warp_cli::computer_use_mcp::ComputerUseModelFamily;
+
+    use crate::ai::blocklist::video_recording_enabled;
+
+    if !FeatureFlag::ComputerUseMcp.is_enabled() {
+        return Err(anyhow!(
+            "The computer use MCP server is not enabled in this build"
+        ));
+    }
+    // Stdout is the protocol channel, so log to stderr. No crash reporting, no initialize_app.
+    warp_logging::init(warp_logging::LogConfig {
+        frontend: LogFrontend::Cli,
+        log_destination: Some(LogDestination::Stderr),
+        ..Default::default()
+    })?;
+    let recording = if args.no_recording || !video_recording_enabled() {
+        None
+    } else if let Some(run_id) = &args.run_id {
+        Some(RecordingDestination::OzRun {
+            cli: std::env::current_exe().context("Failed to locate the Warp CLI")?,
+            run_id: run_id.clone(),
+        })
+    } else {
+        Some(RecordingDestination::Directory(
+            args.recordings_dir
+                .clone()
+                .unwrap_or_else(|| std::env::temp_dir().join("warp-computer-use-recordings")),
+        ))
+    };
+    let (defaults, key_dialect) = match args.model_family {
+        ComputerUseModelFamily::Anthropic => (ImageConstraints::ANTHROPIC, KeyDialect::Anthropic),
+        ComputerUseModelFamily::OpenAi => (ImageConstraints::OPENAI, KeyDialect::OpenAi),
+    };
+    computer_use_mcp::run_stdio(ComputerUseMcpConfig {
+        image_constraints: ImageConstraints {
+            max_long_edge_px: args.max_long_edge_px.unwrap_or(defaults.max_long_edge_px),
+            max_total_px: args.max_total_px.unwrap_or(defaults.max_total_px),
+        },
+        key_dialect,
+        settle_delay: std::time::Duration::from_millis(args.settle_ms),
+        recording,
+    })
 }
 
 /// Runs an integration test using the provided test driver.

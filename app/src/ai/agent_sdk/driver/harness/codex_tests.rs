@@ -8,6 +8,7 @@ use tempfile::TempDir;
 use uuid::Uuid;
 
 use super::super::codex_transcript::CodexTranscriptEnvelope;
+use super::super::{HarnessMcpSettings, JSONMCPServer};
 use super::*;
 use crate::ai::agent::api::ServerConversationToken;
 use crate::server::server_api::harness_support::MockHarnessSupportClient;
@@ -201,7 +202,7 @@ fn prepare_codex_environment_config_honors_codex_home() {
         Some("system prompt"),
         &resolved,
         &HashMap::new(),
-        &HashMap::new(),
+        &ResolvedMCPServers::default(),
         Some(&model_config),
     );
 
@@ -251,7 +252,14 @@ fn prepare_codex_config_toml_writes_fresh_config() {
     let working_dir = tmp.path().join("workspace/proj");
     fs::create_dir_all(&working_dir).unwrap();
 
-    prepare_codex_config_toml(&config_path, &working_dir, &HashMap::new(), None, None).unwrap();
+    prepare_codex_config_toml(
+        &config_path,
+        &working_dir,
+        &ResolvedMCPServers::default(),
+        None,
+        None,
+    )
+    .unwrap();
 
     let canonical = working_dir.canonicalize().unwrap();
     let key = canonical.to_string_lossy().into_owned();
@@ -277,7 +285,14 @@ fn prepare_codex_config_toml_preserves_unrelated_keys() {
 
     // Pass `None` — the `model` key is intentionally removed (managed
     // key), but unrelated keys like existing project entries are kept.
-    prepare_codex_config_toml(&config_path, &working_dir, &HashMap::new(), None, None).unwrap();
+    prepare_codex_config_toml(
+        &config_path,
+        &working_dir,
+        &ResolvedMCPServers::default(),
+        None,
+        None,
+    )
+    .unwrap();
 
     let canonical = working_dir.canonicalize().unwrap();
     let key = canonical.to_string_lossy().into_owned();
@@ -301,9 +316,23 @@ fn prepare_codex_config_toml_is_idempotent() {
     let working_dir = tmp.path().join("workspace");
     fs::create_dir_all(&working_dir).unwrap();
 
-    prepare_codex_config_toml(&config_path, &working_dir, &HashMap::new(), None, None).unwrap();
+    prepare_codex_config_toml(
+        &config_path,
+        &working_dir,
+        &ResolvedMCPServers::default(),
+        None,
+        None,
+    )
+    .unwrap();
     let after_first = fs::read_to_string(&config_path).unwrap();
-    prepare_codex_config_toml(&config_path, &working_dir, &HashMap::new(), None, None).unwrap();
+    prepare_codex_config_toml(
+        &config_path,
+        &working_dir,
+        &ResolvedMCPServers::default(),
+        None,
+        None,
+    )
+    .unwrap();
     let after_second = fs::read_to_string(&config_path).unwrap();
 
     assert_eq!(after_first, after_second);
@@ -331,7 +360,14 @@ fn prepare_codex_config_toml_upgrades_untrusted_entry() {
     )
     .unwrap();
 
-    prepare_codex_config_toml(&config_path, &working_dir, &HashMap::new(), None, None).unwrap();
+    prepare_codex_config_toml(
+        &config_path,
+        &working_dir,
+        &ResolvedMCPServers::default(),
+        None,
+        None,
+    )
+    .unwrap();
 
     let cfg = read_codex_config(&config_path);
     assert_eq!(
@@ -350,7 +386,14 @@ fn prepare_codex_config_toml_trusts_multiple_child_repos() {
     fs::create_dir_all(repo_a.join(".git")).unwrap();
     fs::create_dir_all(repo_b.join(".git")).unwrap();
 
-    prepare_codex_config_toml(&config_path, &working_dir, &HashMap::new(), None, None).unwrap();
+    prepare_codex_config_toml(
+        &config_path,
+        &working_dir,
+        &ResolvedMCPServers::default(),
+        None,
+        None,
+    )
+    .unwrap();
 
     let cfg = read_codex_config(&config_path);
     let projects = cfg["projects"].as_table().unwrap();
@@ -381,7 +424,7 @@ fn prepare_codex_config_toml_overwrites_stale_openai_base_url() {
     prepare_codex_config_toml(
         &config_path,
         &working_dir,
-        &HashMap::new(),
+        &ResolvedMCPServers::default(),
         None,
         Some("https://custom.api.openai.com/v1"),
     )
@@ -392,6 +435,128 @@ fn prepare_codex_config_toml_overwrites_stale_openai_base_url() {
         cfg["openai_base_url"].as_str(),
         Some("https://custom.api.openai.com/v1")
     );
+}
+
+fn resolved(configs: HashMap<String, JSONMCPServer>) -> ResolvedMCPServers {
+    ResolvedMCPServers {
+        configs,
+        ..Default::default()
+    }
+}
+
+#[test]
+fn write_codex_mcp_servers_applies_harness_settings() {
+    let tmp = TempDir::new().unwrap();
+    let config_path = tmp.path().join("config.toml");
+    let working_dir = tmp.path().join("workspace");
+    fs::create_dir_all(&working_dir).unwrap();
+
+    let mut servers = resolved(HashMap::from([(
+        "computer".to_string(),
+        JSONMCPServer {
+            transport_type: JSONTransportType::CLIServer {
+                command: "oz".to_string(),
+                args: vec!["computer-use-mcp".to_string()],
+                env: HashMap::new(),
+                working_directory: None,
+            },
+        },
+    )]));
+    servers.harness_settings.insert(
+        "computer".to_string(),
+        HarnessMcpSettings {
+            forwarded_env_vars: vec!["WARP_API_KEY".to_string()],
+            tool_timeout: Some(std::time::Duration::from_secs(600)),
+            run_scoped: false,
+        },
+    );
+    prepare_codex_config_toml(&config_path, &working_dir, &servers, None, None).unwrap();
+
+    let cfg = read_codex_config(&config_path);
+    let mcp = &cfg["mcp_servers"]["computer"];
+    let forwarded: Vec<_> = mcp["env_vars"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|value| value.as_str().unwrap())
+        .collect();
+    assert_eq!(forwarded, ["WARP_API_KEY"]);
+    assert_eq!(mcp["tool_timeout_sec"].as_integer(), Some(600));
+}
+
+fn run_scoped_computer_use_servers() -> ResolvedMCPServers {
+    let mut servers = resolved(HashMap::from([
+        (
+            "warp-computer-use".to_string(),
+            JSONMCPServer {
+                transport_type: JSONTransportType::CLIServer {
+                    command: "/opt/oz".to_string(),
+                    args: vec!["computer-use-mcp".to_string(), "--run-id".to_string()],
+                    env: HashMap::from([("DISPLAY".to_string(), ":99".to_string())]),
+                    working_directory: None,
+                },
+            },
+        ),
+        (
+            "my-mcp".to_string(),
+            JSONMCPServer {
+                transport_type: JSONTransportType::SSEServer {
+                    url: "https://example.com/mcp".to_string(),
+                    headers: HashMap::new(),
+                },
+            },
+        ),
+    ]));
+    servers.harness_settings.insert(
+        "warp-computer-use".to_string(),
+        HarnessMcpSettings {
+            forwarded_env_vars: vec!["WARP_API_KEY".to_string()],
+            tool_timeout: Some(std::time::Duration::from_secs(600)),
+            run_scoped: true,
+        },
+    );
+    servers
+}
+
+#[test]
+fn run_scoped_mcp_servers_are_not_written_to_config_toml() {
+    let tmp = TempDir::new().unwrap();
+    let config_path = tmp.path().join("config.toml");
+    let working_dir = tmp.path().join("workspace");
+    fs::create_dir_all(&working_dir).unwrap();
+
+    let servers = run_scoped_computer_use_servers();
+    prepare_codex_config_toml(&config_path, &working_dir, &servers, None, None).unwrap();
+
+    let cfg = read_codex_config(&config_path);
+    let mcp = cfg["mcp_servers"].as_table().unwrap();
+    assert!(mcp.contains_key("my-mcp"));
+    assert!(!mcp.contains_key("warp-computer-use"));
+}
+
+#[test]
+fn run_scoped_mcp_servers_become_config_overrides() {
+    let overrides = codex_config_overrides(&run_scoped_computer_use_servers());
+    let [config_override] = overrides.as_slice() else {
+        panic!("expected one override, got {overrides:?}");
+    };
+    let value = config_override
+        .strip_prefix("mcp_servers.warp-computer-use=")
+        .unwrap_or_else(|| panic!("unexpected override key: {config_override}"));
+
+    let parsed: toml::Table = toml::from_str(&format!("entry = {value}")).unwrap();
+    let entry = &parsed["entry"];
+    assert_eq!(entry["command"].as_str(), Some("/opt/oz"));
+    let args: Vec<_> = entry["args"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|arg| arg.as_str().unwrap())
+        .collect();
+    assert_eq!(args, ["computer-use-mcp", "--run-id"]);
+    assert_eq!(entry["env"]["DISPLAY"].as_str(), Some(":99"));
+    assert_eq!(entry["env_vars"][0].as_str(), Some("WARP_API_KEY"));
+    assert_eq!(entry["tool_timeout_sec"].as_integer(), Some(600));
 }
 
 #[test]
@@ -412,7 +577,7 @@ fn write_codex_mcp_servers_cli_server() {
             },
         },
     )]);
-    prepare_codex_config_toml(&config_path, &working_dir, &servers, None, None).unwrap();
+    prepare_codex_config_toml(&config_path, &working_dir, &resolved(servers), None, None).unwrap();
 
     let cfg = read_codex_config(&config_path);
     let mcp = &cfg["mcp_servers"]["my-mcp"];
@@ -443,7 +608,7 @@ fn write_codex_mcp_servers_sse_server() {
             },
         },
     )]);
-    prepare_codex_config_toml(&config_path, &working_dir, &servers, None, None).unwrap();
+    prepare_codex_config_toml(&config_path, &working_dir, &resolved(servers), None, None).unwrap();
 
     let cfg = read_codex_config(&config_path);
     let mcp = &cfg["mcp_servers"]["remote-mcp"];
@@ -469,7 +634,7 @@ fn write_codex_mcp_servers_cli_server_with_cwd() {
             },
         },
     )]);
-    prepare_codex_config_toml(&config_path, &working_dir, &servers, None, None).unwrap();
+    prepare_codex_config_toml(&config_path, &working_dir, &resolved(servers), None, None).unwrap();
 
     let cfg = read_codex_config(&config_path);
     let mcp = &cfg["mcp_servers"]["my-mcp"];
@@ -495,7 +660,7 @@ fn write_codex_mcp_servers_cli_server_without_cwd_omits_key() {
             },
         },
     )]);
-    prepare_codex_config_toml(&config_path, &working_dir, &servers, None, None).unwrap();
+    prepare_codex_config_toml(&config_path, &working_dir, &resolved(servers), None, None).unwrap();
 
     let cfg = read_codex_config(&config_path);
     let mcp = &cfg["mcp_servers"]["my-mcp"];
@@ -516,7 +681,7 @@ fn prepare_codex_config_toml_writes_model_when_specified() {
     prepare_codex_config_toml(
         &config_path,
         &working_dir,
-        &HashMap::new(),
+        &ResolvedMCPServers::default(),
         Some(&harness_model_config("gpt-5.5", None)),
         None,
     )
@@ -542,7 +707,7 @@ fn prepare_codex_config_toml_writes_model_migration_for_older_model() {
     prepare_codex_config_toml(
         &config_path,
         &working_dir,
-        &HashMap::new(),
+        &ResolvedMCPServers::default(),
         Some(&harness_model_config("gpt-5.2", None)),
         None,
     )
@@ -568,7 +733,7 @@ fn prepare_codex_config_toml_skips_model_for_default_sentinel() {
     prepare_codex_config_toml(
         &config_path,
         &working_dir,
-        &HashMap::new(),
+        &ResolvedMCPServers::default(),
         Some(&harness_model_config("default", None)),
         None,
     )
@@ -594,7 +759,14 @@ fn prepare_codex_config_toml_skips_model_when_none() {
     let working_dir = tmp.path().join("workspace");
     fs::create_dir_all(&working_dir).unwrap();
 
-    prepare_codex_config_toml(&config_path, &working_dir, &HashMap::new(), None, None).unwrap();
+    prepare_codex_config_toml(
+        &config_path,
+        &working_dir,
+        &ResolvedMCPServers::default(),
+        None,
+        None,
+    )
+    .unwrap();
 
     let cfg = read_codex_config(&config_path);
     assert!(
@@ -617,7 +789,7 @@ fn prepare_codex_config_toml_writes_model_reasoning_effort_when_specified() {
     prepare_codex_config_toml(
         &config_path,
         &working_dir,
-        &HashMap::new(),
+        &ResolvedMCPServers::default(),
         Some(&harness_model_config("gpt-5.5", Some("medium"))),
         None,
     )
@@ -636,7 +808,14 @@ fn prepare_codex_config_toml_removes_stale_model_reasoning_effort_when_none() {
     fs::create_dir_all(&working_dir).unwrap();
     fs::write(&config_path, "model_reasoning_effort = \"high\"\n").unwrap();
 
-    prepare_codex_config_toml(&config_path, &working_dir, &HashMap::new(), None, None).unwrap();
+    prepare_codex_config_toml(
+        &config_path,
+        &working_dir,
+        &ResolvedMCPServers::default(),
+        None,
+        None,
+    )
+    .unwrap();
 
     let cfg = read_codex_config(&config_path);
     assert!(cfg.get("model_reasoning_effort").is_none());
@@ -667,7 +846,7 @@ fn find_child_git_repos_returns_empty_when_dir_missing() {
 #[test]
 fn codex_command_with_session_id_invokes_resume_subcommand() {
     let uuid = Uuid::new_v4();
-    let cmd = codex_command("codex", Some(&uuid), "/tmp/prompt.txt");
+    let cmd = codex_command("codex", &[], Some(&uuid), "/tmp/prompt.txt");
     assert!(
         cmd.contains(&format!(
             "resume --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust {uuid}"
@@ -682,7 +861,7 @@ fn codex_command_with_session_id_invokes_resume_subcommand() {
 
 #[test]
 fn codex_command_without_session_id_bypasses_hook_trust() {
-    let cmd = codex_command("codex", None, "/tmp/prompt.txt");
+    let cmd = codex_command("codex", &[], None, "/tmp/prompt.txt");
     assert!(
         cmd.contains("--dangerously-bypass-approvals-and-sandbox"),
         "command should bypass approvals and sandbox: {cmd}"
@@ -871,5 +1050,35 @@ async fn fetch_resume_payload_returns_codex_variant_on_success() {
             assert_eq!(info.envelope.codex_version.as_deref(), Some("0.55.0"));
         }
         other => panic!("expected ResumePayload::Codex, got {other:?}"),
+    }
+}
+
+#[test]
+fn codex_command_passes_config_overrides_to_new_and_resumed_sessions() {
+    let config_override = r#"mcp_servers.warp-computer-use={ command = "/opt/o'z" }"#.to_string();
+    let uuid = Uuid::new_v4();
+    for session_id in [None, Some(&uuid)] {
+        let cmd = codex_command(
+            "codex",
+            std::slice::from_ref(&config_override),
+            session_id,
+            "/tmp/prompt.txt",
+        );
+        let words = shell_words::split(&cmd).unwrap();
+        let flag = words
+            .iter()
+            .position(|word| word == "-c")
+            .unwrap_or_else(|| panic!("command should pass -c: {cmd}"));
+        assert_eq!(words[flag + 1], config_override, "{cmd}");
+        assert_eq!(
+            words[flag + 2],
+            "--dangerously-bypass-approvals-and-sandbox",
+            "{cmd}"
+        );
+        let expected_prefix: &[&str] = match session_id {
+            Some(_) => &["codex", "resume"],
+            None => &["codex"],
+        };
+        assert_eq!(&words[..flag], expected_prefix, "{cmd}");
     }
 }
