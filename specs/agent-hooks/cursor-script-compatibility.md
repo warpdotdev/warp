@@ -141,8 +141,13 @@ It is not Cursor's result shape. Binary file content is summarized as `is_binary
   the working directory and its ancestors, plus global rules). A rule file for another part of
   the repository, which the agent can read later but whose content was not sent, is not listed.
   Images and other attachment kinds with no file on disk are not listed.
-- `stop` fires only for a turn that completed (`status: "completed"`); a cancelled or failed turn
-  does not fire it.
+- `stop` fires once for every turn: `status: "completed"` when the turn finished, `"aborted"` when
+  it was cancelled, and `"error"` when it failed (a request that failed for good, a shell the
+  agent exited, a hook that ended the run). A `followup_message` is sent only after a
+  `completed` stop; after `aborted` or `error` it is ignored with a warning. In a cloud run that
+  ends on a cancelled or failed turn, Warp waits for that turn's `stop` hooks before the run
+  exits (for at most the hook's `timeout` plus 5 seconds), so a hook that records the end of
+  every turn sees the last one.
 - `postToolUse.duration` and `postToolUseFailure.duration` are the time the tool ran, in
   milliseconds, from when Warp started it (after every check and confirmation, so approval wait
   is not counted) to its result. A result known at once (a hook denial, a tool with no work to
@@ -183,3 +188,4 @@ with the run. `architecture.md` §7.1 has the rules.
   `beforeSubmitPrompt` of a conversation.
 - `subagentStart` for the children of a `run_agents` call.
 - `beforeSubmitPrompt` for the first prompt of an Oz cloud run.
+- `stop` with `status: "aborted"` and `"error"` for cancelled and failed turns.

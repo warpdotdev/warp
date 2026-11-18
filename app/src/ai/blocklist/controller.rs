@@ -40,7 +40,9 @@ use self::response_stream::{PendingResume, RecoveryBudget, ResponseStream, Respo
 use super::action_model::{BlocklistAIActionEvent, BlocklistAIActionModel};
 use super::context_model::{BlocklistAIContextModel, PendingAttachment, PendingFile};
 use super::conversation_selection::{ConversationSelectionEvent, ConversationSelectionHandle};
-use super::history_model::BlocklistAIHistoryModel;
+use super::history_model::{
+    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, ConversationStatusUpdate,
+};
 use super::orchestration_event_streamer::{
     OrchestrationEventStreamer, OrchestrationEventStreamerEvent,
 };
@@ -765,6 +767,24 @@ impl BlocklistAIController {
             | OrchestrationEventStreamerEvent::ChildStatusChanged { .. }
             | OrchestrationEventStreamerEvent::WatchedRunStatusChanged { .. } => {}
         });
+        // A turn ends as cancelled or failed from many places (a cancelled or errored stream,
+        // actions cancelled with nothing to send back, a shell exit, a hook that ended the run),
+        // all of which set the status; the status change is the one place that sees them all.
+        let history_model = BlocklistAIHistoryModel::handle(ctx);
+        ctx.subscribe_to_model(&history_model, |me, _, event, ctx| {
+            let BlocklistAIHistoryEvent::UpdatedConversationStatus {
+                conversation_id,
+                terminal_surface_id,
+                update: ConversationStatusUpdate::Changed { prev_status },
+                new_status,
+            } = event
+            else {
+                return;
+            };
+            if *terminal_surface_id == me.terminal_surface_id {
+                me.stop_ended_turn(*conversation_id, prev_status, new_status, ctx);
+            }
+        });
         Self {
             input_model,
             context_model,
@@ -1187,6 +1207,45 @@ impl BlocklistAIController {
                     }
                 },
             );
+        }
+    }
+
+    /// Runs the stop hooks of a turn that a status change ended as cancelled or failed, once the
+    /// stream that ended it is out of the way. Nothing here waits for their answer; an Oz run
+    /// about to exit on that status does.
+    fn stop_ended_turn(
+        &mut self,
+        conversation_id: AIConversationId,
+        prev_status: &ConversationStatus,
+        new_status: &ConversationStatus,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if hooks::turn::hold_ended_turn(
+            conversation_id,
+            prev_status,
+            new_status,
+            &self.active_session,
+            ctx,
+        ) {
+            self.start_ended_turn_stops(conversation_id, ctx);
+        }
+    }
+
+    /// Starts the stop hooks of `conversation_id`'s ended turns that are waiting to start, unless
+    /// the stream that ended one of them is still being cleaned up, in which case the stream's end
+    /// starts them.
+    fn start_ended_turn_stops(
+        &mut self,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if self.has_active_stream_for_conversation(conversation_id, ctx) {
+            return;
+        }
+        for stop in hooks::turn::start_ended_turn_stops(conversation_id, ctx) {
+            ctx.spawn(stop, move |_, outcome, ctx| {
+                hooks::turn::finish_ended_turn_stop(conversation_id, outcome, ctx);
+            });
         }
     }
 
@@ -4304,6 +4363,9 @@ impl BlocklistAIController {
                     // follow-up now that nothing is in flight for the conversation.
                     self.start_held_turn_stop(conversation_id, ctx);
                 }
+                // A turn this stream ended as failed set its status before the stream was
+                // cleaned up, so its stop hooks waited for this point.
+                self.start_ended_turn_stops(conversation_id, ctx);
 
                 // Before cleaning up the response stream, check if we should attempt to resume.
                 // The resume inherits the failed request's remaining recovery budget, so

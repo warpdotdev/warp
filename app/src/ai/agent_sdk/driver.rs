@@ -64,6 +64,7 @@ use crate::ai::aws_credentials::BedrockOidcCredentialsConfig;
 use crate::ai::bedrock_credentials;
 use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
 use crate::ai::blocklist::block::FinishReason;
+use crate::ai::blocklist::hooks::turn::ended_turn_stops_settled;
 use crate::ai::blocklist::local_agent_task_sync_model::LocalAgentTaskSyncModel;
 use crate::ai::blocklist::orchestration_event_streamer::{
     register_agent_event_consumer, unregister_agent_event_consumer,
@@ -4435,83 +4436,22 @@ impl AgentDriver {
                         return;
                     }
 
-                    // Conversation is no longer in progress. Handle completion based on the result.
-                    if let Some(conversation_status) =
-                         conversation_output_status_from_conversation(conversation)
-                    {
-                        let output_status = match conversation_status {
-                            AmbientConversationStatus::Success => {
-                                SDKConversationOutputStatus::Success
-                            }
-                            AmbientConversationStatus::Cancelled { reason } => {
-                                SDKConversationOutputStatus::Cancelled { reason }
-                            }
-                            AmbientConversationStatus::Error { error } => {
-                                SDKConversationOutputStatus::Error { error }
-                            }
-                            AmbientConversationStatus::Blocked { blocked_action } => {
-                                SDKConversationOutputStatus::Blocked { blocked_action }
-                            }
-                        };
-
-                        if matches!(output_status, SDKConversationOutputStatus::Success)
-                            && QueuedQueryModel::as_ref(ctx).has_pending_native_injections(*conversation_id)
-                        {
-                            log::info!(
-                                "event=worker_exit_deferred task_id={:?} conversation_id={conversation_id} reason=pending_native_injections queue_len={}",
-                                me.task_id, QueuedQueryModel::as_ref(ctx).queue(*conversation_id).len(),
-                            );
-                            run_exit.cancel_idle_timeout();
-                            return;
-                        }
-
-                        // Errors here are terminal: in-flight recoveries surface as
-                        // TransientError (handled above). Whether the process outlives either
-                        // kind of terminal status is controlled by the `--idle-on-complete` /
-                        // `--idle-on-fail` flags; see `idle_window_for_terminal_status`.
-                        let idle_window = idle_window_for_terminal_status(
-                            &output_status,
-                            me.idle_on_complete,
-                            me.idle_on_fail,
+                    // A turn that was cancelled or failed fires its stop hooks after its status
+                    // is set; the run ends once they are done, so a hook that records every
+                    // turn's end sees the last one.
+                    if let Some(stops_settled) = ended_turn_stops_settled(*conversation_id, ctx) {
+                        log::info!(
+                            "Ambient agent idle lifecycle: event=run_exit_deferred task_id={:?} terminal_view_id={terminal_id:?} reason=turn_stop_hooks",
+                            me.task_id
                         );
-                        let outcome = terminal_status_log_outcome(&output_status);
-                        if let Some(idle_timeout) = idle_window {
-                            log::info!(
-                                "Ambient agent idle lifecycle: event=idle_timeout_scheduled task_id={:?} terminal_view_id={terminal_id:?} timeout={idle_timeout:?} outcome={outcome}",
-                                me.task_id
-                            );
-                        } else {
-                            log::info!(
-                                "Ambient agent idle lifecycle: event=run_completion_immediate task_id={:?} terminal_view_id={terminal_id:?} outcome={outcome}",
-                                me.task_id
-                            );
-                        }
-                        match idle_window {
-                            // A failure window is held open by the human working in the session,
-                            // so it goes through the shared arming path that refreshes on viewer
-                            // input. The success window has no such notion.
-                            Some(window)
-                                if matches!(
-                                    output_status,
-                                    SDKConversationOutputStatus::Error { .. }
-                                ) =>
-                            {
-                                me.arm_debug_window(run_exit.clone(), output_status, window, ctx);
-                            }
-                            // Whether the run exits immediately (no idle window) or a deferred
-                            // window later elapses on its own, `run_exit`'s `on_commit` hook
-                            // (see `execute_run`) commits the conversation exiting
-                            // synchronously, on whichever thread completes the run, strictly
-                            // before the completion signal is observable. That covers both
-                            // cases uniformly, closing off any orchestration event still
-                            // buffered for this conversation before it could otherwise race the
-                            // teardown that follows and get cancelled, leaving the run stuck
-                            // `InProgress` (QUALITY-1801).
-                            None | Some(_) => {
-                                run_exit.complete_with_optional_idle(idle_window, output_status);
-                            }
-                        }
+                        let conversation_id = *conversation_id;
+                        let run_exit = run_exit.clone();
+                        ctx.spawn(stops_settled, move |me, _, ctx| {
+                            me.end_run_for_settled_conversation(conversation_id, &run_exit, ctx);
+                        });
+                        return;
                     }
+                    me.end_run_for_settled_conversation(*conversation_id, &run_exit, ctx);
                 }
 
                 BlocklistAIHistoryEvent::SetActiveConversation { .. } => {
@@ -4693,6 +4633,100 @@ impl AgentDriver {
             }
         });
         external_rx
+    }
+
+    /// Ends the run, now or after the idle window for its outcome, once the run's conversation
+    /// has settled on a status that ends it. Read from live state, since the decision can follow
+    /// the status change by the time its stop hooks took: a conversation that is under way again
+    /// by then is left alone.
+    fn end_run_for_settled_conversation(
+        &mut self,
+        conversation_id: AIConversationId,
+        run_exit: &IdleTimeoutSender<SDKConversationOutputStatus>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let terminal_id = self.terminal_driver.as_ref(ctx).terminal_view().id();
+        let history_model = BlocklistAIHistoryModel::as_ref(ctx);
+        let Some(conversation) = history_model.conversation(&conversation_id) else {
+            log::warn!("No conversation with id {conversation_id} to end the run for");
+            return;
+        };
+        let status = conversation.status();
+        if !(status.is_done() || status.is_blocked()) {
+            log::info!(
+                "Ambient agent idle lifecycle: event=run_exit_skipped task_id={:?} terminal_view_id={terminal_id:?} status={status:?} reason=conversation_under_way_again",
+                self.task_id
+            );
+            return;
+        }
+        let Some(conversation_status) = conversation_output_status_from_conversation(conversation)
+        else {
+            return;
+        };
+        let output_status = match conversation_status {
+            AmbientConversationStatus::Success => SDKConversationOutputStatus::Success,
+            AmbientConversationStatus::Cancelled { reason } => {
+                SDKConversationOutputStatus::Cancelled { reason }
+            }
+            AmbientConversationStatus::Error { error } => {
+                SDKConversationOutputStatus::Error { error }
+            }
+            AmbientConversationStatus::Blocked { blocked_action } => {
+                SDKConversationOutputStatus::Blocked { blocked_action }
+            }
+        };
+
+        if matches!(output_status, SDKConversationOutputStatus::Success)
+            && QueuedQueryModel::as_ref(ctx).has_pending_native_injections(conversation_id)
+        {
+            log::info!(
+                "event=worker_exit_deferred task_id={:?} conversation_id={conversation_id} reason=pending_native_injections queue_len={}",
+                self.task_id,
+                QueuedQueryModel::as_ref(ctx).queue(conversation_id).len(),
+            );
+            run_exit.cancel_idle_timeout();
+            return;
+        }
+
+        // Errors here are terminal: in-flight recoveries surface as TransientError, which never
+        // reaches this point. Whether the process outlives either kind of terminal status is
+        // controlled by the `--idle-on-complete` / `--idle-on-fail` flags; see
+        // `idle_window_for_terminal_status`.
+        let idle_window = idle_window_for_terminal_status(
+            &output_status,
+            self.idle_on_complete,
+            self.idle_on_fail,
+        );
+        let outcome = terminal_status_log_outcome(&output_status);
+        if let Some(idle_timeout) = idle_window {
+            log::info!(
+                "Ambient agent idle lifecycle: event=idle_timeout_scheduled task_id={:?} terminal_view_id={terminal_id:?} timeout={idle_timeout:?} outcome={outcome}",
+                self.task_id
+            );
+        } else {
+            log::info!(
+                "Ambient agent idle lifecycle: event=run_completion_immediate task_id={:?} terminal_view_id={terminal_id:?} outcome={outcome}",
+                self.task_id
+            );
+        }
+        match idle_window {
+            // A failure window is held open by the human working in the session, so it goes
+            // through the shared arming path that refreshes on viewer input. The success window
+            // has no such notion.
+            Some(window) if matches!(output_status, SDKConversationOutputStatus::Error { .. }) => {
+                self.arm_debug_window(run_exit.clone(), output_status, window, ctx);
+            }
+            // Whether the run exits immediately (no idle window) or a deferred window later
+            // elapses on its own, `run_exit`'s `on_commit` hook (see `execute_run`) commits the
+            // conversation exiting synchronously, on whichever thread completes the run,
+            // strictly before the completion signal is observable. That covers both cases
+            // uniformly, closing off any orchestration event still buffered for this
+            // conversation before it could otherwise race the teardown that follows and get
+            // cancelled, leaving the run stuck `InProgress` (QUALITY-1801).
+            None | Some(_) => {
+                run_exit.complete_with_optional_idle(idle_window, output_status);
+            }
+        }
     }
 
     /// Write the inputs to an exchange to stdout.

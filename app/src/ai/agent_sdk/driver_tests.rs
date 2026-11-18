@@ -2387,6 +2387,69 @@ fn a_first_run_prompt_that_cannot_be_fetched_is_sent_without_the_hook_otherwise(
     resolved.assert();
 }
 
+/// A turn that fails fires its `turn.stop` hooks after its status is set, and the run does not
+/// end until they are done, so a hook that records every turn's end sees the last one.
+#[test]
+fn the_run_waits_for_a_failed_turns_stop_hooks_before_it_ends() {
+    App::test((), |mut app| async move {
+        let harness = test_utils::controller_harness(&mut app);
+        let stop = test_binding(test_source_id("stop"), HookBoundary::TurnStop, 0, None);
+        app.update(|ctx| harness.hooks.install_bindings(vec![stop], ctx));
+        let hold = harness.hooks.runner.hold();
+        let (conversation_id, stream) = harness.mock_stream(&mut app);
+        let temp = TempDir::new().unwrap();
+        let driver = app.add_model(|ctx| {
+            let terminal_driver = super::terminal::TerminalDriver::create_from_existing_view(
+                harness.terminal.clone(),
+                ctx,
+            );
+            let mut driver =
+                AgentDriver::new_for_test(temp.path().to_path_buf(), terminal_driver, ctx);
+            driver.skip_initial_turn = true;
+            driver.idle_on_complete = None;
+            driver.idle_on_fail = None;
+            driver
+        });
+        let mut run_exit_rx = driver.update(&mut app, |driver, ctx| {
+            driver.execute_run(AgentRunPrompt::Local(String::new()), ctx)
+        });
+
+        stream.update(&mut app, |stream, ctx| {
+            stream.emit_response_event_for_test(test_utils::stream_init_event(), ctx);
+            stream.exhaust_recovery_budget_for_test(ctx);
+            stream.emit_error_event_for_test(
+                Arc::new(crate::server::server_api::AIApiError::UnexpectedEof),
+                ctx,
+            );
+            stream.emit_after_stream_finished_for_test(ctx);
+        });
+        assert_eq!(
+            test_utils::conversation_status(&app, conversation_id),
+            Some(ConversationStatus::Error)
+        );
+        test_utils::settle(&mut app, |_| harness.hooks.runner.invocation_count() == 1).await;
+        test_utils::let_background_work_settle(&mut app).await;
+        assert!(
+            run_exit_rx.try_recv().unwrap().is_none(),
+            "the run must not end while the stop hooks run"
+        );
+
+        hold.release();
+        let SDKConversationOutputStatus::Error { .. } = run_exit_rx.await.unwrap() else {
+            panic!("the run ends as a failure once the hooks are done");
+        };
+        let envelopes = harness.hooks.adapter.encoded_envelopes();
+        assert_eq!(envelopes.len(), 1);
+        assert!(matches!(
+            envelopes[0].payload,
+            ai::hooks::HookPayload::TurnStop {
+                status: ai::hooks::TurnStopStatus::Error,
+                ..
+            }
+        ));
+    });
+}
+
 /// The whole path from a hook's `ask` to the end of the run: the model asks for a shell command,
 /// the pre-tool hook answers `ask` through the runner, nobody can answer it, and the hook's source
 /// is set to fail the run in that case.
