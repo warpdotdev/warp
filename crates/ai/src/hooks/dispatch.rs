@@ -9,7 +9,7 @@ use futures::future::{BoxFuture, join_all};
 use instant::Instant;
 use uuid::Uuid;
 
-use crate::hooks::adapters::{DeclaredBinding, DecodePolicy};
+use crate::hooks::adapters::{DeclaredBinding, DecodePolicy, HookInput};
 use crate::hooks::model::{
     DiagnosticSeverity, EffectKind, FailurePolicy, HookAsker, HookBindingId, HookBoundary,
     HookDiagnostic, HookEffects, HookEnvelope, HookReason, HookSurface, HookVerdict, MergedEffects,
@@ -32,6 +32,9 @@ pub const INPUT_NOT_ENCODABLE_DENY_REASON: &str =
 pub struct InvocationRecord {
     pub invocation_id: Uuid,
     pub binding: HookBindingId,
+    /// The part of the operation the process was run for, when the firing was split into several
+    /// runs of the binding.
+    pub label: Option<String>,
     pub exit: ProcessExit,
     pub duration: Duration,
     pub stderr_tail: String,
@@ -112,8 +115,8 @@ impl HookDispatcher {
             let mut invocations = Vec::with_capacity(matching.len());
             let mut ordered = Vec::with_capacity(matching.len());
             let mut askers = Vec::new();
-            for (active, (record, effects)) in matching.iter().zip(finished) {
-                invocations.extend(record);
+            for (active, (records, effects)) in matching.iter().zip(finished) {
+                invocations.extend(records);
                 let effects =
                     refuse_unhonorable_effects(active, envelope.boundary(), is_headless, effects);
                 if effects.verdict == HookVerdict::Ask {
@@ -144,10 +147,12 @@ impl HookDispatcher {
             effects.askers = askers;
             route_notices(&*messenger, &envelope, &effects);
             log::info!(
-                "hook dispatch: event={} action={} matched={} verdict={:?} halt={} duration_ms={}",
+                "hook dispatch: event={} action={} matched={} invocations={} verdict={:?} \
+                 halt={} duration_ms={}",
                 envelope.boundary(),
                 action_label(&envelope),
                 matching.len(),
+                invocations.len(),
                 effects.verdict,
                 effects.halt_turn,
                 started.elapsed().as_millis()
@@ -196,7 +201,8 @@ fn effects_for_unencodable_input(binding: &DeclaredBinding) -> HookEffects {
     }
 }
 
-/// Runs one binding and decodes what it did. A binding that finds the firing already cancelled
+/// Runs one binding, once per input its adapter encodes for the firing, and merges what those
+/// runs asked for into the binding's effects. A binding that finds the firing already cancelled
 /// does not start; its effects are never merged, so they are left empty.
 async fn run_binding(
     runner: &dyn HookRunner,
@@ -204,16 +210,58 @@ async fn run_binding(
     active: &ActiveBinding,
     envelope: &HookEnvelope,
     cancel: Arc<AtomicBool>,
+) -> (Vec<InvocationRecord>, HookEffects) {
+    if cancel.load(Ordering::Acquire) {
+        return (Vec::new(), HookEffects::default());
+    }
+    // The adapter sees the id of the binding's first run; further runs of a split action get
+    // their own ids on their records.
+    let mut per_binding = envelope.clone();
+    per_binding.invocation_id = Uuid::new_v4();
+    let inputs = active.adapter.encode_inputs(&active.binding, &per_binding);
+    let runs = inputs.into_iter().enumerate().map(|(index, input)| {
+        let invocation_id = if index == 0 {
+            per_binding.invocation_id
+        } else {
+            Uuid::new_v4()
+        };
+        run_input(
+            runner,
+            messenger,
+            active,
+            envelope,
+            input,
+            invocation_id,
+            cancel.clone(),
+        )
+    });
+    // `join_all` keeps the adapter's order, so a split action's parts merge in the order the
+    // action lists them.
+    let finished = join_all(runs).await;
+    let mut records = Vec::with_capacity(finished.len());
+    let mut effects = Vec::with_capacity(finished.len());
+    for (record, part_effects) in finished {
+        records.extend(record);
+        effects.push(part_effects);
+    }
+    (records, merge_binding_effects(&active.binding.id, effects))
+}
+
+/// Runs one input of a binding and decodes what the process did. The reasons it gives are
+/// prefixed with the input's label, so a denial names the file it was about.
+async fn run_input(
+    runner: &dyn HookRunner,
+    messenger: &dyn HookMessenger,
+    active: &ActiveBinding,
+    envelope: &HookEnvelope,
+    input: HookInput,
+    invocation_id: Uuid,
+    cancel: Arc<AtomicBool>,
 ) -> (Option<InvocationRecord>, HookEffects) {
     if cancel.load(Ordering::Acquire) {
         return (None, HookEffects::default());
     }
-    let mut per_invocation = envelope.clone();
-    per_invocation.invocation_id = Uuid::new_v4();
-    let input = active
-        .adapter
-        .encode_input(&active.binding, &per_invocation);
-    let stdin = match serde_json::to_vec(&input) {
+    let stdin = match serde_json::to_vec(&input.payload) {
         Ok(stdin) => stdin,
         Err(error) => {
             log::error!(
@@ -229,13 +277,20 @@ async fn run_binding(
                     active.binding.id
                 ),
             });
-            return (None, effects_for_unencodable_input(&active.binding));
+            return (
+                None,
+                labeled(
+                    effects_for_unencodable_input(&active.binding),
+                    input.label.as_deref(),
+                ),
+            );
         }
     };
 
     let outcome = runner
         .run(HookInvocation {
             binding: active.binding.id.clone(),
+            label: input.label.clone(),
             command: active.binding.command.clone(),
             cwd: active.working_directory.clone(),
             env: invocation_environment(&hook_identity(active, envelope), &envelope.session_env),
@@ -253,14 +308,68 @@ async fn run_binding(
         },
     );
     let record = InvocationRecord {
-        invocation_id: per_invocation.invocation_id,
+        invocation_id,
         binding: active.binding.id.clone(),
+        label: input.label.clone(),
         exit: outcome.exit,
         duration: outcome.duration,
         stderr_tail: truncate_to_char_boundary(&outcome.stderr_tail, STDERR_TAIL_LOG_LIMIT)
             .to_owned(),
     };
-    (Some(record), effects)
+    (Some(record), labeled(effects, input.label.as_deref()))
+}
+
+/// `effects` with every reason prefixed by `label`, so a reason from one part of a split action
+/// says which part it was about.
+fn labeled(mut effects: HookEffects, label: Option<&str>) -> HookEffects {
+    if let Some(label) = label {
+        for reason in &mut effects.reasons {
+            reason.text = format!("{label}: {}", reason.text);
+        }
+    }
+    effects
+}
+
+/// What one binding asked for across its runs, merged by the same rules that merge bindings:
+/// the most severe verdict wins, lists concatenate in order, a halt is any-wins, and a scalar
+/// keeps its first value. A binding that ran once contributes its effects as they are. A binding
+/// that ran only to defer stays a deferral, so the boundary's rule for deferrals still applies.
+fn merge_binding_effects(binding: &HookBindingId, mut effects: Vec<HookEffects>) -> HookEffects {
+    if effects.len() <= 1 {
+        return effects.pop().unwrap_or_default();
+    }
+    let all_deferred = effects
+        .iter()
+        .all(|effects| effects.verdict == HookVerdict::Defer);
+    let merged = reduce_effects(
+        effects
+            .into_iter()
+            .map(|effects| (binding.clone(), effects))
+            .collect(),
+    );
+    for conflict in &merged.conflicts {
+        log::warn!("hook merge conflict within {binding}: {conflict}");
+    }
+    HookEffects {
+        verdict: if all_deferred {
+            HookVerdict::Defer
+        } else {
+            merged.verdict
+        },
+        reasons: merged.reasons,
+        replacement_input: merged.replacement_input,
+        replacement_result: merged.replacement_result,
+        model_context: merged.model_context,
+        user_notices: merged.user_notices,
+        session_env: merged.session_env,
+        halt_turn: merged.halt_turn,
+        continuation: merged.continuation,
+        unsupported: if all_deferred {
+            Vec::new()
+        } else {
+            merged.unsupported
+        },
+    }
 }
 
 /// Who the hook is, for the variables the runner sets on its process.

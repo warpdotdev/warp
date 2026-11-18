@@ -180,6 +180,7 @@ pub(super) fn outcome(exit: ProcessExit, stdout: &str) -> HookProcessOutcome {
         stdout_truncated: false,
         stderr_tail: String::new(),
         duration: Duration::from_millis(1),
+        queued: Duration::ZERO,
     }
 }
 

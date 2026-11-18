@@ -14,24 +14,85 @@ use serde::Serialize;
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
-use self::tool_input::{mcp_server_id, tool_input};
-use self::tool_output::result_view;
+use self::tool_input::{mcp_server_id, part_tool_input};
+use self::tool_output::part_result_view;
 use super::events::{CursorEvent, CursorEventSpec};
 use super::facets::{McpCallOutcome, finished_shell_command, mcp_tool_call, pending_shell_command};
-use super::tool_names::tool_name;
-use crate::agent::action::AIAgentActionType;
+use super::parts::{ToolPart, tool_parts};
 use crate::agent::action_result::{
     AIAgentActionResultType, RequestCommandOutputResult, RunAgentsResult,
 };
+use crate::hooks::adapters::HookInput;
 use crate::hooks::model::{HookEnvelope, HookPayload, TurnStopStatus};
 
+/// The stdin payloads for one firing of `spec`'s event: one per part of a tool action that
+/// `part_matches` accepts (a Cursor script sees a batched read or edit as one event per file), and
+/// one for every other event. Inputs are labeled by their file only when the action was split.
+pub(super) fn encode_inputs(
+    spec: &CursorEventSpec,
+    envelope: &HookEnvelope,
+    part_matches: impl Fn(&ToolPart<'_>) -> bool,
+) -> Vec<HookInput> {
+    let action = match spec.event {
+        CursorEvent::PreToolUse | CursorEvent::PostToolUse | CursorEvent::PostToolUseFailure => {
+            envelope.payload.action()
+        }
+        CursorEvent::SessionStart
+        | CursorEvent::BeforeShellExecution
+        | CursorEvent::AfterShellExecution
+        | CursorEvent::BeforeMcpExecution
+        | CursorEvent::AfterMcpExecution
+        | CursorEvent::BeforeSubmitPrompt
+        | CursorEvent::Stop
+        | CursorEvent::AfterAgentResponse
+        | CursorEvent::AfterAgentThought
+        | CursorEvent::SessionEnd
+        | CursorEvent::SubagentStart
+        | CursorEvent::SubagentStop
+        | CursorEvent::BeforeReadFile
+        | CursorEvent::AfterFileEdit
+        | CursorEvent::PreCompact
+        | CursorEvent::BeforeTabFileRead
+        | CursorEvent::AfterTabFileEdit
+        | CursorEvent::WorkspaceOpen => None,
+    };
+    let Some(action) = action else {
+        return vec![HookInput::whole(encode_part(spec, envelope, None))];
+    };
+    let parts = tool_parts(action);
+    let split = parts.len() > 1;
+    parts
+        .iter()
+        .filter(|part| part_matches(part))
+        .map(|part| HookInput {
+            label: split.then(|| part.file().map(str::to_owned)).flatten(),
+            payload: encode_part(spec, envelope, Some(part)),
+        })
+        .collect()
+}
+
+/// The one stdin payload for a firing that has one part, which is every firing of an event other
+/// than the generic tool events and every tool event whose action is not split.
+#[cfg(test)]
 pub(super) fn encode_input(spec: &CursorEventSpec, envelope: &HookEnvelope) -> Value {
+    let mut inputs = encode_inputs(spec, envelope, |_| true);
+    assert_eq!(inputs.len(), 1, "{} has one part", spec.name);
+    inputs.remove(0).payload
+}
+
+/// The payload for `spec`'s event, about `part` when the event is one of the generic tool
+/// events (and the envelope carries a tool action).
+fn encode_part(
+    spec: &CursorEventSpec,
+    envelope: &HookEnvelope,
+    part: Option<&ToolPart<'_>>,
+) -> Value {
     let mut input = common_fields(spec, envelope);
     match spec.event {
         CursorEvent::SessionStart => encode_session_start(envelope, &mut input),
-        CursorEvent::PreToolUse => encode_pre_tool_use(envelope, &mut input),
-        CursorEvent::PostToolUse => encode_post_tool_use(envelope, &mut input),
-        CursorEvent::PostToolUseFailure => encode_post_tool_use_failure(envelope, &mut input),
+        CursorEvent::PreToolUse => encode_pre_tool_use(envelope, part, &mut input),
+        CursorEvent::PostToolUse => encode_post_tool_use(envelope, part, &mut input),
+        CursorEvent::PostToolUseFailure => encode_post_tool_use_failure(envelope, part, &mut input),
         CursorEvent::BeforeShellExecution => encode_before_shell_execution(envelope, &mut input),
         CursorEvent::AfterShellExecution => encode_after_shell_execution(envelope, &mut input),
         CursorEvent::BeforeMcpExecution => encode_before_mcp_execution(envelope, &mut input),
@@ -119,16 +180,19 @@ fn insert_duration_ms(key: &str, duration: Option<Duration>, input: &mut Map<Str
     }
 }
 
-/// The generic tool events' fields for the action: Cursor's `tool_name` and `tool_input`, plus
-/// the MCP server for an MCP action, named beside the input as the MCP events name it.
+/// The generic tool events' fields for one part of the action: Cursor's `tool_name` and
+/// `tool_input`, plus the MCP server for an MCP action, named beside the input as the MCP events
+/// name it.
 fn insert_tool_fields(
-    action: &AIAgentActionType,
+    part: &ToolPart<'_>,
     envelope: &HookEnvelope,
     input: &mut Map<String, Value>,
 ) {
-    input.insert("tool_name".to_owned(), json!(tool_name(action)));
-    input.insert("tool_input".to_owned(), tool_input(action, envelope));
-    if let Some(server_id) = mcp_server_id(action) {
+    input.insert("tool_name".to_owned(), json!(part.tool_name()));
+    input.insert("tool_input".to_owned(), part_tool_input(part, envelope));
+    if let ToolPart::Whole(action) = part
+        && let Some(server_id) = mcp_server_id(action)
+    {
         input.insert("mcp_server_id".to_owned(), json!(server_id.to_string()));
     }
 }
@@ -150,45 +214,61 @@ fn encode_session_start(envelope: &HookEnvelope, input: &mut Map<String, Value>)
     input.insert("composer_mode".to_owned(), json!("agent"));
 }
 
-fn encode_pre_tool_use(envelope: &HookEnvelope, input: &mut Map<String, Value>) {
-    let HookPayload::ToolPre { action } = &envelope.payload else {
+fn encode_pre_tool_use(
+    envelope: &HookEnvelope,
+    part: Option<&ToolPart<'_>>,
+    input: &mut Map<String, Value>,
+) {
+    let (HookPayload::ToolPre { .. }, Some(part)) = (&envelope.payload, part) else {
         return;
     };
-    insert_tool_fields(action, envelope, input);
+    insert_tool_fields(part, envelope, input);
     insert_tool_use_id(envelope, input);
     insert_cwd(envelope, input);
 }
 
-fn encode_post_tool_use(envelope: &HookEnvelope, input: &mut Map<String, Value>) {
-    let HookPayload::ToolResult {
-        action,
-        result,
-        duration,
-    } = &envelope.payload
+fn encode_post_tool_use(
+    envelope: &HookEnvelope,
+    part: Option<&ToolPart<'_>>,
+    input: &mut Map<String, Value>,
+) {
+    let (
+        HookPayload::ToolResult {
+            result, duration, ..
+        },
+        Some(part),
+    ) = (&envelope.payload, part)
     else {
         return;
     };
-    insert_tool_fields(action, envelope, input);
+    insert_tool_fields(part, envelope, input);
     input.insert(
         "tool_output".to_owned(),
-        json!(result_view(result).to_string()),
+        json!(part_result_view(part, result).to_string()),
     );
     insert_tool_use_id(envelope, input);
     insert_cwd(envelope, input);
     insert_duration_ms("duration", *duration, input);
 }
 
-fn encode_post_tool_use_failure(envelope: &HookEnvelope, input: &mut Map<String, Value>) {
-    let HookPayload::ToolFailure {
-        action,
-        result,
-        cancellation_reason,
-        duration,
-    } = &envelope.payload
+fn encode_post_tool_use_failure(
+    envelope: &HookEnvelope,
+    part: Option<&ToolPart<'_>>,
+    input: &mut Map<String, Value>,
+) {
+    let (
+        HookPayload::ToolFailure {
+            result,
+            cancellation_reason,
+            duration,
+            ..
+        },
+        Some(part),
+    ) = (&envelope.payload, part)
     else {
         return;
     };
-    insert_tool_fields(action, envelope, input);
+    insert_tool_fields(part, envelope, input);
     insert_tool_use_id(envelope, input);
     insert_cwd(envelope, input);
     input.insert("error_message".to_owned(), json!(result.to_string()));

@@ -105,6 +105,11 @@ fn encode(event: CursorEvent, payload: HookPayload) -> Value {
     encode_input(event.spec(), &fixture_envelope(payload))
 }
 
+/// Every input for the firing, for actions a Cursor script sees as several.
+fn encode_all(event: CursorEvent, payload: HookPayload) -> Vec<HookInput> {
+    encode_inputs(event.spec(), &fixture_envelope(payload), |_| true)
+}
+
 /// Cursor sends some fields as JSON text inside a string. Their key order is a serializer
 /// detail, so they are compared as parsed JSON.
 fn with_nested_json_parsed(mut value: Value) -> Value {
@@ -318,7 +323,8 @@ fn tool_input_describes_non_shell_actions() {
     assert_eq!(input["tool_name"], "Read");
     assert_eq!(
         input["tool_input"],
-        json!({ "files": [ { "path": "src/lib.rs", "lines": [[1, 20]] } ] })
+        json!({ "file_path": "src/lib.rs", "lines": [[1, 20]] }),
+        "a read has Cursor's single-file shape"
     );
 
     let edit = tool_pre(AIAgentActionType::RequestFileEdits {
@@ -334,18 +340,40 @@ fn tool_input_describes_non_shell_actions() {
         ],
         title: Some("Replace old.rs".to_owned()),
     });
-    let input = encode(CursorEvent::PreToolUse, edit);
-    assert_eq!(input["tool_name"], "Write");
+    let inputs = encode_all(CursorEvent::PreToolUse, edit);
     assert_eq!(
-        input["tool_input"],
+        inputs.len(),
+        2,
+        "a batch over two files is one event per file"
+    );
+    assert_eq!(inputs[0].label.as_deref(), Some("new.rs"));
+    assert_eq!(inputs[0].payload["tool_name"], "Write");
+    assert_eq!(
+        inputs[0].payload["tool_input"],
         json!({
+            "file_path": "new.rs",
             "title": "Replace old.rs",
             "edits": [
-                { "kind": "create", "file_path": "new.rs", "content": "fn main() {}", "allow_overwrite": false },
-                { "kind": "delete", "file_path": "old.rs" }
+                { "kind": "create", "file_path": "new.rs", "content": "fn main() {}", "allow_overwrite": false }
             ]
-        }),
-        "a batch over two files names no single file_path"
+        })
+    );
+    assert_eq!(inputs[1].label.as_deref(), Some("old.rs"));
+    assert_eq!(
+        inputs[1].payload["tool_name"], "Delete",
+        "the part made only of a delete is a Delete"
+    );
+    assert_eq!(
+        inputs[1].payload["tool_input"],
+        json!({
+            "file_path": "old.rs",
+            "title": "Replace old.rs",
+            "edits": [ { "kind": "delete", "file_path": "old.rs" } ]
+        })
+    );
+    assert_eq!(
+        inputs[0].payload["tool_use_id"], inputs[1].payload["tool_use_id"],
+        "both parts belong to the one tool call"
     );
 
     let mcp = tool_pre(mcp_action("read_file", json!({ "path": "a" })));
@@ -465,6 +493,88 @@ fn edits_to_one_file_name_it_with_cursors_field_names() {
         input["tool_input"].get("file_path").is_none(),
         "an edit with no file names none"
     );
+}
+
+#[test]
+fn a_read_of_several_files_is_one_event_per_file_with_that_files_output() {
+    let request = ReadFilesRequest {
+        locations: vec![
+            FileLocations {
+                name: "src/a.rs".to_owned(),
+                lines: Vec::new(),
+            },
+            FileLocations {
+                name: "missing.txt".to_owned(),
+                lines: Vec::new(),
+            },
+        ],
+    };
+    let result = AIAgentActionResultType::ReadFiles(ReadFilesResult::Success {
+        files: vec![FileContext::new(
+            "/work/repo/src/a.rs".to_owned(),
+            AnyFileContent::StringContent("fn a() {}".to_owned()),
+            None,
+            None,
+        )],
+        failed_files: vec![ReadFilesFailedFile {
+            path: "/work/repo/missing.txt".to_owned(),
+            message: "not found".to_owned(),
+        }],
+    });
+
+    let pre = encode_all(
+        CursorEvent::PreToolUse,
+        tool_pre(AIAgentActionType::ReadFiles(request.clone())),
+    );
+    assert_eq!(pre.len(), 2);
+    assert_eq!(pre[0].label.as_deref(), Some("src/a.rs"));
+    assert_eq!(pre[0].payload["tool_name"], "Read");
+    assert_eq!(
+        pre[0].payload["tool_input"],
+        json!({ "file_path": "src/a.rs", "lines": [] })
+    );
+    assert_eq!(pre[1].label.as_deref(), Some("missing.txt"));
+
+    let post = encode_all(
+        CursorEvent::PostToolUse,
+        tool_result(AIAgentActionType::ReadFiles(request), result, None),
+    );
+    assert_eq!(post.len(), 2);
+    let first: Value =
+        serde_json::from_str(post[0].payload["tool_output"].as_str().expect("a string"))
+            .expect("JSON");
+    assert_eq!(first["kind"], "success");
+    assert_eq!(first["files"][0]["content"], "fn a() {}");
+    assert_eq!(first["files"].as_array().map(Vec::len), Some(1));
+    assert_eq!(
+        first["failed_files"].as_array().map(Vec::len),
+        Some(0),
+        "the other file's failure is not in this file's output"
+    );
+    let second: Value =
+        serde_json::from_str(post[1].payload["tool_output"].as_str().expect("a string"))
+            .expect("JSON");
+    assert_eq!(second["files"].as_array().map(Vec::len), Some(0));
+    assert_eq!(second["failed_files"][0]["message"], "not found");
+}
+
+#[test]
+fn a_single_file_read_is_one_unlabeled_event() {
+    let inputs = encode_all(
+        CursorEvent::PreToolUse,
+        tool_pre(AIAgentActionType::ReadFiles(ReadFilesRequest {
+            locations: vec![FileLocations {
+                name: "src/a.rs".to_owned(),
+                lines: Vec::new(),
+            }],
+        })),
+    );
+    assert_eq!(inputs.len(), 1);
+    assert_eq!(
+        inputs[0].label, None,
+        "nothing was split, so nothing is labeled"
+    );
+    assert_eq!(inputs[0].payload["tool_input"]["file_path"], "src/a.rs");
 }
 
 #[test]

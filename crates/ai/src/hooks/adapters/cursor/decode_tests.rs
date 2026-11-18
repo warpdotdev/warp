@@ -358,6 +358,7 @@ fn stdout_that_is_not_utf8_is_malformed() {
         stdout_truncated: false,
         stderr_tail: String::new(),
         duration: std::time::Duration::from_millis(1),
+        queued: std::time::Duration::ZERO,
     };
     let effects = decode_output(
         CursorEvent::BeforeShellExecution.spec(),

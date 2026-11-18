@@ -7,13 +7,42 @@ use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
 use super::{insert_some, range_view, serialized};
+use crate::agent::FileLocations;
 use crate::agent::action::{
     AIAgentActionType, AIAgentPtyWriteMode, CommentSide, FileEdit, InsertReviewComment,
     RunAgentsExecutionMode, ShellCommandDelay, SuggestPromptRequest,
 };
 use crate::diff_validation::ParsedDiff;
+use crate::hooks::adapters::cursor::parts::ToolPart;
 use crate::hooks::model::HookEnvelope;
 use crate::skills::SkillReference;
+
+/// The `tool_input` object for one part of an action: Cursor's single-file `Read` shape for one
+/// file of a read, the edits of one file for a split edit batch, and the whole action's input
+/// otherwise.
+pub(super) fn part_tool_input(part: &ToolPart<'_>, envelope: &HookEnvelope) -> Value {
+    match part {
+        ToolPart::Whole(action) => tool_input(action, envelope),
+        ToolPart::ReadFile(location) => read_file_input(location),
+        ToolPart::EditFile { file, title, edits } => {
+            let mut fields = Map::new();
+            insert_some(&mut fields, "file_path", *file);
+            insert_some(&mut fields, "title", *title);
+            fields.insert(
+                "edits".to_owned(),
+                Value::Array(edits.iter().map(|edit| file_edit_view(edit)).collect()),
+            );
+            Value::Object(fields)
+        }
+    }
+}
+
+fn read_file_input(location: &FileLocations) -> Value {
+    json!({
+        "file_path": location.name,
+        "lines": location.lines.iter().map(range_view).collect::<Vec<_>>(),
+    })
+}
 
 /// The `tool_input` object for `preToolUse` and the post-tool events: the action's arguments as
 /// the model gave them. Shell commands carry the working directory beside the command, as

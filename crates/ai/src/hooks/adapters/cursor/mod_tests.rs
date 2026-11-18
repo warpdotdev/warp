@@ -5,6 +5,7 @@ use std::sync::atomic::AtomicBool;
 use futures::executor::block_on;
 
 use super::*;
+use crate::agent::action::{AIAgentActionType, FileEdit};
 use crate::hooks::adapters::adapter_for;
 use crate::hooks::adapters::cursor::events::CursorEvent;
 use crate::hooks::adapters::cursor::test_support::{
@@ -132,8 +133,8 @@ fn the_trait_methods_work_end_to_end_for_a_shell_hook() {
     assert!(adapter.matches(binding, &envelope));
     assert!(!adapter.matches(binding, &fixture_envelope(tool_pre(shell_action("ls")))));
     assert_eq!(
-        adapter.encode_input(binding, &envelope),
-        json(fixture.stdin)
+        adapter.encode_inputs(binding, &envelope),
+        vec![HookInput::whole(json(fixture.stdin))]
     );
 
     let effects = adapter.decode_output(
@@ -159,7 +160,10 @@ fn a_binding_declared_under_an_unknown_event_never_fires() {
     binding.vendor_event = "notACursorEvent".to_owned();
     let envelope = fixture_envelope(tool_pre(shell_action("ls")));
     assert!(!adapter.matches(&binding, &envelope));
-    assert_eq!(adapter.encode_input(&binding, &envelope), json("{}"));
+    assert_eq!(
+        adapter.encode_inputs(&binding, &envelope),
+        vec![HookInput::whole(json("{}"))]
+    );
     assert_eq!(
         adapter.decode_output(
             &binding,
@@ -168,6 +172,56 @@ fn a_binding_declared_under_an_unknown_event_never_fires() {
         ),
         HookEffects::default()
     );
+}
+
+#[test]
+fn a_delete_matcher_selects_only_the_delete_part_of_a_mixed_batch() {
+    let adapter = Arc::new(CursorAdapter::new());
+    let config = parsed(
+        r#"{ "version": 1, "hooks": { "preToolUse": [
+            { "command": "./no-deletes.sh", "matcher": "^Delete$" }
+        ] } }"#,
+    );
+    let binding = adapter.bindings(&config).remove(0);
+    let runner = Arc::new(ScriptedRunner::new());
+    runner.script(
+        binding.id.clone(),
+        ScriptedRunner::exit_with(0, r#"{"permission":"deny","agent_message":"no deletes"}"#),
+    );
+    let dispatcher = HookDispatcher::new(runner.clone(), Arc::new(RecordingMessenger::new()));
+    let snapshot = Arc::new(RegistrySnapshot {
+        revision: 1,
+        bindings: vec![active_binding(binding.clone(), adapter.clone())],
+        diagnostics: Vec::new(),
+    });
+    let envelope = fixture_envelope(tool_pre(AIAgentActionType::RequestFileEdits {
+        file_edits: vec![
+            FileEdit::Create {
+                file: Some("new.rs".to_owned()),
+                content: Some(String::new()),
+                allow_overwrite: false,
+            },
+            FileEdit::Delete {
+                file: Some("old.rs".to_owned()),
+            },
+        ],
+        title: None,
+    }));
+    assert!(
+        adapter.matches(&binding, &envelope),
+        "the batch as a whole is a Write, but one of its parts is a Delete"
+    );
+
+    let outcome =
+        block_on(dispatcher.dispatch(envelope, snapshot, false, Arc::new(AtomicBool::new(false))));
+    assert_eq!(outcome.effects.verdict, HookVerdict::Deny);
+    assert_eq!(outcome.effects.reasons[0].text, "old.rs: no deletes");
+    assert_eq!(outcome.invocations.len(), 1, "only the delete part ran");
+    assert_eq!(outcome.invocations[0].label.as_deref(), Some("old.rs"));
+    let stdin: serde_json::Value =
+        serde_json::from_slice(&runner.invocations()[0].stdin).expect("stdin is JSON");
+    assert_eq!(stdin["tool_name"], "Delete");
+    assert_eq!(stdin["tool_input"]["file_path"], "old.rs");
 }
 
 #[test]

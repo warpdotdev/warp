@@ -179,6 +179,92 @@ fn one_deny_binding_denies_with_its_reason() {
 }
 
 #[test]
+fn a_split_firing_runs_the_binding_once_per_part_and_merges_what_the_parts_said() {
+    let h = harness();
+    h.adapter
+        .fan_out(vec!["src/a.rs", "src/secret.env", "src/b.rs"]);
+    let binding = test_binding(test_source_id("s"), HookBoundary::ToolPre, 0, None);
+    h.runner.script_part(
+        binding.id.clone(),
+        "src/secret.env",
+        ScriptedRunner::deny_with("secrets stay out of the model"),
+    );
+    let outcome = dispatch(
+        &h,
+        shell_envelope(),
+        vec![active_binding(binding.clone(), h.adapter.clone())],
+    );
+
+    assert_eq!(outcome.effects.verdict, HookVerdict::Deny);
+    assert_eq!(outcome.effects.verdict_binding, Some(binding.id.clone()));
+    assert_eq!(
+        outcome.effects.reasons.len(),
+        1,
+        "the parts that had no opinion added no reason"
+    );
+    assert_eq!(
+        outcome.effects.reasons[0].text, "src/secret.env: secrets stay out of the model",
+        "the reason names the part it was about"
+    );
+
+    assert_eq!(outcome.invocations.len(), 3, "one process per part");
+    assert_eq!(
+        outcome
+            .invocations
+            .iter()
+            .map(|record| record.label.as_deref())
+            .collect::<Vec<_>>(),
+        vec![Some("src/a.rs"), Some("src/secret.env"), Some("src/b.rs")],
+        "records keep the adapter's order"
+    );
+    assert_eq!(
+        outcome.invocations[0].invocation_id,
+        h.adapter.encoded_envelopes()[0].invocation_id,
+        "the adapter saw the first run's id"
+    );
+    assert_ne!(
+        outcome.invocations[1].invocation_id,
+        outcome.invocations[0].invocation_id
+    );
+
+    let invocations = h.runner.invocations();
+    assert_eq!(invocations.len(), 3);
+    let stdin: serde_json::Value =
+        serde_json::from_slice(&invocations[1].stdin).expect("stdin is JSON");
+    assert_eq!(stdin["part"], "src/secret.env");
+    assert_eq!(invocations[1].label.as_deref(), Some("src/secret.env"));
+    assert_eq!(
+        h.adapter.encoded_count(),
+        1,
+        "the envelope is encoded once; the adapter splits it"
+    );
+}
+
+#[test]
+fn a_split_firing_whose_parts_all_allow_is_one_allow() {
+    let h = harness();
+    h.adapter.fan_out(vec!["a", "b"]);
+    let binding = test_binding(test_source_id("s"), HookBoundary::ToolPre, 0, None);
+    h.runner.script(
+        binding.id.clone(),
+        ScriptedRunner::exit_with(0, r#"{"verdict":"allow","notices":["checked"]}"#),
+    );
+    let outcome = dispatch(
+        &h,
+        shell_envelope(),
+        vec![active_binding(binding, h.adapter.clone())],
+    );
+    assert_eq!(outcome.effects.verdict, HookVerdict::Allow);
+    assert!(outcome.effects.reasons.is_empty());
+    assert_eq!(
+        outcome.effects.user_notices,
+        vec!["checked", "checked"],
+        "notices concatenate across the parts"
+    );
+    assert_eq!(outcome.invocations.len(), 2);
+}
+
+#[test]
 fn a_strict_sources_setting_reaches_the_adapter() {
     let h = harness();
     let binding = test_binding(test_source_id("s"), HookBoundary::ToolPre, 0, None);
@@ -708,6 +794,7 @@ mod failure_policy {
             stdout_truncated: false,
             stderr_tail: String::new(),
             duration: Duration::from_secs(30),
+            queued: Duration::ZERO,
         }
     }
 
