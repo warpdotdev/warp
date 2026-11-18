@@ -14,10 +14,14 @@ use anyhow::{Context, Result, anyhow};
 use clap::error::ErrorKind;
 use clap::{Parser, Subcommand};
 use inquire::{InquireError, Password, PasswordDisplayMode};
+use sha2::{Digest, Sha256};
 use warp::settings::{TuiThemeSettings, TuiZeroStateSettings, TuiZeroStateSettingsChangedEvent};
 #[cfg(feature = "voice_input")]
 use warp::settings::{TuiVoiceSettings, TuiVoiceSettingsChangedEvent};
-use warp::tui_export::{AIConversationAutoexecuteMode, Appearance, ServerConversationToken};
+use warp::tui_export::{
+    AIConversationAutoexecuteMode, Appearance, AuthStateProvider, FactoryGitTokenResponse,
+    ServerApiProvider, ServerConversationToken, authenticate_then_execute,
+};
 use warp::{TuiLoginEvent, TuiLoginModel, TuiLoginPhase};
 use warp_core::channel::ChannelState;
 use warp_core::settings::Setting as _;
@@ -27,6 +31,7 @@ use warpui::SingletonEntity as _;
 use warpui_core::platform::{TerminationMode, WindowStyle};
 use warpui_core::runtime::{TuiDriverStartupError, TuiFocusPolicy, spawn_tui_driver};
 use warpui_core::{AddWindowOptions, AppContext, ModelHandle, ViewHandle};
+use warpui_extras::secure_storage::AppContextExt as _;
 
 use crate::clipboard::copy_to_clipboard;
 use crate::orchestration_model::TuiOrchestrationModel;
@@ -107,6 +112,9 @@ enum TuiCommand {
         /// Write the schema to this path instead of standard output.
         output_path: Option<PathBuf>,
     },
+    /// Generate a new Git access token for warp-hosted factory definitions
+    /// for the current user.
+    GetGitAccessJwt { factory_id: String },
 }
 
 /// Reads a provider API key from a masked TTY prompt or, when stdin is piped,
@@ -138,6 +146,52 @@ fn parse_resume_token(token: String) -> Result<ServerConversationToken> {
     Ok(ServerConversationToken::new(token))
 }
 
+fn build_jwt_cache_key(ctx: &AppContext, factory_id: &str) -> Result<String> {
+    let server = ChannelState::server_root_url().to_string();
+    let user_uid = AuthStateProvider::as_ref(ctx)
+        .get()
+        .user_id()
+        .ok_or_else(|| anyhow!("Authenticated user has no user ID"))?
+        .as_string();
+    let permission = "read";
+
+    let input = serde_json::to_vec(&(server, user_uid, factory_id, permission))?;
+    let key = hex::encode(Sha256::digest(input));
+    Ok(format!("factory-git-token-v1-{key}"))
+}
+
+fn read_cached_git_jwt(ctx: &AppContext, factory_id: &str) -> Option<String> {
+    if !AuthStateProvider::as_ref(ctx).get().is_logged_in() {
+        return None;
+    }
+    let cache_key = build_jwt_cache_key(ctx, factory_id).ok()?;
+
+    let cached = ctx
+        .secure_storage()
+        .read_value(&cache_key)
+        .map(|cached_str| serde_json::from_str::<FactoryGitTokenResponse>(&cached_str).ok())
+        .ok()
+        .flatten()?;
+
+    // Request a new token if the cached one is expired or expiring soon.
+    if cached.expires_in(chrono::TimeDelta::seconds(30)) {
+        return None;
+    }
+
+    Some(cached.token)
+}
+
+fn cache_git_jwt_response(
+    ctx: &AppContext,
+    response: &FactoryGitTokenResponse,
+    factory_id: &str,
+) -> Result<()> {
+    let cache_key = build_jwt_cache_key(ctx, factory_id)?;
+    let serialized = serde_json::to_string(response)?;
+    ctx.secure_storage().write_value(&cache_key, &serialized)?;
+    Ok(())
+}
+
 /// Boots the headless Warp app and mounts the transcript-capable TUI session.
 pub fn run() -> Result<()> {
     // Protect this managed version before any worker dispatch or resource
@@ -162,9 +216,60 @@ pub fn run() -> Result<()> {
         }
         Err(error) => return Err(anyhow::Error::new(error)),
     };
-    if let Some(TuiCommand::DumpSettingsSchema { output_path }) = args.command {
-        warp::features::init_feature_flags();
-        return warp::settings::dump_settings_schema(output_path.as_deref());
+    if let Some(command) = args.command {
+        return match command {
+            TuiCommand::DumpSettingsSchema { output_path } => {
+                warp::features::init_feature_flags();
+                warp::settings::dump_settings_schema(output_path.as_deref())
+            }
+            TuiCommand::GetGitAccessJwt { factory_id } => {
+                let cached_factory_id = factory_id.clone();
+                warp::run_tui_cli_command(Box::new(move |ctx| {
+                    if let Some(token) = read_cached_git_jwt(ctx, &cached_factory_id) {
+                        println!("{token}");
+                        ctx.terminate_app(TerminationMode::ForceTerminate, None);
+                        return;
+                    };
+                    let login_hint =
+                        "You are not logged in - please open Warp Agent CLI to log in.";
+                    if let Err(error) =
+                        authenticate_then_execute(None, login_hint, ctx, move |ctx| {
+                            let factory = ServerApiProvider::as_ref(ctx).get_factory_client();
+                            let app = ctx.weak_app();
+                            ctx.foreground_executor()
+                                .spawn(async move {
+                                    let result =
+                                        factory.get_factory_git_token(factory_id.clone()).await;
+                                    let Some(mut app) = app.upgrade() else {
+                                        return;
+                                    };
+                                    app.update(|ctx| match result {
+                                        Ok(response) => {
+                                            let _ =
+                                                cache_git_jwt_response(ctx, &response, &factory_id);
+                                            println!("{}", response.token);
+                                            ctx.terminate_app(
+                                                TerminationMode::ForceTerminate,
+                                                None,
+                                            );
+                                        }
+                                        Err(error) => {
+                                            ctx.terminate_app(
+                                                TerminationMode::ForceTerminate,
+                                                Some(Err(error)),
+                                            );
+                                        }
+                                    });
+                                })
+                                .detach();
+                            Ok(())
+                        })
+                    {
+                        ctx.terminate_app(TerminationMode::ForceTerminate, Some(Err(error)));
+                    }
+                }))
+            }
+        };
     }
     let provider_api_key_command = if let Some(provider) = args.set_provider_api_key {
         if !provider.supports_pasted_api_key() {

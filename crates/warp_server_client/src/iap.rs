@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -7,7 +8,7 @@ use blocking::unblock;
 use instant::Instant;
 use serde::{Deserialize, Serialize};
 use warp_core::channel::IapConfig;
-use warpui_core::r#async::{BoxFuture, FutureExt as _, Timer};
+use warpui_core::r#async::{BoxFuture, FutureExt as _, SpawnedFutureHandle, Timer};
 use warpui_core::{AppContext, Entity, ModelContext, SingletonEntity};
 #[cfg(not(target_family = "wasm"))]
 use websocket::connect_error_http_response;
@@ -16,10 +17,7 @@ const PROACTIVE_REFRESH_BUFFER: Duration = Duration::from_secs(5 * 60);
 
 const BASE_FAILURE_RETRY_DELAY: Duration = Duration::from_secs(30);
 const MAX_FAILURE_RETRY_DELAY: Duration = Duration::from_secs(5 * 60);
-/// Maximum number of consecutive failed fetches to automatically retry
-/// before giving up and waiting for a manual Refresh or an inbound
-/// IAP challenge. i.e. so a persistently broken setup (no gcloud,
-/// bad credentials) doesn't loop forever.
+/// Maximum number of automatic retries before requiring a manual refresh.
 const MAX_FAILURE_RETRIES: u32 = 5;
 
 /// Upper bound on establishing IAP access for a blocking caller (e.g. a one-shot
@@ -116,6 +114,7 @@ pub struct IapState {
     audiences: String,
     service_account_email: String,
     inner: RwLock<IapCredentialsState>,
+    routing_opt_in: AtomicBool,
 }
 
 impl IapState {
@@ -124,6 +123,7 @@ impl IapState {
             audiences: config.audiences.to_string(),
             service_account_email: config.service_account_email.to_string(),
             inner: RwLock::new(IapCredentialsState::Missing),
+            routing_opt_in: AtomicBool::new(false),
         }
     }
 
@@ -143,9 +143,8 @@ impl IapState {
         }
     }
 
-    pub fn proxy_auth_header(&self) -> Option<(&'static str, String)> {
-        self.get_cached()
-            .map(|token| http_client::iap::proxy_auth_header(&token))
+    pub fn set_routing_opt_in(&self, enabled: bool) {
+        self.routing_opt_in.store(enabled, Ordering::Relaxed);
     }
 
     pub fn state(&self) -> IapCredentialsState {
@@ -184,6 +183,10 @@ impl http_client::iap::IapTokenProvider for IapState {
     fn cached_token(&self) -> Option<String> {
         self.get_cached()
     }
+
+    fn routing_opt_in_enabled(&self) -> bool {
+        self.routing_opt_in.load(Ordering::Relaxed)
+    }
 }
 
 /// Owns the IAP refresh lifecycle: initial fetch, proactive time-based
@@ -194,8 +197,11 @@ pub struct IapManager {
     /// Runner-context Workload Identity Federation mint. When present, refreshes
     /// self-mint via WIF instead of shelling out to gcloud.
     managed_mint: Option<ManagedIapMint>,
-    /// Number of consecutive failed fetches since the last success.
     consecutive_failures: u32,
+    last_loaded_at: Option<Instant>,
+    fresh_token_rejected: bool,
+    refresh_timer: Option<SpawnedFutureHandle>,
+    refresh_generation: u64,
 }
 
 pub enum IapManagerEvent {
@@ -223,6 +229,10 @@ impl IapManager {
             path_resolver,
             managed_mint,
             consecutive_failures: 0,
+            last_loaded_at: None,
+            fresh_token_rejected: false,
+            refresh_timer: None,
+            refresh_generation: 0,
         };
         manager.start_refresh(ctx);
         manager
@@ -236,14 +246,6 @@ impl IapManager {
 
     pub fn state(&self) -> Option<IapCredentialsState> {
         self.state.as_ref().map(|s| s.state())
-    }
-
-    /// Returns a handle to the shared IAP credential state, if IAP is active.
-    /// Mirrors how `AuthStateProvider` hands out the `Arc<AuthState>`, letting
-    /// callers read cached credentials (e.g. to build a proxy-auth header) off
-    /// a `ModelContext` without reaching through `ServerApi`.
-    pub fn iap_state(&self) -> Option<Arc<IapState>> {
-        self.state.clone()
     }
 
     /// Returns `true` when a currently-valid (unexpired) IAP token is available.
@@ -266,7 +268,9 @@ impl IapManager {
         if self.state.is_none() {
             return;
         }
-        self.start_refresh(ctx);
+        if !matches!(self.state(), Some(IapCredentialsState::Failed { .. })) {
+            self.refresh(ctx);
+        }
         ctx.spawn(
             async { Timer::after(IAP_ACCESS_TIMEOUT).await },
             |manager, _, ctx| {
@@ -277,18 +281,67 @@ impl IapManager {
         );
     }
 
+    fn cancel_scheduled_refresh(&mut self) {
+        if let Some(timer) = self.refresh_timer.take() {
+            timer.abort();
+        }
+        self.refresh_generation += 1;
+    }
+
     pub fn handle_challenge(&mut self, ctx: &mut ModelContext<Self>) {
-        self.consecutive_failures = 0;
-        self.start_refresh(ctx);
+        self.handle_challenge_at(Instant::now(), ctx);
+    }
+
+    fn handle_challenge_at(&mut self, now: Instant, ctx: &mut ModelContext<Self>) {
+        let Some(state) = self.state() else {
+            return;
+        };
+        match state {
+            IapCredentialsState::Refreshing { .. } | IapCredentialsState::Failed { .. } => {}
+            IapCredentialsState::Loaded(cached)
+                if cached.expires_at > now
+                    && self.last_loaded_at.is_some_and(|loaded_at| {
+                        now.saturating_duration_since(loaded_at) < BASE_FAILURE_RETRY_DELAY
+                    }) =>
+            {
+                self.fresh_token_rejected = true;
+                self.apply_refresh_result(
+                    Err(anyhow::anyhow!(
+                        "IAP rejected a fresh token; check audience and allowlist"
+                    )),
+                    ctx,
+                );
+            }
+            IapCredentialsState::Loaded(_) | IapCredentialsState::Missing => {
+                self.fresh_token_rejected = false;
+                self.consecutive_failures = 0;
+                self.refresh(ctx);
+            }
+        }
     }
 
     pub fn start_refresh(&mut self, ctx: &mut ModelContext<Self>) {
+        self.consecutive_failures = 0;
+        self.fresh_token_rejected = false;
+        self.refresh(ctx);
+    }
+
+    fn refresh(&mut self, ctx: &mut ModelContext<Self>) {
         let Some(state) = self.state.clone() else {
             return;
         };
         // Don't touch state if a refresh is already running.
         if matches!(state.state(), IapCredentialsState::Refreshing { .. }) {
             return;
+        }
+        self.cancel_scheduled_refresh();
+        if matches!(state.state(), IapCredentialsState::Loaded(_))
+            && self
+                .last_loaded_at
+                .is_some_and(|loaded_at| loaded_at.elapsed() >= BASE_FAILURE_RETRY_DELAY)
+        {
+            self.fresh_token_rejected = false;
+            self.consecutive_failures = 0;
         }
 
         // Runner context: self-mint via Workload Identity Federation. This is the
@@ -353,9 +406,12 @@ impl IapManager {
         // Fast path: reuse a fresh IAP token cache. This is actually required by
         // child processes when the main process spawns a child oz sub-process...
         // i.e. GCP SDK calling `oz federate issue-token --audience warp-cloud-agent-otel`
-        if let Some(cached) = cache::read() {
+        if matches!(state.state(), IapCredentialsState::Missing)
+            && let Some(cached) = cache::read(state.audiences())
+        {
             let expires_at = cached.expires_at;
             state.set_loaded(cached);
+            self.last_loaded_at = Some(Instant::now());
             ctx.emit(IapManagerEvent::StateChanged);
             ctx.notify();
             self.schedule_next_refresh(expires_at, ctx);
@@ -415,7 +471,11 @@ impl IapManager {
                     cache::write(&cached.token);
                 }
                 state.set_loaded(cached);
-                self.consecutive_failures = 0;
+                self.last_loaded_at = Some(Instant::now());
+                // A successful mint does not prove that IAP accepts the token.
+                if !self.fresh_token_rejected {
+                    self.consecutive_failures = 0;
+                }
                 log::info!("Warp Staging IAP token refreshed");
                 ctx.emit(IapManagerEvent::StateChanged);
                 ctx.notify();
@@ -423,7 +483,7 @@ impl IapManager {
             }
             Err(err) => {
                 let message = format!("{err:#}");
-                log::warn!("Warp Staging IAP token fetch failed: {message}");
+                log::warn!("Warp Staging IAP credentials failed: {message}");
                 let is_first_failure_of_streak = self.consecutive_failures == 0;
                 state.set_failed(message.clone());
                 ctx.emit(IapManagerEvent::RefreshFailed {
@@ -446,9 +506,10 @@ impl IapManager {
 
     fn schedule_failure_retry(&mut self, ctx: &mut ModelContext<Self>) {
         if self.consecutive_failures >= MAX_FAILURE_RETRIES {
+            self.cancel_scheduled_refresh();
             log::warn!(
-                "IAP token fetch failed {MAX_FAILURE_RETRIES} times in a row; giving up until \
-                 manual refresh or server challenge"
+                "IAP credentials failed after {MAX_FAILURE_RETRIES} retries; \
+                 giving up until manual refresh"
             );
             return;
         }
@@ -467,29 +528,20 @@ impl IapManager {
     }
 
     fn schedule_retry(&mut self, delay: Duration, ctx: &mut ModelContext<Self>) {
-        ctx.spawn(
+        self.cancel_scheduled_refresh();
+        let generation = self.refresh_generation;
+        self.refresh_timer = Some(ctx.spawn(
             async move {
                 Timer::after(delay).await;
             },
-            |manager, _, ctx| {
-                manager.start_refresh(ctx);
+            move |manager, _, ctx| {
+                if manager.refresh_generation == generation {
+                    manager.refresh_timer = None;
+                    manager.refresh(ctx);
+                }
             },
-        );
+        ));
     }
-
-    /// Inspects a websocket *handshake* connect error for an IAP challenge.
-    /// If detected, triggers a refresh so the caller's retry loop can pick up
-    /// a fresh token on the next attempt.
-    #[cfg(not(target_family = "wasm"))]
-    pub fn check_ws_connect_error(&mut self, err: &anyhow::Error, ctx: &mut ModelContext<Self>) {
-        if ws_connect_is_iap_challenge(err) {
-            log::warn!("Received IAP challenge on websocket handshake; triggering refresh");
-            self.handle_challenge(ctx);
-        }
-    }
-
-    #[cfg(target_family = "wasm")]
-    pub fn check_ws_connect_error(&mut self, _err: &anyhow::Error, _ctx: &mut ModelContext<Self>) {}
 }
 
 #[cfg(not(target_family = "wasm"))]
@@ -771,7 +823,7 @@ mod cache {
 
     use instant::Instant;
 
-    use super::{CachedToken, get_expires_at};
+    use super::{CachedToken, get_expires_at, parse_aud_from_jwt};
 
     /// Discard a cached token with less than this remaining, so we never hand back
     /// a near-dead credential the mint path should refresh instead.
@@ -784,10 +836,10 @@ mod cache {
             .join("iap_cache.jwt")
     }
 
-    pub(super) fn read() -> Option<CachedToken> {
+    pub(super) fn read(audience: &str) -> Option<CachedToken> {
         let token = std::fs::read_to_string(cache_path()).ok()?;
         let token = token.trim().to_owned();
-        if token.is_empty() {
+        if parse_aud_from_jwt(&token).as_deref() != Some(audience) {
             return None;
         }
         let expires_at = get_expires_at(&token).ok()?;
@@ -826,8 +878,7 @@ mod cache {
 #[cfg(target_family = "wasm")]
 mod cache {
     use super::CachedToken;
-
-    pub(super) fn read() -> Option<CachedToken> {
+    pub(super) fn read(_audience: &str) -> Option<CachedToken> {
         None
     }
 

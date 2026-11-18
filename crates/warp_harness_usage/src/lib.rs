@@ -8,6 +8,7 @@ mod capture;
 mod claude;
 mod codex;
 mod counters;
+mod pi;
 mod tools;
 
 use std::collections::BTreeMap;
@@ -17,6 +18,7 @@ pub use capture::{
 };
 pub use claude::extract_claude;
 pub use codex::extract_codex;
+pub use pi::extract_pi;
 
 /// Maximum length accepted for a session, scope, message, invocation, or classification ID.
 pub const MAX_SCOPE_LENGTH: usize = 256;

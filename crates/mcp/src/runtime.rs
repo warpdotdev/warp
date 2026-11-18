@@ -12,22 +12,25 @@ use std::time::Duration;
 use cfg_if::cfg_if;
 use cloud_object_models::{StaticEnvVar, TransportType};
 use futures::{FutureExt as _, StreamExt as _, TryStreamExt as _};
-use rmcp::ServiceExt as _;
 use rmcp::model::{
     ClientConfig, ClientJsonRpcMessage, ClientRequest, DiscoverRequest, DiscoverRequestParams,
     ErrorCode, Implementation, InitializeRequest, ProtocolVersion, RequestId, RequestMetaObject,
     ServerJsonRpcMessage, ServerResult,
 };
 use rmcp::service::{
-    ClientInitializeError, ClientLifecycleMode, ClientServiceExt as _, select_protocol_version,
+    ClientInitializeError, ClientLifecycleMode, ClientServiceExt as _, DynService, RunningService,
+    select_protocol_version,
 };
 use rmcp::transport::ConfigureCommandExt as _;
+use rmcp::transport::streamable_http_client::StreamableHttpClient;
+use rmcp::{RoleClient, ServiceExt as _};
 use simple_logger::SimpleLogger;
 use tokio::io::AsyncBufReadExt as _;
 use uuid::Uuid;
 use warp_errors::report_error;
 
 use super::TemplatableMCPServerInfo;
+use crate::refreshable_headers::{RefreshableHeaderClient, RefreshableHeaders};
 
 type ReqwestHttpTransport = rmcp::transport::StreamableHttpClientTransport<reqwest::Client>;
 type ReqwestSseTransport = crate::sse_transport::SseClientTransport<reqwest::Client>;
@@ -174,6 +177,13 @@ fn challenge_parameter_names(www_authenticate: &str) -> Vec<&str> {
     names
 }
 
+/// The `User-Agent` sent to remote MCP servers. Matches the one warp-server sends on managed MCP
+/// requests, so servers and WAF allowlists see one Warp MCP client identity.
+///
+/// reqwest sends no `User-Agent` by default, and some servers (e.g. Snowflake's managed MCP
+/// servers) reject such requests with a `400`.
+const MCP_USER_AGENT: &str = "Warp-MCP-Client/1.0 (+https://www.warp.dev)";
+
 /// Builds a reqwest client with custom headers for MCP HTTP/SSE connections.
 #[allow(clippy::result_large_err)]
 pub fn build_client_with_headers(
@@ -182,6 +192,8 @@ pub fn build_client_with_headers(
     let header_map = build_header_map(headers);
 
     reqwest::Client::builder()
+        // Set before the configured headers so a user-supplied `User-Agent` wins.
+        .user_agent(MCP_USER_AGENT)
         .default_headers(header_map)
         .build()
         .map_err(|e| {
@@ -191,8 +203,9 @@ pub fn build_client_with_headers(
         })
 }
 
-/// Spawns a new MCP server from a given [`TransportType`].
-#[allow(clippy::result_large_err)]
+/// Spawns a new MCP server from a given [`TransportType`]. With `refreshable_headers`, an HTTP
+/// connection sends those headers in place of any the transport configures under the same name.
+#[allow(clippy::result_large_err, clippy::too_many_arguments)]
 pub async fn spawn_server(
     server_name: String,
     description: Option<String>,
@@ -201,6 +214,7 @@ pub async fn spawn_server(
     transport_type: TransportType,
     logger: SimpleLogger,
     auth_context: Option<crate::oauth::AuthContext>,
+    refreshable_headers: Option<RefreshableHeaders>,
 ) -> Result<TemplatableMCPServerInfo, rmcp::RmcpError> {
     logger.log("[note] Attention! There may be sensitive information (such as API keys) in these logs. Make sure to redact any secrets before sharing with others.".to_string());
 
@@ -322,14 +336,26 @@ pub async fn spawn_server(
             )
         }
         TransportType::ServerSentEvents(sse_server) => {
-            let headers: HashMap<String, String> = sse_server
+            let configured_headers: HashMap<String, String> = sse_server
                 .headers
                 .iter()
                 .map(|h| (h.name.clone(), h.value.clone()))
                 .collect();
-            match determine_transport(server_name.clone(), &sse_server.url, &headers, auth_context)
-                .await
-            {
+            let transport = determine_transport(
+                server_name.clone(),
+                &sse_server.url,
+                &configured_headers,
+                auth_context,
+                refreshable_headers.as_ref(),
+            )
+            .await;
+            // Only the Streamable HTTP transport can replace headers on an open connection; the
+            // others connect with the ones that are current now.
+            let headers = match &refreshable_headers {
+                Some(refreshable_headers) => refreshable_headers.applied_to(&configured_headers).0,
+                None => configured_headers.clone(),
+            };
+            match transport {
                 // TODO: these need headers also?
                 Ok(Transport::Http(Some(client), protocol)) => {
                     is_authenticated_transport = true;
@@ -353,28 +379,29 @@ pub async fn spawn_server(
                 }
                 Ok(Transport::Http(None, protocol)) => {
                     logger.log("[info] MCP: Using Streaming HTTP transport".to_string());
-                    let transport = if headers.is_empty() {
-                        rmcp::transport::StreamableHttpClientTransport::from_uri(
-                            sse_server.url.clone(),
-                        )
-                    } else {
-                        let client = build_client_with_headers(&headers)?;
-                        rmcp::transport::StreamableHttpClientTransport::with_client(
+                    if let Some(refreshable_headers) = refreshable_headers {
+                        let client = RefreshableHeaderClient::new(
+                            build_client_with_headers(
+                                &refreshable_headers.excluded_from(&configured_headers),
+                            )?,
+                            refreshable_headers,
+                        );
+                        let transport = rmcp::transport::StreamableHttpClientTransport::with_client(
                             client,
                             rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig::with_uri(
                                 sse_server.url.clone(),
                             ),
-                        )
-                    };
-                    let transport = TransportLoggingWrapper {
-                        transport,
-                        logger: logger.clone(),
-                    };
-                    Ok(make_client_info()
-                        .with_protocol_version(protocol.version.clone())
-                        .into_dyn()
-                        .serve_with_lifecycle(transport, protocol.lifecycle())
-                        .await?)
+                        );
+                        serve_streamable_http(transport, &protocol, &logger).await
+                    } else {
+                        let transport = rmcp::transport::StreamableHttpClientTransport::with_client(
+                            build_client_with_headers(&headers)?,
+                            rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig::with_uri(
+                                sse_server.url.clone(),
+                            ),
+                        );
+                        serve_streamable_http(transport, &protocol, &logger).await
+                    }
                 }
                 Ok(Transport::Sse(Some(client))) => {
                     is_authenticated_transport = true;
@@ -401,24 +428,15 @@ pub async fn spawn_server(
                 }
                 Ok(Transport::Sse(None)) => {
                     logger.log("[info] MCP: Using (legacy) SSE transport (due to preflight failing with a 404)".to_string());
-                    let transport = if headers.is_empty() {
-                        crate::sse_transport::SseClientTransport::start(sse_server.url.clone())
-                            .await
-                            .map_err(|e| {
-                                rmcp::RmcpError::transport_creation::<ReqwestSseTransport>(e)
-                            })?
-                    } else {
-                        let client = build_client_with_headers(&headers)?;
-                        crate::sse_transport::SseClientTransport::start_with_client(
-                            client,
-                            crate::sse_transport::SseClientConfig {
-                                sse_endpoint: sse_server.url.clone().into(),
-                                ..Default::default()
-                            },
-                        )
-                        .await
-                        .map_err(rmcp::RmcpError::transport_creation::<ReqwestSseTransport>)?
-                    };
+                    let transport = crate::sse_transport::SseClientTransport::start_with_client(
+                        build_client_with_headers(&headers)?,
+                        crate::sse_transport::SseClientConfig {
+                            sse_endpoint: sse_server.url.clone().into(),
+                            ..Default::default()
+                        },
+                    )
+                    .await
+                    .map_err(rmcp::RmcpError::transport_creation::<ReqwestSseTransport>)?;
                     let transport = TransportLoggingWrapper {
                         transport,
                         logger: logger.clone(),
@@ -460,6 +478,24 @@ pub async fn spawn_server(
     })
 }
 
+/// Connects to a server over the Streamable HTTP `transport`, logging its traffic to `logger`.
+#[allow(clippy::result_large_err)]
+async fn serve_streamable_http<C: StreamableHttpClient>(
+    transport: rmcp::transport::StreamableHttpClientTransport<C>,
+    protocol: &NegotiatedProtocol,
+    logger: &SimpleLogger,
+) -> Result<RunningService<RoleClient, Box<dyn DynService<RoleClient>>>, rmcp::RmcpError> {
+    let transport = TransportLoggingWrapper {
+        transport,
+        logger: logger.clone(),
+    };
+    Ok(make_client_info()
+        .with_protocol_version(protocol.version.clone())
+        .into_dyn()
+        .serve_with_lifecycle(transport, protocol.lifecycle())
+        .await?)
+}
+
 /// The transport to use for MCP.
 enum Transport {
     /// The HTTP transport, with an optional authenticated client.
@@ -478,8 +514,9 @@ enum Transport {
 async fn determine_transport(
     server_name: String,
     url: &str,
-    headers: &HashMap<String, String>,
+    configured_headers: &HashMap<String, String>,
     auth_context: Option<crate::oauth::AuthContext>,
+    refreshable_headers: Option<&RefreshableHeaders>,
 ) -> Result<Transport, rmcp::RmcpError> {
     use reqwest::StatusCode;
 
@@ -489,7 +526,21 @@ async fn determine_transport(
         ))
     }
 
-    let preflight = negotiate_protocol(url, headers, None).await?;
+    let (mut headers, sent_generation) = match refreshable_headers {
+        Some(refreshable_headers) => refreshable_headers.applied_to(configured_headers),
+        None => (configured_headers.clone(), 0),
+    };
+    let mut preflight = negotiate_protocol(url, &headers, None).await?;
+    if preflight.status == StatusCode::UNAUTHORIZED
+        && let Some(refreshable_headers) = refreshable_headers
+        && refreshable_headers
+            .refreshed_after_rejection(sent_generation, &preflight.www_authenticate.join(", "))
+            .await
+    {
+        (headers, _) = refreshable_headers.applied_to(configured_headers);
+        preflight = negotiate_protocol(url, &headers, None).await?;
+    }
+    let headers = &headers;
     match preflight.status {
         StatusCode::OK => Ok(Transport::Http(None, preflight.protocol)),
         StatusCode::NOT_FOUND | StatusCode::METHOD_NOT_ALLOWED => Ok(Transport::Sse(None)),
@@ -759,14 +810,16 @@ async fn send_preflight_request(
     let mut request = build_client_with_headers(headers)?
         .post(url)
         .timeout(Duration::from_secs(10))
-        .header(HEADER_MCP_PROTOCOL_VERSION, protocol.version.as_str())
         .header(
             http::header::ACCEPT,
             [EVENT_STREAM_MIME_TYPE, JSON_MIME_TYPE].join(", "),
         )
         .json(&message);
     if protocol.discover {
-        request = request.header(HEADER_MCP_METHOD, "server/discover");
+        // Legacy initialize negotiates in its body; an unsupported header prevents a counteroffer.
+        request = request
+            .header(HEADER_MCP_PROTOCOL_VERSION, protocol.version.as_str())
+            .header(HEADER_MCP_METHOD, "server/discover");
     }
 
     if let Some(auth_client) = auth_client.as_ref() {

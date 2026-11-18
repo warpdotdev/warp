@@ -23,12 +23,24 @@ pub(crate) enum ThirdPartyHarnessTelemetryEvent {
     /// retry (e.g. dismissing Claude's background-task confirmation), or a
     /// final force-kill of the harness's process group. Fires on every
     /// attempt, not just escalations, so the ratio of clean exits to
-    /// escalations is measurable.
+    /// escalations is measurable, and once more when the whole ladder ran
+    /// out and the run's bounded exit timeout was swallowed.
     ExitEscalation {
         /// CLI command prefix for the harness (e.g. `"claude"`, `"codex"`).
         harness: String,
-        /// `"exit"`, `"exit_followup"`, or `"force_kill"`.
+        /// `"exit"`, `"exit_followup"`, `"force_kill"`, or `"timed_out"`.
         method: &'static str,
+    },
+
+    /// A run the server requested over ACP was driven over a PTY instead because the
+    /// sandbox had no ACP adapter. Fires once per run at harness start, so the share of
+    /// runs that silently lose native streaming and attachments is measurable.
+    TransportFallback {
+        /// CLI command prefix for the harness (e.g. `"claude"`, `"codex"`).
+        harness: String,
+        /// `"no_sidecar"` or `"sidecar_without_adapter"`; see
+        /// [`super::TransportFallbackReason`].
+        reason: &'static str,
     },
 }
 
@@ -49,6 +61,10 @@ impl TelemetryEvent for ThirdPartyHarnessTelemetryEvent {
                 "harness": harness,
                 "method": method,
             })),
+            ThirdPartyHarnessTelemetryEvent::TransportFallback { harness, reason } => Some(json!({
+                "harness": harness,
+                "reason": reason,
+            })),
         }
     }
 
@@ -64,6 +80,7 @@ impl TelemetryEvent for ThirdPartyHarnessTelemetryEvent {
         match self {
             ThirdPartyHarnessTelemetryEvent::RuntimeErrorDetected { .. } => false,
             ThirdPartyHarnessTelemetryEvent::ExitEscalation { .. } => false,
+            ThirdPartyHarnessTelemetryEvent::TransportFallback { .. } => false,
         }
     }
 
@@ -81,6 +98,9 @@ impl TelemetryEventDesc for ThirdPartyHarnessTelemetryEventDiscriminants {
             ThirdPartyHarnessTelemetryEventDiscriminants::ExitEscalation => {
                 "AmbientAgents.ThirdPartyHarness.Exit.Escalation"
             }
+            ThirdPartyHarnessTelemetryEventDiscriminants::TransportFallback => {
+                "AmbientAgents.ThirdPartyHarness.Transport.Fallback"
+            }
         }
     }
 
@@ -94,6 +114,10 @@ impl TelemetryEventDesc for ThirdPartyHarnessTelemetryEventDiscriminants {
                 "One attempt (initial exit, follow-up retry, or force-kill) in the harness \
                  exit escalation ladder."
             }
+            ThirdPartyHarnessTelemetryEventDiscriminants::TransportFallback => {
+                "A run requested over ACP was driven over a PTY because the sandbox had no \
+                 ACP adapter."
+            }
         }
     }
 
@@ -103,6 +127,9 @@ impl TelemetryEventDesc for ThirdPartyHarnessTelemetryEventDiscriminants {
                 EnablementState::Always
             }
             ThirdPartyHarnessTelemetryEventDiscriminants::ExitEscalation => EnablementState::Always,
+            ThirdPartyHarnessTelemetryEventDiscriminants::TransportFallback => {
+                EnablementState::Always
+            }
         }
     }
 }

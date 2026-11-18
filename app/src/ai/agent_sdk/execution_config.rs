@@ -1,5 +1,6 @@
 use std::path::{Component, PathBuf};
 
+use ai::hooks::{HookFormat, HookOnAsk, HookSourceKind, HookSourcePolicy};
 use anyhow::{Context as _, bail};
 use cloud_object_models::CodeForge as RuntimeForge;
 use serde_json::{Map, Value};
@@ -8,12 +9,14 @@ use warp_cli::mcp::MCPSpec;
 use warp_cli::share::{ShareAccessLevel, ShareRequest, ShareSubject};
 use warp_graphql::ai::AgentHarness;
 use warp_graphql::queries::execution_config::{
-    CloudProviderClientConfigs, CodeForge, ExecutionRepository, ExecutionRepositoryRefType,
+    AgentHookFormat, AgentHookLevel, AgentHookOnAsk, AgentHookSource, CloudProviderClientConfigs,
+    CodeForge, ExecutionRepository, ExecutionRepositoryRefType, FactoryBranchExecutionConfig,
     SessionSharingAccessLevel, SessionSharingAclSpec, SessionSharingSubjectType,
     SourceRepo as ConfigSourceRepo,
 };
 
 use super::driver::environment::ResolvedRepository;
+use super::driver::hooks::{ConfiguredHookLocation, ConfiguredHookSource};
 use super::{config_file, mcp_config};
 use crate::ai::cloud_environments::{
     AwsProviderConfig, GcpProviderConfig, ProvidersConfig, SourceRepo,
@@ -28,15 +31,6 @@ pub(super) fn team_scope(team_id: Option<&cynic::Id>) -> anyhow::Result<Headless
                 .context("Execution task has an invalid team UID")?,
         )),
         None => Ok(HeadlessTeamScope::Personal),
-    }
-}
-
-pub(super) fn validate_prewarmed_harness(harness: Harness) -> anyhow::Result<()> {
-    match harness {
-        Harness::Oz | Harness::Claude | Harness::Codex => Ok(()),
-        Harness::Gemini | Harness::OpenCode | Harness::Pi | Harness::Unknown => {
-            bail!("Pre-warmed sandboxes do not support the {harness} harness")
-        }
     }
 }
 
@@ -196,6 +190,116 @@ pub(super) fn factory_skill_dirs(dirs: Vec<String>) -> anyhow::Result<Vec<PathBu
             Ok(path)
         })
         .collect()
+}
+
+/// The hook directories the execution configuration selected, in the order the server sent them.
+/// A value this client does not know (a newer format, level, on-ask setting, or forge) fails the
+/// run rather than dropping the entry, because declared hooks are never silently skipped. Paths are
+/// checked later, when each entry is found on disk, so a malformed one fails only that entry.
+pub(super) fn agent_hook_sources(
+    sources: Vec<AgentHookSource>,
+) -> anyhow::Result<Vec<ConfiguredHookSource>> {
+    sources
+        .into_iter()
+        .enumerate()
+        .map(|(index, source)| {
+            let number = index + 1;
+            let format = match source.format {
+                AgentHookFormat::Cursor => HookFormat::Cursor,
+                AgentHookFormat::Unknown => {
+                    bail!("Hook entry {number} uses a hook format this Warp version does not support")
+                }
+            };
+            let kind = match source.level {
+                AgentHookLevel::Agent => HookSourceKind::FactoryAgent,
+                AgentHookLevel::Factory => HookSourceKind::FactoryWide,
+                AgentHookLevel::Unknown => {
+                    bail!("Hook entry {number} has a level this Warp version does not support")
+                }
+            };
+            let on_ask = match source.on_ask {
+                AgentHookOnAsk::Deny => HookOnAsk::Deny,
+                AgentHookOnAsk::FailRun => HookOnAsk::FailRun,
+                AgentHookOnAsk::Unknown => {
+                    bail!("Hook entry {number} has an onAsk setting this Warp version does not support")
+                }
+            };
+            let location = match source.repository {
+                Some(repository) => ConfiguredHookLocation::Repository {
+                    repo: SourceRepo::new(
+                        forge(repository.forge)
+                            .with_context(|| format!("Hook entry {number}"))?,
+                        repository.owner,
+                        repository.name,
+                    ),
+                    path: source.path,
+                },
+                None => ConfiguredHookLocation::Worker { path: source.path },
+            };
+            Ok(ConfiguredHookSource {
+                format,
+                location,
+                kind,
+                policy: HookSourcePolicy {
+                    strict: source.strict,
+                    on_ask,
+                },
+            })
+        })
+        .collect()
+}
+
+/// A hook directory inside a repository: relative, with no parent, root, or prefix components.
+/// `.` is the repository root.
+pub(crate) fn hook_repository_path(path: &str) -> anyhow::Result<PathBuf> {
+    if path.is_empty() || path.trim() != path || path.contains('\0') {
+        bail!("hook directory {path:?} is not an unambiguous relative path");
+    }
+    let path = PathBuf::from(path);
+    if path
+        .components()
+        .any(|part| !matches!(part, Component::Normal(_) | Component::CurDir))
+    {
+        bail!(
+            "hook directory {} must stay within its repository",
+            path.display()
+        );
+    }
+    Ok(path)
+}
+
+/// A hook directory on the worker outside any repository: an absolute path.
+pub(crate) fn hook_worker_path(path: &str) -> anyhow::Result<PathBuf> {
+    if path.trim() != path || path.contains('\0') {
+        bail!("hook directory {path:?} is not an unambiguous absolute path");
+    }
+    let path = PathBuf::from(path);
+    if !path.is_absolute() {
+        bail!(
+            "hook directory {} must be an absolute path on the worker",
+            path.display()
+        );
+    }
+    Ok(path)
+}
+
+pub(super) fn factory_definition_sha(
+    branch: Option<FactoryBranchExecutionConfig>,
+) -> anyhow::Result<Option<String>> {
+    branch
+        .map(|branch| {
+            let sha = branch.source_sha;
+            // The commit is inlined into a setup command, so only a full commit ID is accepted.
+            if sha.len() != 40
+                || !sha
+                    .bytes()
+                    .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+            {
+                bail!("Execution Factory branch commit is not a full commit SHA");
+            }
+            Ok(sha)
+        })
+        .transpose()
 }
 
 #[cfg(test)]

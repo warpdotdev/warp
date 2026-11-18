@@ -308,6 +308,7 @@ fn serializes_mcp_servers_as_object_not_string() {
         .unwrap();
 
     let request = SpawnAgentRequest {
+        delegated_github_coauthor_user_uid: None,
         metadata: Default::default(),
         prompt: Some("hello".to_string()),
         mode: UserQueryMode::Normal,

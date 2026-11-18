@@ -216,7 +216,7 @@ fn platform_plugin_version_is_current_when_cache_current() {
 #[test]
 fn platform_plugin_version_is_not_current_when_cache_outdated() {
     let dir = tempfile::tempdir().unwrap();
-    write_cache_manifest(dir.path(), super::PLATFORM_PLUGIN_NAME, "0.4.0");
+    write_cache_manifest(dir.path(), super::PLATFORM_PLUGIN_NAME, "0.4.1");
 
     assert!(!super::platform_plugin_version_is_current(dir.path()));
 }
@@ -279,7 +279,7 @@ fn needs_update_true_when_enabled_without_cached_version() {
 fn platform_plugin_needs_update_true_when_enabled_and_outdated() {
     let dir = tempfile::tempdir().unwrap();
     write_plugin_config(dir.path(), super::PLATFORM_PLUGIN_KEY, true);
-    write_cache_manifest(dir.path(), super::PLATFORM_PLUGIN_NAME, "0.4.0");
+    write_cache_manifest(dir.path(), super::PLATFORM_PLUGIN_NAME, "0.4.1");
 
     assert!(super::plugin_needs_update(
         dir.path(),

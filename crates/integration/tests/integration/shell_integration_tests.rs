@@ -19,6 +19,8 @@ integration_tests! {
     // Test properties of bootstrap.
     test_bootstrap_with_no_script_execution_block,
     test_rc_files_only_sourced_once_during_bootstrapping,
+    // Tests Linux cloud-agent command precedence after Bash, Zsh, and Fish profiles reset PATH.
+    test_cloud_agent_fallback_commands_survive_profile_path_reset,
     // Test ctrl-c terminates long-running commands.
     test_ctrl_c,
     // Test copying a block's command gives us the expected command string.

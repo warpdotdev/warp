@@ -7,7 +7,7 @@ const ADDON_CREDITS_DESCRIPTION_LEAD: &str = "Add-on credits are purchased in pr
 const ADDON_CREDITS_VOLUME_DISCOUNT_NOTE: &str =
     "The more you purchase, the better the per-credit rate.";
 const ADDON_CREDITS_DESCRIPTION_TAIL: &str =
-    "Once your base plan credits are used, add-on credits will be consumed.";
+    "Once your included credits are used, add-on credits will be consumed.";
 
 /// What an add-on pack buys, in the unit it is shown in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

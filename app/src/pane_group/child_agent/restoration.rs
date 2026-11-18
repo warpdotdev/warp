@@ -11,25 +11,21 @@ use super::{HiddenChildAgentTaskContext, apply_hidden_child_agent_task_context};
 use crate::ai::agent::conversation::{AIConversation, AIConversationId};
 use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::ambient_agents::discovery::list_direct_children;
 use crate::ai::ambient_agents::task::AmbientAgentTask;
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
-use crate::ai::blocklist::orchestration_event_streamer::agent_task_harness;
+use crate::ai::blocklist::orchestration_event_streamer::{
+    OrchestrationEventStreamer, agent_task_harness,
+};
 use crate::ai::restored_conversations::RestoredAgentConversations;
 use crate::pane_group::{PaneGroup, PaneId, PendingParentChildSeed};
 use crate::server::retry_strategies::is_transient_http_error;
 use crate::server::server_api::ServerApiProvider;
-use crate::server::server_api::ai::TaskListFilter;
 use crate::terminal::shared_session::IsSharedSessionCreator;
 use crate::terminal::view::load_ai_conversation::{
     RestoreConversationEntryBehavior, RestoredAIConversation,
 };
-
-/// Max direct children fetched per ancestor-list restore seed. The server
-/// caps at 100 regardless, matching the Observer-side ancestor seed fetch.
-/// A parent with more direct children than this only has its first page
-/// discovered, since this path does not paginate.
-const RESTORE_CHILD_SEED_FETCH_LIMIT: i32 = 100;
 
 /// How long to wait before retrying a parent's ancestor-list fetch after a
 /// transient error (network blip, 5xx, 408, 429), so a parent isn't left
@@ -179,6 +175,9 @@ impl PaneGroup {
         parent_task_id: AmbientAgentTaskId,
         ctx: &mut ViewContext<Self>,
     ) {
+        if !self.passive_child_seeding_released {
+            return;
+        }
         let Some(seed) = self.pending_parent_child_seeds.get(&parent_task_id) else {
             return;
         };
@@ -198,16 +197,8 @@ impl PaneGroup {
         }
 
         let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
-        let filter = TaskListFilter {
-            ancestor_run_id: Some(parent_task_id.to_string()),
-            ..TaskListFilter::default()
-        };
         ctx.spawn(
-            async move {
-                ai_client
-                    .list_ambient_agent_tasks(RESTORE_CHILD_SEED_FETCH_LIMIT, filter, None)
-                    .await
-            },
+            async move { list_direct_children(ai_client.as_ref(), parent_task_id).await },
             move |me, result, ctx| {
                 if is_stale_ancestor_list_completion(
                     me.pending_parent_child_seeds.get(&parent_task_id),
@@ -439,6 +430,9 @@ impl PaneGroup {
         child_conversation_id: AIConversationId,
         ctx: &mut ViewContext<Self>,
     ) -> bool {
+        OrchestrationEventStreamer::handle(ctx).update(ctx, |streamer, ctx| {
+            streamer.restore_local_child(child_conversation_id, ctx);
+        });
         if self
             .child_agent_panes
             .get(&child_conversation_id)
@@ -510,6 +504,21 @@ impl PaneGroup {
         parent_pane_id: PaneId,
         ctx: &mut ViewContext<Self>,
     ) {
+        self.create_hidden_child_agent_pane_with_env(
+            child_conversation,
+            parent_pane_id,
+            HashMap::new(),
+            ctx,
+        );
+    }
+
+    pub(super) fn create_hidden_child_agent_pane_with_env(
+        &mut self,
+        child_conversation: AIConversation,
+        parent_pane_id: PaneId,
+        env_vars: HashMap<std::ffi::OsString, std::ffi::OsString>,
+        ctx: &mut ViewContext<Self>,
+    ) {
         let child_id = child_conversation.id();
 
         // Viewer and owner children share one task-driven dispatch; only
@@ -534,7 +543,7 @@ impl PaneGroup {
         // dispatch time, not on subsequent restores.
         let new_pane_id = self.insert_terminal_pane_hidden_for_child_agent(
             parent_pane_id,
-            HashMap::new(),
+            env_vars,
             IsSharedSessionCreator::No,
             ctx,
         );

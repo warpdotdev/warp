@@ -2,6 +2,7 @@ use std::fs::{self, File};
 use std::io::{BufRead as _, BufReader, Read as _};
 use std::path::{Path, PathBuf};
 
+use anyhow::Result;
 use serde_json::Value;
 use uuid::Uuid;
 

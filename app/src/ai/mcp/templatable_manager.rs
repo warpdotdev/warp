@@ -14,6 +14,8 @@ use mcp::TemplatableMCPServerInfo;
 #[cfg(not(target_family = "wasm"))]
 use mcp::oauth;
 #[cfg(not(target_family = "wasm"))]
+use mcp::refreshable_headers::RefreshableHeaders;
+#[cfg(not(target_family = "wasm"))]
 pub use native::McpIntegration;
 #[cfg(not(target_family = "wasm"))]
 use parking_lot::Mutex;
@@ -24,6 +26,10 @@ use uuid::Uuid;
 use warpui::ModelSpawner;
 use warpui::{Entity, SingletonEntity};
 
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::agent_sdk::driver::git_credentials::restricted::{
+    active_restricted_child_environment, protected_environment_key,
+};
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::mcp::templatable::CloudTemplatableMCPServer;
 use crate::ai::mcp::templatable_installation::TemplatableMCPServerInstallation;
@@ -57,6 +63,10 @@ pub struct TemplatableMCPServerManager {
     spawned_servers: HashMap<Uuid, SpawnedServerInfo>,
     #[cfg(not(target_family = "wasm"))]
     reconnectable_ephemeral_installations: HashMap<Uuid, TemplatableMCPServerInstallation>,
+    /// The replaceable request headers of the ephemeral servers spawned with them. A reconnect
+    /// sends these rather than the ones the cached installation was resolved with.
+    #[cfg(not(target_family = "wasm"))]
+    refreshable_headers: HashMap<Uuid, RefreshableHeaders>,
     /// Cached credentials for each server.
     ///
     /// We persist these to secure storage, and if they are present when the server is started,
@@ -141,22 +151,38 @@ pub enum FigmaMcpStatus {
 
 impl TemplatableMCPServerManager {
     #[cfg(not(target_family = "wasm"))]
-    fn apply_runtime_environment(&self, transport: &mut TransportType) {
+    pub(crate) fn apply_runtime_environment(
+        &self,
+        transport: &mut TransportType,
+    ) -> anyhow::Result<()> {
         if let TransportType::CLIServer(server) = transport {
-            server
-                .static_env_vars
-                .retain(|variable| !self.runtime_environment.contains_key(&variable.name));
-            server
-                .static_env_vars
-                .extend(
-                    self.runtime_environment
-                        .iter()
-                        .map(|(name, value)| StaticEnvVar {
-                            name: name.clone(),
-                            value: value.clone(),
-                        }),
+            let mut environment = self.runtime_environment.clone();
+            let protected = active_restricted_child_environment()?;
+            let restricted = !protected.is_empty();
+            if restricted {
+                environment.retain(|name, _| !protected_environment_key(name));
+            }
+            for (name, value) in protected {
+                environment.insert(
+                    name.into_string()
+                        .map_err(|_| anyhow::anyhow!("Managed environment key is not UTF-8"))?,
+                    value
+                        .into_string()
+                        .map_err(|_| anyhow::anyhow!("Managed environment value is not UTF-8"))?,
                 );
+            }
+            server.static_env_vars.retain(|variable| {
+                !(environment.contains_key(&variable.name)
+                    || restricted && protected_environment_key(&variable.name))
+            });
+            server
+                .static_env_vars
+                .extend(environment.iter().map(|(name, value)| StaticEnvVar {
+                    name: name.clone(),
+                    value: value.clone(),
+                }));
         }
+        Ok(())
     }
 
     pub fn get_installed_templatable_servers(

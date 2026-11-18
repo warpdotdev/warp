@@ -1,6 +1,6 @@
 use std::time::SystemTime;
 
-use session_sharing_protocol::common::AgentAttachment;
+use session_sharing_protocol::common::{AgentAttachment, ProfileData};
 use uuid::Uuid;
 use warp_multi_agent_api::client_action::{AddMessagesToTask, CreateTask, UpdateTaskMessage};
 use warp_multi_agent_api::message::tool_call::{CallMcpTool, RunShellCommand, Tool};
@@ -209,7 +209,8 @@ fn shared_session_injections_go_to_the_prompt_sink_instead_of_the_queue() {
                     ctx,
                 );
                 let relayed = prompts.try_recv().unwrap();
-                assert_eq!(relayed.text, "follow-up");
+                assert!(relayed.text.ends_with("\n\nfollow-up"));
+                assert!(relayed.text.contains("coauthor_user_uid: \"\""));
                 assert!(
                     matches!(
                         relayed.attachments.as_slice(),
@@ -257,9 +258,20 @@ fn injections_queued_before_the_sink_exists_are_relayed_when_it_is_installed() {
                 };
                 let base = BaseUserQuery::from_proto(api::request::input::UserQuery {
                     author: Some(author.clone()),
+                    origin: Some(api::UserQueryOrigin {
+                        variant: Some(api::user_query_origin::Variant::WarpClient(
+                            Default::default(),
+                        )),
+                    }),
                     ..Default::default()
                 });
+                let second_base = BaseUserQuery::for_viewer(Some(&ProfileData {
+                    firebase_uid: "second-viewer".into(),
+                    ..Default::default()
+                }));
+                let second_author = second_base.to_proto().author;
                 let participant_id = ParticipantId::new();
+                let second_participant_id = ParticipantId::new();
                 controller.execute_warp_agent_prompt_from_shared_session_injection(
                     "first".into(),
                     None,
@@ -276,13 +288,21 @@ fn injections_queued_before_the_sink_exists_are_relayed_when_it_is_installed() {
                     vec![AgentAttachment::PlainText {
                         content: "second context".into(),
                     }],
-                    participant_id.clone(),
-                    Some(base),
+                    second_participant_id.clone(),
+                    Some(second_base),
+                    ctx,
+                );
+                controller.execute_warp_agent_prompt_from_shared_session_injection(
+                    "unknown sender".into(),
+                    None,
+                    vec![],
+                    ParticipantId::new(),
+                    None,
                     ctx,
                 );
                 assert_eq!(
                     QueuedQueryModel::as_ref(ctx).queue(id).len(),
-                    2,
+                    3,
                     "with no sink and setup pending, injections are held in the queue"
                 );
 
@@ -291,7 +311,8 @@ fn injections_queued_before_the_sink_exists_are_relayed_when_it_is_installed() {
                 let first = prompts
                     .try_recv()
                     .expect("first prompt is relayed on install");
-                assert_eq!(first.text, "first");
+                assert_eq!(first.text, base.format_third_party_prompt("first"));
+                assert!(first.text.contains("coauthor_user_uid: \"viewer-uid\""));
                 assert!(
                     matches!(
                         first.attachments.as_slice(),
@@ -309,7 +330,9 @@ fn injections_queued_before_the_sink_exists_are_relayed_when_it_is_installed() {
                 let second = prompts
                     .try_recv()
                     .expect("second prompt is relayed on install, after the first");
-                assert_eq!(second.text, "second");
+                assert!(second.text.ends_with("\n\nsecond"));
+                assert!(second.text.contains("coauthor_user_uid: \"second-viewer\""));
+                assert!(!second.text.contains("viewer-uid"));
                 assert!(
                     matches!(
                         second.attachments.as_slice(),
@@ -318,12 +341,19 @@ fn injections_queued_before_the_sink_exists_are_relayed_when_it_is_installed() {
                     "second prompt's attachments must survive the queue: {:?}",
                     second.attachments
                 );
-                assert_eq!(second.participant_id, participant_id);
+                assert_eq!(second.participant_id, second_participant_id);
                 assert_eq!(
                     second.base.map(|base| base.to_proto().author),
-                    Some(Some(author))
+                    Some(second_author)
                 );
 
+                let unknown = prompts
+                    .try_recv()
+                    .expect("unknown sender follows both humans");
+                assert!(unknown.text.ends_with("\n\nunknown sender"));
+                assert!(unknown.text.contains("coauthor_user_uid: \"\""));
+                assert!(!unknown.text.contains("viewer-uid"));
+                assert!(!unknown.text.contains("second-viewer"));
                 assert!(
                     prompts.is_empty(),
                     "each queued row is relayed exactly once"
@@ -522,6 +552,57 @@ fn queued_harness_prompts_are_shown_as_rows_until_hidden() {
             });
         });
     });
+}
+
+#[test]
+fn displayed_harness_prompt_is_not_wrapped_again_when_relayed() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |terminal, ctx| {
+            terminal.ai_controller().update(ctx, |controller, ctx| {
+                let id = controller.bind_native_prompt_conversation(None, ctx);
+                let prompt = ExternalHarnessPrompt::new(
+                    "waiting".into(),
+                    vec![],
+                    ParticipantId::new(),
+                    Some(BaseUserQuery::for_viewer(Some(&ProfileData {
+                        firebase_uid: "alice".into(),
+                        ..Default::default()
+                    }))),
+                );
+                controller.show_external_harness_prompt_queued(id, &prompt, ctx);
+                let (sink, prompts) = async_channel::unbounded();
+                controller.set_external_harness_prompt_sink(sink, ctx);
+
+                let relayed = prompts.try_recv().unwrap();
+                assert_eq!(relayed.text, prompt.text);
+                assert_eq!(relayed.text.matches("[Query identity]").count(), 1);
+                assert_eq!(relayed.base.unwrap().query(), Some("waiting"));
+                assert!(prompts.is_empty());
+            });
+        });
+    });
+}
+
+#[test]
+fn external_harness_prompt_preserves_controls_and_authoritative_query_text() {
+    for text in ["/clear", "!git status", "&background", "\u{3}"] {
+        let prompt = ExternalHarnessPrompt::new(text.into(), vec![], ParticipantId::new(), None);
+        assert_eq!(prompt.text, text);
+    }
+
+    let prompt = ExternalHarnessPrompt::new(
+        "fallback".into(),
+        vec![],
+        ParticipantId::new(),
+        Some(BaseUserQuery::from_proto(api::request::input::UserQuery {
+            query: "authoritative".into(),
+            ..Default::default()
+        })),
+    );
+    assert!(prompt.text.ends_with("\n\nauthoritative"));
+    assert!(!prompt.text.contains("fallback"));
 }
 
 #[test]

@@ -156,6 +156,9 @@ fn converts_run_agents_metadata_maps() {
         message: Some(api::message::Message::ToolCall(api::message::ToolCall {
             tool_call_id: "run-agents".to_string(),
             tool: Some(api::message::tool_call::Tool::RunAgents(api::RunAgents {
+                github_commit_attribution: Some(api::run_agents::GitHubCommitAttribution {
+                    coauthor_user_uid: "delegated-human".to_string(),
+                }),
                 metadata: metadata.clone(),
                 agent_run_configs: vec![api::run_agents::AgentRunConfig {
                     name: "child".to_string(),
@@ -185,7 +188,54 @@ fn converts_run_agents_metadata_maps() {
         panic!("expected run_agents");
     };
     assert_eq!(request.metadata, metadata);
+    assert_eq!(
+        request.delegated_github_coauthor_user_uid.as_deref(),
+        Some("delegated-human")
+    );
     assert_eq!(request.agent_run_configs[0].metadata, child_metadata);
+}
+
+#[test]
+fn send_message_preserves_explicit_empty_github_attribution() {
+    let task_id = TaskId::new("task-id".to_string());
+    let message = api::Message {
+        message: Some(api::message::Message::ToolCall(api::message::ToolCall {
+            tool_call_id: "send-message".to_string(),
+            tool: Some(api::message::tool_call::Tool::SendMessageToAgent(
+                api::SendMessageToAgent {
+                    github_commit_attribution: Some(api::run_agents::GitHubCommitAttribution {
+                        coauthor_user_uid: String::new(),
+                    }),
+                    addresses: vec!["child".to_string()],
+                    subject: "Follow-up".to_string(),
+                    message: "Continue".to_string(),
+                },
+            )),
+        })),
+        ..Default::default()
+    };
+    let output = message
+        .to_client_output_message(ConversionParams {
+            task_id: &task_id,
+            current_todo_list: None,
+            active_code_review: None,
+            skill_path_origin: &SkillPathOrigin::Local,
+        })
+        .unwrap();
+    let MaybeAIAgentOutputMessage::Message(output) = output else {
+        panic!("expected message");
+    };
+    let AIAgentOutputMessageType::Action(action) = output.message else {
+        panic!("expected action");
+    };
+    let AIAgentActionType::SendMessageToAgent {
+        delegated_github_coauthor_user_uid,
+        ..
+    } = action.action
+    else {
+        panic!("expected send_message_to_agent");
+    };
+    assert_eq!(delegated_github_coauthor_user_uid.as_deref(), Some(""));
 }
 
 #[test]

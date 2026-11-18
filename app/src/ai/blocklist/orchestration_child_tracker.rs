@@ -30,11 +30,8 @@ use std::collections::{HashMap, HashSet};
 
 use session_sharing_protocol::common::SessionId;
 use warp_multi_agent_api as api;
-use warpui::ModelContext;
-#[cfg(not(test))]
-use warpui::SingletonEntity;
+use warpui::{ModelContext, SingletonEntity};
 
-#[cfg(not(test))]
 use super::history_model::BlocklistAIHistoryModel;
 use super::orchestration_event_streamer::{
     OrchestrationEventStreamer, OrchestrationEventStreamerEvent,
@@ -223,36 +220,36 @@ impl OrchestrationChildTracker {
         kind: api::LifecycleEventType,
         ctx: &mut ModelContext<OrchestrationEventStreamer>,
     ) {
+        let status = conversation_status_from_lifecycle_event_type(kind);
         let tracker_known = self.children.contains_key(&task_id);
         if tracker_known {
             if let Some(child) = self.children.get_mut(&task_id) {
                 child.last_lifecycle = Some(kind);
             }
-            let status = conversation_status_from_lifecycle_event_type(kind);
-            // Write status through immediately so the pill bar badge reflects
-            // the lifecycle transition without waiting for a redraw cycle.
-            #[cfg(not(test))]
-            {
-                let child_info = {
-                    let history = BlocklistAIHistoryModel::as_ref(ctx);
-                    history
-                        .conversation_id_for_agent_id(run_id)
-                        .and_then(|child_conv_id| {
-                            history
-                                .terminal_surface_id_for_conversation(&child_conv_id)
-                                .map(|surface_id| (child_conv_id, surface_id))
-                        })
-                };
-                if let Some((child_conv_id, surface_id)) = child_info {
-                    BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
-                        history.update_conversation_status(
-                            surface_id,
-                            child_conv_id,
-                            status.clone(),
-                            ctx,
-                        );
-                    });
-                }
+            let child_info = {
+                let history = BlocklistAIHistoryModel::as_ref(ctx);
+                history
+                    .conversation_id_for_agent_id(run_id)
+                    .filter(|id| {
+                        history
+                            .conversation(id)
+                            .is_some_and(|conversation| conversation.is_remote_child())
+                    })
+                    .and_then(|child_conv_id| {
+                        history
+                            .terminal_surface_id_for_conversation(&child_conv_id)
+                            .map(|surface_id| (child_conv_id, surface_id))
+                    })
+            };
+            if let Some((child_conv_id, surface_id)) = child_info {
+                BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                    history.update_conversation_status(
+                        surface_id,
+                        child_conv_id,
+                        status.clone(),
+                        ctx,
+                    );
+                });
             }
             ctx.emit(OrchestrationEventStreamerEvent::ChildStatusChanged {
                 parent_task_id: self.parent_task_id,
@@ -270,7 +267,6 @@ impl OrchestrationChildTracker {
         if let Some(child) = self.children.get_mut(&task_id) {
             child.last_lifecycle = Some(kind);
         }
-        let status = conversation_status_from_lifecycle_event_type(kind);
         ctx.emit(OrchestrationEventStreamerEvent::ChildStatusChanged {
             parent_task_id: self.parent_task_id,
             run_id: run_id.to_string(),

@@ -136,9 +136,14 @@ use warp_graphql::queries::task_git_credentials::{
     TaskGitCredentialsLegacyInput, TaskGitCredentialsLegacyResult,
     TaskGitCredentialsLegacyVariables, TaskGitCredentialsResult, TaskGitCredentialsVariables,
 };
+use warp_graphql::queries::task_restricted_git_credentials::{
+    RestrictedTaskGitCredentials, RestrictedTaskGitCredentialsInput,
+    RestrictedTaskGitCredentialsOutput, RestrictedTaskGitCredentialsResult,
+    RestrictedTaskGitCredentialsVariables, TaskGitCredentialProvider,
+};
 #[cfg(not(target_family = "wasm"))]
 use warp_graphql::queries::task_secrets::{ManagedSecretValue, TaskSecretsInput};
-use warp_multi_agent_api::ConversationData;
+use warp_multi_agent_api::{ConversationData, LifecycleEventType};
 use warp_server_client::PresignedDownloadResponse;
 
 use super::ServerApi;
@@ -171,6 +176,8 @@ use crate::ai::llms::{
 };
 #[cfg(feature = "agent_mode_evals")]
 use crate::ai::request_usage_model::RequestLimitInfo;
+#[cfg(not(feature = "agent_mode_evals"))]
+use crate::ai::request_usage_model::WorkspaceIncludedUsage;
 use crate::ai::{AICreditAvailability, RequestUsageInfo};
 use crate::ai_assistant::execution_context::WarpAiExecutionContext;
 use crate::ai_assistant::requests::GenerateDialogueResult;
@@ -291,6 +298,8 @@ impl TaskStatusUpdate {
 /// JSON payload sent to the public `POST /agent/run` API.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SpawnAgentRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delegated_github_coauthor_user_uid: Option<String>,
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub metadata: HashMap<String, String>,
     /// None for skill-only or conversation-only invocations; omitted on the wire.
@@ -424,6 +433,8 @@ pub struct RunFollowupRequest {
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SendAgentMessageRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delegated_github_coauthor_user_uid: Option<String>,
     pub to: Vec<String>,
     pub subject: String,
     pub body: String,
@@ -454,12 +465,240 @@ pub struct AgentMessageHeader {
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct AgentRunEvent {
-    pub event_type: String,
+    #[serde(flatten)]
+    pub kind: AgentRunEventKind,
+    /// The run this event belongs to, including the notified run for `WaitedOn`.
     pub run_id: String,
+    /// Event-specific payload, defined by `kind`; never a subscription or routing key.
     pub ref_id: Option<String>,
     pub execution_id: Option<String>,
     pub occurred_at: String,
     pub sequence: i64,
+}
+
+impl AgentRunEvent {
+    pub fn waited_on_by(&self, recipient_run_id: &str) -> Option<&str> {
+        if self.kind != AgentRunEventKind::WaitedOn || self.run_id != recipient_run_id {
+            return None;
+        }
+        self.ref_id.as_deref().filter(|waiter| !waiter.is_empty())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AgentRunEventKind {
+    InProgress,
+    Succeeded,
+    Failed {
+        reason: Option<String>,
+        error_message: Option<String>,
+    },
+    Errored {
+        reason: Option<String>,
+        error_message: Option<String>,
+    },
+    Blocked {
+        blocked_action: Option<String>,
+    },
+    Cancelled {
+        reason: Option<String>,
+    },
+    /// A message arrived for this run; `ref_id` is the message ID.
+    NewMessage,
+    /// This run started a child; `ref_id` is the child run ID.
+    ChildAgentStarted,
+    /// This run linked a session; `ref_id` is the session UUID.
+    RunSessionLinked,
+    /// The event's run is being waited on; `ref_id` identifies the waiter.
+    WaitedOn,
+    LegacyStarted,
+    LegacyIdle,
+    LegacyRestarted,
+    Unknown,
+}
+
+impl AgentRunEventKind {
+    pub fn lifecycle_type(&self) -> Option<LifecycleEventType> {
+        match self {
+            Self::InProgress | Self::LegacyStarted | Self::LegacyRestarted => {
+                Some(LifecycleEventType::InProgress)
+            }
+            Self::Succeeded | Self::LegacyIdle => Some(LifecycleEventType::Succeeded),
+            Self::Failed { .. } => Some(LifecycleEventType::Failed),
+            Self::Errored { .. } => Some(LifecycleEventType::Errored),
+            Self::Blocked { .. } => Some(LifecycleEventType::Blocked),
+            Self::Cancelled { .. } => Some(LifecycleEventType::Cancelled),
+            Self::WaitedOn => Some(LifecycleEventType::Waiting),
+            Self::NewMessage | Self::ChildAgentStarted | Self::RunSessionLinked | Self::Unknown => {
+                None
+            }
+        }
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for AgentRunEventKind {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(serde::Deserialize)]
+        struct WireEvent {
+            event_type: WireEventType,
+            detail: Option<serde_json::Value>,
+        }
+        #[derive(serde::Deserialize)]
+        enum WireEventType {
+            #[serde(rename = "run_in_progress")]
+            InProgress,
+            #[serde(rename = "run_succeeded")]
+            Succeeded,
+            #[serde(rename = "run_failed")]
+            Failed,
+            #[serde(rename = "run_errored")]
+            Errored,
+            #[serde(rename = "run_blocked")]
+            Blocked,
+            #[serde(rename = "run_cancelled")]
+            Cancelled,
+            #[serde(rename = "new_message")]
+            NewMessage,
+            #[serde(rename = "child_agent_started")]
+            ChildAgentStarted,
+            #[serde(rename = "run_session_linked")]
+            RunSessionLinked,
+            #[serde(rename = "run_waited_on")]
+            WaitedOn,
+            #[serde(rename = "run_started")]
+            LegacyStarted,
+            #[serde(rename = "run_idle")]
+            LegacyIdle,
+            #[serde(rename = "run_restarted")]
+            LegacyRestarted,
+            #[serde(other)]
+            Unknown,
+        }
+        #[derive(Default, serde::Deserialize)]
+        struct Failure {
+            reason: Option<String>,
+            error_message: Option<String>,
+        }
+        #[derive(Default, serde::Deserialize)]
+        struct Blocked {
+            blocked_action: Option<String>,
+        }
+        #[derive(Default, serde::Deserialize)]
+        struct Cancelled {
+            reason: Option<String>,
+        }
+        fn detail<T: serde::de::DeserializeOwned + Default, E: serde::de::Error>(
+            value: Option<serde_json::Value>,
+        ) -> Result<T, E> {
+            if value.as_ref().is_some_and(|value| !value.is_object()) {
+                return Err(E::custom("lifecycle detail must be an object"));
+            }
+            value
+                .map(serde_json::from_value)
+                .transpose()
+                .map_err(E::custom)
+                .map(Option::unwrap_or_default)
+        }
+
+        let wire = WireEvent::deserialize(deserializer)?;
+        Ok(match wire.event_type {
+            WireEventType::InProgress => Self::InProgress,
+            WireEventType::Succeeded => Self::Succeeded,
+            WireEventType::Failed => {
+                let Failure {
+                    reason,
+                    error_message,
+                } = detail::<Failure, D::Error>(wire.detail)?;
+                Self::Failed {
+                    reason,
+                    error_message,
+                }
+            }
+            WireEventType::Errored => {
+                let Failure {
+                    reason,
+                    error_message,
+                } = detail::<Failure, D::Error>(wire.detail)?;
+                Self::Errored {
+                    reason,
+                    error_message,
+                }
+            }
+            WireEventType::Blocked => {
+                let Blocked { blocked_action } = detail::<Blocked, D::Error>(wire.detail)?;
+                Self::Blocked { blocked_action }
+            }
+            WireEventType::Cancelled => {
+                let Cancelled { reason } = detail::<Cancelled, D::Error>(wire.detail)?;
+                Self::Cancelled { reason }
+            }
+            WireEventType::NewMessage => Self::NewMessage,
+            WireEventType::ChildAgentStarted => Self::ChildAgentStarted,
+            WireEventType::RunSessionLinked => Self::RunSessionLinked,
+            WireEventType::WaitedOn => Self::WaitedOn,
+            WireEventType::LegacyStarted => Self::LegacyStarted,
+            WireEventType::LegacyIdle => Self::LegacyIdle,
+            WireEventType::LegacyRestarted => Self::LegacyRestarted,
+            WireEventType::Unknown => Self::Unknown,
+        })
+    }
+}
+
+impl serde::Serialize for AgentRunEventKind {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut detail = serde_json::Map::new();
+        let event_type = match self {
+            Self::InProgress => "run_in_progress",
+            Self::Succeeded => "run_succeeded",
+            Self::Failed {
+                reason,
+                error_message,
+            }
+            | Self::Errored {
+                reason,
+                error_message,
+            } => {
+                if let Some(reason) = reason {
+                    detail.insert("reason".into(), reason.clone().into());
+                }
+                if let Some(message) = error_message {
+                    detail.insert("error_message".into(), message.clone().into());
+                }
+                if matches!(self, Self::Failed { .. }) {
+                    "run_failed"
+                } else {
+                    "run_errored"
+                }
+            }
+            Self::Blocked { blocked_action } => {
+                if let Some(action) = blocked_action {
+                    detail.insert("blocked_action".into(), action.clone().into());
+                }
+                "run_blocked"
+            }
+            Self::Cancelled { reason } => {
+                if let Some(reason) = reason {
+                    detail.insert("reason".into(), reason.clone().into());
+                }
+                "run_cancelled"
+            }
+            Self::NewMessage => "new_message",
+            Self::ChildAgentStarted => "child_agent_started",
+            Self::RunSessionLinked => "run_session_linked",
+            Self::WaitedOn => "run_waited_on",
+            Self::LegacyStarted => "run_started",
+            Self::LegacyIdle => "run_idle",
+            Self::LegacyRestarted => "run_restarted",
+            Self::Unknown => "unknown",
+        };
+        let mut map = serializer.serialize_map(Some(if detail.is_empty() { 1 } else { 2 }))?;
+        map.serialize_entry("event_type", event_type)?;
+        if !detail.is_empty() {
+            map.serialize_entry("detail", &detail)?;
+        }
+        map.end()
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -488,6 +727,8 @@ pub struct AgentRunClientEventRequest {
 #[serde(untagged)]
 pub enum AgentRunClientEventPayload {
     SetupMetric(AgentRunClientSetupMetricPayload),
+    /// An event-specific JSON payload for a timeline event.
+    Timeline(serde_json::Value),
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -496,6 +737,12 @@ pub struct AgentRunClientSetupMetricPayload {
     pub finish_ts: DateTime<Utc>,
     pub latency_ms: i64,
     pub is_error: bool,
+    /// A bounded, event-specific label for how the step turned out.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<String>,
+    /// `acp` or `pty`, when the step belongs to a third-party harness transport.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transport: Option<String>,
 }
 #[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
 pub struct AgentRunEnvironmentSnapshotRequest {
@@ -529,6 +776,8 @@ impl AgentRunClientEventRequest {
         start_timestamp: DateTime<Utc>,
         finish_timestamp: DateTime<Utc>,
         is_error: bool,
+        outcome: Option<String>,
+        transport: Option<String>,
     ) -> Self {
         Self {
             event_uuid: uuid::Uuid::new_v4().to_string(),
@@ -543,6 +792,8 @@ impl AgentRunClientEventRequest {
                         .num_milliseconds()
                         .max(0),
                     is_error,
+                    outcome,
+                    transport,
                 },
             )),
         }
@@ -1003,6 +1254,67 @@ struct ListRunsResponse {
     runs: Vec<AmbientAgentTask>,
 }
 
+#[derive(Debug)]
+pub struct AgentRunsPage {
+    pub runs: Vec<AmbientAgentTask>,
+    pub page_info: AgentRunsPageInfo,
+    /// Wire harness names, retaining unknown variants for duplicate validation.
+    pub harness_names: Vec<Option<String>>,
+}
+
+impl<'de> serde::Deserialize<'de> for AgentRunsPage {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(serde::Deserialize)]
+        struct RawPage {
+            runs: Vec<serde_json::Value>,
+            page_info: AgentRunsPageInfo,
+        }
+        let raw = RawPage::deserialize(deserializer)?;
+        let mut runs = Vec::with_capacity(raw.runs.len());
+        let mut harness_names = Vec::with_capacity(raw.runs.len());
+        for row in raw.runs {
+            let harness = row
+                .get("agent_config_snapshot")
+                .or_else(|| row.get("agent_config"))
+                .and_then(|config| config.get("harness"))
+                .and_then(|harness| harness.get("type"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned);
+            runs.push(serde_json::from_value(row).map_err(serde::de::Error::custom)?);
+            harness_names.push(harness);
+        }
+        Ok(Self {
+            runs,
+            page_info: raw.page_info,
+            harness_names,
+        })
+    }
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct AgentRunsPageInfo {
+    pub has_next_page: bool,
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct ListRunPreviewsResponse {
+    pub execution_id: Option<i64>,
+    pub previews: Vec<RunPreview>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct RunPreview {
+    pub port: u16,
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub url: Option<String>,
+}
+
 impl<'de> serde::Deserialize<'de> for ListRunsResponse {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -1268,6 +1580,10 @@ pub struct UpdateMemoryResponse {
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
 pub trait AIClient: 'static + Send + Sync {
+    async fn list_run_previews(
+        &self,
+        task_id: &AmbientAgentTaskId,
+    ) -> anyhow::Result<ListRunPreviewsResponse>;
     async fn generate_commands_from_natural_language(
         &self,
         prompt: String,
@@ -1409,6 +1725,12 @@ pub trait AIClient: 'static + Send + Sync {
         filter: TaskListFilter,
         request_team_scope: Option<RequestTeamScope>,
     ) -> anyhow::Result<Vec<AmbientAgentTask>, anyhow::Error>;
+
+    async fn list_agent_runs_page(
+        &self,
+        limit: i32,
+        filter: TaskListFilter,
+    ) -> anyhow::Result<AgentRunsPage>;
 
     /// List agent runs and return the raw server JSON response.
     async fn list_agent_runs_raw(
@@ -1600,6 +1922,15 @@ pub trait AIClient: 'static + Send + Sync {
         accepts_partial_refresh: bool,
         use_factory_repositories: bool,
     ) -> Result<TaskGitCredentialsResponse, TaskGitCredentialsError>;
+
+    async fn get_restricted_task_git_credentials(
+        &self,
+        task_id: String,
+        workload_token: String,
+        accepts_partial_refresh: bool,
+        use_factory_repositories: bool,
+        providers: Option<Vec<TaskGitCredentialProvider>>,
+    ) -> Result<RestrictedTaskGitCredentialsOutput, TaskGitCredentialsError>;
 
     /// Authorizes a REMOTE-2661 debug agent prompt against a retained environment-setup-failure
     /// session, called by the sharer with its own workload token. Anything short of `Ok(true)`
@@ -2015,6 +2346,16 @@ fn convert_upload_field(
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
 impl AIClient for ServerApi {
+    async fn list_run_previews(
+        &self,
+        task_id: &AmbientAgentTaskId,
+    ) -> anyhow::Result<ListRunPreviewsResponse> {
+        self.get_public_api_response_for_task(task_id, &format!("agent/runs/{task_id}/previews"))
+            .await?
+            .json::<ListRunPreviewsResponse>()
+            .await
+            .map_err(Into::into)
+    }
     async fn generate_commands_from_natural_language(
         &self,
         prompt: String,
@@ -2149,6 +2490,7 @@ impl AIClient for ServerApi {
     async fn get_request_limit_info(&self) -> Result<RequestUsageInfo, anyhow::Error> {
         Ok(RequestUsageInfo {
             request_limit_info: RequestLimitInfo::new_for_evals(),
+            workspace_allowances: Default::default(),
             bonus_grants: vec![],
         })
     }
@@ -2164,6 +2506,23 @@ impl AIClient for ServerApi {
         match response.user {
             warp_graphql::queries::get_request_limit_info::UserResult::UserOutput(user_output) => {
                 let request_limit_info = user_output.user.request_limit_info.into();
+
+                let workspace_allowances = user_output
+                    .user
+                    .workspaces
+                    .iter()
+                    .filter_map(|workspace| {
+                        workspace
+                            .included_usage_info
+                            .clone()
+                            .map(|info| WorkspaceIncludedUsage {
+                                workspace_uid: WorkspaceUid::from(ServerId::from_string_lossy(
+                                    workspace.uid.inner(),
+                                )),
+                                info,
+                            })
+                    })
+                    .collect();
 
                 let workspace_and_team_bonus_grants = user_output
                     .user
@@ -2196,6 +2555,7 @@ impl AIClient for ServerApi {
                 Ok(RequestUsageInfo {
                     request_limit_info,
                     bonus_grants,
+                    workspace_allowances,
                 })
             }
             warp_graphql::queries::get_request_limit_info::UserResult::UserFacingError(e) => {
@@ -2681,6 +3041,15 @@ impl AIClient for ServerApi {
         Ok(response.runs)
     }
 
+    async fn list_agent_runs_page(
+        &self,
+        limit: i32,
+        filter: TaskListFilter,
+    ) -> anyhow::Result<AgentRunsPage> {
+        self.get_public_api(&build_list_agent_runs_url(limit, &filter))
+            .await
+    }
+
     async fn list_agent_runs_raw(
         &self,
         limit: i32,
@@ -3138,6 +3507,42 @@ impl AIClient for ServerApi {
                     .await
             }
             Err(error) => Err(error),
+        }
+    }
+
+    async fn get_restricted_task_git_credentials(
+        &self,
+        task_id: String,
+        workload_token: String,
+        accepts_partial_refresh: bool,
+        use_factory_repositories: bool,
+        providers: Option<Vec<TaskGitCredentialProvider>>,
+    ) -> Result<RestrictedTaskGitCredentialsOutput, TaskGitCredentialsError> {
+        let variables = RestrictedTaskGitCredentialsVariables {
+            input: RestrictedTaskGitCredentialsInput {
+                task_id: cynic::Id::new(task_id),
+                workload_token,
+                accepts_partial_refresh: Some(accepts_partial_refresh),
+                use_factory_repositories: use_factory_repositories.then_some(true),
+                github_credential_contract_version: Some(1),
+                providers,
+            },
+            request_context: get_request_context(),
+        };
+        let operation = RestrictedTaskGitCredentials::build(variables);
+        let response = self
+            .send_graphql_request(operation, None)
+            .await
+            .map_err(TaskGitCredentialsError::Request)?;
+
+        match response.task_git_credentials {
+            RestrictedTaskGitCredentialsResult::TaskGitCredentialsOutput(output) => Ok(output),
+            RestrictedTaskGitCredentialsResult::UserFacingError(error) => {
+                Err(TaskGitCredentialsError::from_user_facing(error))
+            }
+            RestrictedTaskGitCredentialsResult::Unknown => Err(TaskGitCredentialsError::Request(
+                anyhow!("Unknown restricted taskGitCredentials response"),
+            )),
         }
     }
 
@@ -4096,3 +4501,7 @@ impl StoreClient for ServerApi {
 #[cfg(test)]
 #[path = "ai_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "agent_run_event_tests.rs"]
+mod agent_run_event_tests;

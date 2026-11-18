@@ -13,7 +13,9 @@ use warpui::{Entity, EntityId, ModelContext, SingletonEntity};
 use super::history_model::{
     BlocklistAIHistoryEvent, BlocklistAIHistoryModel, ConversationStatusUpdate,
 };
-use crate::ai::agent::conversation::{AIConversation, AIConversationId, ConversationStatus};
+use crate::ai::agent::conversation::{
+    AIConversation, AIConversationId, ConversationStatus, LocalChildRestorationStatus,
+};
 use crate::ai::agent::{AIAgentOutputStatus, FinishedAIAgentOutput, RenderableAIError};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::server::server_api::ServerApiProvider;
@@ -54,6 +56,7 @@ pub struct LocalAgentTaskSyncModel {
     /// acknowledged. Used by the agent driver to decide whether a terminal
     /// state still needs to be reported before the process exits.
     confirmed_terminal_states: HashMap<AmbientAgentTaskId, AgentTaskState>,
+    latest_delivered_task_states: HashMap<AmbientAgentTaskId, AgentTaskState>,
 }
 
 pub enum LocalAgentTaskSyncModelEvent {}
@@ -108,6 +111,7 @@ impl LocalAgentTaskSyncModel {
             update_queue: LocalTaskUpdateQueue::default(),
             idle_waiters: HashMap::new(),
             confirmed_terminal_states: HashMap::new(),
+            latest_delivered_task_states: HashMap::new(),
         }
     }
 
@@ -141,6 +145,15 @@ impl LocalAgentTaskSyncModel {
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
     pub fn confirmed_terminal_state(&self, task_id: &AmbientAgentTaskId) -> Option<AgentTaskState> {
         self.confirmed_terminal_states.get(task_id).copied()
+    }
+
+    /// The latest task state successfully delivered through this model, including nonterminal states.
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    pub fn latest_delivered_task_state(
+        &self,
+        task_id: &AmbientAgentTaskId,
+    ) -> Option<AgentTaskState> {
+        self.latest_delivered_task_states.get(task_id).copied()
     }
 
     fn notify_idle_waiters(&mut self, task_id: &AmbientAgentTaskId) {
@@ -307,6 +320,12 @@ impl LocalAgentTaskSyncModel {
     ) {
         let Some((task_id, Some(update))) =
             with_local_conversation(conversation_id, ctx, |conversation| {
+                if conversation
+                    .local_child_restoration_status()
+                    .is_some_and(|state| state != LocalChildRestorationStatus::Restored)
+                {
+                    return None;
+                }
                 // When the conversation transitions to Error but the last exchange is
                 // still streaming, the stream hasn't finished processing the error yet.
                 // Skip this update — `mark_request_completed_with_error` will fire
@@ -445,9 +464,11 @@ impl LocalAgentTaskSyncModel {
             move |me, result, ctx| {
                 if result.is_ok()
                     && let Some(state) = task_state
-                    && is_terminal_task_state(state)
                 {
-                    me.confirmed_terminal_states.insert(task_id, state);
+                    me.latest_delivered_task_states.insert(task_id, state);
+                    if is_terminal_task_state(state) {
+                        me.confirmed_terminal_states.insert(task_id, state);
+                    }
                 }
                 if let Some(update) = me.update_queue.record_result(task_id, result.is_ok()) {
                     me.send_update(task_id, update, ctx);

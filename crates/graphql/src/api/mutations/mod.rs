@@ -45,6 +45,7 @@ pub mod remove_object_link_permissions;
 pub mod remove_user_from_team;
 pub mod remove_user_from_workspace;
 pub mod rename_team;
+pub mod report_harness_transport;
 pub mod request_bonus;
 pub mod reset_invite_links;
 pub mod send_referral_invite_emails;

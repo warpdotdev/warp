@@ -138,12 +138,12 @@ impl BlocklistAIController {
                 self.terminal_surface_id,
                 attachments.len(),
             );
-            let relayed = ExternalHarnessPrompt {
-                text: prompt.to_owned(),
-                attachments: attachments.to_vec(),
-                participant_id: participant_id.clone(),
-                base: base.cloned(),
-            };
+            let relayed = ExternalHarnessPrompt::new(
+                prompt.to_owned(),
+                attachments.to_vec(),
+                participant_id.clone(),
+                base.cloned(),
+            );
             if sink.try_send(relayed).is_err() {
                 report_error!(
                     "Dropped a shared-session prompt because the external harness is no longer accepting prompts",
@@ -188,9 +188,7 @@ impl BlocklistAIController {
         if needs_preparation {
             self.prepare_queued_attachments(id, query_id, attachments.to_vec(), ctx);
         }
-        if self.can_dispatch_queued_warp_agent_prompt(id, ctx) {
-            self.dispatch_queued_warp_agent_prompt(id, None, ctx);
-        }
+        self.dispatch_queued_warp_agent_prompt(id, None, ctx);
         true
     }
 
@@ -201,6 +199,9 @@ impl BlocklistAIController {
         query_id: Option<QueuedQueryId>,
         ctx: &mut ModelContext<Self>,
     ) {
+        if query_id.is_none() && !self.can_dispatch_queued_warp_agent_prompt(conversation_id, ctx) {
+            return;
+        }
         let has_active_subagent = BlocklistAIHistoryModel::as_ref(ctx)
             .conversation(&conversation_id)
             .is_some_and(|conversation| conversation.has_active_subagent());

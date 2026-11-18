@@ -126,6 +126,9 @@ fn verify_standby_bootstrap() {
                         "__typename": "PrewarmedSandboxConfiguration",
                         "sandboxId": "bootstrap-test",
                         "fingerprint": "bootstrap-generation",
+                    "preparationKind": "AGENT",
+                    "runnerPreparationContractVersion": null,
+                        "githubCredentialMode": "LEGACY",
                         "spec": {
                             "harness": "oz",
                             "repositories": [],
@@ -173,6 +176,7 @@ fn verify_standby_bootstrap() {
         )
         .match_body(Matcher::Json(json!({
             "fingerprint": "bootstrap-generation",
+            "runner_preparation_contract_version": 1,
             "state": "ready",
             "manifest_hash": "bootstrap-generation"
         })))

@@ -124,6 +124,38 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
                 ),
             )
         }
+        AgentDriverError::HookSourcesUnavailable { details } => {
+            let source_lines = details
+                .iter()
+                .map(|detail| format!("- {detail}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            (
+                AgentTaskState::Failed,
+                TaskStatusUpdate::with_error_code(
+                    format!(
+                        "One or more agent hook sources marked strict could not be loaded:\n\n{source_lines}\n\nCheck that each hook directory is in a repository attached to the factory, or exists on the machine running the agent, and holds a valid hooks.json."
+                    ),
+                    PlatformErrorCode::EnvironmentSetupFailed,
+                ),
+            )
+        }
+        AgentDriverError::HooksRequireOzHarness { harness } => (
+            AgentTaskState::Failed,
+            TaskStatusUpdate::with_error_code(
+                format!(
+                    "This run's agent has hooks, but its harness ({harness}) does not run Warp agent hooks. Use the Oz harness or remove the hooks."
+                ),
+                PlatformErrorCode::EnvironmentSetupFailed,
+            ),
+        ),
+        AgentDriverError::HooksUnsupportedByThisBuild => (
+            AgentTaskState::Error,
+            TaskStatusUpdate::with_error_code(
+                "This run has hooks, but this build of Warp cannot run hooks. The run was stopped so that its hooks are not skipped.",
+                PlatformErrorCode::InternalError,
+            ),
+        ),
         AgentDriverError::MCPJsonParseError(msg) => (
             AgentTaskState::Failed,
             TaskStatusUpdate::with_error_code(
@@ -363,13 +395,23 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
                 },
             )
         }
-        AgentDriverError::HarnessSetupFailed { harness, reason } => (
-            AgentTaskState::Failed,
-            TaskStatusUpdate::with_error_code(
+        AgentDriverError::HarnessSetupFailed {
+            harness,
+            stage,
+            reason,
+        } => {
+            let mut update = TaskStatusUpdate::with_error_code(
                 format!("Harness '{harness}' setup failed: {reason}"),
                 PlatformErrorCode::EnvironmentSetupFailed,
-            ),
-        ),
+            );
+            if let Some(stage) = stage {
+                let info = update.platform_error.as_mut().expect("platform error");
+                info.metadata
+                    .insert("harness_stage".to_owned(), stage.as_str().to_owned());
+                info.metrics_category = Some(format!("acp_{}_failed", stage.as_str()));
+            }
+            (AgentTaskState::Failed, update)
+        }
         AgentDriverError::HarnessConfigSetupFailed { harness, error } => (
             AgentTaskState::Failed,
             TaskStatusUpdate::with_error_code(
@@ -386,13 +428,16 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
                 "Harness '{harness}' authentication check failed: {detail}{detail_separator}\
                  Verify that the authentication secret configured for this harness is correct."
             );
-            (
-                AgentTaskState::Failed,
-                TaskStatusUpdate::with_error_code(
-                    message,
-                    PlatformErrorCode::AuthenticationRequired,
-                ),
-            )
+            let mut update = TaskStatusUpdate::with_error_code(
+                message,
+                PlatformErrorCode::AuthenticationRequired,
+            );
+            update
+                .platform_error
+                .as_mut()
+                .expect("platform error")
+                .metrics_category = Some("acp_auth_failed".to_owned());
+            (AgentTaskState::Failed, update)
         }
         AgentDriverError::HarnessRuntimeFailureDetected {
             harness,
@@ -501,7 +546,8 @@ fn task_state_for_platform_error_code(code: PlatformErrorCode) -> AgentTaskState
         | PlatformErrorCode::IntegrationNotConfigured
         | PlatformErrorCode::InvalidRequest
         | PlatformErrorCode::NotAuthorized
-        | PlatformErrorCode::ResourceNotFound => AgentTaskState::Failed,
+        | PlatformErrorCode::ResourceNotFound
+        | PlatformErrorCode::OperationNotSupported => AgentTaskState::Failed,
     }
 }
 

@@ -3,6 +3,7 @@ mod app;
 mod autotracking;
 mod entity;
 mod model;
+mod spawn;
 mod view;
 mod window;
 
