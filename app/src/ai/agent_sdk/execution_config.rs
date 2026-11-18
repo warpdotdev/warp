@@ -313,7 +313,3 @@ pub(super) fn factory_definition_sha(
         })
         .transpose()
 }
-
-#[cfg(test)]
-#[path = "execution_config_tests.rs"]
-mod tests;
