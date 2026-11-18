@@ -66,7 +66,7 @@ impl PreviewRetention {
                 let client = client.clone();
                 Box::pin(async move {
                     check_previews(
-                        client.list_run_previews(&task_id),
+                        client.list_run_previews(&task_id, false),
                         expected_execution_id,
                         PREVIEW_CHECK_TIMEOUT,
                     )
