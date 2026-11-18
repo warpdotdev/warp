@@ -845,6 +845,11 @@ fn prepare_codex_config_toml(
         set_codex_openai_base_url(&mut doc, url);
     }
     set_codex_check_for_update_on_startup(&mut doc, false);
+    // Native children bypass Oz's task tracking. Model-selected multi-agent v2 ignores the legacy
+    // feature toggle, so both the agents setting and feature overrides must be disabled.
+    doc["agents"]["enabled"] = toml_edit::value(false);
+    doc["features"]["multi_agent"] = toml_edit::value(false);
+    doc["features"]["multi_agent_v2"] = toml_edit::value(false);
     set_codex_model(&mut doc, third_party_harness_model_config);
     set_codex_model_reasoning_effort(&mut doc, third_party_harness_model_config);
 

@@ -265,10 +265,51 @@ fn prepare_codex_config_toml_writes_fresh_config() {
     let key = canonical.to_string_lossy().into_owned();
     let cfg = read_codex_config(&config_path);
     assert_eq!(cfg["check_for_update_on_startup"].as_bool(), Some(false));
+    assert_eq!(cfg["agents"]["enabled"].as_bool(), Some(false));
+    assert_eq!(cfg["features"]["multi_agent"].as_bool(), Some(false));
+    assert_eq!(cfg["features"]["multi_agent_v2"].as_bool(), Some(false));
     assert_eq!(
         cfg["projects"][&key]["trust_level"].as_str(),
         Some("trusted")
     );
+}
+
+#[test]
+fn prepare_codex_config_toml_disables_existing_native_orchestration() {
+    let tmp = TempDir::new().unwrap();
+    let config_path = tmp.path().join("config.toml");
+    let working_dir = tmp.path().join("workspace");
+    fs::create_dir_all(&working_dir).unwrap();
+    fs::write(
+        &config_path,
+        r#"
+[agents]
+enabled = true
+max_threads = 8
+
+[features]
+multi_agent = true
+multi_agent_v2 = true
+web_search = true
+"#,
+    )
+    .unwrap();
+
+    prepare_codex_config_toml(
+        &config_path,
+        &working_dir,
+        &ResolvedMCPServers::default(),
+        None,
+        None,
+    )
+    .unwrap();
+
+    let cfg = read_codex_config(&config_path);
+    assert_eq!(cfg["agents"]["enabled"].as_bool(), Some(false));
+    assert_eq!(cfg["features"]["multi_agent"].as_bool(), Some(false));
+    assert_eq!(cfg["features"]["multi_agent_v2"].as_bool(), Some(false));
+    assert_eq!(cfg["agents"]["max_threads"].as_integer(), Some(8));
+    assert_eq!(cfg["features"]["web_search"].as_bool(), Some(true));
 }
 
 #[test]
