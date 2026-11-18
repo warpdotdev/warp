@@ -680,6 +680,7 @@ Match targets per event follow report 01 §1.4. For the three tool events the ta
 | --- | --- |
 | `RequestCommandOutput` | `Shell` |
 | `ReadFiles` | `Read` |
+| `ReadSkill` of a skill on disk | `Read`, because a Cursor agent loads a skill by reading its `SKILL.md`, and Cursor scripts detect skill use that way; `tool_input` is `{ file_path, skill: true }` |
 | `RequestFileEdits` | `Write` (or `Delete` when every edit is a delete; judgment call) |
 | `Grep` | `Grep` |
 | `RunAgents` | `Task` |
@@ -691,9 +692,11 @@ Match targets per event follow report 01 §1.4. For the three tool events the ta
 | `SearchCodebase` | `SearchCodebase` |
 | `ReadMCPResource` | `MCPResource:<name>` |
 | `WriteToLongRunningShellCommand`, `ReadShellCommandOutput`, `TransferShellCommandControlToUser` | `ShellWrite`, `ShellRead`, `ShellHandoff` |
-| `ReadSkill`, `UseComputer`, `RequestComputerUse`, `StartRecording`, `StopRecording`, `ReadDocuments`, `EditDocuments`, `CreateDocuments`, `AskUserQuestion`, `SendMessageToAgent`, `FetchConversation`, `WaitForEvents`, `UploadArtifact`, `SuggestNewConversation`, `SuggestPrompt`, `InitProject`, `OpenCodeReview`, `InsertCodeReviewComments` | PascalCase variant name |
+| `ReadSkill` of a bundled skill (no file on disk; `tool_input` is `{ bundled_skill_id }`), `UseComputer`, `RequestComputerUse`, `StartRecording`, `StopRecording`, `ReadDocuments`, `EditDocuments`, `CreateDocuments`, `AskUserQuestion`, `SendMessageToAgent`, `FetchConversation`, `WaitForEvents`, `UploadArtifact`, `SuggestNewConversation`, `SuggestPrompt`, `InitProject`, `OpenCodeReview`, `InsertCodeReviewComments` | PascalCase variant name |
 
 A `"*"` matcher on `preToolUse` will fire for the Warp-only names. Hook authors who wrote for Cursor will see unfamiliar tool names and must allow by default. Cursor's `WebSearch`/`WebFetch` never appear because those tools run on warp-server.
+
+`tool_input` uses Cursor's field names where Warp's action maps onto a Cursor tool, so a script written for Cursor reads it unchanged: file edits name their file as `file_path` and a string replacement as `old_string` and `new_string`, with a top-level `file_path` when every edit in the batch is to one file; an MCP call's `tool_input` is the tool's own arguments, with the server named beside it as `mcp_server_id`, as the MCP events name it. The full list of differences a Cursor script sees is kept in `cursor-script-compatibility.md`.
 
 For `subagentStart`/`subagentStop`, Cursor matches on `generalPurpose`/`explore`/`shell`. Warp would match on its own type string (section 3.6).
 
