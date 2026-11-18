@@ -2939,8 +2939,7 @@ union PopulateMerkleTreeCacheResult = PopulateMerkleTreeCacheOutput | UserFacing
 
 input PrewarmedSandboxConfigInput {
   """
-  The Factory experiment keys whose values an assignment should carry. Absent
-  means no keys.
+  The Factory experiment keys the sandbox wants delivered with its assignment.
   """
   experimentKeys: [String!]
   githubCredentialContractVersion: Int
@@ -5454,7 +5453,7 @@ type ExecutionConfiguration {
   The run's Factory experiment values as a JSON object, or null when it has
   none.
   """
-  experimentalJson: String @deprecated(reason: "Use experiments instead")
+  experimentalJson: String @deprecated(reason: "Ask for the keys you use with experimentKeys and read experiments.")
   """
   The run's Factory experiment values for the keys the client asked for, in the
   order asked. A key the run has no value for is omitted.

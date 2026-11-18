@@ -580,8 +580,8 @@ pub(crate) async fn register_environment_skills(
                 if me.cwd_scoped_cloud_skills_enabled() {
                     manager.set_cloud_working_dir(me.harness_working_dir.clone());
                 } else if !skills.is_empty() {
-                    // A run with no environment skills keeps the ordinary cwd scoping, which
-                    // local runs rely on.
+                    // The unscoped listing exists to surface environment skills from every cwd;
+                    // with none to surface, ordinary cwd scoping stays in effect.
                     manager.set_cloud_environment(true);
                 }
                 manager.handle_skills_added(skills);
