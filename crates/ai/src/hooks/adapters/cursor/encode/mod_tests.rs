@@ -1,26 +1,30 @@
 use std::ops::Range;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use chrono::{Local, TimeZone};
 use serde_json::{Value, json};
 use warp_terminal::event::ObservedExitStatus;
 use warp_terminal::model::BlockId;
+use warp_util::local_or_remote_path::LocalOrRemotePath;
 
 use super::*;
 use crate::agent::FileLocations;
 use crate::agent::action::{
-    AIAgentActionType, FileEdit, ReadFilesRequest, RunAgentsAgentRunConfig, RunAgentsExecutionMode,
-    RunAgentsRequest,
+    AIAgentActionType, FileEdit, ReadFilesRequest, ReadSkillRequest, RunAgentsAgentRunConfig,
+    RunAgentsExecutionMode, RunAgentsRequest,
 };
 use crate::agent::action_result::{
     AIAgentActionResultType, AnyFileContent, CallMCPToolResult, FileContext, ReadFilesFailedFile,
     ReadFilesResult, RequestCommandOutputResult,
 };
+use crate::diff_validation::ParsedDiff;
 use crate::hooks::adapters::cursor::test_support::{
     EVENT_FIXTURES, FIXTURE_CONVERSATION_ID, completed_shell, fixture_envelope, json, mcp_action,
     shell_action, tool_failure, tool_pre, tool_result,
 };
 use crate::hooks::model::{HookTurnId, PromptProvenance, TurnStopStatus};
+use crate::skills::SkillReference;
 
 /// The payload each `stdin.json` fixture was written for.
 fn fixture_payload(event: CursorEvent) -> HookPayload {
@@ -337,10 +341,11 @@ fn tool_input_describes_non_shell_actions() {
         json!({
             "title": "Replace old.rs",
             "edits": [
-                { "kind": "create", "file": "new.rs", "content": "fn main() {}", "allow_overwrite": false },
-                { "kind": "delete", "file": "old.rs" }
+                { "kind": "create", "file_path": "new.rs", "content": "fn main() {}", "allow_overwrite": false },
+                { "kind": "delete", "file_path": "old.rs" }
             ]
-        })
+        }),
+        "a batch over two files names no single file_path"
     );
 
     let mcp = tool_pre(mcp_action("read_file", json!({ "path": "a" })));
@@ -348,11 +353,12 @@ fn tool_input_describes_non_shell_actions() {
     assert_eq!(input["tool_name"], "MCP:read_file");
     assert_eq!(
         input["tool_input"],
-        json!({
-            "server_id": "22222222-2222-2222-2222-222222222222",
-            "name": "read_file",
-            "input": { "path": "a" }
-        })
+        json!({ "path": "a" }),
+        "the input is the tool's own arguments"
+    );
+    assert_eq!(
+        input["mcp_server_id"],
+        "22222222-2222-2222-2222-222222222222"
     );
 
     let agents = tool_pre(AIAgentActionType::RunAgents(Box::new(RunAgentsRequest {
@@ -383,6 +389,81 @@ fn tool_input_describes_non_shell_actions() {
     assert!(
         !input["tool_input"].to_string().contains("secret"),
         "the harness secret name is not part of the input"
+    );
+}
+
+#[test]
+fn a_skill_loaded_from_disk_is_a_read_of_its_skill_file() {
+    let on_disk = tool_pre(AIAgentActionType::ReadSkill(ReadSkillRequest {
+        skill: SkillReference::Path(LocalOrRemotePath::Local(PathBuf::from(
+            "/work/repo/.agents/skills/deploy/SKILL.md",
+        ))),
+    }));
+    let input = encode(CursorEvent::PreToolUse, on_disk);
+    assert_eq!(input["tool_name"], "Read");
+    assert_eq!(
+        input["tool_input"],
+        json!({ "file_path": "/work/repo/.agents/skills/deploy/SKILL.md", "skill": true })
+    );
+
+    let bundled = tool_pre(AIAgentActionType::ReadSkill(ReadSkillRequest {
+        skill: SkillReference::BundledSkillId("create-pr".to_owned()),
+    }));
+    let input = encode(CursorEvent::PreToolUse, bundled);
+    assert_eq!(input["tool_name"], "ReadSkill");
+    assert_eq!(
+        input["tool_input"],
+        json!({ "bundled_skill_id": "create-pr" })
+    );
+}
+
+#[test]
+fn edits_to_one_file_name_it_with_cursors_field_names() {
+    let edit = tool_pre(AIAgentActionType::RequestFileEdits {
+        file_edits: vec![
+            FileEdit::Edit(ParsedDiff::StrReplaceEdit {
+                file: Some("src/lib.rs".to_owned()),
+                search: Some("a".to_owned()),
+                replace: Some("b".to_owned()),
+            }),
+            FileEdit::Edit(ParsedDiff::StrReplaceEdit {
+                file: Some("src/lib.rs".to_owned()),
+                search: Some("c".to_owned()),
+                replace: Some("d".to_owned()),
+            }),
+        ],
+        title: None,
+    });
+    let input = encode(CursorEvent::PreToolUse, edit);
+    assert_eq!(input["tool_name"], "Write");
+    assert_eq!(input["tool_input"]["file_path"], "src/lib.rs");
+    assert_eq!(
+        input["tool_input"]["edits"][1],
+        json!({ "kind": "edit", "file_path": "src/lib.rs", "old_string": "c", "new_string": "d" })
+    );
+
+    let delete = tool_pre(AIAgentActionType::RequestFileEdits {
+        file_edits: vec![FileEdit::Delete {
+            file: Some("old.rs".to_owned()),
+        }],
+        title: None,
+    });
+    let input = encode(CursorEvent::PreToolUse, delete);
+    assert_eq!(input["tool_name"], "Delete");
+    assert_eq!(input["tool_input"]["file_path"], "old.rs");
+
+    let nameless = tool_pre(AIAgentActionType::RequestFileEdits {
+        file_edits: vec![FileEdit::Create {
+            file: None,
+            content: None,
+            allow_overwrite: false,
+        }],
+        title: None,
+    });
+    let input = encode(CursorEvent::PreToolUse, nameless);
+    assert!(
+        input["tool_input"].get("file_path").is_none(),
+        "an edit with no file names none"
     );
 }
 
