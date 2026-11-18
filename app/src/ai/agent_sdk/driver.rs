@@ -730,8 +730,8 @@ pub struct AgentDriverOptions {
     pub use_factory_repositories: bool,
     pub github_credential_mode: GitHubCredentialMode,
     pub(crate) credential_store_owner: Option<ManagedStoreOwner>,
-    /// Server-provided experiments for this run.
-    pub experimental: Option<serde_json::Map<String, serde_json::Value>>,
+    /// Whether the run's Factory experiments scope cloud skill listings to the working directory.
+    pub skills_listing_deltas: bool,
     /// Parent run ID for child orchestration flows, if this task was spawned by another run.
     pub parent_run_id: Option<String>,
     /// Whether the agent run should share its session.
@@ -804,7 +804,7 @@ struct RunConfiguration {
     use_factory_repositories: bool,
     github_credential_mode: GitHubCredentialMode,
     credential_store_owner: Option<ManagedStoreOwner>,
-    experimental: Option<serde_json::Map<String, serde_json::Value>>,
+    skills_listing_deltas: bool,
     parent_run_id: Option<String>,
     idle_on_complete: Option<Duration>,
     idle_on_fail: Option<Duration>,
@@ -846,7 +846,7 @@ fn split_run_options(
         use_factory_repositories,
         github_credential_mode,
         credential_store_owner,
-        experimental,
+        skills_listing_deltas,
         parent_run_id,
         should_share,
         idle_on_complete,
@@ -996,7 +996,7 @@ fn split_run_options(
             use_factory_repositories,
             github_credential_mode,
             credential_store_owner,
-            experimental,
+            skills_listing_deltas,
             parent_run_id,
             idle_on_complete,
             idle_on_fail,
@@ -1079,7 +1079,7 @@ pub struct AgentDriver {
     use_factory_repositories: bool,
     github_credential_mode: GitHubCredentialMode,
     credential_store_owner: Option<ManagedStoreOwner>,
-    pub experimental: Option<serde_json::Map<String, serde_json::Value>>,
+    skills_listing_deltas: bool,
     team_scope: Option<HeadlessTeamScope>,
     bedrock_oidc_credentials: Option<BedrockOidcCredentialsConfig>,
 
@@ -1521,13 +1521,7 @@ impl From<PrepareEnvironmentError> for AgentDriverError {
 
 impl AgentDriver {
     fn cwd_scoped_cloud_skills_enabled(&self) -> bool {
-        FeatureFlag::CwdScopedCloudSkills.is_enabled()
-            || self
-                .experimental
-                .as_ref()
-                .and_then(|experiments| experiments.get("skillsListingDeltas"))
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(false)
+        FeatureFlag::CwdScopedCloudSkills.is_enabled() || self.skills_listing_deltas
     }
 
     fn idle_timeout_sender<T: Send + 'static>(
@@ -1660,7 +1654,7 @@ impl AgentDriver {
             use_factory_repositories: false,
             github_credential_mode: GitHubCredentialMode::Legacy,
             credential_store_owner: None,
-            experimental: None,
+            skills_listing_deltas: false,
             team_scope: None,
             bedrock_oidc_credentials: None,
             harness: None,
@@ -1715,7 +1709,7 @@ impl AgentDriver {
             use_factory_repositories,
             github_credential_mode,
             credential_store_owner,
-            experimental,
+            skills_listing_deltas,
             parent_run_id,
             idle_on_complete,
             idle_on_fail,
@@ -1764,7 +1758,7 @@ impl AgentDriver {
         self.github_credential_mode = github_credential_mode;
         self.credential_store_owner = credential_store_owner;
         self.factory_repository_contract = use_factory_repositories;
-        self.experimental = experimental;
+        self.skills_listing_deltas = skills_listing_deltas;
         self.parent_run_id = parent_run_id;
         self.idle_on_complete = idle_on_complete;
         self.idle_on_fail = idle_on_fail;

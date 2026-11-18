@@ -105,7 +105,11 @@ async fn prepare_and_wait(
         .await?;
 
     let config = api
-        .fetch_configuration(&sandbox_id, supports_deferred_repositories)
+        .fetch_configuration(
+            &sandbox_id,
+            supports_deferred_repositories,
+            execution_config::requested_experiment_keys(),
+        )
         .await?;
     anyhow::ensure!(
         config.sandbox_id == sandbox_id,
@@ -234,7 +238,11 @@ pub(super) async fn renew_standby_credentials(
                 owner,
                 bounded_control(
                     clock,
-                    api.fetch_configuration(sandbox_id, supports_deferred_repositories),
+                    api.fetch_configuration(
+                        sandbox_id,
+                        supports_deferred_repositories,
+                        execution_config::requested_experiment_keys(),
+                    ),
                 ),
             )
             .await?;

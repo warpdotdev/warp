@@ -718,8 +718,8 @@ fn build_execution_task_and_options(
         sources: execution_config::agent_hook_sources(config.agent_hook_sources)?,
         surface: driver::hooks::run_surface_for(true),
     };
-    let experimental = execution_config::experimental(config.experimental_json.as_deref());
-    log_factory_experimental_config(experimental.as_ref());
+    let skills_listing_deltas = execution_config::skills_listing_deltas(&config.experiments);
+    log_skills_listing_deltas(skills_listing_deltas);
     let mut factory_skill_dirs = execution_config::factory_skill_dirs(config.factory_skill_dirs)?;
     let factory_definition_sha = execution_config::factory_definition_sha(config.factory_branch)?;
     let definition_skill_dirs = factory_skill_dirs.clone();
@@ -741,7 +741,7 @@ fn build_execution_task_and_options(
         use_factory_repositories,
         github_credential_mode: GitHubCredentialMode::Legacy,
         credential_store_owner: None,
-        experimental,
+        skills_listing_deltas,
         parent_run_id: config.parent_run_id.map(|id| id.into_inner()),
         should_share: FeatureFlag::AgentSharedSessions.is_enabled(),
         idle_on_complete,
@@ -805,20 +805,9 @@ fn build_execution_task_and_options(
     ))
 }
 
-/// Records whether a run carries Factory experiment values, without their contents.
-fn log_factory_experimental_config(
-    experimental: Option<&serde_json::Map<String, serde_json::Value>>,
-) {
-    match experimental {
-        Some(values) => warp_core::safe_info!(
-            safe: ("factory_experimental_config state=read_uninterpreted key_count={}", values.len()),
-            full: ("factory_experimental_config state=read_uninterpreted key_count={}", values.len())
-        ),
-        None => warp_core::safe_info!(
-            safe: ("factory_experimental_config state=absent key_count=0"),
-            full: ("factory_experimental_config state=absent key_count=0")
-        ),
-    }
+/// Records the one Factory experiment value a run acts on.
+fn log_skills_listing_deltas(enabled: bool) {
+    log::info!("factory_experiments skills_listing_deltas={enabled}");
 }
 
 fn reconcile_task_harness(
@@ -1250,6 +1239,7 @@ impl AgentDriverRunner {
                     execution_id,
                     workload_token.clone(),
                     supports_deferred_repositories,
+                    execution_config::requested_experiment_keys(),
                 )
             },
             retry::is_transient_graphql_or_http_error,
@@ -1630,7 +1620,7 @@ impl AgentDriverRunner {
                     use_factory_repositories,
                     github_credential_mode,
                     credential_store_owner: None,
-                    experimental: None,
+                    skills_listing_deltas: false,
                     parent_run_id: None,
                     should_share,
                     idle_on_complete: args.idle_on_complete.map(|d| d.into()),
@@ -1990,7 +1980,7 @@ impl AgentDriverRunner {
             task_harness_model_config,
             additional_source_repos,
             task_team_scope,
-            experimental,
+            skills_listing_deltas,
         ) = match task_metadata_result {
             Ok(Some(task_metadata)) => {
                 // The task's harness is stored on the snapshot; if absent, it's the default Oz.
@@ -2002,9 +1992,14 @@ impl AgentDriverRunner {
                     .map(|h| h.harness_type)
                     .unwrap_or(Harness::Oz);
                 let task_harness_model_config = task_harness_config.and_then(|h| h.model_config());
-                let experimental = agent_config_snapshot
+                let skills_listing_deltas = agent_config_snapshot
                     .as_ref()
-                    .and_then(|config| config.experimental.clone());
+                    .and_then(|config| config.experimental.as_ref())
+                    .and_then(|experiments| {
+                        experiments.get(execution_config::SKILLS_LISTING_DELTAS_EXPERIMENT)
+                    })
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false);
                 let additional_source_repos = agent_config_snapshot
                     .and_then(|config| config.additional_source_repos)
                     .unwrap_or_default();
@@ -2019,13 +2014,13 @@ impl AgentDriverRunner {
                     task_harness_model_config,
                     additional_source_repos,
                     task_team_scope,
-                    experimental,
+                    skills_listing_deltas,
                 )
             }
-            Ok(None) => (None, None, None, None, Vec::new(), None, None),
+            Ok(None) => (None, None, None, None, Vec::new(), None, false),
             Err(err) => return Err(AgentDriverError::TaskMetadataFetchFailed(err)),
         };
-        log_factory_experimental_config(experimental.as_ref());
+        log_skills_listing_deltas(skills_listing_deltas);
 
         // Validate the requested `--harness` against the task's harness setting. This avoids the
         // extra conversation-metadata roundtrip that would otherwise be needed downstream when the
@@ -2043,7 +2038,7 @@ impl AgentDriverRunner {
 
         driver_options.task_id = parsed_task_id;
         driver_options.parent_run_id = parent_run_id;
-        driver_options.experimental = experimental;
+        driver_options.skills_listing_deltas = skills_listing_deltas;
         driver_options.secrets = secrets;
         // The server-reported task scope is authoritative for the headless window this run
         // creates; it supersedes whatever scope was resolved from CLI args before the task was

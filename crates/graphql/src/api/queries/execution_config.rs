@@ -9,6 +9,9 @@ use crate::schema;
 pub struct ExecutionBootstrapVariables {
     pub execution_id: cynic::Id,
     pub supports_deferred_repositories: bool,
+    /// The Factory experiment keys whose values the configuration should carry. Absent means no
+    /// keys.
+    pub experiment_keys: Option<Vec<String>>,
     pub secrets_input: TaskSecretsInput,
     pub task_input: TaskInput,
     pub request_context: RequestContext,
@@ -59,7 +62,7 @@ pub struct BootstrapTaskOutput {
 #[derive(cynic::QueryFragment, Debug)]
 #[cynic(graphql_type = "Task", variables = "ExecutionBootstrapVariables")]
 pub struct BootstrapTask {
-    #[arguments(executionId: $execution_id, supportsDeferredRepositories: $supports_deferred_repositories, supportsAgentHooks: true)]
+    #[arguments(executionId: $execution_id, supportsDeferredRepositories: $supports_deferred_repositories, supportsAgentHooks: true, experimentKeys: $experiment_keys)]
     pub execution_config: ExecutionConfiguration,
     pub attachments: Vec<TaskAttachment>,
 }
@@ -93,7 +96,16 @@ pub struct ExecutionConfiguration {
     pub idle_on_fail_seconds: Option<i32>,
     pub snapshot_disabled: bool,
     pub agent_hook_sources: Vec<AgentHookSource>,
-    pub experimental_json: Option<String>,
+    /// The run's values for the requested Factory experiment keys, in request order. A key the
+    /// run has no value for is omitted.
+    pub experiments: Vec<FactoryExperimentValue>,
+}
+
+#[derive(cynic::QueryFragment, Clone, Debug, PartialEq, Eq)]
+pub struct FactoryExperimentValue {
+    pub key: String,
+    /// The value as JSON text.
+    pub value_json: String,
 }
 
 #[derive(cynic::Enum, Clone, Copy, Debug, PartialEq, Eq)]

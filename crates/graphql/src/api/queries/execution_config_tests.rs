@@ -1,4 +1,4 @@
-use super::{ExecutionBootstrap, ExecutionBootstrapVariables};
+use super::{ExecutionBootstrap, ExecutionBootstrapVariables, FactoryExperimentValue};
 use crate::api::queries::task_attachments::TaskInput;
 use crate::api::queries::task_secrets::TaskSecretsInput;
 use crate::request_context::{ClientContext, OsContext, RequestContext};
@@ -9,6 +9,7 @@ fn bootstrap_fetches_all_task_data_in_one_operation() {
         let operation = ExecutionBootstrap::build_with_capabilities(ExecutionBootstrapVariables {
             execution_id: "execution".into(),
             supports_deferred_repositories,
+            experiment_keys: Some(vec!["experiment".to_owned()]),
             secrets_input: TaskSecretsInput {
                 task_id: "task".into(),
                 workload_token: "token".to_owned(),
@@ -57,15 +58,27 @@ fn bootstrap_fetches_all_task_data_in_one_operation() {
             supports_deferred_repositories
         );
         assert!(query.contains("supportsAgentHooks: true"));
-        for field in ["agentHookSources", "onAsk", "strict", "experimentalJson"] {
+        assert!(query.contains("experimentKeys: $experimentKeys"));
+        for field in [
+            "agentHookSources",
+            "onAsk",
+            "strict",
+            "experiments",
+            "valueJson",
+        ] {
             assert!(query.contains(field), "missing {field}");
         }
+        assert!(!query.contains("experimentalJson"));
         assert!(!query.contains("@skip"));
         let variables = serde_json::to_value(&operation.variables).unwrap();
         assert_eq!(variables["executionId"], "execution");
         assert_eq!(
             variables["supportsDeferredRepositories"],
             supports_deferred_repositories
+        );
+        assert_eq!(
+            variables["experimentKeys"],
+            serde_json::json!(["experiment"])
         );
         assert_eq!(variables["secretsInput"]["taskId"], "task");
         assert_eq!(variables["secretsInput"]["workloadToken"], "token");
@@ -102,7 +115,7 @@ fn configuration_json() -> serde_json::Value {
         "idleOnFailSeconds": null,
         "snapshotDisabled": false,
         "agentHookSources": [],
-        "experimentalJson": null
+        "experiments": []
     })
 }
 
@@ -120,13 +133,25 @@ fn experiment_values_decode_as_the_json_text_the_server_sent() {
     let mut json = configuration_json();
     let config: super::ExecutionConfiguration =
         serde_json::from_value(json.clone()).expect("decodes");
-    assert_eq!(config.experimental_json, None);
+    assert!(config.experiments.is_empty());
 
-    json["experimentalJson"] = serde_json::json!(r#"{"skillsListingDeltas":true}"#);
+    json["experiments"] = serde_json::json!([
+        { "key": "first", "valueJson": "true" },
+        { "key": "second", "valueJson": "{\"nested\":1}" }
+    ]);
     let config: super::ExecutionConfiguration = serde_json::from_value(json).expect("decodes");
     assert_eq!(
-        config.experimental_json.as_deref(),
-        Some(r#"{"skillsListingDeltas":true}"#)
+        config.experiments,
+        [
+            FactoryExperimentValue {
+                key: "first".to_owned(),
+                value_json: "true".to_owned(),
+            },
+            FactoryExperimentValue {
+                key: "second".to_owned(),
+                value_json: r#"{"nested":1}"#.to_owned(),
+            },
+        ]
     );
 }
 

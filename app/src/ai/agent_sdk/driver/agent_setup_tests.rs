@@ -275,10 +275,7 @@ fn assert_environment_skill_listing_fallback(flag_enabled: bool, skill_deltas: b
             let terminal_driver = TerminalDriver::create_from_existing_view(terminal, ctx);
             let mut driver = AgentDriver::new_for_test(working_dir.clone(), terminal_driver, ctx);
             driver.harness_working_dir = harness_dir.clone();
-            driver.experimental = Some(serde_json::Map::from_iter([(
-                "skillsListingDeltas".into(),
-                serde_json::Value::Bool(skill_deltas),
-            )]));
+            driver.skills_listing_deltas = skill_deltas;
             driver
         });
         let foreground = driver.update(&mut app, |_, ctx| ctx.spawner());
@@ -321,10 +318,7 @@ fn read_skills_leaves_the_skill_manager_untouched() {
             let terminal_driver = TerminalDriver::create_from_existing_view(terminal, ctx);
             let mut driver = AgentDriver::new_for_test(working_dir.clone(), terminal_driver, ctx);
             driver.harness_working_dir = harness_dir.clone();
-            driver.experimental = Some(serde_json::Map::from_iter([(
-                "skillsListingDeltas".into(),
-                serde_json::Value::Bool(true),
-            )]));
+            driver.skills_listing_deltas = true;
             driver
         });
         let foreground = driver.update(&mut app, |_, ctx| ctx.spawner());
@@ -382,10 +376,7 @@ fn prepared_skills_register_under_the_runs_listing_mode() {
                 let mut driver =
                     AgentDriver::new_for_test(working_dir.clone(), terminal_driver, ctx);
                 driver.harness_working_dir = harness_dir.clone();
-                driver.experimental = Some(serde_json::Map::from_iter([(
-                    "skillsListingDeltas".into(),
-                    serde_json::Value::Bool(skill_deltas),
-                )]));
+                driver.skills_listing_deltas = skill_deltas;
                 driver.skill_dirs.clear();
                 driver
             });

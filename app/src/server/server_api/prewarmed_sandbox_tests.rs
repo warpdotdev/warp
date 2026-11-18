@@ -5,7 +5,9 @@ use std::sync::Arc;
 use futures::executor::block_on;
 #[cfg(not(feature = "skip_login"))]
 use mockito::Matcher;
-use warp_graphql::queries::execution_config::{CodeForge, ExecutionRepositoryRefType};
+use warp_graphql::queries::execution_config::{
+    CodeForge, ExecutionRepositoryRefType, FactoryExperimentValue,
+};
 #[cfg(not(feature = "skip_login"))]
 use warp_server_client::base_client::AMBIENT_WORKLOAD_TOKEN_HEADER;
 
@@ -135,7 +137,7 @@ fn configuration_errors_return_after_one_request() {
             .create();
         drop(server);
 
-        let error = block_on(api.fetch_configuration("sandbox", true)).unwrap_err();
+        let error = block_on(api.fetch_configuration("sandbox", true, Vec::new())).unwrap_err();
         assert_eq!(
             match error
                 .downcast_ref::<warp_graphql::client::GraphQLError>()
@@ -308,7 +310,8 @@ fn configuration_uses_default_graphql_timeout_and_authentication() {
                 "githubCredentialContractVersion": 1,
                 "runnerPreparationContractVersion": 1,
                 "supportsDeferredRepositories": true,
-                "supportsAgentHooks": true
+                "supportsAgentHooks": true,
+                "experimentKeys": ["experiment"]
             })
         );
     }));
@@ -322,9 +325,13 @@ fn configuration_uses_default_graphql_timeout_and_authentication() {
         .create();
     drop(server);
     assert_eq!(
-        block_on(api.fetch_configuration("11111111-2222-3333-4444-555555555555", true))
-            .unwrap()
-            .generation,
+        block_on(api.fetch_configuration(
+            "11111111-2222-3333-4444-555555555555",
+            true,
+            vec!["experiment".into()]
+        ))
+        .unwrap()
+        .generation,
         "abc123"
     );
     request.assert();
@@ -360,7 +367,7 @@ fn configuration_rejects_user_errors_unknown_results_and_missing_data() {
             .with_body(body.to_string())
             .create();
         drop(server);
-        let error = block_on(api.fetch_configuration("sandbox", true)).unwrap_err();
+        let error = block_on(api.fetch_configuration("sandbox", true, Vec::new())).unwrap_err();
         assert_eq!(error.to_string(), expected);
         assert!(!format!("{error:#}").contains("private-server-detail"));
         request.assert();
@@ -607,10 +614,10 @@ fn an_assignment_without_hook_sources_decodes_with_none() {
 }
 
 /// A server that predates Factory experiments on the execution configuration sends no
-/// `experimentalJson`; the assignment still decodes, with no experiment values.
+/// `experiments`; the assignment still decodes, with no experiment values.
 #[test]
-fn an_assignment_without_experiment_values_decodes_with_none() {
-    let experiment_values = |fixture: serde_json::Value| {
+fn an_assignment_without_experiments_decodes_with_none() {
+    let experiments = |fixture: serde_json::Value| {
         let event: PrewarmedSandboxControlEvent = serde_json::from_value(fixture).unwrap();
         let PrewarmedSandboxControlEvent::Assignment {
             execution_config, ..
@@ -618,21 +625,24 @@ fn an_assignment_without_experiment_values_decodes_with_none() {
         else {
             panic!("expected assignment event");
         };
-        execution_config.experimental_json
+        execution_config.experiments
     };
     let mut fixture: serde_json::Value =
         serde_json::from_str(include_str!("testdata/prewarmed_assignment_fresh_run.json")).unwrap();
-    assert_eq!(experiment_values(fixture.clone()), None);
+    assert!(experiments(fixture.clone()).is_empty());
     fixture["execution_config"]
         .as_object_mut()
         .unwrap()
-        .remove("experimentalJson");
-    assert_eq!(experiment_values(fixture.clone()), None);
-    fixture["execution_config"]["experimentalJson"] =
-        serde_json::json!(r#"{"skillsListingDeltas":true}"#);
+        .remove("experiments");
+    assert!(experiments(fixture.clone()).is_empty());
+    fixture["execution_config"]["experiments"] =
+        serde_json::json!([{ "key": "experiment", "valueJson": "true" }]);
     assert_eq!(
-        experiment_values(fixture).as_deref(),
-        Some(r#"{"skillsListingDeltas":true}"#)
+        experiments(fixture),
+        [FactoryExperimentValue {
+            key: "experiment".into(),
+            value_json: "true".into(),
+        }]
     );
 }
 
@@ -728,7 +738,7 @@ fn all_endpoints_use_cached_credentials_and_expected_payloads() {
     drop(server);
     block_on(async {
         assert_eq!(
-            api.fetch_configuration("11111111-2222-3333-4444-555555555555", true)
+            api.fetch_configuration("11111111-2222-3333-4444-555555555555", true, Vec::new())
                 .await
                 .unwrap()
                 .generation,
@@ -911,7 +921,7 @@ fn config_gone_requires_the_structured_lifecycle_marker() {
             .with_body(response.to_string())
             .create();
         drop(server);
-        let error = block_on(api.fetch_configuration("sandbox", true)).unwrap_err();
+        let error = block_on(api.fetch_configuration("sandbox", true, Vec::new())).unwrap_err();
         assert_eq!(is_prewarmed_sandbox_unavailable(&error), expected);
         assert!(!format!("{error:#}").contains("private-server-detail"));
         request.assert();

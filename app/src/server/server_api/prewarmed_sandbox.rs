@@ -287,8 +287,8 @@ pub enum PrewarmedSandboxControlEvent {
 }
 
 /// Decodes an assignment's execution configuration. A server that predates `agentHookSources` or
-/// `experimentalJson` omits the field; it has no value to send, so the run gets an empty list or no
-/// experiment values rather than failing to claim the assignment.
+/// `experiments` omits the field; it has no value to send, so the run gets an empty list rather
+/// than failing to claim the assignment.
 fn assignment_execution_config<'de, D>(
     deserializer: D,
 ) -> std::result::Result<Box<ExecutionConfiguration>, D::Error>
@@ -297,12 +297,11 @@ where
 {
     let mut value = serde_json::Value::deserialize(deserializer)?;
     if let Some(config) = value.as_object_mut() {
-        config
-            .entry("agentHookSources")
-            .or_insert_with(|| serde_json::Value::Array(Vec::new()));
-        config
-            .entry("experimentalJson")
-            .or_insert(serde_json::Value::Null);
+        for field in ["agentHookSources", "experiments"] {
+            config
+                .entry(field)
+                .or_insert_with(|| serde_json::Value::Array(Vec::new()));
+        }
     }
     serde_json::from_value(value).map_err(serde::de::Error::custom)
 }
@@ -416,11 +415,13 @@ impl PrewarmedSandboxControlReader {
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
 pub trait PrewarmedSandboxClient: 'static + Send + Sync {
-    /// Fetches this sandbox's preparation plan and credentials.
+    /// Fetches this sandbox's preparation plan and credentials. `experiment_keys` names the
+    /// Factory experiment values the sandbox's eventual assignment should carry.
     async fn fetch_configuration(
         &self,
         sandbox_id: &str,
         supports_deferred_repositories: bool,
+        experiment_keys: Vec<String>,
     ) -> Result<PrewarmedSandboxConfiguration>;
 
     /// Reports whether preparation succeeded for the supplied configuration generation.
@@ -486,6 +487,7 @@ impl PrewarmedSandboxClient for ServerApi {
         &self,
         sandbox_id: &str,
         supports_deferred_repositories: bool,
+        experiment_keys: Vec<String>,
     ) -> Result<PrewarmedSandboxConfiguration> {
         let operation = PrewarmedSandboxConfig::build(PrewarmedSandboxConfigVariables {
             input: PrewarmedSandboxConfigInput {
@@ -494,6 +496,7 @@ impl PrewarmedSandboxClient for ServerApi {
                 runner_preparation_contract_version: Some(1),
                 supports_deferred_repositories: Some(supports_deferred_repositories),
                 supports_agent_hooks: Some(true),
+                experiment_keys: Some(experiment_keys),
             },
             request_context: get_request_context(),
         });

@@ -16,6 +16,7 @@ fn serializes_configuration_mutation_without_workload_token_input() {
             runner_preparation_contract_version: Some(1),
             supports_deferred_repositories: Some(true),
             supports_agent_hooks: Some(true),
+            experiment_keys: Some(vec!["experiment".to_owned()]),
         },
         request_context: RequestContext {
             client_context: ClientContext { version: None },
@@ -98,10 +99,33 @@ fn serializes_configuration_mutation_without_workload_token_input() {
             "githubCredentialContractVersion": 1,
             "runnerPreparationContractVersion": 1,
             "supportsDeferredRepositories": true,
-            "supportsAgentHooks": true
+            "supportsAgentHooks": true,
+            "experimentKeys": ["experiment"]
         })
     );
     assert!(request["variables"]["requestContext"].is_object());
+}
+
+/// A caller that asks for no experiment keys sends no `experimentKeys` field at all.
+#[test]
+fn omits_experiment_keys_when_none_are_requested() {
+    let operation = PrewarmedSandboxConfig::build(PrewarmedSandboxConfigVariables {
+        input: PrewarmedSandboxConfigInput {
+            sandbox_id: "sandbox".into(),
+            github_credential_contract_version: Some(1),
+            runner_preparation_contract_version: Some(1),
+            supports_deferred_repositories: Some(true),
+            supports_agent_hooks: Some(true),
+            experiment_keys: None,
+        },
+        request_context: get_request_context(),
+    });
+    let request = serde_json::to_value(operation).unwrap();
+    assert!(
+        request["variables"]["input"]
+            .get("experimentKeys")
+            .is_none()
+    );
 }
 
 #[test]
@@ -199,6 +223,7 @@ fn rejects_invalid_workload_token_headers() {
                 runner_preparation_contract_version: Some(1),
                 supports_deferred_repositories: Some(true),
                 supports_agent_hooks: Some(true),
+                experiment_keys: None,
             },
             request_context: get_request_context(),
         });

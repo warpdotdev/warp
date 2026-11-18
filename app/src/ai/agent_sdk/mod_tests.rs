@@ -28,6 +28,7 @@ use warp_graphql::ai::AgentTaskState;
 use warpui::{App, SingletonEntity, WindowId};
 
 use super::driver::agent_setup::configured_skills::selected_execution_skills;
+use super::execution_config::SKILLS_LISTING_DELTAS_EXPERIMENT;
 use super::{
     AgentDriverRunner, CommandAuthentication, command_authentication, command_requires_auth,
     command_to_telemetry_event, reconcile_task_harness, resolve_agent_driver_team_scope,
@@ -99,7 +100,7 @@ fn paired_execution_launch_keeps_inventory_separate_from_eager_membership() {
                 }],
                 "setupCommands": ["prepare-workspace"], "sessionSharingAcls": [],
                 "skipInitialTurn": true, "snapshotDisabled": true, "agentHookSources": [],
-                "experimentalJson": null,
+                "experiments": [],
             }))
             .unwrap();
             let (options, _, _, _) = app.update(|ctx| {
@@ -226,7 +227,7 @@ fn paired_execution_rejects_a_different_task_or_execution() {
                 "deferredRepositories": [],
                 "setupCommands": [], "sessionSharingAcls": [],
                 "skipInitialTurn": false, "snapshotDisabled": false, "agentHookSources": [],
-                "experimentalJson": null,
+                "experiments": [],
             }))
             .unwrap();
             let result = app.update(|ctx| {
@@ -260,7 +261,7 @@ fn execution_config_with_hooks(hooks: serde_json::Value) -> serde_json::Value {
         "computerUseEnabled": false, "repositories": [], "deferredRepositories": [],
         "setupCommands": [], "sessionSharingAcls": [],
         "skipInitialTurn": false, "snapshotDisabled": false, "agentHookSources": hooks,
-        "experimentalJson": null,
+        "experiments": [],
     })
 }
 
@@ -350,24 +351,22 @@ fn execution_hook_sources_reach_the_driver_in_order() {
     });
 }
 
-/// A run's Factory experiment values reach the driver from the execution configuration, so a run
-/// that bootstraps this way opts into the same experiments as one that reads its task.
+/// A run's Factory experiment value reaches the driver from the execution configuration as the
+/// one bool the driver acts on, so a run that bootstraps this way opts into the same listing mode
+/// as one that reads its task.
 #[test]
 fn execution_experiment_values_reach_the_driver() {
     App::test((), |mut app| async move {
         let options = options_for(&mut app, execution_config_with_hooks(json!([]))).unwrap();
-        assert_eq!(options.experimental, None);
+        assert!(!options.skills_listing_deltas);
 
         let mut config = execution_config_with_hooks(json!([]));
-        config["experimentalJson"] = json!(r#"{"skillsListingDeltas":true}"#);
+        config["experiments"] = json!([
+            { "key": "unrelated", "valueJson": "\"value\"" },
+            { "key": SKILLS_LISTING_DELTAS_EXPERIMENT, "valueJson": "true" }
+        ]);
         let options = options_for(&mut app, config).unwrap();
-        assert_eq!(
-            options.experimental,
-            Some(serde_json::Map::from_iter([(
-                "skillsListingDeltas".to_owned(),
-                json!(true)
-            )]))
-        );
+        assert!(options.skills_listing_deltas);
     });
 }
 
@@ -470,7 +469,7 @@ fn deferred_capability_bootstrap_subprocess() {
         "factoryBranch": null, "computerUseEnabled": false, "repositories": eager,
         "setupCommands": [], "sessionSharingAcls": [],
         "skipInitialTurn": false, "snapshotDisabled": false, "agentHookSources": [],
-        "experimentalJson": null,
+        "experiments": [],
     });
     if supports_deferred_repositories && scenario != "missing" {
         config["deferredRepositories"] = deferred;
@@ -816,7 +815,7 @@ pub(crate) fn agent_driver_options() -> AgentDriverOptions {
         use_factory_repositories: false,
         github_credential_mode: Default::default(),
         credential_store_owner: None,
-        experimental: None,
+        skills_listing_deltas: false,
         parent_run_id: None,
         should_share: false,
         idle_on_complete: None,
@@ -844,17 +843,13 @@ pub(crate) fn agent_driver_options() -> AgentDriverOptions {
     }
 }
 
+/// An existing task's Factory experiments reach the driver as the one bool it acts on, and the
+/// log records only that bool, never the other experiment values.
 #[test]
 fn existing_task_factory_experiments_bootstrap_and_log_without_payload() {
     for (scenario, expected_line) in [
-        (
-            "present",
-            "factory_experimental_config state=read_uninterpreted key_count=4",
-        ),
-        (
-            "absent",
-            "factory_experimental_config state=absent key_count=0",
-        ),
+        ("present", "factory_experiments skills_listing_deltas=true"),
+        ("absent", "factory_experiments skills_listing_deltas=false"),
         ("local", ""),
     ] {
         let output = ProcessCommand::new(std::env::current_exe().unwrap())
@@ -880,7 +875,7 @@ fn existing_task_factory_experiments_bootstrap_and_log_without_payload() {
         );
         let lifecycle_lines: Vec<_> = output
             .lines()
-            .filter(|line| line.contains("factory_experimental_config"))
+            .filter(|line| line.contains("factory_experiments"))
             .collect();
         if scenario == "local" {
             assert!(lifecycle_lines.is_empty(), "{output}");
@@ -890,9 +885,6 @@ fn existing_task_factory_experiments_bootstrap_and_log_without_payload() {
         assert!(lifecycle_lines[0].contains(expected_line), "{output}");
         for private_value in ["private-uid-sentinel", "secret-value-sentinel", "183749"] {
             assert!(!output.contains(private_value), "{output}");
-        }
-        for private_value in ["true", "null"] {
-            assert!(!lifecycle_lines[0].contains(private_value), "{output}");
         }
     }
 }
@@ -936,14 +928,14 @@ fn factory_experiment_bootstrap_subprocess() {
             )
             .await
             .unwrap();
-            assert!(options.experimental.is_none());
+            assert!(!options.skills_listing_deltas);
             return;
         }
 
         let experimental: serde_json::Map<String, serde_json::Value> =
             serde_json::from_value(json!({
                 "private-uid-sentinel": "secret-value-sentinel",
-                "boolean": true,
+                SKILLS_LISTING_DELTAS_EXPERIMENT: true,
                 "numeric": 183749,
                 "nullable": null
             }))
@@ -1006,14 +998,7 @@ fn factory_experiment_bootstrap_subprocess() {
         )
         .await
         .unwrap();
-        assert_eq!(
-            options.experimental,
-            if scenario == "present" {
-                Some(experimental)
-            } else {
-                None
-            }
-        );
+        assert_eq!(options.skills_listing_deltas, scenario == "present");
     });
 }
 

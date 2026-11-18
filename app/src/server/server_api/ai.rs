@@ -2105,10 +2105,12 @@ impl ServerApi {
         execution_id: &str,
         workload_token: String,
         supports_deferred_repositories: bool,
+        experiment_keys: Vec<String>,
     ) -> anyhow::Result<ExecutionBootstrapData> {
         let operation = ExecutionBootstrap::build_with_capabilities(ExecutionBootstrapVariables {
             execution_id: execution_id.to_string().into(),
             supports_deferred_repositories,
+            experiment_keys: Some(experiment_keys),
             secrets_input: TaskSecretsInput {
                 task_id: task_id.to_string().into(),
                 workload_token,
