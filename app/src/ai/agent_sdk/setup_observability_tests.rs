@@ -48,6 +48,8 @@ const EXPECTED: &[(SetupStep, SetupScope)] = &[
         SetupStep::ThirdPartyHarnessExternalConversation,
         SetupScope::Run,
     ),
+    (SetupStep::ClaudeMessageBridge, SetupScope::Run),
+    (SetupStep::ClaudeCommandStart, SetupScope::Run),
     (
         SetupStep::ThirdPartyHarnessPreparationNotificationPluginInstall,
         SetupScope::Run,

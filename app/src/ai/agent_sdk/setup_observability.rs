@@ -374,6 +374,8 @@ pub(crate) enum SetupStep {
     /// conversation binding and first-turn setup for ACP harnesses.
     ThirdPartyHarnessStart,
     ThirdPartyHarnessExternalConversation,
+    ClaudeMessageBridge,
+    ClaudeCommandStart,
     /// Sub-steps of [`SetupStep::ThirdPartyHarnessPreparation`] that track plugin
     /// install/update latency and reliability individually.
     ThirdPartyHarnessPreparationNotificationPluginInstall,
@@ -437,6 +439,8 @@ impl SetupStep {
             | Self::ThirdPartyHarnessPreparation
             | Self::ThirdPartyHarnessStart
             | Self::ThirdPartyHarnessExternalConversation
+            | Self::ClaudeMessageBridge
+            | Self::ClaudeCommandStart
             | Self::ThirdPartyHarnessPreparationNotificationPluginInstall
             | Self::ThirdPartyHarnessPreparationNotificationPluginUpdate
             | Self::ThirdPartyHarnessPreparationPlatformPluginInstall
@@ -543,6 +547,8 @@ impl SetupStep {
             Self::ThirdPartyHarnessExternalConversation => {
                 span_and_name!("setup_third_party_harness_external_conversation")
             }
+            Self::ClaudeMessageBridge => span_and_name!("setup_claude_message_bridge"),
+            Self::ClaudeCommandStart => span_and_name!("setup_claude_command_start"),
             Self::ThirdPartyHarnessPreparationNotificationPluginInstall => {
                 span_and_name!("setup_third_party_harness_preparation_notification_plugin_install")
             }
