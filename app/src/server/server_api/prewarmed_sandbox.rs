@@ -286,9 +286,9 @@ pub enum PrewarmedSandboxControlEvent {
     Unknown,
 }
 
-/// Decodes an assignment's execution configuration. A server that predates agent hooks sends no
-/// `agentHookSources`; it has none to send, so the run gets an empty list rather than failing to
-/// claim the assignment.
+/// Decodes an assignment's execution configuration. A server that predates `agentHookSources` or
+/// `experimentalJson` omits the field; it has no value to send, so the run gets an empty list or no
+/// experiment values rather than failing to claim the assignment.
 fn assignment_execution_config<'de, D>(
     deserializer: D,
 ) -> std::result::Result<Box<ExecutionConfiguration>, D::Error>

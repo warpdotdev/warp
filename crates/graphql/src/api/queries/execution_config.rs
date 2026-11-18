@@ -76,7 +76,6 @@ pub struct ExecutionConfiguration {
     pub reasoning_level: Option<String>,
     pub profile_id: Option<cynic::Id>,
     pub mcp_servers_json: String,
-    pub experimental_json: Option<String>,
     pub skills: Vec<ExecutionSkillSpec>,
     pub factory_skill_dirs: Vec<String>,
     pub factory_branch: Option<FactoryBranchExecutionConfig>,
@@ -94,6 +93,7 @@ pub struct ExecutionConfiguration {
     pub idle_on_fail_seconds: Option<i32>,
     pub snapshot_disabled: bool,
     pub agent_hook_sources: Vec<AgentHookSource>,
+    pub experimental_json: Option<String>,
 }
 
 #[derive(cynic::Enum, Clone, Copy, Debug, PartialEq, Eq)]

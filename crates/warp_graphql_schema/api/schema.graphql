@@ -5420,7 +5420,6 @@ type ExecutionConfiguration {
   reasoningLevel: String
   profileId: ID
   mcpServersJson: String!
-  experimentalJson: String
   skills: [ExecutionSkillSpec!]!
   factorySkillDirs: [String!]!
   factoryBranch: FactoryBranchExecutionConfig
@@ -5441,6 +5440,11 @@ type ExecutionConfiguration {
   factory's, each in declared order. Duplicates are not merged.
   """
   agentHookSources: [AgentHookSource!]!
+  """
+  The run's Factory experiment values as a JSON object, or null when it has
+  none.
+  """
+  experimentalJson: String
 }
 
 """

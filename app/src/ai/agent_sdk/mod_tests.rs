@@ -88,7 +88,7 @@ fn paired_execution_launch_keeps_inventory_separate_from_eager_membership() {
                 "reasoningLevel": null, "profileId": null, "computerUseModelId": null,
                 "inferenceProviders": null, "providers": null,
                 "idleOnCompleteSeconds": 120, "idleOnFailSeconds": 60,
-                "mcpServersJson": "{}", "experimentalJson": null, "skills": [], "factorySkillDirs": [".agents/skills"],
+                "mcpServersJson": "{}", "skills": [], "factorySkillDirs": [".agents/skills"],
                 "factoryBranch": null, "computerUseEnabled": false, "repositories": eager,
                 "deferredRepositories": [{
                     "forge": deferred_forge, "owner": "platform/backend", "name": "api",
@@ -98,6 +98,7 @@ fn paired_execution_launch_keeps_inventory_separate_from_eager_membership() {
                 }],
                 "setupCommands": ["prepare-workspace"], "sessionSharingAcls": [],
                 "skipInitialTurn": true, "snapshotDisabled": true, "agentHookSources": [],
+                "experimentalJson": null,
             }))
             .unwrap();
             let (options, _, _, _) = app.update(|ctx| {
@@ -219,11 +220,12 @@ fn paired_execution_rejects_a_different_task_or_execution() {
                 "reasoningLevel": null, "profileId": null, "computerUseModelId": null,
                 "inferenceProviders": null, "providers": null,
                 "idleOnCompleteSeconds": null, "idleOnFailSeconds": null,
-                "mcpServersJson": "{}", "experimentalJson": null, "skills": [], "factorySkillDirs": [],
+                "mcpServersJson": "{}", "skills": [], "factorySkillDirs": [],
                 "factoryBranch": null, "computerUseEnabled": false, "repositories": [],
                 "deferredRepositories": [],
                 "setupCommands": [], "sessionSharingAcls": [],
                 "skipInitialTurn": false, "snapshotDisabled": false, "agentHookSources": [],
+                "experimentalJson": null,
             }))
             .unwrap();
             let result = app.update(|ctx| {
@@ -253,53 +255,12 @@ fn execution_config_with_hooks(hooks: serde_json::Value) -> serde_json::Value {
         "reasoningLevel": null, "profileId": null, "computerUseModelId": null,
         "inferenceProviders": null, "providers": null,
         "idleOnCompleteSeconds": null, "idleOnFailSeconds": null,
-        "mcpServersJson": "{}", "experimentalJson": null, "skills": [], "factorySkillDirs": [], "factoryBranch": null,
+        "mcpServersJson": "{}", "skills": [], "factorySkillDirs": [], "factoryBranch": null,
         "computerUseEnabled": false, "repositories": [], "deferredRepositories": [],
         "setupCommands": [], "sessionSharingAcls": [],
         "skipInitialTurn": false, "snapshotDisabled": false, "agentHookSources": hooks,
+        "experimentalJson": null,
     })
-}
-
-#[test]
-fn execution_experiments_reach_driver_options() {
-    App::test((), |mut app| async move {
-        let experimental = json!({
-            "skillsListingDeltas": true,
-            "disabled": false,
-            "future": {"value": 3},
-        });
-        let mut config = execution_config_with_hooks(json!([]));
-        config["experimentalJson"] = json!(experimental.to_string());
-        assert_eq!(
-            options_for(&mut app, config).unwrap().experimental,
-            experimental.as_object().cloned()
-        );
-    });
-}
-
-#[test]
-fn execution_experiments_require_an_object_or_null() {
-    App::test((), |mut app| async move {
-        for experimental in [json!(null), json!("null")] {
-            let mut config = execution_config_with_hooks(json!([]));
-            config["experimentalJson"] = experimental;
-            assert!(
-                options_for(&mut app, config)
-                    .unwrap()
-                    .experimental
-                    .is_none()
-            );
-        }
-        for experimental in ["[]", "{"] {
-            let mut config = execution_config_with_hooks(json!([]));
-            config["experimentalJson"] = json!(experimental);
-            let error = options_for(&mut app, config).err().unwrap();
-            assert_eq!(
-                error.to_string(),
-                "Invalid execution experimental configuration"
-            );
-        }
-    });
 }
 
 fn options_for(app: &mut App, config: serde_json::Value) -> anyhow::Result<AgentDriverOptions> {
@@ -384,6 +345,27 @@ fn execution_hook_sources_reach_the_driver_in_order() {
                     policy: ai::hooks::HookSourcePolicy::default(),
                 },
             ]
+        );
+    });
+}
+
+/// A run's Factory experiment values reach the driver from the execution configuration, so a run
+/// that bootstraps this way opts into the same experiments as one that reads its task.
+#[test]
+fn execution_experiment_values_reach_the_driver() {
+    App::test((), |mut app| async move {
+        let options = options_for(&mut app, execution_config_with_hooks(json!([]))).unwrap();
+        assert_eq!(options.experimental, None);
+
+        let mut config = execution_config_with_hooks(json!([]));
+        config["experimentalJson"] = json!(r#"{"skillsListingDeltas":true}"#);
+        let options = options_for(&mut app, config).unwrap();
+        assert_eq!(
+            options.experimental,
+            Some(serde_json::Map::from_iter([(
+                "skillsListingDeltas".to_owned(),
+                json!(true)
+            )]))
         );
     });
 }
@@ -483,10 +465,11 @@ fn deferred_capability_bootstrap_subprocess() {
         "reasoningLevel": null, "profileId": null, "computerUseModelId": null,
         "inferenceProviders": null, "providers": null,
         "idleOnCompleteSeconds": null, "idleOnFailSeconds": null,
-        "mcpServersJson": "{}", "experimentalJson": null, "skills": [], "factorySkillDirs": [],
+        "mcpServersJson": "{}", "skills": [], "factorySkillDirs": [],
         "factoryBranch": null, "computerUseEnabled": false, "repositories": eager,
         "setupCommands": [], "sessionSharingAcls": [],
         "skipInitialTurn": false, "snapshotDisabled": false, "agentHookSources": [],
+        "experimentalJson": null,
     });
     if supports_deferred_repositories && scenario != "missing" {
         config["deferredRepositories"] = deferred;
