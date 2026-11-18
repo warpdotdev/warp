@@ -585,6 +585,7 @@ fn prewarmed_config_conversion_and_state_binding_preserve_run_settings() {
             .add_model(|ctx| AgentDriver::new_for_test(root.path().into(), terminal_driver, ctx));
         let mut configuration = config();
         configuration.profile_id = Some("run-profile".into());
+        configuration.experimental_json = Some(r#"{"skillsListingDeltas":true}"#.into());
         configuration.deferred_repositories = Some(vec![ExecutionRepository {
             forge: CodeForge::GitHub,
             owner: "benchmarks".into(),
@@ -670,6 +671,10 @@ fn prewarmed_config_conversion_and_state_binding_preserve_run_settings() {
             assert_eq!(driver.sandbox_deadline, Some(deadline.into()));
             assert!(driver.use_factory_repositories);
             assert_eq!(
+                driver.experimental.as_ref().unwrap()["skillsListingDeltas"],
+                serde_json::json!(true)
+            );
+            assert_eq!(
                 driver.skill_dirs,
                 vec![
                     PathBuf::from(".agents/skills"),
@@ -677,6 +682,27 @@ fn prewarmed_config_conversion_and_state_binding_preserve_run_settings() {
                 ]
             );
             assert!(driver.snapshot_file_writer.is_none());
+        });
+        let (options, ..) = app.update(|ctx| {
+            build_execution_task_and_options(
+                None,
+                HarnessTransport::Pty,
+                config(),
+                RepositoryContract {
+                    supports_deferred_repositories: true,
+                    use_factory_repositories: false,
+                },
+                root.path().into(),
+                None,
+                Vec::new(),
+                ctx,
+            )
+            .unwrap()
+        });
+        let (_, run_config) = split_run_options(options).unwrap();
+        driver.update(&mut app, |driver, ctx| {
+            driver.apply_run_configuration(run_config, ctx);
+            assert!(driver.experimental.is_none());
         });
     });
 }

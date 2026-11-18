@@ -243,6 +243,7 @@ pub(super) fn execution_config() -> ExecutionConfiguration {
         reasoning_level: None,
         profile_id: None,
         mcp_servers_json: "{}".into(),
+        experimental_json: None,
         skills: Vec::new(),
         factory_skill_dirs: Vec::new(),
         factory_branch: None,

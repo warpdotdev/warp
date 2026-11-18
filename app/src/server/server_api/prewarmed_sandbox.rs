@@ -300,6 +300,9 @@ where
         config
             .entry("agentHookSources")
             .or_insert_with(|| serde_json::Value::Array(Vec::new()));
+        config
+            .entry("experimentalJson")
+            .or_insert(serde_json::Value::Null);
     }
     serde_json::from_value(value).map_err(serde::de::Error::custom)
 }

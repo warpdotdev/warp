@@ -76,6 +76,7 @@ pub struct ExecutionConfiguration {
     pub reasoning_level: Option<String>,
     pub profile_id: Option<cynic::Id>,
     pub mcp_servers_json: String,
+    pub experimental_json: Option<String>,
     pub skills: Vec<ExecutionSkillSpec>,
     pub factory_skill_dirs: Vec<String>,
     pub factory_branch: Option<FactoryBranchExecutionConfig>,

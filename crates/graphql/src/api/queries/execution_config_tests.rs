@@ -34,6 +34,7 @@ fn bootstrap_fetches_all_task_data_in_one_operation() {
         assert_eq!(query.matches("task(").count(), 1);
         for field in [
             "mcpServersJson",
+            "experimentalJson",
             "teamId",
             "factorySkillDirs",
             "factoryBranch",
@@ -86,6 +87,7 @@ fn configuration_json() -> serde_json::Value {
         "reasoningLevel": null,
         "profileId": null,
         "mcpServersJson": "{}",
+        "experimentalJson": null,
         "skills": [],
         "factorySkillDirs": [],
         "factoryBranch": null,

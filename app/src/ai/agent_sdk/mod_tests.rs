@@ -88,7 +88,7 @@ fn paired_execution_launch_keeps_inventory_separate_from_eager_membership() {
                 "reasoningLevel": null, "profileId": null, "computerUseModelId": null,
                 "inferenceProviders": null, "providers": null,
                 "idleOnCompleteSeconds": 120, "idleOnFailSeconds": 60,
-                "mcpServersJson": "{}", "skills": [], "factorySkillDirs": [".agents/skills"],
+                "mcpServersJson": "{}", "experimentalJson": null, "skills": [], "factorySkillDirs": [".agents/skills"],
                 "factoryBranch": null, "computerUseEnabled": false, "repositories": eager,
                 "deferredRepositories": [{
                     "forge": deferred_forge, "owner": "platform/backend", "name": "api",
@@ -219,7 +219,7 @@ fn paired_execution_rejects_a_different_task_or_execution() {
                 "reasoningLevel": null, "profileId": null, "computerUseModelId": null,
                 "inferenceProviders": null, "providers": null,
                 "idleOnCompleteSeconds": null, "idleOnFailSeconds": null,
-                "mcpServersJson": "{}", "skills": [], "factorySkillDirs": [],
+                "mcpServersJson": "{}", "experimentalJson": null, "skills": [], "factorySkillDirs": [],
                 "factoryBranch": null, "computerUseEnabled": false, "repositories": [],
                 "deferredRepositories": [],
                 "setupCommands": [], "sessionSharingAcls": [],
@@ -253,11 +253,53 @@ fn execution_config_with_hooks(hooks: serde_json::Value) -> serde_json::Value {
         "reasoningLevel": null, "profileId": null, "computerUseModelId": null,
         "inferenceProviders": null, "providers": null,
         "idleOnCompleteSeconds": null, "idleOnFailSeconds": null,
-        "mcpServersJson": "{}", "skills": [], "factorySkillDirs": [], "factoryBranch": null,
+        "mcpServersJson": "{}", "experimentalJson": null, "skills": [], "factorySkillDirs": [], "factoryBranch": null,
         "computerUseEnabled": false, "repositories": [], "deferredRepositories": [],
         "setupCommands": [], "sessionSharingAcls": [],
         "skipInitialTurn": false, "snapshotDisabled": false, "agentHookSources": hooks,
     })
+}
+
+#[test]
+fn execution_experiments_reach_driver_options() {
+    App::test((), |mut app| async move {
+        let experimental = json!({
+            "skillsListingDeltas": true,
+            "disabled": false,
+            "future": {"value": 3},
+        });
+        let mut config = execution_config_with_hooks(json!([]));
+        config["experimentalJson"] = json!(experimental.to_string());
+        assert_eq!(
+            options_for(&mut app, config).unwrap().experimental,
+            experimental.as_object().cloned()
+        );
+    });
+}
+
+#[test]
+fn execution_experiments_require_an_object_or_null() {
+    App::test((), |mut app| async move {
+        for experimental in [json!(null), json!("null")] {
+            let mut config = execution_config_with_hooks(json!([]));
+            config["experimentalJson"] = experimental;
+            assert!(
+                options_for(&mut app, config)
+                    .unwrap()
+                    .experimental
+                    .is_none()
+            );
+        }
+        for experimental in ["[]", "{"] {
+            let mut config = execution_config_with_hooks(json!([]));
+            config["experimentalJson"] = json!(experimental);
+            let error = options_for(&mut app, config).err().unwrap();
+            assert_eq!(
+                error.to_string(),
+                "Invalid execution experimental configuration"
+            );
+        }
+    });
 }
 
 fn options_for(app: &mut App, config: serde_json::Value) -> anyhow::Result<AgentDriverOptions> {
@@ -441,7 +483,7 @@ fn deferred_capability_bootstrap_subprocess() {
         "reasoningLevel": null, "profileId": null, "computerUseModelId": null,
         "inferenceProviders": null, "providers": null,
         "idleOnCompleteSeconds": null, "idleOnFailSeconds": null,
-        "mcpServersJson": "{}", "skills": [], "factorySkillDirs": [],
+        "mcpServersJson": "{}", "experimentalJson": null, "skills": [], "factorySkillDirs": [],
         "factoryBranch": null, "computerUseEnabled": false, "repositories": eager,
         "setupCommands": [], "sessionSharingAcls": [],
         "skipInitialTurn": false, "snapshotDisabled": false, "agentHookSources": [],

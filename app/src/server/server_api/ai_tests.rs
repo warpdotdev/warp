@@ -111,6 +111,7 @@ fn execution_bootstrap_response() -> Value {
                         "reasoningLevel": null,
                         "profileId": null,
                         "mcpServersJson": "{}",
+                        "experimentalJson": "{\"skillsListingDeltas\":true}",
                         "skills": [],
                         "factorySkillDirs": [],
                         "factoryBranch": null,
@@ -248,6 +249,10 @@ fn execution_bootstrap_fetches_config_secrets_and_attachments_once() {
         .unwrap();
         assert_eq!(data.config.task_id.inner(), "task-one");
         assert_eq!(data.config.execution_id.inner(), "1");
+        assert_eq!(
+            data.config.experimental_json.as_deref(),
+            Some(r#"{"skillsListingDeltas":true}"#)
+        );
         if supports_deferred_repositories {
             assert!(data.config.repositories.is_empty());
             let deferred_repositories = data.config.deferred_repositories.unwrap();

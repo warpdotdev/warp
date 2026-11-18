@@ -739,7 +739,13 @@ fn build_execution_task_and_options(
         use_factory_repositories,
         github_credential_mode: GitHubCredentialMode::Legacy,
         credential_store_owner: None,
-        experimental: None,
+        experimental: config
+            .experimental_json
+            .as_deref()
+            .map(serde_json::from_str::<Option<_>>)
+            .transpose()
+            .map_err(|_| anyhow::anyhow!("Invalid execution experimental configuration"))?
+            .flatten(),
         parent_run_id: config.parent_run_id.map(|id| id.into_inner()),
         should_share: FeatureFlag::AgentSharedSessions.is_enabled(),
         idle_on_complete,

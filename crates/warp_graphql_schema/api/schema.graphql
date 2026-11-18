@@ -5420,6 +5420,7 @@ type ExecutionConfiguration {
   reasoningLevel: String
   profileId: ID
   mcpServersJson: String!
+  experimentalJson: String
   skills: [ExecutionSkillSpec!]!
   factorySkillDirs: [String!]!
   factoryBranch: FactoryBranchExecutionConfig
