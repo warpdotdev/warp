@@ -227,36 +227,43 @@ fn standby_provider_setup_precedes_workspace_preparation() {
 
 #[test]
 fn environment_skill_setup_uses_harness_working_dir_as_listing_fallback() {
-    assert_environment_skill_listing_fallback(true, false, false);
+    assert_environment_skill_listing_fallback(true, false);
 }
 
 #[test]
 fn environment_skill_setup_without_cwd_scoping_sets_no_listing_fallback() {
-    assert_environment_skill_listing_fallback(false, false, false);
+    assert_environment_skill_listing_fallback(false, false);
 }
 
 #[test]
 fn skill_delta_experiment_uses_harness_working_dir_as_listing_fallback() {
-    assert_environment_skill_listing_fallback(false, true, false);
+    assert_environment_skill_listing_fallback(false, true);
 }
 
-/// A standby loads skills before it has an assignment, which leaves every skill listed. A run that
-/// opts into scoping when it is assigned to that sandbox still gets scoped listings.
-#[test]
-fn skill_delta_experiment_scopes_listings_a_standby_left_unscoped() {
-    assert_environment_skill_listing_fallback(false, true, true);
+fn project_skill(name: &str, dir: &Path) -> ParsedSkill {
+    ParsedSkill {
+        name: name.into(),
+        description: name.into(),
+        content: name.into(),
+        path: LocalOrRemotePath::Local(dir.join(format!(".agents/skills/{name}/SKILL.md"))),
+        line_range: None,
+        provider: SkillProvider::Agents,
+        scope: SkillScope::Project,
+    }
 }
 
-#[test]
-fn environment_skill_setup_without_cwd_scoping_keeps_a_standby_unscoped() {
-    assert_environment_skill_listing_fallback(false, false, true);
+/// The names listed with no live cwd, where the harness directory stands in once it is set.
+fn listed_skill_names(app: &mut App) -> Vec<String> {
+    app.update(|ctx| {
+        SkillManager::as_ref(ctx)
+            .get_skills_for_working_directory(None, ctx)
+            .into_iter()
+            .map(|skill| skill.name)
+            .collect()
+    })
 }
 
-fn assert_environment_skill_listing_fallback(
-    flag_enabled: bool,
-    skill_deltas: bool,
-    unscoped_by_standby: bool,
-) {
+fn assert_environment_skill_listing_fallback(flag_enabled: bool, skill_deltas: bool) {
     App::test((), move |mut app| async move {
         let _flag = FeatureFlag::CwdScopedCloudSkills.override_enabled(flag_enabled);
         initialize_app_for_terminal_view(&mut app);
@@ -275,50 +282,154 @@ fn assert_environment_skill_listing_fallback(
             driver
         });
         let foreground = driver.update(&mut app, |_, ctx| ctx.spawner());
-        if unscoped_by_standby {
-            app.update(|ctx| {
-                SkillManager::handle(ctx).update(ctx, |manager, _| {
-                    manager.set_cloud_environment(true);
-                });
-            });
-        }
         load_environment_skills(&foreground, Vec::new()).await;
 
-        let project_skill = |name: &str, dir: &Path| ParsedSkill {
-            name: name.into(),
-            description: name.into(),
-            content: name.into(),
-            path: LocalOrRemotePath::Local(dir.join(format!(".agents/skills/{name}/SKILL.md"))),
-            line_range: None,
-            provider: SkillProvider::Agents,
-            scope: SkillScope::Project,
-        };
-        let names = app.update(|ctx| {
+        app.update(|ctx| {
             SkillManager::handle(ctx).update(ctx, |manager, _| {
                 manager.handle_skills_added(vec![
                     project_skill("harness", &harness_dir),
                     project_skill("sibling", &working_dir.join("sibling")),
                 ]);
             });
-            SkillManager::as_ref(ctx)
-                .get_skills_for_working_directory(None, ctx)
-                .into_iter()
-                .map(|skill| skill.name)
-                .collect::<Vec<_>>()
         });
+        let names = listed_skill_names(&mut app);
 
         let scoped = flag_enabled || skill_deltas;
-        assert_eq!(
-            names.contains(&"harness".to_string()),
-            scoped || unscoped_by_standby,
-            "{names:?}"
-        );
-        assert_eq!(
-            names.contains(&"sibling".to_string()),
-            !scoped && unscoped_by_standby,
-            "{names:?}"
-        );
+        assert_eq!(names.contains(&"harness".to_string()), scoped, "{names:?}");
+        assert!(!names.contains(&"sibling".to_string()), "{names:?}");
     });
+}
+
+/// A standby reads its skill files before it has an assignment, so the read must leave the
+/// `SkillManager` alone: nothing registered, no listing mode, no fallback directory.
+#[test]
+fn read_skills_leaves_the_skill_manager_untouched() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let root = TempDir::new().unwrap();
+        let working_dir = dunce::canonicalize(root.path()).unwrap();
+        let harness_dir = working_dir.join("repo");
+        let skill_dir = working_dir.join("skill-repo/.agents/skills/standby-global");
+        fs::create_dir_all(&skill_dir).unwrap();
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: standby-global\ndescription: Selected globally.\n---\nGlobal.\n",
+        )
+        .unwrap();
+        let terminal = add_window_with_terminal(&mut app, None);
+        let driver = app.add_model(|ctx| {
+            let terminal_driver = TerminalDriver::create_from_existing_view(terminal, ctx);
+            let mut driver = AgentDriver::new_for_test(working_dir.clone(), terminal_driver, ctx);
+            driver.harness_working_dir = harness_dir.clone();
+            driver.experimental = Some(serde_json::Map::from_iter([(
+                "skillsListingDeltas".into(),
+                serde_json::Value::Bool(true),
+            )]));
+            driver
+        });
+        let foreground = driver.update(&mut app, |_, ctx| ctx.spawner());
+        let setup_events = SetupClientEventReporter::standby(
+            Arc::new(MockAIClient::new()),
+            app.background_executor(),
+        );
+
+        let prepared = read_skills(
+            &foreground,
+            Vec::new(),
+            GlobalSkillResolution {
+                specs: vec!["org/skill-repo:standby-global".parse().unwrap()],
+                repos: vec![GithubRepo::new("org".into(), "skill-repo".into())],
+            },
+            &setup_events,
+        )
+        .await;
+
+        assert!(prepared.environment.is_empty());
+        assert_eq!(
+            prepared
+                .global
+                .iter()
+                .map(|skill| skill.name.as_str())
+                .collect::<Vec<_>>(),
+            ["standby-global"]
+        );
+        app.update(|ctx| {
+            SkillManager::handle(ctx).update(ctx, |manager, _| {
+                manager.handle_skills_added(vec![project_skill("harness", &harness_dir)]);
+            });
+        });
+        let names = listed_skill_names(&mut app);
+        assert!(!names.contains(&"standby-global".to_string()), "{names:?}");
+        assert!(!names.contains(&"harness".to_string()), "{names:?}");
+    });
+}
+
+/// A run assigned to a standby registers the skills the standby read under the run's own listing
+/// mode: scoped to the harness directory with global skills at home tier when the run opted into
+/// skill listing deltas, and unscoped otherwise.
+#[test]
+fn prepared_skills_register_under_the_runs_listing_mode() {
+    for skill_deltas in [true, false] {
+        App::test((), move |mut app| async move {
+            let _flag = FeatureFlag::CwdScopedCloudSkills.override_enabled(false);
+            initialize_app_for_terminal_view(&mut app);
+            let root = TempDir::new().unwrap();
+            let working_dir = dunce::canonicalize(root.path()).unwrap();
+            let harness_dir = working_dir.join("repo");
+            let terminal = add_window_with_terminal(&mut app, None);
+            let driver = app.add_model(|ctx| {
+                let terminal_driver = TerminalDriver::create_from_existing_view(terminal, ctx);
+                let mut driver =
+                    AgentDriver::new_for_test(working_dir.clone(), terminal_driver, ctx);
+                driver.harness_working_dir = harness_dir.clone();
+                driver.experimental = Some(serde_json::Map::from_iter([(
+                    "skillsListingDeltas".into(),
+                    serde_json::Value::Bool(skill_deltas),
+                )]));
+                driver.skill_dirs.clear();
+                driver
+            });
+            let foreground = driver.update(&mut app, |_, ctx| ctx.spawner());
+            let setup_events = SetupClientEventReporter::standby(
+                Arc::new(MockAIClient::new()),
+                app.background_executor(),
+            );
+
+            load_skills(
+                &foreground,
+                RunSkills::Prepared(PreparedSkills {
+                    environment: vec![
+                        project_skill("standby-harness", &harness_dir),
+                        project_skill("standby-sibling", &working_dir.join("sibling")),
+                    ],
+                    global: vec![project_skill(
+                        "standby-global",
+                        &working_dir.join("skill-repo"),
+                    )],
+                }),
+                &setup_events,
+            )
+            .await;
+
+            let skills = app.update(|ctx| {
+                SkillManager::as_ref(ctx).get_skills_for_working_directory(None, ctx)
+            });
+            let scope_of = |name: &str| {
+                skills
+                    .iter()
+                    .find(|skill| skill.name == name)
+                    .map(|skill| skill.scope)
+            };
+            assert_eq!(scope_of("standby-harness"), Some(SkillScope::Project));
+            if skill_deltas {
+                assert_eq!(scope_of("standby-sibling"), None);
+                assert_eq!(scope_of("standby-global"), Some(SkillScope::Home));
+            } else {
+                assert_eq!(scope_of("standby-sibling"), Some(SkillScope::Project));
+                assert_eq!(scope_of("standby-global"), Some(SkillScope::Project));
+            }
+        });
+    }
 }
 
 #[test]
@@ -367,10 +478,12 @@ fn configured_skills_load_without_environment_or_global_repositories() {
         });
         load_skills(
             &foreground,
-            Vec::new(),
-            GlobalSkillResolution {
-                specs: Vec::new(),
-                repos: Vec::new(),
+            RunSkills::FromRepositories {
+                repositories: Vec::new(),
+                global_skills: GlobalSkillResolution {
+                    specs: Vec::new(),
+                    repos: Vec::new(),
+                },
             },
             &setup_events,
         )

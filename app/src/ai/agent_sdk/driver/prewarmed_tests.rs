@@ -364,6 +364,7 @@ fn assert_third_party_assignment(
                 harness,
                 configuration: prepared_configuration,
                 repositories: Vec::new(),
+                skills: Default::default(),
             }));
             driver
                 .apply_prewarmed_run_configuration(terminal_inputs, run_config, ctx)
@@ -897,6 +898,7 @@ fn install_resumed_configuration(
             harness: Harness::Oz,
             configuration: prepared_configuration,
             repositories: Vec::new(),
+            skills: Default::default(),
         }));
         driver
             .apply_prewarmed_run_configuration(terminal_inputs, run_config, ctx)

@@ -1033,6 +1033,9 @@ pub(crate) struct StandbyWorkspace {
     pub configuration: environment::WorkspaceConfiguration,
     /// Repositories to scan for skills, carried over from the preparation.
     pub repositories: Vec<crate::ai::cloud_environments::SourceRepo>,
+    /// Skill files read from those repositories and the global selection, registered once the
+    /// assigned run knows its listing mode.
+    pub skills: agent_setup::PreparedSkills,
 }
 
 /// A run's workspace, before or after setup.
@@ -2525,23 +2528,13 @@ impl AgentDriver {
                 .await?;
             let workspace = workspace.ok_or(AgentDriverError::InvalidRuntimeState)?;
             let runner_preparation = matches!(&workspace, WorkspaceState::PendingRunner(_));
-            let (global_skill_resolution, prepared_workspace) = match workspace {
-                // A standby sandbox already cloned the repositories and ran the setup
-                // commands, so the run resumes from those results.
-                WorkspaceState::Prepared(prepared) => {
-                    let global_skill_resolution =
-                        agent_setup::resolve_global_skills(&foreground).await?;
-                    let harness_working_dir = foreground
-                        .spawn(|me, _| me.harness_working_dir.clone())
-                        .await?;
-                    (
-                        global_skill_resolution,
-                        agent_setup::PreparedWorkspace {
-                            harness_working_dir,
-                            repositories: prepared.repositories,
-                        },
-                    )
-                }
+            let (run_skills, cloned_repositories) = match workspace {
+                // A standby sandbox already cloned the repositories, ran the setup commands, and
+                // read the skill files, so the run resumes from those results.
+                WorkspaceState::Prepared(prepared) => (
+                    agent_setup::RunSkills::Prepared(prepared.skills),
+                    prepared.repositories,
+                ),
                 WorkspaceState::Pending(mut workspace)
                 | WorkspaceState::PendingRunner(mut workspace) => {
                     let launch_file_warmup = match &task.harness {
@@ -2658,7 +2651,13 @@ impl AgentDriver {
                         )
                         .await?;
                     }
-                    (global_skill_resolution, prepared)
+                    (
+                        agent_setup::RunSkills::FromRepositories {
+                            repositories: prepared.repositories.clone(),
+                            global_skills: global_skill_resolution,
+                        },
+                        prepared.repositories,
+                    )
                 }
                 WorkspaceState::RunnerPrepared(_) => {
                     return Err(AgentDriverError::InvalidRuntimeState);
@@ -2707,17 +2706,10 @@ impl AgentDriver {
                     // After environment preparation, so the login shell's PATH includes what the
                     // setup commands added to its startup files; it overlaps skill loading.
                     agent_setup::start_login_shell_path_capture(&foreground).await?;
-                    let cloned_repositories = prepared_workspace.repositories.clone();
                     // Load skills from repos synchronously so the initial message includes them.
                     // File trees are ready after prepare_environment and global skill repo
                     // cloning above.
-                    agent_setup::load_skills(
-                        &foreground,
-                        prepared_workspace.repositories,
-                        global_skill_resolution,
-                        &setup_events,
-                    )
-                    .await;
+                    agent_setup::load_skills(&foreground, run_skills, &setup_events).await;
                     if factory_repository_contract {
                         agent_setup::load_factory_deferred_repositories_skill(&foreground).await;
                     }
