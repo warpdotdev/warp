@@ -105,12 +105,17 @@ impl HookFormatAdapter for RecordingAdapter {
         self.bindings.lock().expect("adapter lock").clone()
     }
 
+    /// A matcher names a tool on the tool boundaries and a child on `subagent.start`; it is
+    /// ignored elsewhere.
     fn matches(&self, binding: &DeclaredBinding, envelope: &HookEnvelope) -> bool {
         let Some(matcher) = binding.matcher.as_deref() else {
             return true;
         };
         if matcher.is_empty() || matcher == "*" {
             return true;
+        }
+        if let HookPayload::SubagentStart { launch } = &envelope.payload {
+            return launch.name == matcher;
         }
         match envelope.payload.action() {
             Some(action) => test_tool_name(action) == matcher,

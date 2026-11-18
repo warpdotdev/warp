@@ -16,14 +16,18 @@ use uuid::Uuid;
 
 use self::tool_input::{mcp_server_id, part_tool_input};
 use self::tool_output::part_result_view;
-use super::events::{CursorEvent, CursorEventSpec};
-use super::facets::{McpCallOutcome, finished_shell_command, mcp_tool_call, pending_shell_command};
+use super::events::{CursorEvent, CursorEventSpec, SUBAGENT_TYPE};
+use super::facets::{
+    McpCallOutcome, finished_shell_command, mcp_tool_call, pending_shell_command, subagent_launch,
+};
 use super::parts::{ToolPart, tool_parts};
 use crate::agent::action_result::{
     AIAgentActionResultType, RequestCommandOutputResult, RunAgentsResult,
 };
 use crate::hooks::adapters::HookInput;
-use crate::hooks::model::{HookEnvelope, HookPayload, PromptAttachmentKind, TurnStopStatus};
+use crate::hooks::model::{
+    HookEnvelope, HookPayload, PromptAttachmentKind, SubagentExecutionMode, TurnStopStatus,
+};
 
 /// The stdin payloads for one firing of `spec`'s event: one per part of a tool action that
 /// `part_matches` accepts (a Cursor script sees a batched read or edit as one event per file), and
@@ -98,12 +102,12 @@ fn encode_part(
         CursorEvent::BeforeMcpExecution => encode_before_mcp_execution(envelope, &mut input),
         CursorEvent::AfterMcpExecution => encode_after_mcp_execution(envelope, &mut input),
         CursorEvent::BeforeSubmitPrompt => encode_before_submit_prompt(envelope, &mut input),
+        CursorEvent::SubagentStart => encode_subagent_start(envelope, &mut input),
         CursorEvent::Stop => encode_stop(envelope, &mut input),
         CursorEvent::AfterAgentResponse => encode_after_agent_response(envelope, &mut input),
         CursorEvent::AfterAgentThought => encode_after_agent_thought(envelope, &mut input),
         // Warp does not fire these yet, so there is no payload to encode.
         CursorEvent::SessionEnd
-        | CursorEvent::SubagentStart
         | CursorEvent::SubagentStop
         | CursorEvent::BeforeReadFile
         | CursorEvent::AfterFileEdit
@@ -385,6 +389,40 @@ fn encode_before_submit_prompt(envelope: &HookEnvelope, input: &mut Map<String, 
     input.insert("attachments".to_owned(), Value::Array(attachments));
 }
 
+/// Cursor's fields for a subagent about to start, plus Warp's own: the child's name, its harness,
+/// and whether it runs here or as a cloud run. `git_branch` is left out because Warp makes no
+/// branch for a child at launch.
+fn encode_subagent_start(envelope: &HookEnvelope, input: &mut Map<String, Value>) {
+    let Some(launch) = subagent_launch(&envelope.payload) else {
+        return;
+    };
+    input.insert(
+        "subagent_id".to_owned(),
+        json!(launch.subagent_id.to_string()),
+    );
+    input.insert("subagent_type".to_owned(), json!(SUBAGENT_TYPE));
+    input.insert("task".to_owned(), json!(launch.task));
+    input.insert(
+        "parent_conversation_id".to_owned(),
+        json!(envelope.conversation_id.to_string()),
+    );
+    if let Some(action_id) = &envelope.action_id {
+        input.insert("tool_call_id".to_owned(), json!(action_id.to_string()));
+    }
+    insert_some(input, "subagent_model", launch.model_id.as_deref());
+    input.insert(
+        "is_parallel_worker".to_owned(),
+        json!(launch.is_parallel_worker),
+    );
+    input.insert("subagent_name".to_owned(), json!(launch.name));
+    input.insert("harness".to_owned(), json!(launch.harness));
+    let execution_mode = match launch.execution_mode {
+        SubagentExecutionMode::Local => "local",
+        SubagentExecutionMode::Remote => "remote",
+    };
+    input.insert("execution_mode".to_owned(), json!(execution_mode));
+}
+
 fn encode_stop(envelope: &HookEnvelope, input: &mut Map<String, Value>) {
     let HookPayload::TurnStop {
         status,
@@ -425,6 +463,7 @@ fn payload_duration(payload: &HookPayload) -> Option<Duration> {
         HookPayload::ToolPre { .. }
         | HookPayload::SessionStart { .. }
         | HookPayload::PromptSubmit { .. }
+        | HookPayload::SubagentStart { .. }
         | HookPayload::TurnStop { .. }
         | HookPayload::ResponseComplete { .. }
         | HookPayload::ReasoningComplete { .. } => None,

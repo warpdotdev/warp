@@ -47,6 +47,7 @@ fn last_duration_for(harness: &HookTestApp, action_id: &str) -> Option<Option<Du
         HookPayload::SessionStart { .. }
         | HookPayload::PromptSubmit { .. }
         | HookPayload::ToolPre { .. }
+        | HookPayload::SubagentStart { .. }
         | HookPayload::TurnStop { .. }
         | HookPayload::ResponseComplete { .. }
         | HookPayload::ReasoningComplete { .. } => None,

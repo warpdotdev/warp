@@ -3,7 +3,8 @@ use std::time::Duration;
 
 use ai::hooks::{
     ENVELOPE_SCHEMA_VERSION, HOOK_PROTOCOL_VERSION, HookEnvelope, HookExecutionHost, HookPayload,
-    HookSurface, PermissionFacts, PromptAttachment, PromptProvenance, TurnStopStatus,
+    HookSurface, PermissionFacts, PromptAttachment, PromptProvenance, SubagentLaunch,
+    TurnStopStatus,
 };
 use repo_metadata::repositories::DetectedRepositories;
 use uuid::Uuid;
@@ -14,7 +15,9 @@ use warpui::{AppContext, ModelHandle, SingletonEntity};
 
 use super::{HookRuntime, RunSurface};
 use crate::ai::agent::conversation::AIConversationId;
-use crate::ai::agent::{AIAgentAction, AIAgentActionResultType, CancellationReason};
+use crate::ai::agent::{
+    AIAgentAction, AIAgentActionId, AIAgentActionResultType, CancellationReason,
+};
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::ai::llms::LLMId;
 use crate::auth::AuthStateProvider;
@@ -268,6 +271,19 @@ pub(crate) fn envelope_for_prompt_submit(
         },
         ctx,
     )
+}
+
+/// The envelope for one child of the `run_agents` call `action_id`, which fires in the parent
+/// conversation.
+pub(crate) fn envelope_for_subagent_start(
+    launch: SubagentLaunch,
+    action_id: &AIAgentActionId,
+    site: &EnvelopeSite<'_>,
+    ctx: &AppContext,
+) -> HookEnvelope {
+    let mut envelope = build(site, HookPayload::SubagentStart { launch }, ctx);
+    envelope.action_id = Some(action_id.clone());
+    envelope
 }
 
 pub(crate) fn envelope_for_turn_stop(

@@ -100,7 +100,6 @@ fn the_full_config_parses_every_event_with_its_options() {
         parsed.warnings,
         vec![
             "sessionEnd[0]: Warp does not fire sessionEnd yet; this hook will never run",
-            "subagentStart[0]: Warp does not fire subagentStart yet; this hook will never run",
             "subagentStop[0]: Warp does not fire subagentStop yet; this hook will never run",
             "beforeShellExecution[1]: prompt hooks are not supported yet; it was skipped",
             "beforeReadFile[0]: Warp does not fire beforeReadFile yet; this hook will never run",

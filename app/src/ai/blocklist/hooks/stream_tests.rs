@@ -495,6 +495,7 @@ fn collect_observations_reads_text_reasoning_and_splits_from_client_actions() {
                 | HookPayload::ToolPre { .. }
                 | HookPayload::ToolResult { .. }
                 | HookPayload::ToolFailure { .. }
+                | HookPayload::SubagentStart { .. }
                 | HookPayload::TurnStop { .. } => "other".to_owned(),
             })
             .collect::<HashSet<_>>();

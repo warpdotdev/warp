@@ -259,7 +259,7 @@ fn validate_warns_for_a_verdict_on_a_boundary_that_cannot_block() {
 }
 
 #[test]
-fn phase_1_boundaries_are_the_eight_the_loop_fires() {
+fn phase_1_boundaries_are_the_nine_the_loop_fires() {
     let firing = [
         HookBoundary::SessionStart,
         HookBoundary::SessionEnd,
@@ -289,6 +289,7 @@ fn phase_1_boundaries_are_the_eight_the_loop_fires() {
             HookBoundary::ToolPre,
             HookBoundary::ToolResult,
             HookBoundary::ToolFailure,
+            HookBoundary::SubagentStart,
             HookBoundary::TurnStop,
             HookBoundary::ResponseComplete,
             HookBoundary::ReasoningComplete,

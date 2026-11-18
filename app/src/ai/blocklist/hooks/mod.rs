@@ -11,6 +11,7 @@ pub(crate) mod pre_tool;
 pub(crate) mod prompt;
 pub(crate) mod session;
 pub(crate) mod stream;
+pub(crate) mod subagent;
 #[cfg(test)]
 pub(crate) mod test_utils;
 pub(crate) mod tool_result;
@@ -26,8 +27,9 @@ use std::time::Duration;
 #[cfg(feature = "local_tty")]
 use ai::hooks::runner::command::CommandHookRunner;
 use ai::hooks::{
-    HookDispatcher, HookEnvelope, HookMessenger, HookRegistry, HookRunner, HookSurface, HookTurnId,
-    RegistrySnapshot, RunMetadata,
+    DenyCause, HookDispatcher, HookEnvelope, HookMessenger, HookNotice, HookNoticeKind, HookReason,
+    HookRegistry, HookRunner, HookSurface, HookTurnId, MergedEffects, RegistrySnapshot,
+    RunMetadata,
 };
 #[cfg(feature = "local_tty")]
 use futures::FutureExt as _;
@@ -464,6 +466,41 @@ impl Entity for HookRuntime {
 }
 
 impl SingletonEntity for HookRuntime {}
+
+/// Tells the person that hooks denied `action_id` in `conversation_id`, and tells the run's owner
+/// to end the run when the denial stands in for a confirmation nobody could give and a hook that
+/// asked came from a source that ends the run on that. An outright deny outranks an ask, so only
+/// a denial for an unanswerable ask can end the run.
+pub(super) fn report_denial(
+    conversation_id: AIConversationId,
+    action_id: &AIAgentActionId,
+    reason: &HookReason,
+    cause: DenyCause,
+    merged: &MergedEffects,
+    ctx: &mut AppContext,
+) {
+    HookRuntime::as_ref(ctx).messenger().notify(HookNotice {
+        conversation_id,
+        action_id: Some(action_id.clone()),
+        kind: HookNoticeKind::Denied,
+        text: reason.text.clone(),
+    });
+    let ends_the_run = match cause {
+        DenyCause::ApprovalUnavailable => merged.an_asker_fails_the_run(),
+        DenyCause::Hook | DenyCause::RewriteUnsupported | DenyCause::DeferralUnsupported => false,
+    };
+    if ends_the_run {
+        let reason = reason.text.clone();
+        let action_id = action_id.clone();
+        HookRuntime::handle(ctx).update(ctx, |_, ctx| {
+            ctx.emit(HookRuntimeEvent::ApprovalUnavailable {
+                conversation_id,
+                action_id,
+                reason,
+            });
+        });
+    }
+}
 
 /// The longest timeout among the bindings in `snapshot` that would run for `envelope`, which is
 /// how long a boundary that waits for its hooks waits. `None` when no binding would run.

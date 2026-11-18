@@ -1132,6 +1132,7 @@ mod hooks {
                     | HookPayload::ToolPre { .. }
                     | HookPayload::ToolResult { .. }
                     | HookPayload::ToolFailure { .. }
+                    | HookPayload::SubagentStart { .. }
                     | HookPayload::ReasoningComplete { .. } => {
                         envelope.boundary().canonical_name().to_owned()
                     }
