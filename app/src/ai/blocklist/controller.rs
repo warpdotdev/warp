@@ -296,10 +296,7 @@ impl RequestInput {
         app: &AppContext,
     ) -> Self {
         let llm_prefs = LLMPreferences::as_ref(app);
-        let model_id = llm_prefs
-            .get_active_base_model(scope, app, Some(terminal_surface_id))
-            .id
-            .clone();
+        let model_id = active_base_model_id(scope, terminal_surface_id, app);
         let coding_model_id = llm_prefs
             .get_active_coding_model(scope, app, Some(terminal_surface_id))
             .id
@@ -874,11 +871,8 @@ impl BlocklistAIController {
         );
         // Hooks see the prompt as it was typed, including any mode prefix. The copy is only made
         // when a hook could fire, so the inactive path adds nothing beyond the check.
-        let submitted_prompt = (is_user_submitted_prompt && hooks::HookRuntime::is_active(ctx))
-            .then(|| hooks::prompt::SubmittedPrompt {
-                text: query.clone(),
-                provenance,
-            });
+        let prompt_text =
+            (is_user_submitted_prompt && hooks::HookRuntime::is_active(ctx)).then(|| query.clone());
         let (query, user_query_mode) = if is_hook_follow_up {
             (query, UserQueryMode::Normal)
         } else {
@@ -994,6 +988,11 @@ impl BlocklistAIController {
             }
             InputQueryType::AIInputType { ai_input } => ai_input,
         };
+        let submitted_prompt = prompt_text.map(|text| hooks::prompt::SubmittedPrompt {
+            text,
+            attachments: hooks::prompt::attachments_in(&ai_input),
+            provenance,
+        });
         inputs.push(ai_input);
 
         // Piggyback any pending orchestration config updates for this conversation.
@@ -1018,8 +1017,11 @@ impl BlocklistAIController {
         };
         // After the previous turn's actions are cancelled, so their `tool.failure` precedes this
         // turn's `prompt.submit`. With no hook to wait for, the request goes out right here.
+        let scope = ResolvedTeamScope::from_scope(&self.team_context(ctx));
+        let model_id = active_base_model_id(&scope, self.terminal_surface_id, ctx);
         match hooks::prompt::prepare_turn(
             submitted_prompt,
+            model_id,
             conversation_id,
             &self.active_session,
             ctx,
@@ -4564,6 +4566,18 @@ pub struct ClientIdentifiers {
     pub client_exchange_id: AIAgentExchangeId,
     /// Not populated for restored AI blocks.
     pub response_stream_id: Option<ResponseStreamId>,
+}
+
+/// The base model the next Agent Mode request from `terminal_surface_id` uses.
+fn active_base_model_id(
+    scope: &impl TeamScope,
+    terminal_surface_id: EntityId,
+    app: &AppContext,
+) -> LLMId {
+    LLMPreferences::as_ref(app)
+        .get_active_base_model(scope, app, Some(terminal_surface_id))
+        .id
+        .clone()
 }
 
 #[allow(clippy::too_many_arguments)]

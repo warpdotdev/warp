@@ -312,7 +312,7 @@ fn literal_events_match_their_fixed_word() {
 
     let prompt = HookPayload::PromptSubmit {
         text: "hi".to_owned(),
-        attachments_summary: Vec::new(),
+        attachments: Vec::new(),
         provenance: PromptProvenance::User,
     };
     assert!(matches(

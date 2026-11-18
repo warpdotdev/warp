@@ -265,7 +265,7 @@ fn prompt_envelope(text: &str, cwd: &Path) -> HookEnvelope {
         AIConversationId::new(),
         HookPayload::PromptSubmit {
             text: text.to_owned(),
-            attachments_summary: Vec::new(),
+            attachments: Vec::new(),
             provenance: PromptProvenance::User,
         },
     );

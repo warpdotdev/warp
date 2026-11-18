@@ -11,5 +11,8 @@
   "transcript_path": null,
   "hook_event_name": "beforeSubmitPrompt",
   "prompt": "Fix the failing test",
-  "attachments": [ { "type": "file", "file_path": "/work/repo/src/lib.rs" } ]
+  "attachments": [
+    { "type": "file", "file_path": "/work/repo/src/lib.rs" },
+    { "type": "rule", "file_path": "/work/repo/AGENTS.md" }
+  ]
 }

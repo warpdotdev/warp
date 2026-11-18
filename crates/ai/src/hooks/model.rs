@@ -331,6 +331,21 @@ pub enum PromptProvenance {
     },
 }
 
+/// A file that went to the model with a prompt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PromptAttachment {
+    pub kind: PromptAttachmentKind,
+    pub path: PathBuf,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PromptAttachmentKind {
+    /// A file the person attached to the prompt.
+    File,
+    /// A rule file whose content the request carries.
+    Rule,
+}
+
 /// What Warp's own permission check knows at the time the boundary fires.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PermissionFacts {
@@ -392,7 +407,7 @@ pub enum HookPayload {
     },
     PromptSubmit {
         text: String,
-        attachments_summary: Vec<String>,
+        attachments: Vec<PromptAttachment>,
         provenance: PromptProvenance,
     },
     ToolPre {

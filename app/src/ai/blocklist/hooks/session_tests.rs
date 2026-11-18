@@ -35,6 +35,10 @@ fn prompt_binding() -> DeclaredBinding {
     )
 }
 
+fn test_model() -> LLMId {
+    LLMId::from("test-model")
+}
+
 fn session_start_count(harness: &ControllerHarness) -> usize {
     harness
         .hooks
@@ -62,6 +66,17 @@ fn session_start_fires_once_before_a_new_conversations_first_request() {
                 is_background_agent: false
             }
         ));
+        let sent_model = BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+            history
+                .conversation(&conversation_id)
+                .and_then(|conversation| conversation.latest_exchange())
+                .map(|exchange| exchange.model_id.clone())
+        });
+        assert!(sent_model.is_some());
+        assert_eq!(
+            envelope.model_id, sent_model,
+            "before any exchange exists, the event names the model the first request uses"
+        );
 
         // The conversation's later prompts do not start another session.
         harness.update_controller(&mut app, |controller, ctx| {
@@ -214,7 +229,14 @@ fn a_conversation_with_exchanges_is_not_a_new_session() {
             });
         });
 
-        let wait = app.update(|ctx| barrier(harness.conversation_id, &harness.active_session, ctx));
+        let wait = app.update(|ctx| {
+            barrier(
+                harness.conversation_id,
+                test_model(),
+                &harness.active_session,
+                ctx,
+            )
+        });
         assert!(wait.is_none());
         let_background_work_settle(&mut app).await;
         assert_eq!(harness.hooks.adapter.encoded_count(), 0);
@@ -231,8 +253,14 @@ fn a_request_before_finalization_does_not_use_up_the_session_start() {
         let harness = hook_test_app(&mut app);
         app.update(|ctx| harness.hooks.stage_bindings(vec![session_binding()], ctx));
 
-        let early =
-            app.update(|ctx| barrier(harness.conversation_id, &harness.active_session, ctx));
+        let early = app.update(|ctx| {
+            barrier(
+                harness.conversation_id,
+                test_model(),
+                &harness.active_session,
+                ctx,
+            )
+        });
         assert!(early.is_none());
         assert!(app.read(|ctx| {
             !HookRuntime::as_ref(ctx)
@@ -248,7 +276,14 @@ fn a_request_before_finalization_does_not_use_up_the_session_start() {
             });
         });
         let after = app
-            .update(|ctx| barrier(harness.conversation_id, &harness.active_session, ctx))
+            .update(|ctx| {
+                barrier(
+                    harness.conversation_id,
+                    test_model(),
+                    &harness.active_session,
+                    ctx,
+                )
+            })
             .expect("the first request after finalization waits for session.start");
         after.await;
         assert_eq!(harness.hooks.runner.invocation_count(), 1);
@@ -263,10 +298,24 @@ fn a_second_request_while_the_hooks_run_waits_on_the_same_firing() {
         let hold = harness.hooks.runner.hold();
 
         let first = app
-            .update(|ctx| barrier(harness.conversation_id, &harness.active_session, ctx))
+            .update(|ctx| {
+                barrier(
+                    harness.conversation_id,
+                    test_model(),
+                    &harness.active_session,
+                    ctx,
+                )
+            })
             .expect("the first request waits");
         let second = app
-            .update(|ctx| barrier(harness.conversation_id, &harness.active_session, ctx))
+            .update(|ctx| {
+                barrier(
+                    harness.conversation_id,
+                    test_model(),
+                    &harness.active_session,
+                    ctx,
+                )
+            })
             .expect("the second request waits on the same hooks");
         settle(&mut app, |_| harness.hooks.runner.invocation_count() == 1).await;
         assert!(app.read(|ctx| {
@@ -288,8 +337,13 @@ fn a_second_request_while_the_hooks_run_waits_on_the_same_firing() {
         .await;
         assert_eq!(harness.hooks.runner.invocation_count(), 1);
         assert!(
-            app.update(|ctx| barrier(harness.conversation_id, &harness.active_session, ctx,))
-                .is_none(),
+            app.update(|ctx| barrier(
+                harness.conversation_id,
+                test_model(),
+                &harness.active_session,
+                ctx
+            ))
+            .is_none(),
             "a conversation whose session started does not start it again"
         );
     });
@@ -364,7 +418,8 @@ fn viewer_and_transcript_conversations_do_not_fire_session_start() {
             })
         });
         for conversation_id in [viewer, transcript] {
-            let wait = app.update(|ctx| barrier(conversation_id, &harness.active_session, ctx));
+            let wait = app
+                .update(|ctx| barrier(conversation_id, test_model(), &harness.active_session, ctx));
             assert!(wait.is_none());
         }
         let_background_work_settle(&mut app).await;

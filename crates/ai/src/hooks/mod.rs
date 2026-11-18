@@ -28,8 +28,8 @@ pub use model::{
     HookDiagnostic, HookEffects, HookEnvelope, HookExecutionHost, HookFormat, HookOnAsk,
     HookPayload, HookReason, HookSourceId, HookSourceKind, HookSourceLocation, HookSourcePolicy,
     HookSurface, HookTurnId, HookVerdict, MalformedOutputPolicy, MatcherTarget, MergedEffects,
-    PermissionFacts, PromptProvenance, RunMetadata, TurnStopStatus, UnsupportedEffect,
-    reduce_effects, validate_capabilities,
+    PermissionFacts, PromptAttachment, PromptAttachmentKind, PromptProvenance, RunMetadata,
+    TurnStopStatus, UnsupportedEffect, reduce_effects, validate_capabilities,
 };
 pub use notices::{HookMessenger, HookNotice, HookNoticeKind, LogOnlyMessenger};
 pub use permission::{

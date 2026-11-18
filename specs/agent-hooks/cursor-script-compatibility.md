@@ -21,8 +21,9 @@ listed at the end of this file.
   `workspace_roots` instead.
 - `cursor_version` holds Warp's version string; `warp_version` says the same thing under its own
   name.
-- `model` and `model_id` are present only when Warp knows the model for the event; both hold
-  the same id. `model_params` is always `[]`.
+- `model` and `model_id` are present on every event and hold the same id: on `sessionStart` and
+  `beforeSubmitPrompt` it is the model the request about to be sent uses, on every later event
+  the model of the request the event belongs to. `model_params` is always `[]`.
 - `user_email` is `null` when Warp does not know it.
 
 ## Tool names
@@ -108,7 +109,12 @@ It is not Cursor's result shape. Binary file content is summarized as `is_binary
   `beforeReadFile`, `afterFileEdit`, `preCompact`. Never fired: `beforeTabFileRead`,
   `afterTabFileEdit`, `workspaceOpen`.
 - `beforeSubmitPrompt` does not fire for the first prompt of an Oz cloud run, because the server
-  resolves that prompt. It fires for later prompts. `attachments` is currently always `[]`.
+  resolves that prompt. It fires for later prompts. `attachments` lists the files the person
+  attached (`{ "type": "file", "file_path" }`, in path order) and then the rule files whose
+  content went with the prompt (`{ "type": "rule", "file_path" }`; Warp's `WARP.md` and
+  `AGENTS.md` files for the working directory and its ancestors, plus global rules). A rule file
+  for another part of the repository, which the agent can read later but whose content was not
+  sent, is not listed. Images and other attachment kinds with no file on disk are not listed.
 - `stop` fires only for a turn that completed (`status: "completed"`); a cancelled or failed turn
   does not fire it.
 - `postToolUse.duration` and `postToolUseFailure.duration` are the time the tool ran, in
@@ -147,3 +153,5 @@ with the run. `architecture.md` §7.1 has the rules.
 - One event per file for batched reads and edits, and per-command timeouts that start when the
   hook starts.
 - `duration` on `postToolUse` and `postToolUseFailure` for every tool.
+- `attachments` on `beforeSubmitPrompt`, and `model`/`model_id` on `sessionStart` and the first
+  `beforeSubmitPrompt` of a conversation.

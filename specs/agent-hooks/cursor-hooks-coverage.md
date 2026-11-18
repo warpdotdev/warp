@@ -72,7 +72,7 @@ This section is a condensed reading of report 01. See that report for field-by-f
 | --- | --- | --- |
 | `conversation_id` | Available now | `AIConversationId` (`crates/ai_types/src/agent.rs`). Exists before the server assigns `ServerConversationToken`. |
 | `generation_id` | Available with work | Cursor's changes per user message. Warp maps it to a user-turn id allocated by the prompt-submit hook (section 3.14) and carried across every exchange of that turn; `AIConversation::turn_exchange_ids` (`app/src/ai/agent/conversation.rs`) already groups exchanges per turn. `AIAgentExchangeId`, which changes per request including tool-result follow-ups, is exposed separately as a request id. |
-| `model` | Available now | `RequestInput.model_id` (`LLMId`, `app/src/ai/blocklist/controller.rs`). The model actually used arrives later in `Message::ModelUsed`. |
+| `model` | Available now | The model the request uses, read the way `RequestInput.model_id` is (`LLMId`, `app/src/ai/blocklist/controller.rs`). `sessionStart` and `beforeSubmitPrompt` fire before their request exists, so the envelope site carries the model that request will use; every other event reads it from the conversation's latest exchange. The model actually used arrives later in `Message::ModelUsed`. |
 | `model_id` | Available now | Same `LLMId`. |
 | `model_params` | Available with work | Warp has no structured parameter list on the client. Send an empty array, or derive effort from the model id. |
 | `hook_event_name` | Available now | Set by the hook runner. |
@@ -502,7 +502,7 @@ A correction to report 03: user-attached files are sent as path references (`AIA
 | Field | Status | Warp source or work needed |
 | --- | --- | --- |
 | `prompt` | Available now | `query: String`. |
-| `attachments` | Available with work | `referenced_attachments` holds file references, blocks, drive objects, diffs, plan documents; images are `AIAgentContext::Image`. Map `FilePathReference` to `file` and `ProjectRules` paths to `rule`; other kinds are Warp extensions or omitted. |
+| `attachments` | Available now | Built: the files the person attached (every `FilePathReference` in the input's `referenced_attachments`, in path order) as `file`, then the rule files whose content the request carries (`ProjectRules.active_rules`, which includes global rules) as `rule`. Rules the request only lists by path (`additional_rule_paths`) are like Cursor's agent-requested rules and are not listed; images, blocks, drive objects, diffs, and plan documents have no file the model reads and are left out. |
 
 **Output fields.**
 
