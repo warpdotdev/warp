@@ -1,5 +1,7 @@
 //! Shared MCP startup for normal runs and standby preparation, with bounded readiness waits.
+use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
+use std::ffi::{OsStr, OsString};
 use std::future::Future;
 use std::mem;
 use std::path::PathBuf;
@@ -15,27 +17,34 @@ use instant::Instant;
 use itertools::Itertools as _;
 use oneshot::Canceled;
 use uuid::Uuid;
+use warp_cli::agent::Harness;
 use warp_cli::mcp::MCPSpec;
+use warp_cli::{
+    SERVER_ROOT_URL_OVERRIDE_ENV, SESSION_SHARING_SERVER_URL_OVERRIDE_ENV,
+    WS_SERVER_URL_OVERRIDE_ENV,
+};
 use warp_core::execution_mode::AppExecutionMode;
 use warp_core::features::FeatureFlag;
+use warp_graphql::mutations::create_managed_mcp_client_config::CreateManagedMcpClientConfigOutput;
 use warp_graphql::queries::task_restricted_git_credentials::GitHubCredentialMode;
 use warp_managed_secrets::ManagedSecretValue;
 use warp_server_client::base_client::AMBIENT_WORKLOAD_TOKEN_HEADER;
 use warpui::r#async::{FutureExt as _, TimeoutError};
-use warpui::{Entity, ModelContext, ModelHandle, ModelSpawner, SingletonEntity};
+use warpui::{AppContext, Entity, ModelContext, ModelHandle, ModelSpawner, SingletonEntity};
 
-use super::harness::ResolvedMCPServers;
+use super::harness::{HarnessMcpSettings, ResolvedMCPServers};
+use super::managed_mcp_refresh::{self, ManagedMcpLease, ManagedMcpRefresh};
 use super::{AgentDriver, AgentDriverError, git_credentials};
 use crate::ai::agent_sdk::retry::{is_transient_graphql_or_http_error, with_bounded_retry_using};
 use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
-use crate::ai::blocklist::BlocklistAIPermissions;
+use crate::ai::blocklist::{BlocklistAIPermissions, video_recording_enabled};
 use crate::ai::mcp::file_based_manager::{FileBasedMCPManager, FileBasedMCPManagerEvent};
 use crate::ai::mcp::parsing::{ParsedTemplatableMCPServerResult, normalize_mcp_json, resolve_json};
 use crate::ai::mcp::templatable_manager::TemplatableMCPServerManagerEvent;
 use crate::ai::mcp::{
-    JSONMCPServer, MCPServerState, TemplatableMCPServerInstallation, TemplatableMCPServerManager,
-    VariableType, VariableValue, builtin,
+    JSONMCPServer, JSONTransportType, MCPServerState, TemplatableMCPServerInstallation,
+    TemplatableMCPServerManager, VariableType, VariableValue, builtin,
 };
 use crate::auth::AuthStateProvider;
 use crate::auth::credentials::Credentials;
@@ -116,12 +125,34 @@ fn log_unresolved_secret_refs(
 struct ResolvedMcpSpecs {
     local_uuids: Vec<Uuid>,
     ephemeral_installations: Vec<TemplatableMCPServerInstallation>,
+    /// The expiring credentials among `ephemeral_installations`.
+    leases: Vec<ManagedMcpLease>,
 }
 
 enum ResolvedMcpSpec {
     LocalUuid(Uuid),
     EphemeralInstallations(Vec<TemplatableMCPServerInstallation>),
+    /// Installations resolved from a managed MCP client config, with the leases of the
+    /// credentials that config issued.
+    ManagedInstallations {
+        installations: Vec<TemplatableMCPServerInstallation>,
+        leases: Vec<ManagedMcpLease>,
+    },
     Skipped,
+}
+
+impl ResolvedMcpSpec {
+    fn managed(
+        config: &CreateManagedMcpClientConfigOutput,
+        installations: Vec<TemplatableMCPServerInstallation>,
+        warp_id: &str,
+    ) -> Self {
+        let leases = managed_mcp_refresh::leases_for_installations(config, &installations, warp_id);
+        Self::ManagedInstallations {
+            installations,
+            leases,
+        }
+    }
 }
 
 enum PreparedMcpSpec<'a> {
@@ -372,6 +403,11 @@ pub(crate) async fn start_task_and_profile_mcp_servers(
             })
             .await?;
     }
+    let leases = match mode {
+        McpStartupMode::Run => resolved_mcp_specs.leases,
+        // An assignment resolves its servers again, so standby credentials are never refreshed.
+        McpStartupMode::Standby => Vec::new(),
+    };
 
     attach_builtin_mcp_servers(
         mode,
@@ -418,6 +454,7 @@ pub(crate) async fn start_task_and_profile_mcp_servers(
                 me,
                 existing_uuids,
                 ephemeral_installations,
+                leases,
                 profile_allowlist,
                 mode,
                 ctx,
@@ -429,9 +466,10 @@ pub(crate) async fn start_task_and_profile_mcp_servers(
 
 /// Uses one readiness subscription for all selected servers so waits cannot cancel each other.
 fn start_mcp_servers_concurrently(
-    me: &AgentDriver,
+    me: &mut AgentDriver,
     task_uuids: Vec<Uuid>,
     ephemeral_installations: Vec<TemplatableMCPServerInstallation>,
+    leases: Vec<ManagedMcpLease>,
     profile_uuids: Vec<Uuid>,
     mode: McpStartupMode,
     ctx: &mut ModelContext<AgentDriver>,
@@ -489,13 +527,25 @@ fn start_mcp_servers_concurrently(
         )
     }));
 
+    let refresh = ManagedMcpRefresh::new(leases.into_iter().filter(|lease| {
+        ephemeral_installations
+            .iter()
+            .any(|installation| installation.uuid() == lease.installation_id)
+    }));
+    let mut refreshable_headers = refresh
+        .as_ref()
+        .map(ManagedMcpRefresh::headers)
+        .unwrap_or_default();
+    me.managed_mcp_refresh = refresh;
+
     let wait = wait_for_mcp_servers_started(me, named_servers, ctx);
     TemplatableMCPServerManager::handle(ctx).update(ctx, move |manager, ctx| {
         for uuid in persistent_servers {
             manager.spawn_server(uuid, ctx);
         }
         for installation in ephemeral_installations {
-            manager.spawn_cli_ephemeral_server(installation, ctx);
+            let refreshable_headers = refreshable_headers.remove(&installation.uuid());
+            manager.spawn_cli_ephemeral_server(installation, refreshable_headers, ctx);
         }
     });
 
@@ -884,6 +934,13 @@ impl AgentDriver {
                 ResolvedMcpSpec::EphemeralInstallations(installations) => {
                     resolved.ephemeral_installations.extend(installations);
                 }
+                ResolvedMcpSpec::ManagedInstallations {
+                    installations,
+                    leases,
+                } => {
+                    resolved.ephemeral_installations.extend(installations);
+                    resolved.leases.extend(leases);
+                }
                 ResolvedMcpSpec::Skipped => {}
             }
         }
@@ -918,7 +975,9 @@ impl AgentDriver {
                     task_id,
                     &uuid.to_string(),
                 )
-                .map(ResolvedMcpSpec::EphemeralInstallations)
+                .map(|installations| {
+                    ResolvedMcpSpec::managed(&client_config, installations, &uuid.to_string())
+                })
                 .map_err(|err| AgentDriverError::ManagedMcpResolutionFailed {
                     uid: *uuid,
                     message: err.to_string(),
@@ -952,7 +1011,9 @@ impl AgentDriver {
                     task_id,
                     id,
                 ) {
-                    Ok(installations) => Ok(ResolvedMcpSpec::EphemeralInstallations(installations)),
+                    Ok(installations) => {
+                        Ok(ResolvedMcpSpec::managed(&client_config, installations, id))
+                    }
                     Err(err) => {
                         log::warn!("Skipping well-known MCP server '{id}': {err}");
                         Ok(ResolvedMcpSpec::Skipped)
@@ -1496,6 +1557,199 @@ impl AgentDriver {
             }
         })
     }
+}
+
+/// Whether a run on `harness` carries the run's computer use configuration. Third-party harnesses
+/// only use it to decide whether to get the computer use MCP server.
+pub(crate) fn harness_takes_computer_use_config(harness: Harness) -> bool {
+    harness == Harness::Oz
+        || (FeatureFlag::ComputerUseMcp.is_enabled()
+            && computer_use_model_family(harness).is_some())
+}
+
+/// The model family whose conventions the computer use MCP server follows for `harness`, or `None`
+/// when `harness` can't be given the server.
+fn computer_use_model_family(harness: Harness) -> Option<&'static str> {
+    match harness {
+        Harness::Claude => Some("anthropic"),
+        Harness::Codex => Some("openai"),
+        // Gemini only reads MCP servers from settings files that outlive the run, which would
+        // leave it in control of the computer after the run ends.
+        Harness::Gemini => None,
+        Harness::Oz | Harness::OpenCode | Harness::Pi | Harness::Unknown => None,
+    }
+}
+
+/// Display-server variables the computer use MCP server needs to reach the screen. Harnesses don't
+/// all pass their environment through to MCP servers (Codex forwards only an allowlist), so the
+/// server's config sets them explicitly.
+const COMPUTER_USE_MCP_ENV_VARS: &[&str] = &[
+    "DISPLAY",
+    "XAUTHORITY",
+    "WAYLAND_DISPLAY",
+    "XDG_RUNTIME_DIR",
+    "DBUS_SESSION_BUS_ADDRESS",
+];
+
+/// Variables the computer use MCP server needs from the harness's environment: the Warp CLI that
+/// uploads recordings authenticates with the API key and honors the server URL overrides.
+const COMPUTER_USE_MCP_FORWARDED_ENV_VARS: &[&str] = &[
+    "WARP_API_KEY",
+    SERVER_ROOT_URL_OVERRIDE_ENV,
+    WS_SERVER_URL_OVERRIDE_ENV,
+    SESSION_SHARING_SERVER_URL_OVERRIDE_ENV,
+];
+
+/// How long a harness waits for a computer use tool call, with headroom over the longest call.
+const COMPUTER_USE_MCP_TOOL_TIMEOUT: Duration =
+    Duration::from_secs(computer_use_mcp::STOP_RECORDING_TIMEOUT.as_secs() + 60);
+
+impl AgentDriver {
+    /// Adds the built-in computer use MCP server to a third-party harness's MCP servers when
+    /// computer use is enabled for this run, unless a configured server already uses its name.
+    pub(super) fn with_builtin_computer_use_mcp(
+        &self,
+        harness: Harness,
+        mut servers: ResolvedMCPServers,
+        ctx: &AppContext,
+    ) -> ResolvedMCPServers {
+        if let Some(server) = self.builtin_computer_use_mcp_for_run(harness, ctx) {
+            attach_computer_use_mcp(&mut servers, server);
+        }
+        servers
+    }
+
+    /// Returns the computer use MCP server to give `harness`, or `None` when computer use isn't
+    /// enabled for this run. This mirrors the gate Oz applies before offering its own computer use
+    /// tools, except that the run must allow computer use without asking: a third-party harness
+    /// can't surface Warp's approval prompt.
+    fn builtin_computer_use_mcp_for_run(
+        &self,
+        harness: Harness,
+        ctx: &AppContext,
+    ) -> Option<JSONMCPServer> {
+        if !FeatureFlag::ComputerUseMcp.is_enabled()
+            || !FeatureFlag::AgentModeComputerUse.is_enabled()
+            || !(FeatureFlag::LocalComputerUse.is_enabled() || self.task_id.is_some())
+        {
+            return None;
+        }
+        let terminal_view = self.terminal_driver.as_ref(ctx).terminal_view();
+        let scope = terminal_view
+            .as_ref(ctx)
+            .ai_controller()
+            .as_ref(ctx)
+            .team_context(ctx);
+        let permission = BlocklistAIPermissions::as_ref(ctx).get_computer_use_setting(
+            Some(terminal_view.id()),
+            &scope,
+            ctx,
+        );
+        if !permission.is_always_allow() {
+            return None;
+        }
+        if !computer_use::is_supported_on_current_platform() {
+            log::warn!("Computer use is enabled for this run but isn't supported on this host");
+            return None;
+        }
+        let cli_path = match std::env::current_exe().map(PathBuf::into_os_string) {
+            Ok(path) => path.into_string().ok()?,
+            Err(error) => {
+                log::warn!(
+                    "Can't give the harness computer use: failed to locate the CLI: {error}"
+                );
+                return None;
+            }
+        };
+        let env = computer_use_mcp_env(&self.resolved_env_vars, |name| std::env::var_os(name));
+        computer_use_mcp_server(
+            harness,
+            cli_path,
+            self.task_id.map(|task_id| task_id.to_string()),
+            video_recording_enabled(),
+            env,
+        )
+    }
+}
+
+fn attach_computer_use_mcp(servers: &mut ResolvedMCPServers, server: JSONMCPServer) {
+    match servers
+        .configs
+        .entry(builtin::COMPUTER_USE_MCP_SERVER_NAME.to_owned())
+    {
+        Entry::Occupied(_) => log::info!(
+            "Skipping the built-in computer use MCP server: a server named '{}' is already configured for this run",
+            builtin::COMPUTER_USE_MCP_SERVER_NAME
+        ),
+        Entry::Vacant(entry) => {
+            log::info!("Attaching the built-in computer use MCP server to this agent run");
+            entry.insert(server);
+            servers.installation_ids.insert(
+                builtin::COMPUTER_USE_MCP_SERVER_NAME.to_owned(),
+                builtin::COMPUTER_USE_MCP_INSTALLATION_UUID,
+            );
+            servers.harness_settings.insert(
+                builtin::COMPUTER_USE_MCP_SERVER_NAME.to_owned(),
+                HarnessMcpSettings {
+                    forwarded_env_vars: COMPUTER_USE_MCP_FORWARDED_ENV_VARS
+                        .iter()
+                        .map(|name| (*name).to_owned())
+                        .collect(),
+                    tool_timeout: Some(COMPUTER_USE_MCP_TOOL_TIMEOUT),
+                    // The server controls the computer, so it must not stay configured once the
+                    // run that was allowed to use it ends.
+                    run_scoped: true,
+                },
+            );
+        }
+    }
+}
+
+/// Builds the stdio MCP server entry that serves computer use to `harness` from the CLI at
+/// `cli_path`, or `None` when `harness` can't be given the server. Screen recordings are attached
+/// to `run_id` when there is one, and saved locally otherwise.
+fn computer_use_mcp_server(
+    harness: Harness,
+    cli_path: String,
+    run_id: Option<String>,
+    recording_enabled: bool,
+    env: HashMap<String, String>,
+) -> Option<JSONMCPServer> {
+    let model_family = computer_use_model_family(harness)?;
+    let mut args: Vec<String> = ["computer-use-mcp", "--model-family", model_family]
+        .map(str::to_owned)
+        .to_vec();
+    if !recording_enabled {
+        args.push("--no-recording".to_owned());
+    } else if let Some(run_id) = run_id {
+        args.extend(["--run-id".to_owned(), run_id]);
+    }
+    Some(JSONMCPServer {
+        transport_type: JSONTransportType::CLIServer {
+            command: cli_path,
+            args,
+            env,
+            working_directory: None,
+        },
+    })
+}
+
+/// Collects [`COMPUTER_USE_MCP_ENV_VARS`] for the computer use MCP server, preferring the run's
+/// resolved environment over this process's.
+fn computer_use_mcp_env(
+    resolved_env_vars: &HashMap<OsString, OsString>,
+    process_env: impl Fn(&str) -> Option<OsString>,
+) -> HashMap<String, String> {
+    COMPUTER_USE_MCP_ENV_VARS
+        .iter()
+        .filter_map(|name| {
+            let value = resolved_env_vars
+                .get(OsStr::new(name))
+                .cloned()
+                .or_else(|| process_env(name))?;
+            Some(((*name).to_owned(), value.into_string().ok()?))
+        })
+        .collect()
 }
 
 #[cfg(test)]

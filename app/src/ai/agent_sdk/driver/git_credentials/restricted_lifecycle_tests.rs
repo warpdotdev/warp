@@ -203,8 +203,13 @@ impl Drop for RecordCancellation {
 
 #[async_trait]
 impl PrewarmedSandboxClient for RenewalClient {
-    async fn fetch_configuration(&self, sandbox_id: &str) -> Result<PrewarmedSandboxConfiguration> {
+    async fn fetch_configuration(
+        &self,
+        sandbox_id: &str,
+        supports_deferred_repositories: bool,
+    ) -> Result<PrewarmedSandboxConfiguration> {
         assert_eq!(sandbox_id, "sandbox");
+        assert!(supports_deferred_repositories);
         self.requests.fetch_add(1, Ordering::SeqCst);
         self.started.0.send(()).await?;
         if self.pending {
@@ -216,6 +221,7 @@ impl PrewarmedSandboxClient for RenewalClient {
             credentials[0].token = "renewed-standby-token".into();
             credentials[0].expires_at = Some((Utc::now() + TimeDelta::hours(2)).into());
             return Ok(PrewarmedSandboxConfiguration {
+                runner_preparation: false,
                 sandbox_id: "sandbox".into(),
                 generation: "renewed".into(),
                 github_credential_mode: GitHubCredentialMode::RestrictedInstallation,
@@ -301,6 +307,7 @@ fn actual_standby_renewal_clears_gone_and_cancels_inflight_fetch_before_task_own
                         &client,
                         &owner,
                         Utc::now() + TimeDelta::hours(2),
+                        true,
                         &clock,
                     )
                     .boxed();

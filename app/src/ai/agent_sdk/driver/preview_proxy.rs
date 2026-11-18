@@ -1,12 +1,15 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::thread::JoinHandle;
 
-use ::preview_proxy::Proxy;
+use ::preview_proxy::{PortSource, PreviewRecord, Proxy};
 use anyhow::Context as _;
 use tokio_util::sync::CancellationToken;
+use url::Url;
+use uuid::Uuid;
 
 use crate::ai::ambient_agents::AmbientAgentTaskId;
-use crate::server::server_api::ai::AIClient;
+use crate::server::server_api::ai::{AIClient, ListRunPreviewsResponse};
 
 pub(super) struct Manager {
     cancel: CancellationToken,
@@ -79,23 +82,69 @@ impl Manager {
     }
 }
 
-impl ::preview_proxy::PortSource for Client {
-    async fn ports(&self) -> anyhow::Result<Vec<u16>> {
+impl PortSource for Client {
+    async fn previews(&self) -> anyhow::Result<Vec<PreviewRecord>> {
         let response = self.client.list_run_previews(&self.task_id).await?;
-        anyhow::ensure!(
-            response.execution_id == Some(self.execution_id),
-            "Preview execution mismatch: expected {}, received {:?}",
-            self.execution_id,
-            response.execution_id
-        );
-        Ok(response
-            .previews
-            .into_iter()
-            .map(|preview| preview.port)
-            .collect())
+        preview_records(response, self.execution_id)
     }
 }
 
+fn preview_records(
+    response: ListRunPreviewsResponse,
+    expected_execution_id: i64,
+) -> anyhow::Result<Vec<PreviewRecord>> {
+    anyhow::ensure!(
+        response.execution_id == Some(expected_execution_id),
+        "Preview execution mismatch: expected {}, received {:?}",
+        expected_execution_id,
+        response.execution_id
+    );
+
+    let mut ids = HashSet::new();
+    let mut ports = HashSet::new();
+    let mut origins = HashSet::new();
+    response
+        .previews
+        .into_iter()
+        .map(|preview| {
+            anyhow::ensure!(
+                preview.port >= 1024,
+                "Invalid preview app port {}",
+                preview.port
+            );
+            anyhow::ensure!(ports.insert(preview.port), "Duplicate preview app port");
+            let id_string = preview.id.context("Preview record missing UUID")?;
+            let public_url = preview.url.context("Preview record missing public URL")?;
+            let id = Uuid::parse_str(&id_string).context("Invalid preview UUID")?;
+            anyhow::ensure!(
+                !id.is_nil() && id.to_string() == id_string,
+                "Preview UUID must be non-nil and use canonical lowercase formatting"
+            );
+            anyhow::ensure!(ids.insert(id), "Duplicate preview UUID");
+            let origin = preview_origin(&public_url)?;
+            anyhow::ensure!(origins.insert(origin.clone()), "Duplicate preview origin");
+
+            Ok(PreviewRecord {
+                id,
+                port: preview.port,
+                origin,
+            })
+        })
+        .collect()
+}
+
+fn preview_origin(public_url: &str) -> anyhow::Result<String> {
+    let url = Url::parse(public_url).context("Invalid preview public URL")?;
+    anyhow::ensure!(
+        matches!(url.scheme(), "http" | "https"),
+        "Preview URL must use HTTP or HTTPS"
+    );
+    anyhow::ensure!(
+        url.username().is_empty() && url.password().is_none(),
+        "Preview URL must not contain credentials"
+    );
+    Ok(url.origin().ascii_serialization())
+}
 impl Drop for Manager {
     fn drop(&mut self) {
         self.cancel.cancel();

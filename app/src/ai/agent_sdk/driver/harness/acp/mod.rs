@@ -214,7 +214,7 @@ impl AcpHarness {
                     system_prompt,
                     resolved_env_vars,
                     resolved_secrets,
-                    &HashMap::new(),
+                    &ResolvedMCPServers::default(),
                     None,
                 )?;
                 publish_skills_for_codex(
@@ -595,7 +595,7 @@ impl AcpHarnessRunner {
                 {
                     return AgentDriverError::HarnessAuthCheckFailed {
                         harness: self.harness.to_string(),
-                        detail: rpc_error.message.clone(),
+                        detail: rpc_error.detail(),
                     };
                 }
                 let reason = format!("{error:#}");

@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "hooks": {
+    "beforeToolUse": [
+      { "command": "./hooks/typo.sh" }
+    ],
+    "beforeShellExecution": [
+      { "command": "./hooks/check.sh" }
+    ]
+  }
+}

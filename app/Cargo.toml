@@ -310,6 +310,7 @@ axum.workspace = true
 build_cache.workspace = true
 cloud_object_persistence.workspace = true
 comfy-table = "7.1.4"
+computer_use_mcp.workspace = true
 inquire = "0.9.1"
 diesel = { workspace = true, features = ["sqlite", "chrono"] }
 diesel_migrations = { version = "2.2.0", features = ["sqlite"] }
@@ -503,6 +504,7 @@ creating_shared_sessions = []
 cross_repo_context = []
 codebase_index_persistence = ["full_source_code_embedding"]
 well_known_mcp_ids = []
+managed_mcp_credential_refresh = []
 factory_mcp = []
 preview_urls_mcp = []
 default = [
@@ -707,6 +709,7 @@ default = [
     "cloud_agent_execution_config",
     "file_backed_execution_profiles",
     "well_known_mcp_ids",
+    "managed_mcp_credential_refresh",
     "factory_mcp",
     "ime_marked_text",
     "ctrl_c_cancels_third_party_harness",
@@ -795,6 +798,7 @@ list_skills = []
 # include dependencies that should only exist in such environments.
 local_tty = ["warp_terminal/local_tty"]
 local_computer_use = []
+computer_use_mcp = []
 local_claude_codex_child_harnesses = []
 # This feature is enabled in build.rs when compiling for platforms which
 # have APIs for interacting with a local filesystem.  It can be used to

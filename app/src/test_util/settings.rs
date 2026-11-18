@@ -23,6 +23,22 @@ pub fn initialize_settings_for_tests_with_mode(
     mode: warp_core::execution_mode::ExecutionMode,
     is_sandboxed: bool,
 ) {
+    use warp_core::execution_mode::ExecutionMode;
+
+    let is_headless = match mode {
+        ExecutionMode::App | ExecutionMode::Tui => false,
+        ExecutionMode::Sdk | ExecutionMode::RemoteServerDaemon => true,
+    };
+    initialize_settings_for_tests_with_mode_and_headlessness(app, mode, is_sandboxed, is_headless);
+}
+
+#[cfg(test)]
+pub fn initialize_settings_for_tests_with_mode_and_headlessness(
+    app: &mut App,
+    mode: warp_core::execution_mode::ExecutionMode,
+    is_sandboxed: bool,
+    is_headless: bool,
+) {
     use warp_core::execution_mode::AppExecutionMode;
     use warp_core::semantic_selection::SemanticSelection;
 
@@ -53,7 +69,9 @@ pub fn initialize_settings_for_tests_with_mode(
     use crate::user_config::WarpConfig;
     use crate::window_settings::WindowSettings;
     use crate::workspace::tab_settings::TabSettings;
-    app.add_singleton_model(|ctx| AppExecutionMode::new(mode, is_sandboxed, ctx));
+    app.add_singleton_model(|ctx| {
+        AppExecutionMode::new_with_headlessness(mode, is_sandboxed, is_headless, ctx)
+    });
 
     app.update(init_and_register_user_preferences);
     app.add_singleton_model(|_ctx| SettingsManager::default());

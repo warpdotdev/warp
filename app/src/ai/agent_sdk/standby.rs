@@ -36,6 +36,7 @@ use crate::ai::agent_sdk::driver::environment::{WorkspaceConfiguration, merge_re
 use crate::ai::agent_sdk::driver::git_credentials::restricted::{
     self, CredentialStoreGuard, ManagedStoreOwner,
 };
+use crate::ai::agent_sdk::driver::mcp_startup::harness_takes_computer_use_config;
 use crate::ai::agent_sdk::driver::{
     AgentDriver, AgentDriverError, AgentDriverOptions, Task, cloud_provider, git_credentials,
 };
@@ -70,11 +71,12 @@ const DELIVERY_CONFIRMATION_WINDOW: Duration = Duration::from_secs(5 * 60);
 
 /// Starts the standby lifecycle and exits the app after expiry or a fatal error.
 pub(super) fn run(ctx: &mut AppContext, args: RunCloudStandbyArgs) -> anyhow::Result<()> {
+    let supports_deferred_repositories = FeatureFlag::FactoryDeferredRepositories.is_enabled();
     let runner = ctx.add_singleton_model(|_| AgentDriverRunner);
     runner.update(ctx, move |_, ctx| {
         let spawner = ctx.spawner();
         ctx.spawn(
-            prepare_and_wait(spawner, args.standby_id),
+            prepare_and_wait(spawner, args.standby_id, supports_deferred_repositories),
             |_, result, ctx| match result {
                 Ok(()) => ctx.terminate_app(TerminationMode::ForceTerminate, None),
                 Err(err) => super::report_fatal_error(err, ctx),
@@ -90,6 +92,7 @@ pub(super) fn run(ctx: &mut AppContext, args: RunCloudStandbyArgs) -> anyhow::Re
 async fn prepare_and_wait(
     foreground: ModelSpawner<AgentDriverRunner>,
     sandbox_id: String,
+    supports_deferred_repositories: bool,
 ) -> anyhow::Result<()> {
     let api = foreground
         .spawn(|_, ctx| ServerApiProvider::as_ref(ctx).get_prewarmed_sandbox_client())
@@ -101,7 +104,9 @@ async fn prepare_and_wait(
         })
         .await?;
 
-    let config = api.fetch_configuration(&sandbox_id).await?;
+    let config = api
+        .fetch_configuration(&sandbox_id, supports_deferred_repositories)
+        .await?;
     anyhow::ensure!(
         config.sandbox_id == sandbox_id,
         "Standby configuration sandbox ID does not match"
@@ -141,7 +146,13 @@ async fn prepare_and_wait(
                 api.as_ref(),
                 &sandbox_id,
                 &generation,
-                prepare(&foreground, config, &setup_events).await,
+                prepare(
+                    &foreground,
+                    config,
+                    supports_deferred_repositories,
+                    &setup_events,
+                )
+                .await,
             )
             .await
         },
@@ -159,7 +170,7 @@ async fn prepare_and_wait(
         },
         |driver_spawner, assignment| {
             *assigned_driver.lock().unwrap() = Some(driver_spawner.clone());
-            graduate_sandbox(driver_spawner, assignment).boxed()
+            graduate_sandbox(driver_spawner, assignment, supports_deferred_repositories).boxed()
         },
         |(spawner, task, credentials)| {
             async move {
@@ -173,7 +184,14 @@ async fn prepare_and_wait(
         &clock,
         async {
             if mode == GitHubCredentialMode::RestrictedInstallation {
-                renew_standby_credentials(api.as_ref(), &owner, expires_at, &clock).await
+                renew_standby_credentials(
+                    api.as_ref(),
+                    &owner,
+                    expires_at,
+                    supports_deferred_repositories,
+                    &clock,
+                )
+                .await
             } else {
                 future::pending().await
             }
@@ -195,6 +213,7 @@ pub(super) async fn renew_standby_credentials(
     api: &dyn PrewarmedSandboxClient,
     owner: &ManagedStoreOwner,
     expires_at: DateTime<Utc>,
+    supports_deferred_repositories: bool,
     clock: &StandbyClock,
 ) -> anyhow::Result<()> {
     let ManagedStoreOwner::Standby {
@@ -213,7 +232,10 @@ pub(super) async fn renew_standby_credentials(
         for attempt in 0..=3 {
             let fetched = restricted::with_expiry(
                 owner,
-                bounded_control(clock, api.fetch_configuration(sandbox_id)),
+                bounded_control(
+                    clock,
+                    api.fetch_configuration(sandbox_id, supports_deferred_repositories),
+                ),
             )
             .await?;
             let fetched = fetched.and_then(|result| result);
@@ -601,6 +623,7 @@ async fn run_lifecycle<'a, P, R>(
 async fn graduate_sandbox(
     driver_spawner: ModelSpawner<AgentDriver>,
     assignment: Assignment,
+    supports_deferred_repositories: bool,
 ) -> anyhow::Result<(ModelSpawner<AgentDriver>, Task, CredentialStoreGuard)> {
     let credentials = CredentialStoreGuard::new(ManagedStoreOwner::Task(
         assignment.execution_config.task_id.inner().to_owned(),
@@ -611,6 +634,7 @@ async fn graduate_sandbox(
         assignment.runtime_env,
         assignment.api_key,
         assignment.expires_at,
+        supports_deferred_repositories,
     )
     .await
     .context("Failed to prepare pre-warmed sandbox assignment")?;
@@ -630,9 +654,31 @@ fn wait_window(expires_at: DateTime<Utc>, now: DateTime<Utc>) -> Duration {
 async fn prepare(
     foreground: &ModelSpawner<AgentDriverRunner>,
     config: PrewarmedSandboxConfiguration,
+    supports_deferred_repositories: bool,
     setup_events: &SetupClientEventReporter,
 ) -> Result<ModelSpawner<AgentDriver>, AgentDriverError> {
+    let runner_preparation = config.runner_preparation;
     let preparation = config.preparation;
+    if runner_preparation
+        && (!preparation.repositories.is_empty()
+            || !preparation.deferred_repositories.is_empty()
+            || !preparation.skills.is_empty()
+            || !preparation.factory_skill_dirs.is_empty()
+            || !preparation.mcp_servers.is_empty()
+            || preparation.providers.is_some()
+            || !config.environment_variables.is_empty()
+            || !config.managed_secrets.is_empty()
+            || !config.git_credentials.is_empty())
+    {
+        return Err(AgentDriverError::ConfigBuildFailed(anyhow::anyhow!(
+            "Runner standby contains run resources"
+        )));
+    }
+    if !supports_deferred_repositories && !preparation.deferred_repositories.is_empty() {
+        return Err(AgentDriverError::ConfigBuildFailed(anyhow::anyhow!(
+            "Pre-warmed preparation has deferred repositories this client cannot prepare"
+        )));
+    }
     let harness = Harness::from_config_name(&preparation.harness)
         .with_context(|| {
             format!(
@@ -679,12 +725,19 @@ async fn prepare(
     let preparation_repositories =
         merge_repos_deduped(workspace.source_repos.clone(), skill_repositories)
             .map_err(|error| AgentDriverError::ConfigBuildFailed(error.into()))?;
-    let global_skills = setup_events
-        .record_result(
-            SetupStep::GlobalSkillResolution,
-            resolve_global_skills(foreground),
-        )
-        .await?;
+    let global_skills = if runner_preparation {
+        super::driver::agent_setup::GlobalSkillResolution {
+            specs: Vec::new(),
+            repos: Vec::new(),
+        }
+    } else {
+        setup_events
+            .record_result(
+                SetupStep::GlobalSkillResolution,
+                resolve_global_skills(foreground),
+            )
+            .await?
+    };
     merge_repos_deduped(
         preparation_repositories,
         global_skills.repos.iter().map(SourceRepo::from).collect(),
@@ -693,34 +746,35 @@ async fn prepare(
     let secrets = config.managed_secrets;
     let working_dir = workspace_root().map_err(AgentDriverError::ConfigBuildFailed)?;
 
-    setup_events
-        .record_result(SetupStep::TeamMetadataRefresh, async {
-            foreground
-                .spawn(|_, ctx| {
-                    Box::pin(super::common::refresh_workspace_metadata(ctx))
-                        as std::pin::Pin<
-                            Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send>,
-                        >
-                })
-                .await?
-                .await
-                .map_err(AgentDriverError::TeamMetadataRefreshFailed)
-        })
-        .await?;
-    setup_events
-        .record_result(SetupStep::WarpDriveSync, async {
-            if foreground
-                .spawn(|_, ctx| super::common::refresh_warp_drive(ctx))
-                .await?
-                .await
-                .is_err()
-            {
-                return Err(AgentDriverError::WarpDriveSyncFailed);
-            }
-            Ok(())
-        })
-        .await?;
-
+    if !runner_preparation {
+        setup_events
+            .record_result(SetupStep::TeamMetadataRefresh, async {
+                foreground
+                    .spawn(|_, ctx| {
+                        Box::pin(super::common::refresh_workspace_metadata(ctx))
+                            as std::pin::Pin<
+                                Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send>,
+                            >
+                    })
+                    .await?
+                    .await
+                    .map_err(AgentDriverError::TeamMetadataRefreshFailed)
+            })
+            .await?;
+        setup_events
+            .record_result(SetupStep::WarpDriveSync, async {
+                if foreground
+                    .spawn(|_, ctx| super::common::refresh_warp_drive(ctx))
+                    .await?
+                    .await
+                    .is_err()
+                {
+                    return Err(AgentDriverError::WarpDriveSyncFailed);
+                }
+                Ok(())
+            })
+            .await?;
+    }
     setup_events
         .record_result(SetupStep::AgentCredentialsFetch, async {
             if config.github_credential_mode == GitHubCredentialMode::Legacy {
@@ -762,7 +816,7 @@ async fn prepare(
         environment_variables: config.environment_variables,
         workspace,
         cloud_providers,
-        computer_use_config: (harness == Harness::Oz)
+        computer_use_config: harness_takes_computer_use_config(harness)
             .then_some((preparation.computer_use_enabled, None)),
         selected_harness: harness,
         ..Default::default()
@@ -779,6 +833,7 @@ async fn prepare(
         mcp_specs,
         global_skills,
         setup_events,
+        runner_preparation,
     )
     .await?;
     Ok(driver_spawner)

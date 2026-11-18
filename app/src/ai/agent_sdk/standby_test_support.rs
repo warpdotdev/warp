@@ -45,8 +45,11 @@ impl PrewarmedSandboxClient for FakeClient {
     async fn fetch_configuration(
         &self,
         sandbox_id: &str,
+        supports_deferred_repositories: bool,
     ) -> anyhow::Result<PrewarmedSandboxConfiguration> {
-        panic!("Unexpected configuration fetch for {sandbox_id}")
+        panic!(
+            "Unexpected configuration fetch for {sandbox_id}: support={supports_deferred_repositories}"
+        )
     }
 
     async fn report_status(
@@ -242,6 +245,7 @@ pub(super) fn execution_config() -> ExecutionConfiguration {
         mcp_servers_json: "{}".into(),
         skills: Vec::new(),
         factory_skill_dirs: Vec::new(),
+        factory_branch: None,
         computer_use_enabled: false,
         computer_use_model_id: None,
         inference_providers: None,
@@ -254,6 +258,7 @@ pub(super) fn execution_config() -> ExecutionConfiguration {
         idle_on_complete_seconds: None,
         idle_on_fail_seconds: None,
         snapshot_disabled: true,
+        agent_hook_sources: Vec::new(),
     }
 }
 

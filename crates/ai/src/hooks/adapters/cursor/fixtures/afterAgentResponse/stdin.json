@@ -1,0 +1,14 @@
+{
+  "conversation_id": "11111111-1111-1111-1111-111111111111",
+  "generation_id": "11111111-1111-1111-1111-111111111111",
+  "model": "claude-sonnet",
+  "model_id": "claude-sonnet",
+  "model_params": [],
+  "cursor_version": "v0.2026.01.01",
+  "warp_version": "v0.2026.01.01",
+  "workspace_roots": ["/work/repo"],
+  "user_email": "dev@example.com",
+  "transcript_path": null,
+  "hook_event_name": "afterAgentResponse",
+  "text": "Done. The tests pass."
+}

@@ -1451,12 +1451,16 @@ fn blobless_clone_walks_path_limited_history_without_network() {
     assert_eq!(commit_count, 2, "expected both commits touching notes.md");
 }
 
+const FACTORY_DEFINITION_SHA: &str = "0123456789abcdef0123456789abcdef01234567";
+const FACTORY_DEFINITION_CHECKOUT: &str = "git -C \"$WARP_FACTORY_REPO_DIR\" -c advice.detachedHead=false checkout --quiet --detach 0123456789abcdef0123456789abcdef01234567";
+
 #[test]
 fn factory_clone_is_prepended_when_clone_values_are_present() {
     let mut setup_commands = vec!["make setup".to_string()];
     super::prepend_factory_definition_clone_for_values(
         "https://t:token@definitions.example.com/team/factory.git",
         "acme_factory_repo",
+        None,
         ShellType::Bash,
         &mut setup_commands,
     );
@@ -1484,6 +1488,7 @@ fn factory_clone_references_env_vars_with_the_session_shells_syntax() {
         super::prepend_factory_definition_clone_for_values(
             "https://t:token@definitions.example.com/team/factory.git",
             "acme_factory_repo",
+            None,
             shell_type,
             &mut setup_commands,
         );
@@ -1492,23 +1497,96 @@ fn factory_clone_references_env_vars_with_the_session_shells_syntax() {
 }
 
 #[test]
-fn factory_clone_is_skipped_without_clone_values() {
+fn factory_checkout_runs_after_the_clone_and_before_customer_setup() {
+    let mut setup_commands = vec!["make setup".to_string()];
+    super::prepend_factory_definition_clone_for_values(
+        "https://t:token@definitions.example.com/team/factory.git",
+        "acme_factory_repo",
+        Some(FACTORY_DEFINITION_SHA),
+        ShellType::Bash,
+        &mut setup_commands,
+    );
+    assert_eq!(
+        setup_commands,
+        vec![
+            "git clone \"$WARP_FACTORY_REPO_CLONE_URL\" \"$WARP_FACTORY_REPO_DIR\"".to_string(),
+            FACTORY_DEFINITION_CHECKOUT.to_string(),
+            "make setup".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn factory_checkout_references_the_clone_dir_with_the_session_shells_syntax() {
+    let powershell_checkout = format!(
+        "git -C \"$env:WARP_FACTORY_REPO_DIR\" -c advice.detachedHead=false checkout --quiet --detach {FACTORY_DEFINITION_SHA}"
+    );
+    for (shell_type, expected) in [
+        (ShellType::Bash, FACTORY_DEFINITION_CHECKOUT),
+        (ShellType::Zsh, FACTORY_DEFINITION_CHECKOUT),
+        (ShellType::Fish, FACTORY_DEFINITION_CHECKOUT),
+        (ShellType::PowerShell, powershell_checkout.as_str()),
+    ] {
+        let mut setup_commands = Vec::new();
+        super::prepend_factory_definition_clone_for_values(
+            "https://t:token@definitions.example.com/team/factory.git",
+            "acme_factory_repo",
+            Some(FACTORY_DEFINITION_SHA),
+            shell_type,
+            &mut setup_commands,
+        );
+        assert_eq!(setup_commands[1], expected, "{shell_type:?}");
+    }
+}
+
+#[test]
+fn factory_checkout_follows_a_persisted_environment_clone() {
+    let persisted =
+        "git clone \"$WARP_FACTORY_REPO_CLONE_URL\" \"$WARP_FACTORY_REPO_DIR\"".to_string();
+    let mut setup_commands = vec![
+        "echo before".to_string(),
+        persisted.clone(),
+        "make setup".to_string(),
+    ];
+    super::prepend_factory_definition_clone_for_values(
+        "https://t:token@definitions.example.com/team/factory.git",
+        "acme_factory_repo",
+        Some(FACTORY_DEFINITION_SHA),
+        ShellType::Bash,
+        &mut setup_commands,
+    );
+    assert_eq!(
+        setup_commands,
+        vec![
+            "echo before".to_string(),
+            persisted,
+            FACTORY_DEFINITION_CHECKOUT.to_string(),
+            "make setup".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn factory_clone_and_checkout_are_skipped_without_clone_values() {
     let mut setup_commands = vec!["make setup".to_string()];
     super::prepend_factory_definition_clone_for_values(
         "",
         "",
+        Some(FACTORY_DEFINITION_SHA),
         ShellType::Bash,
         &mut setup_commands,
     );
     super::prepend_factory_definition_clone_for_values(
         "url",
         "  ",
+        Some(FACTORY_DEFINITION_SHA),
         ShellType::Bash,
         &mut setup_commands,
     );
     super::prepend_factory_definition_clone_for_values(
         "  ",
         "dir",
+        Some(FACTORY_DEFINITION_SHA),
         ShellType::Bash,
         &mut setup_commands,
     );
@@ -1527,6 +1605,7 @@ fn factory_clone_defers_to_a_persisted_environment_copy() {
     super::prepend_factory_definition_clone_for_values(
         "https://t:token@definitions.example.com/team/factory.git",
         "acme_factory_repo",
+        None,
         ShellType::Bash,
         &mut setup_commands,
     );
@@ -1542,6 +1621,7 @@ fn factory_clone_defers_to_a_persisted_bare_clone_copy() {
     super::prepend_factory_definition_clone_for_values(
         "https://t:token@definitions.example.com/team/factory.git",
         "acme_factory_repo",
+        None,
         ShellType::Bash,
         &mut setup_commands,
     );

@@ -151,6 +151,7 @@ impl fmt::Debug for PrewarmedSandboxPreparation {
 /// Supplies a standby configuration whose secrets must stay out of logs and saved app state.
 #[derive(Clone)]
 pub struct PrewarmedSandboxConfiguration {
+    pub runner_preparation: bool,
     pub sandbox_id: String,
     /// Identifies the configuration version that status reports and heartbeats must match.
     pub generation: String,
@@ -170,8 +171,20 @@ impl TryFrom<GraphqlConfiguration> for PrewarmedSandboxConfiguration {
     type Error = anyhow::Error;
 
     fn try_from(config: GraphqlConfiguration) -> Result<Self> {
+        let runner_preparation = match config.preparation_kind.as_str() {
+            "AGENT" => false,
+            "RUNNER" => {
+                ensure!(
+                    config.runner_preparation_contract_version == Some(1),
+                    "Unsupported runner preparation contract"
+                );
+                true
+            }
+            _ => bail!("Unknown standby preparation kind"),
+        };
         let preparation = config.spec;
         Ok(Self {
+            runner_preparation,
             sandbox_id: config.sandbox_id.inner().to_owned(),
             generation: config.fingerprint,
             preparation: PrewarmedSandboxPreparation {
@@ -242,6 +255,7 @@ impl PrewarmedSandboxState {
 /// Reports a preparation outcome for a specific configuration generation.
 #[derive(Debug, Serialize)]
 struct PrewarmedSandboxStatusInput {
+    runner_preparation_contract_version: i32,
     /// The server's name for the configuration generation.
     fingerprint: String,
     state: &'static str,
@@ -259,6 +273,7 @@ struct PrewarmedSandboxStatusInput {
 pub enum PrewarmedSandboxControlEvent {
     Assignment {
         generation: String,
+        #[serde(deserialize_with = "assignment_execution_config")]
         execution_config: Box<ExecutionConfiguration>,
         runtime_env: HashMap<String, String>,
         api_key: String,
@@ -269,6 +284,24 @@ pub enum PrewarmedSandboxControlEvent {
     /// A message type this client does not know, which it ignores so the server can add types.
     #[serde(other)]
     Unknown,
+}
+
+/// Decodes an assignment's execution configuration. A server that predates agent hooks sends no
+/// `agentHookSources`; it has none to send, so the run gets an empty list rather than failing to
+/// claim the assignment.
+fn assignment_execution_config<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Box<ExecutionConfiguration>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let mut value = serde_json::Value::deserialize(deserializer)?;
+    if let Some(config) = value.as_object_mut() {
+        config
+            .entry("agentHookSources")
+            .or_insert_with(|| serde_json::Value::Array(Vec::new()));
+    }
+    serde_json::from_value(value).map_err(serde::de::Error::custom)
 }
 
 impl fmt::Debug for PrewarmedSandboxControlEvent {
@@ -381,7 +414,11 @@ impl PrewarmedSandboxControlReader {
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
 pub trait PrewarmedSandboxClient: 'static + Send + Sync {
     /// Fetches this sandbox's preparation plan and credentials.
-    async fn fetch_configuration(&self, sandbox_id: &str) -> Result<PrewarmedSandboxConfiguration>;
+    async fn fetch_configuration(
+        &self,
+        sandbox_id: &str,
+        supports_deferred_repositories: bool,
+    ) -> Result<PrewarmedSandboxConfiguration>;
 
     /// Reports whether preparation succeeded for the supplied configuration generation.
     async fn report_status(
@@ -442,11 +479,18 @@ impl ServerApi {
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
 impl PrewarmedSandboxClient for ServerApi {
-    async fn fetch_configuration(&self, sandbox_id: &str) -> Result<PrewarmedSandboxConfiguration> {
+    async fn fetch_configuration(
+        &self,
+        sandbox_id: &str,
+        supports_deferred_repositories: bool,
+    ) -> Result<PrewarmedSandboxConfiguration> {
         let operation = PrewarmedSandboxConfig::build(PrewarmedSandboxConfigVariables {
             input: PrewarmedSandboxConfigInput {
                 sandbox_id: sandbox_id.into(),
                 github_credential_contract_version: Some(1),
+                runner_preparation_contract_version: Some(1),
+                supports_deferred_repositories: Some(supports_deferred_repositories),
+                supports_agent_hooks: Some(true),
             },
             request_context: get_request_context(),
         });
@@ -488,6 +532,7 @@ impl PrewarmedSandboxClient for ServerApi {
         bounded_request(REQUEST_TIMEOUT, async {
             let url = Self::prewarmed_sandbox_url(sandbox_id, "status");
             let body = PrewarmedSandboxStatusInput {
+                runner_preparation_contract_version: 1,
                 fingerprint: generation.to_string(),
                 state: state.as_wire_value(),
                 manifest_hash: matches!(state, PrewarmedSandboxState::Ready)

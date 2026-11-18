@@ -1,4 +1,6 @@
 use std::cell::OnceCell;
+use std::marker::PhantomData;
+use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 use std::{fmt, vec};
 
@@ -24,7 +26,8 @@ use warpui::platform::Cursor;
 use warpui::text_layout::ClipConfig;
 use warpui::ui_components::components::UiComponent;
 use warpui::{
-    Action, AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, WindowId,
+    Action, AppContext, Entity, EventContext, SingletonEntity, TypedActionView, View, ViewContext,
+    WindowId,
 };
 
 use crate::appearance::Appearance;
@@ -52,12 +55,95 @@ const DROP_SHADOW_COLOR: ColorU = ColorU {
 };
 const SECONDARY_TEXT_RATIO: f32 = 0.9;
 
+/// An action dispatched by a menu item, with its concrete type erased.
+#[derive(Clone)]
+struct ItemAction(Arc<dyn AnyItemAction>);
+
+/// The operations a menu needs from an item's action.
+///
+/// This trait deliberately has no `Debug` supertrait. With one, `Arc<dyn AnyItemAction>` would
+/// itself satisfy the blanket `Action` impl, and method calls on the `Arc` would resolve to the
+/// pointer instead of the action inside it.
+trait AnyItemAction {
+    fn as_action(&self) -> &dyn Action;
+
+    /// Dispatches a copy of the action as a typed action of its concrete type.
+    fn dispatch(&self, ctx: &mut EventContext);
+}
+
+impl<A: Action + Clone> AnyItemAction for A {
+    fn as_action(&self) -> &dyn Action {
+        self
+    }
+
+    fn dispatch(&self, ctx: &mut EventContext) {
+        ctx.dispatch_typed_action(self.clone());
+    }
+}
+
+impl ItemAction {
+    fn new<A: Action + Clone>(action: A) -> Self {
+        Self(Arc::new(action))
+    }
+
+    fn as_action(&self) -> &dyn Action {
+        self.0.as_ref().as_action()
+    }
+
+    fn dispatch(&self, ctx: &mut EventContext) {
+        self.0.as_ref().dispatch(ctx);
+    }
+
+    fn downcast_ref<A: Action>(&self) -> Option<&A> {
+        Action::as_any(self.as_action()).downcast_ref()
+    }
+}
+
+impl fmt::Debug for ItemAction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(self.as_action(), f)
+    }
+}
+
+/// The parts of a menu's [`ViewContext`] that the menu logic needs.
+///
+/// [`AnyMenu`] takes its context as this trait so that it does not depend on the action type of
+/// the [`Menu`] that owns it.
+pub trait MenuViewContext {
+    fn emit(&mut self, event: Event);
+
+    fn notify(&mut self);
+
+    fn dispatch_typed_action(&mut self, action: &dyn Action);
+}
+
+impl<A: Action + Clone> MenuViewContext for ViewContext<'_, Menu<A>> {
+    fn emit(&mut self, event: Event) {
+        ViewContext::emit(self, event);
+    }
+
+    fn notify(&mut self) {
+        ViewContext::notify(self);
+    }
+
+    fn dispatch_typed_action(&mut self, action: &dyn Action) {
+        ViewContext::dispatch_typed_action(self, action);
+    }
+}
+
 #[derive(Clone, Debug)]
 /// At the current time, its not recommended to have more than 1 nested submenu due to
 /// layout constraints.
 pub struct SubMenu<A: Action + Clone = ()> {
+    any: AnySubMenu,
+    _action: PhantomData<A>,
+}
+
+/// The state and behavior of a [`SubMenu`], independent of the type of action its items dispatch.
+#[derive(Clone, Debug)]
+struct AnySubMenu {
     depth: usize,
-    items: Vec<MenuItem<A>>,
+    items: Vec<AnyMenuItem>,
     height: f32,
     /// The menu can have different items, including single item (standard menu) or a row of items,
     /// for example, for tab colors that are rendered in a single row. selected_row_index points
@@ -81,6 +167,15 @@ pub struct SubMenu<A: Action + Clone = ()> {
 /// abstract the Menu functionality into a trait and have separte implementations for dropdown and
 /// context menu.
 pub struct Menu<A: Action + Clone = ()> {
+    any: AnyMenu,
+    _action: PhantomData<A>,
+}
+
+/// The state and behavior of a [`Menu`], independent of the type of action its items dispatch.
+///
+/// The menu logic and rendering are implemented here instead of on [`Menu`] so that they are
+/// compiled once, not once per action type.
+pub struct AnyMenu {
     /// Whether or not the element should make the rest of the window unresponsive. All mouse events
     /// are handled by the [`Menu`] rather than being propagated further down in the element
     /// hierarchy.
@@ -98,7 +193,7 @@ pub struct Menu<A: Action + Clone = ()> {
 
     window_id: OnceCell<WindowId>,
 
-    menu: SubMenu<A>,
+    menu: AnySubMenu,
 
     /// When set, the item at this index gets a subtle background highlight
     /// to indicate that a submenu/sidecar panel is being shown for it.
@@ -131,6 +226,20 @@ pub struct Menu<A: Action + Clone = ()> {
     /// If false, selecting a menu item updates selection and emits menu events
     /// without dispatching the item's typed action directly from the menu.
     dispatch_item_actions: bool,
+}
+
+impl<A: Action + Clone> Deref for Menu<A> {
+    type Target = AnyMenu;
+
+    fn deref(&self) -> &Self::Target {
+        &self.any
+    }
+}
+
+impl<A: Action + Clone> DerefMut for Menu<A> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.any
+    }
 }
 
 #[derive(Clone, Default)]
@@ -393,14 +502,14 @@ struct RightSideLabel {
     font_properties: Properties,
 }
 #[derive(Clone)]
-struct RightSideIconConfig<A> {
+struct RightSideIconConfig {
     icon: icons::Icon,
     override_color: Option<Fill>,
     /// Optional action dispatched when the right-side icon is clicked. When
     /// set, the right-side icon becomes its own hit target: clicking it
     /// dispatches this action without firing the row's own `on_select_action`,
     /// and prevents the row click from propagating.
-    action: Option<A>,
+    action: Option<ItemAction>,
     /// Optional accessibility label for the right-side icon hit target.
     a11y_label: Option<String>,
     /// When true, the right-side icon is rendered as disabled with no hover or
@@ -410,7 +519,7 @@ struct RightSideIconConfig<A> {
     mouse_state: MouseStateHandle,
 }
 
-impl<A> RightSideIconConfig<A> {
+impl RightSideIconConfig {
     fn new(icon: icons::Icon) -> Self {
         Self {
             icon,
@@ -421,24 +530,28 @@ impl<A> RightSideIconConfig<A> {
             mouse_state: MouseStateHandle::default(),
         }
     }
-
-    fn without_action<B>(self) -> RightSideIconConfig<B> {
-        RightSideIconConfig {
-            icon: self.icon,
-            override_color: self.override_color,
-            action: None,
-            a11y_label: self.a11y_label,
-            disabled: self.disabled,
-            mouse_state: self.mouse_state,
-        }
-    }
 }
 
 #[derive(Clone, Default)]
 pub struct MenuItemFields<A: Action + Clone> {
+    any: AnyMenuItemFields,
+    _action: PhantomData<A>,
+}
+
+impl<A: Action + Clone> Deref for MenuItemFields<A> {
+    type Target = AnyMenuItemFields;
+
+    fn deref(&self) -> &Self::Target {
+        &self.any
+    }
+}
+
+/// The contents of a [`MenuItemFields`], independent of the type of action the item dispatches.
+#[derive(Clone, Default)]
+pub struct AnyMenuItemFields {
     element: MenuItemLabel,
     timestamp: Option<DateTime<Local>>,
-    on_select_action: Option<A>,
+    on_select_action: Option<ItemAction>,
     key_shortcut_label: Option<String>,
     has_submenu: bool,
     disabled: bool,
@@ -459,7 +572,7 @@ pub struct MenuItemFields<A: Action + Clone> {
     tooltip: Option<String>,
     tooltip_position: MenuTooltipPosition,
     right_side_label: Option<RightSideLabel>,
-    right_side_icon: Option<RightSideIconConfig<A>>,
+    right_side_icon: Option<RightSideIconConfig>,
     /// Optional override for the background color
     /// hovered or selected. When `None`, the default hover/selected background
     /// from the theme is used (accent or dark overlay, depending on
@@ -477,6 +590,12 @@ pub struct MenuItemFields<A: Action + Clone> {
 
 impl<A: Action + Clone> std::fmt::Debug for MenuItemFields<A> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&self.any, f)
+    }
+}
+
+impl std::fmt::Debug for AnyMenuItemFields {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("MenuItemFields")
             .field("element", &self.element)
             .field("on_select_action", &self.on_select_action)
@@ -487,230 +606,62 @@ impl<A: Action + Clone> std::fmt::Debug for MenuItemFields<A> {
 }
 
 impl<A: Action + Clone> MenuItemFields<A> {
-    pub fn new<T: Into<String>>(label: T) -> Self {
-        MenuItemFields {
-            element: MenuItemLabel::Text(label.into()),
-            timestamp: None,
-            on_select_action: None,
-            key_shortcut_label: None,
-            disabled: false,
-            mouse_state: Default::default(),
-            icon: None,
-            image_icon: None,
-            override_icon_color: None,
-            override_font_family: None,
-            override_font_size: None,
-            override_text_color: None,
-            highlight_on_hover: true,
-            indent: false,
-            no_interaction_on_hover: false,
-            vertical_padding_override: None,
-            horizontal_padding_override: None,
-            has_submenu: false,
-            tooltip: None,
-            tooltip_position: MenuTooltipPosition::default(),
-            right_side_label: None,
-            right_side_icon: None,
-            override_hover_background_color: None,
-            icon_size_override: None,
-            clip_config: None,
+    fn from_label(element: MenuItemLabel) -> Self {
+        Self::from_any(AnyMenuItemFields::new(element))
+    }
+
+    /// Wraps fields whose actions, if any, are of type `A`.
+    fn from_any(any: AnyMenuItemFields) -> Self {
+        Self {
+            any,
+            _action: PhantomData,
         }
+    }
+
+    pub fn new<T: Into<String>>(label: T) -> Self {
+        Self::from_label(MenuItemLabel::Text(label.into()))
     }
 
     pub fn new_submenu<T: Into<String>>(label: T) -> Self {
-        MenuItemFields {
-            element: MenuItemLabel::Text(label.into()),
-            timestamp: None,
-            on_select_action: None,
-            key_shortcut_label: None,
-            disabled: false,
-            mouse_state: Default::default(),
-            icon: None,
-            image_icon: None,
-            override_icon_color: None,
-            override_font_family: None,
-            override_font_size: None,
-            override_text_color: None,
-            highlight_on_hover: true,
-            indent: false,
-            no_interaction_on_hover: false,
-            vertical_padding_override: None,
-            horizontal_padding_override: None,
-            has_submenu: true,
-            tooltip: None,
-            tooltip_position: MenuTooltipPosition::default(),
-            right_side_label: None,
-            right_side_icon: None,
-            override_hover_background_color: None,
-            icon_size_override: None,
-            clip_config: None,
-        }
+        let mut fields = Self::new(label);
+        fields.any.has_submenu = true;
+        fields
     }
 
     pub fn new_with_label<T: Into<String>>(text: T, label: T) -> Self {
-        MenuItemFields {
-            element: MenuItemLabel::LabeledText {
-                primary_text: text.into(),
-                secondary_text: label.into(),
-            },
-            timestamp: None,
-            on_select_action: None,
-            key_shortcut_label: None,
-            disabled: false,
-            mouse_state: Default::default(),
-            icon: None,
-            image_icon: None,
-            override_icon_color: None,
-            override_font_family: None,
-            override_font_size: None,
-            override_text_color: None,
-            highlight_on_hover: true,
-            indent: false,
-            no_interaction_on_hover: false,
-            vertical_padding_override: None,
-            horizontal_padding_override: None,
-            has_submenu: false,
-            tooltip: None,
-            tooltip_position: MenuTooltipPosition::default(),
-            right_side_label: None,
-            right_side_icon: None,
-            override_hover_background_color: None,
-            icon_size_override: None,
-            clip_config: None,
-        }
+        Self::from_label(MenuItemLabel::LabeledText {
+            primary_text: text.into(),
+            secondary_text: label.into(),
+        })
     }
 
     /// Creates a new menu item with vertically stacked
     /// This is useful for items that need both a title and description/subtitle,
     /// such as slash commands with their descriptions.
     pub fn new_with_stacked_label<T: Into<String>>(title: T, subtitle: T) -> Self {
-        MenuItemFields {
-            element: MenuItemLabel::StackedText {
-                primary_text: title.into(),
-                secondary_text: subtitle.into(),
-            },
-            timestamp: None,
-            on_select_action: None,
-            key_shortcut_label: None,
-            disabled: false,
-            mouse_state: Default::default(),
-            icon: None,
-            image_icon: None,
-            override_icon_color: None,
-            override_font_family: None,
-            override_font_size: None,
-            override_text_color: None,
-            highlight_on_hover: true,
-            indent: false,
-            no_interaction_on_hover: false,
-            vertical_padding_override: None,
-            horizontal_padding_override: None,
-            has_submenu: false,
-            tooltip: None,
-            tooltip_position: MenuTooltipPosition::default(),
-            right_side_label: None,
-            right_side_icon: None,
-            override_hover_background_color: None,
-            icon_size_override: None,
-            clip_config: None,
-        }
+        Self::from_label(MenuItemLabel::StackedText {
+            primary_text: title.into(),
+            secondary_text: subtitle.into(),
+        })
     }
 
     pub fn new_with_icon(icon_path: &'static str, icon_color: Fill, icon_label: String) -> Self {
-        MenuItemFields {
-            element: MenuItemLabel::Icon {
-                path: icon_path,
-                color: icon_color,
-                alt_text: icon_label,
-            },
-            timestamp: None,
-            on_select_action: None,
-            key_shortcut_label: None,
-            disabled: false,
-            mouse_state: Default::default(),
-            icon: None,
-            image_icon: None,
-            override_icon_color: None,
-            override_font_family: None,
-            override_font_size: None,
-            override_text_color: None,
-            highlight_on_hover: true,
-            indent: false,
-            no_interaction_on_hover: false,
-            vertical_padding_override: None,
-            horizontal_padding_override: None,
-            has_submenu: false,
-            tooltip: None,
-            tooltip_position: MenuTooltipPosition::default(),
-            right_side_label: None,
-            right_side_icon: None,
-            override_hover_background_color: None,
-            icon_size_override: None,
-            clip_config: None,
-        }
+        Self::from_label(MenuItemLabel::Icon {
+            path: icon_path,
+            color: icon_color,
+            alt_text: icon_label,
+        })
     }
 
     pub fn new_multiline<T: Into<String>>(label: T, max_lines: usize) -> Self {
-        MenuItemFields {
-            element: MenuItemLabel::MultilineText {
-                label: label.into(),
-                max_lines,
-            },
-            timestamp: None,
-            on_select_action: None,
-            key_shortcut_label: None,
-            disabled: false,
-            mouse_state: Default::default(),
-            icon: None,
-            image_icon: None,
-            override_icon_color: None,
-            override_font_family: None,
-            override_font_size: None,
-            override_text_color: None,
-            highlight_on_hover: true,
-            indent: false,
-            no_interaction_on_hover: false,
-            vertical_padding_override: None,
-            horizontal_padding_override: None,
-            has_submenu: false,
-            tooltip: None,
-            tooltip_position: MenuTooltipPosition::default(),
-            right_side_label: None,
-            right_side_icon: None,
-            override_hover_background_color: None,
-            icon_size_override: None,
-            clip_config: None,
-        }
+        Self::from_label(MenuItemLabel::MultilineText {
+            label: label.into(),
+            max_lines,
+        })
     }
 
     pub fn new_with_custom_label(builder: CustomMenuItemLabelFn, label: Option<String>) -> Self {
-        MenuItemFields {
-            element: MenuItemLabel::Custom { builder, label },
-            timestamp: None,
-            on_select_action: None,
-            key_shortcut_label: None,
-            disabled: false,
-            mouse_state: Default::default(),
-            icon: None,
-            image_icon: None,
-            override_icon_color: None,
-            override_font_family: None,
-            override_font_size: None,
-            override_text_color: None,
-            highlight_on_hover: true,
-            indent: false,
-            no_interaction_on_hover: false,
-            vertical_padding_override: None,
-            horizontal_padding_override: None,
-            has_submenu: false,
-            tooltip: None,
-            tooltip_position: MenuTooltipPosition::default(),
-            right_side_label: None,
-            right_side_icon: None,
-            override_hover_background_color: None,
-            icon_size_override: None,
-            clip_config: None,
-        }
+        Self::from_label(MenuItemLabel::Custom { builder, label })
     }
 
     pub fn toggle_pane_action(is_maximized: bool) -> Self {
@@ -730,83 +681,62 @@ impl<A: Action + Clone> MenuItemFields<A> {
         self,
         on_select_action: Option<B>,
     ) -> MenuItemFields<B> {
-        MenuItemFields {
-            timestamp: self.timestamp,
-            on_select_action,
-            element: self.element,
-            key_shortcut_label: self.key_shortcut_label,
-            disabled: self.disabled,
-            mouse_state: self.mouse_state,
-            icon: self.icon,
-            image_icon: self.image_icon,
-            override_icon_color: self.override_icon_color,
-            override_font_family: self.override_font_family,
-            override_font_size: self.override_font_size,
-            override_text_color: self.override_text_color,
-            highlight_on_hover: self.highlight_on_hover,
-            indent: self.indent,
-            no_interaction_on_hover: self.no_interaction_on_hover,
-            vertical_padding_override: self.vertical_padding_override,
-            horizontal_padding_override: self.horizontal_padding_override,
-            has_submenu: self.has_submenu,
-            tooltip: self.tooltip,
-            tooltip_position: self.tooltip_position,
-            right_side_label: self.right_side_label,
-            // The right-side icon action is `Option<A>`; we can't safely map
-            // it to `Option<B>` here, so drop it. Callers that need the
-            // right-side action must set it via `with_right_side_icon_action`
-            // after conversion.
-            right_side_icon: self
-                .right_side_icon
-                .map(RightSideIconConfig::without_action),
-            override_hover_background_color: self.override_hover_background_color,
-            icon_size_override: self.icon_size_override,
-            clip_config: self.clip_config,
+        let mut any = self.any;
+        any.on_select_action = on_select_action.map(ItemAction::new);
+        // The right-side icon action is an `A`; we can't safely map it to a `B` here, so drop
+        // it. Callers that need the right-side action must set it via
+        // `with_right_side_icon_action` after conversion.
+        if let Some(config) = &mut any.right_side_icon {
+            config.action = None;
         }
+        MenuItemFields::from_any(any)
     }
 
     pub fn with_timestamp(mut self, timestamp: DateTime<Local>) -> Self {
-        self.timestamp = Some(timestamp);
+        self.any.timestamp = Some(timestamp);
         self
     }
 
     pub fn on_select_action(&self) -> Option<&A> {
-        self.on_select_action.as_ref()
+        self.any
+            .on_select_action
+            .as_ref()
+            .and_then(ItemAction::downcast_ref)
     }
 
     pub fn no_highlight_on_hover(mut self) -> Self {
-        self.highlight_on_hover = false;
+        self.any.highlight_on_hover = false;
         self
     }
 
     pub fn with_no_interaction_on_hover(mut self) -> Self {
-        self.no_interaction_on_hover = true;
+        self.any.no_interaction_on_hover = true;
         self
     }
 
     pub fn with_padding_override(mut self, vertical_padding: f32, horizontal_padding: f32) -> Self {
-        self.vertical_padding_override = Some(vertical_padding);
-        self.horizontal_padding_override = Some(horizontal_padding);
+        self.any.vertical_padding_override = Some(vertical_padding);
+        self.any.horizontal_padding_override = Some(horizontal_padding);
         self
     }
 
     pub fn with_font_override(mut self, override_font_family: FamilyId) -> Self {
-        self.override_font_family = Some(override_font_family);
+        self.any.override_font_family = Some(override_font_family);
         self
     }
 
     pub fn with_font_size_override(mut self, override_font_size: f32) -> Self {
-        self.override_font_size = Some(override_font_size);
+        self.any.override_font_size = Some(override_font_size);
         self
     }
 
     pub fn with_on_select_action(mut self, action: A) -> Self {
-        self.on_select_action = Some(action);
+        self.any.on_select_action = Some(ItemAction::new(action));
         self
     }
 
     pub fn with_override_text_color(mut self, override_text_color: impl Into<ColorU>) -> Self {
-        self.override_text_color = Some(override_text_color.into());
+        self.any.override_text_color = Some(override_text_color.into());
         self
     }
 
@@ -815,29 +745,29 @@ impl<A: Action + Clone> MenuItemFields<A> {
     /// on `highlight_on_hover`). Has no effect when `no_interaction_on_hover`
     /// is set, or when the item is disabled.
     pub fn with_override_hover_background_color(mut self, color: impl Into<Fill>) -> Self {
-        self.override_hover_background_color = Some(color.into());
+        self.any.override_hover_background_color = Some(color.into());
         self
     }
 
     /// Overrides the leading icon size (in logical pixels) for this item.
     /// The default is `appearance.ui_font_size()`.
     pub fn with_icon_size_override(mut self, size: f32) -> Self {
-        self.icon_size_override = Some(size);
+        self.any.icon_size_override = Some(size);
         self
     }
 
     pub fn with_key_shortcut_label(mut self, label: Option<impl Into<String>>) -> Self {
-        self.key_shortcut_label = label.map(Into::into);
+        self.any.key_shortcut_label = label.map(Into::into);
         self
     }
 
     pub fn with_disabled(mut self, disabled: bool) -> Self {
-        self.disabled = disabled;
+        self.any.disabled = disabled;
         self
     }
 
     pub fn with_icon(mut self, icon: icons::Icon) -> Self {
-        self.icon = Some(icon);
+        self.any.icon = Some(icon);
         self
     }
 
@@ -845,25 +775,25 @@ impl<A: Action + Clone> MenuItemFields<A> {
     /// The image is rendered via [`Image::new`], preserving its original colors
     /// (e.g. for language logos from `bundled/svg/file_type/`).
     pub fn with_image_icon(mut self, path: &'static str) -> Self {
-        self.image_icon = Some(path);
+        self.any.image_icon = Some(path);
         self
     }
 
     pub fn with_indent(mut self) -> Self {
-        self.indent = true;
+        self.any.indent = true;
         self
     }
 
     /// Set an override color for an icon added by [`Self::with_icon`]. The
     /// default is to match the text color, which is based on the hover state.
     pub fn with_override_icon_color(mut self, color: Fill) -> Self {
-        self.override_icon_color = Some(color);
+        self.any.override_icon_color = Some(color);
         self
     }
 
     /// Set a tooltip to display when hovering over this menu item.
     pub fn with_tooltip(mut self, tooltip: impl Into<String>) -> Self {
-        self.tooltip = Some(tooltip.into());
+        self.any.tooltip = Some(tooltip.into());
         self
     }
 
@@ -871,12 +801,12 @@ impl<A: Action + Clone> MenuItemFields<A> {
     /// it would overflow the available width. Only applied to plain
     /// [`MenuItemLabel::Text`] labels.
     pub fn with_clip_config(mut self, config: ClipConfig) -> Self {
-        self.clip_config = Some(config);
+        self.any.clip_config = Some(config);
         self
     }
 
     pub(crate) fn with_tooltip_position(mut self, position: MenuTooltipPosition) -> Self {
-        self.tooltip_position = position;
+        self.any.tooltip_position = position;
         self
     }
 
@@ -886,7 +816,7 @@ impl<A: Action + Clone> MenuItemFields<A> {
         label: impl Into<String>,
         font_properties: Properties,
     ) -> Self {
-        self.right_side_label = Some(RightSideLabel {
+        self.any.right_side_label = Some(RightSideLabel {
             text: label.into(),
             font_properties,
         });
@@ -894,7 +824,7 @@ impl<A: Action + Clone> MenuItemFields<A> {
     }
 
     pub fn with_right_side_icon(mut self, icon: icons::Icon) -> Self {
-        self.right_side_icon = Some(RightSideIconConfig::new(icon));
+        self.any.right_side_icon = Some(RightSideIconConfig::new(icon));
         self
     }
 
@@ -903,21 +833,21 @@ impl<A: Action + Clone> MenuItemFields<A> {
     /// `on_select_action`: clicking the icon dispatches this action and
     /// the row click is suppressed.
     pub fn with_right_side_icon_action(mut self, action: A) -> Self {
-        if let Some(config) = &mut self.right_side_icon {
-            config.action = Some(action);
+        if let Some(config) = &mut self.any.right_side_icon {
+            config.action = Some(ItemAction::new(action));
         }
         self
     }
 
     pub fn with_right_side_icon_a11y_label(mut self, label: impl Into<String>) -> Self {
-        if let Some(config) = &mut self.right_side_icon {
+        if let Some(config) = &mut self.any.right_side_icon {
             config.a11y_label = Some(label.into());
         }
         self
     }
 
     pub fn with_right_side_icon_disabled(mut self, disabled: bool) -> Self {
-        if let Some(config) = &mut self.right_side_icon {
+        if let Some(config) = &mut self.any.right_side_icon {
             config.disabled = disabled;
         }
         self
@@ -925,6 +855,16 @@ impl<A: Action + Clone> MenuItemFields<A> {
 
     pub fn into_item(self) -> MenuItem<A> {
         MenuItem::Item(self)
+    }
+}
+
+impl AnyMenuItemFields {
+    fn new(element: MenuItemLabel) -> Self {
+        Self {
+            element,
+            highlight_on_hover: true,
+            ..Default::default()
+        }
     }
 
     pub fn label(&self) -> &str {
@@ -1082,7 +1022,7 @@ impl<A: Action + Clone> MenuItemFields<A> {
                 let action = action.clone();
                 hoverable = hoverable.on_click(move |ctx, _, _| {
                     if dispatch_item_actions {
-                        ctx.dispatch_typed_action(action.clone());
+                        action.dispatch(ctx);
                     }
                 });
                 // Swallow mouse-down too so the row's click handler
@@ -1430,7 +1370,7 @@ impl<A: Action + Clone> MenuItemFields<A> {
                         item: item_index,
                     }));
                     if dispatch_item_actions {
-                        ctx.dispatch_typed_action(action.clone());
+                        action.dispatch(ctx);
                     }
                     ctx.dispatch_typed_action(MenuAction::Close(true));
                 }
@@ -1471,6 +1411,9 @@ impl<A: Action + Clone> MenuItemFields<A> {
     }
 }
 
+// The variants are constructed and matched throughout the app, so boxing the large ones would
+// change every one of those sites.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 pub enum MenuItem<A: Action + Clone = ()> {
     Item(MenuItemFields<A>),
@@ -1494,6 +1437,26 @@ pub enum MenuItem<A: Action + Clone = ()> {
     },
 }
 
+/// A [`MenuItem`], independent of the type of action it dispatches.
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug, Clone)]
+enum AnyMenuItem {
+    Item(AnyMenuItemFields),
+    Separator,
+    ItemsRow {
+        items: Vec<AnyMenuItemFields>,
+    },
+    Submenu {
+        fields: AnyMenuItemFields,
+        menu: AnySubMenu,
+    },
+    Header {
+        fields: AnyMenuItemFields,
+        clickable: bool,
+        right_side_fields: Option<AnyMenuItemFields>,
+    },
+}
+
 impl<A: Action + Clone> MenuItem<A> {
     #[deprecated(note = "Submenus are not ready for use yet.")]
     pub fn submenu<T: Into<String>>(label: T, items: Vec<MenuItem<A>>) -> Self {
@@ -1504,40 +1467,95 @@ impl<A: Action + Clone> MenuItem<A> {
         }
     }
 
-    fn items_len(&self) -> Option<usize> {
-        match self {
-            MenuItem::Item(_) => Some(1),
-            MenuItem::Separator => None,
-            MenuItem::ItemsRow { items } => Some(items.len()),
-            MenuItem::Submenu { menu, .. } => {
-                // This includes the label as well.
-                Some(menu.items_len() + 1)
-            }
-            MenuItem::Header { clickable, .. } => Some(if *clickable { 1 } else { 0 }),
-        }
-    }
-
     pub fn item_on_select_action(&self) -> Option<&A> {
         match self {
-            MenuItem::Item(fields) => fields.on_select_action.as_ref(),
+            MenuItem::Item(fields) => fields.on_select_action(),
             _ => None,
         }
     }
 
-    pub fn selectable(&self) -> bool {
+    fn into_any(self) -> AnyMenuItem {
+        match self {
+            MenuItem::Item(fields) => AnyMenuItem::Item(fields.any),
+            MenuItem::Separator => AnyMenuItem::Separator,
+            MenuItem::ItemsRow { items } => AnyMenuItem::ItemsRow {
+                items: items.into_iter().map(|fields| fields.any).collect(),
+            },
+            MenuItem::Submenu { fields, menu } => AnyMenuItem::Submenu {
+                fields: fields.any,
+                menu: menu.any,
+            },
+            MenuItem::Header {
+                fields,
+                clickable,
+                right_side_fields,
+            } => AnyMenuItem::Header {
+                fields: fields.any,
+                clickable,
+                right_side_fields: right_side_fields.map(|fields| fields.any),
+            },
+        }
+    }
+
+    /// Converts an item back to its typed form.
+    ///
+    /// `item` must come from [`Self::into_any`] on a `MenuItem<A>`. The actions of an item with
+    /// any other action type are not accessible through the result.
+    fn from_any(item: AnyMenuItem) -> Self {
+        match item {
+            AnyMenuItem::Item(fields) => MenuItem::Item(MenuItemFields::from_any(fields)),
+            AnyMenuItem::Separator => MenuItem::Separator,
+            AnyMenuItem::ItemsRow { items } => MenuItem::ItemsRow {
+                items: items.into_iter().map(MenuItemFields::from_any).collect(),
+            },
+            AnyMenuItem::Submenu { fields, menu } => MenuItem::Submenu {
+                fields: MenuItemFields::from_any(fields),
+                menu: SubMenu {
+                    any: menu,
+                    _action: PhantomData,
+                },
+            },
+            AnyMenuItem::Header {
+                fields,
+                clickable,
+                right_side_fields,
+            } => MenuItem::Header {
+                fields: MenuItemFields::from_any(fields),
+                clickable,
+                right_side_fields: right_side_fields.map(MenuItemFields::from_any),
+            },
+        }
+    }
+}
+
+impl AnyMenuItem {
+    fn items_len(&self) -> Option<usize> {
+        match self {
+            AnyMenuItem::Item(_) => Some(1),
+            AnyMenuItem::Separator => None,
+            AnyMenuItem::ItemsRow { items } => Some(items.len()),
+            AnyMenuItem::Submenu { menu, .. } => {
+                // This includes the label as well.
+                Some(menu.items_len() + 1)
+            }
+            AnyMenuItem::Header { clickable, .. } => Some(if *clickable { 1 } else { 0 }),
+        }
+    }
+
+    fn selectable(&self) -> bool {
         match self {
             // Whether it's selectable depends only on whether the item is disabled or not.
-            MenuItem::Item(fields) => !fields.disabled && !fields.no_interaction_on_hover,
+            AnyMenuItem::Item(fields) => !fields.disabled && !fields.no_interaction_on_hover,
             // For items row, right now, we assume that it's either entire row that's selectable or
             // not (so for simplicity, either all items are selectable or none of them).
             // TODO be smarter about it
-            MenuItem::ItemsRow { items } => items
+            AnyMenuItem::ItemsRow { items } => items
                 .iter()
                 .any(|i| !i.disabled && !i.no_interaction_on_hover),
             // Separator is simply a non-selectable option in the menu list.
-            MenuItem::Separator => false,
-            MenuItem::Submenu { menu, .. } => !menu.items.is_empty(),
-            MenuItem::Header { clickable, .. } => *clickable,
+            AnyMenuItem::Separator => false,
+            AnyMenuItem::Submenu { menu, .. } => !menu.items.is_empty(),
+            AnyMenuItem::Header { clickable, .. } => *clickable,
         }
     }
 
@@ -1558,7 +1576,7 @@ impl<A: Action + Clone> MenuItem<A> {
         app: &AppContext,
     ) -> Box<dyn Element> {
         match self {
-            MenuItem::Item(fields) => fields.render(
+            AnyMenuItem::Item(fields) => fields.render(
                 menu_background_color,
                 depth,
                 row_index,
@@ -1574,7 +1592,7 @@ impl<A: Action + Clone> MenuItem<A> {
                 menu_width,
                 app,
             ),
-            MenuItem::ItemsRow { items } => {
+            AnyMenuItem::ItemsRow { items } => {
                 let horizontal_padding = ((menu_width - (MENU_ITEM_HORIZONTAL_PADDING * 2.))
                     / (items.len() as f32)
                     / 5.)
@@ -1608,7 +1626,7 @@ impl<A: Action + Clone> MenuItem<A> {
                     .with_padding_right(MENU_ITEM_HORIZONTAL_PADDING)
                     .finish()
             }
-            MenuItem::Separator => Container::new(
+            AnyMenuItem::Separator => Container::new(
                 ConstrainedBox::new(
                     Rect::new()
                         .with_background(appearance.theme().disabled_ui_text_color())
@@ -1622,7 +1640,7 @@ impl<A: Action + Clone> MenuItem<A> {
             .with_padding_left(MENU_ITEM_HORIZONTAL_PADDING)
             .with_padding_right(MENU_ITEM_HORIZONTAL_PADDING)
             .finish(),
-            MenuItem::Submenu { fields, .. } => {
+            AnyMenuItem::Submenu { fields, .. } => {
                 fields.render(
                     menu_background_color,
                     depth,
@@ -1640,7 +1658,7 @@ impl<A: Action + Clone> MenuItem<A> {
                     app,
                 )
             }
-            MenuItem::Header {
+            AnyMenuItem::Header {
                 fields,
                 clickable,
                 right_side_fields,
@@ -1648,9 +1666,10 @@ impl<A: Action + Clone> MenuItem<A> {
                 let mut fields = fields.clone();
                 let mut right_side_fields = right_side_fields.clone();
                 if !*clickable {
-                    fields = fields.with_no_interaction_on_hover();
-                    right_side_fields =
-                        right_side_fields.map(|fields| fields.with_no_interaction_on_hover());
+                    fields.no_interaction_on_hover = true;
+                    if let Some(right_side_fields) = &mut right_side_fields {
+                        right_side_fields.no_interaction_on_hover = true;
+                    }
                 }
 
                 if let Some(right_side_fields) = right_side_fields {
@@ -1786,8 +1805,8 @@ pub enum Event {
     ItemHovered,
 }
 
-impl<A: Action + Clone> SubMenu<A> {
-    pub fn new(mut items: Vec<MenuItem<A>>) -> Self {
+impl AnySubMenu {
+    pub fn new(mut items: Vec<AnyMenuItem>) -> Self {
         Self::increment_depth(&mut items);
         Self {
             depth: 0,
@@ -1801,9 +1820,9 @@ impl<A: Action + Clone> SubMenu<A> {
         }
     }
 
-    fn increment_depth(items: &mut [MenuItem<A>]) {
+    fn increment_depth(items: &mut [AnyMenuItem]) {
         for item in items.iter_mut() {
-            if let MenuItem::Submenu { menu, .. } = item {
+            if let AnyMenuItem::Submenu { menu, .. } = item {
                 menu.depth += 1;
                 Self::increment_depth(&mut menu.items);
             }
@@ -1820,14 +1839,14 @@ impl<A: Action + Clone> SubMenu<A> {
         self
     }
 
-    pub fn reset_selection(&mut self, ctx: &mut ViewContext<Menu<A>>) {
+    pub fn reset_selection(&mut self, ctx: &mut dyn MenuViewContext) {
         self.selected_row_index = None;
         self.selected_item_index = None;
         self.last_selection_source = None;
         ctx.notify();
     }
 
-    pub fn selected_item(&self) -> Option<MenuItem<A>> {
+    pub fn selected_item(&self) -> Option<AnyMenuItem> {
         self.selected_row_index
             .and_then(|index| self.items.get(index).cloned())
     }
@@ -1848,16 +1867,12 @@ impl<A: Action + Clone> SubMenu<A> {
         self.items.is_empty()
     }
 
-    pub fn items(&self) -> &[MenuItem<A>] {
-        &self.items
-    }
-
     pub fn items_len(&self) -> usize {
         self.items.len()
     }
 
     /// Select the menu item at the given index. If the index is out of bounds, this clears the selection.
-    pub fn set_selected_by_index(&mut self, selected_index: usize, ctx: &mut ViewContext<Menu<A>>) {
+    pub fn set_selected_by_index(&mut self, selected_index: usize, ctx: &mut dyn MenuViewContext) {
         if selected_index < self.items.len() {
             self.select(
                 SelectAction::Index {
@@ -1946,7 +1961,7 @@ impl<A: Action + Clone> SubMenu<A> {
         &mut self,
         action: SelectAction,
         selection_source: MenuSelectionSource,
-        ctx: &mut ViewContext<Menu<A>>,
+        ctx: &mut dyn MenuViewContext,
     ) {
         self.select_internal(action);
         self.last_selection_source = Some(selection_source);
@@ -1964,23 +1979,23 @@ impl<A: Action + Clone> SubMenu<A> {
         ctx.notify();
     }
 
-    fn select(&mut self, action: SelectAction, ctx: &mut ViewContext<Menu<A>>) {
+    fn select(&mut self, action: SelectAction, ctx: &mut dyn MenuViewContext) {
         self.select_with_source(action, MenuSelectionSource::KeyboardOrProgrammatic, ctx);
     }
 
     #[cfg(test)]
-    fn selected_submenu(&self) -> Option<&SubMenu<A>> {
+    fn selected_submenu(&self) -> Option<&AnySubMenu> {
         let selected_row_index = self.selected_row_index?;
         match self.items.get(selected_row_index)? {
-            MenuItem::Submenu { menu, .. } => Some(menu),
+            AnyMenuItem::Submenu { menu, .. } => Some(menu),
             _ => None,
         }
     }
 
-    fn selected_submenu_mut(&mut self) -> Option<&mut SubMenu<A>> {
+    fn selected_submenu_mut(&mut self) -> Option<&mut AnySubMenu> {
         let selected_row_index = self.selected_row_index?;
         match self.items.get_mut(selected_row_index)? {
-            MenuItem::Submenu { menu, .. } => Some(menu),
+            AnyMenuItem::Submenu { menu, .. } => Some(menu),
             _ => None,
         }
     }
@@ -1990,10 +2005,11 @@ impl<A: Action + Clone> SubMenu<A> {
             Some(selected_row_index)
                 if matches!(
                     self.items.get(selected_row_index),
-                    Some(MenuItem::Submenu { menu, .. }) if menu.selected_row_index.is_some()
+                    Some(AnyMenuItem::Submenu { menu, .. }) if menu.selected_row_index.is_some()
                 ) =>
             {
-                let Some(MenuItem::Submenu { menu, .. }) = self.items.get_mut(selected_row_index)
+                let Some(AnyMenuItem::Submenu { menu, .. }) =
+                    self.items.get_mut(selected_row_index)
                 else {
                     unreachable!("checked selected submenu above");
                 };
@@ -2003,7 +2019,7 @@ impl<A: Action + Clone> SubMenu<A> {
         }
     }
 
-    fn select_first_selectable(&mut self, ctx: &mut ViewContext<Menu<A>>) -> bool {
+    fn select_first_selectable(&mut self, ctx: &mut dyn MenuViewContext) -> bool {
         let Some((row, _)) = self
             .items
             .iter()
@@ -2016,28 +2032,28 @@ impl<A: Action + Clone> SubMenu<A> {
         true
     }
 
-    fn open_selected_submenu(&mut self, ctx: &mut ViewContext<Menu<A>>) -> bool {
+    fn open_selected_submenu(&mut self, ctx: &mut dyn MenuViewContext) -> bool {
         let Some(submenu) = self.active_menu_mut().selected_submenu_mut() else {
             return false;
         };
         submenu.select_first_selectable(ctx)
     }
 
-    fn selected_action_for_enter(&mut self, ctx: &mut ViewContext<Menu<A>>) -> Option<A> {
+    fn selected_action_for_enter(&mut self, ctx: &mut dyn MenuViewContext) -> Option<ItemAction> {
         let active_menu = self.active_menu_mut();
         let selected_row_index = active_menu.selected_row_index?;
         let selected_item_index = active_menu.selected_item_index.unwrap_or_default();
         match active_menu.items.get_mut(selected_row_index)? {
-            MenuItem::Item(fields) => fields.on_select_action.clone(),
-            MenuItem::Separator => None,
-            MenuItem::ItemsRow { items } => items
+            AnyMenuItem::Item(fields) => fields.on_select_action.clone(),
+            AnyMenuItem::Separator => None,
+            AnyMenuItem::ItemsRow { items } => items
                 .get(selected_item_index)
                 .and_then(|fields| fields.on_select_action.clone()),
-            MenuItem::Submenu { menu, .. } => {
+            AnyMenuItem::Submenu { menu, .. } => {
                 menu.select_first_selectable(ctx);
                 None
             }
-            MenuItem::Header {
+            AnyMenuItem::Header {
                 fields, clickable, ..
             } => {
                 if *clickable {
@@ -2054,14 +2070,14 @@ impl<A: Action + Clone> SubMenu<A> {
     pub fn set_selected_by_name<S>(
         &mut self,
         selected_item: S,
-        ctx: &mut ViewContext<Menu<A>>,
+        ctx: &mut dyn MenuViewContext,
     ) -> bool
     where
         S: AsRef<str>,
     {
         let selected_item = selected_item.as_ref();
         if let Some(index) = self.items.iter().position(|item| match item {
-            MenuItem::Item(MenuItemFields {
+            AnyMenuItem::Item(AnyMenuItemFields {
                 element: MenuItemLabel::Text(label) | MenuItemLabel::MultilineText { label, .. },
                 ..
             }) => selected_item == label,
@@ -2081,19 +2097,18 @@ impl<A: Action + Clone> SubMenu<A> {
         }
     }
 
-    /// Select the menu item whose on-select action equals the given action. If no such item exists,
-    /// this clears the selection.
-    ///
-    /// This is primarily useful when items are dynamically generated and correspond to some backing data that's captured by the action.
-    pub fn set_selected_by_action(&mut self, action: &A, ctx: &mut ViewContext<Menu<A>>)
-    where
-        A: PartialEq,
-    {
+    /// Select the menu item whose on-select action satisfies `is_selected`. If no such item
+    /// exists, this clears the selection.
+    fn set_selected_by_action(
+        &mut self,
+        is_selected: &dyn Fn(&ItemAction) -> bool,
+        ctx: &mut dyn MenuViewContext,
+    ) {
         let selected_index = self.items.iter().position(|item| match item {
-            MenuItem::Item(MenuItemFields {
+            AnyMenuItem::Item(AnyMenuItemFields {
                 on_select_action: Some(item_action),
                 ..
-            }) => item_action == action,
+            }) => is_selected(item_action),
             _ => false,
         });
         match selected_index {
@@ -2176,7 +2191,7 @@ impl<A: Action + Clone> SubMenu<A> {
                 let Some(selected_row) = self.selected_item() else {
                     return menus;
                 };
-                let MenuItem::Submenu { menu, .. } = selected_row else {
+                let AnyMenuItem::Submenu { menu, .. } = selected_row else {
                     return menus;
                 };
 
@@ -2249,8 +2264,150 @@ impl<A: Action + Clone> SubMenu<A> {
     }
 }
 
+impl<A: Action + Clone> SubMenu<A> {
+    pub fn new(items: Vec<MenuItem<A>>) -> Self {
+        Self {
+            any: AnySubMenu::new(items.into_iter().map(MenuItem::into_any).collect()),
+            _action: PhantomData,
+        }
+    }
+}
+
 impl<A: Action + Clone> Menu<A> {
     pub fn new() -> Self {
+        Self {
+            any: AnyMenu::new(),
+            _action: PhantomData,
+        }
+    }
+
+    pub fn with_border(mut self, border: Border) -> Self {
+        self.any.border = Some(border);
+        self
+    }
+
+    pub fn with_width(mut self, width: f32) -> Self {
+        self.any.submenu_width = width;
+        self
+    }
+
+    pub fn with_menu_variant(mut self, menu_variant: MenuVariant) -> Self {
+        self.any.menu.with_menu_variant(menu_variant);
+        self
+    }
+
+    /// Prevents interactions with any other elements outside of the [`Menu`]. All events are
+    /// handled by this element and are _not_ propagated further down the element hierarchy.
+    pub fn prevent_interaction_with_other_elements(mut self) -> Self {
+        self.any.prevent_interaction_with_other_elements = true;
+        self
+    }
+
+    pub fn with_drop_shadow(mut self) -> Self {
+        self.any.with_drop_shadow = true;
+        self
+    }
+
+    /// Prevent menu item clicks and Enter from dispatching their typed actions
+    /// directly. Selection and close events still occur normally.
+    pub fn without_item_action_dispatch(mut self) -> Self {
+        self.any.dispatch_item_actions = false;
+        self
+    }
+
+    /// If true, menu items won't fire hover events when covered by another element.
+    /// This is useful when a sidecar panel overlays the menu.
+    pub fn with_ignore_hover_when_covered(mut self) -> Self {
+        self.any.ignore_hover_when_covered = true;
+        self
+    }
+
+    /// Enable safe triangle tracking for suppressing intermediate hovers
+    /// when moving toward a sidecar/submenu.
+    pub fn with_safe_triangle(mut self) -> Self {
+        self.any.safe_triangle = Some(SafeTriangle::new());
+        self
+    }
+
+    pub fn set_items(
+        &mut self,
+        items: impl IntoIterator<Item = MenuItem<A>>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.any.menu.items = items.into_iter().map(MenuItem::into_any).collect();
+        // No need to ctx.notify, since reset_selection will.
+        self.any.reset_selection(ctx);
+    }
+
+    #[allow(dead_code)]
+    pub fn add_item(&mut self, item: MenuItem<A>) {
+        self.any.menu.items.push(item.into_any());
+    }
+
+    pub fn add_items(&mut self, items: impl IntoIterator<Item = MenuItem<A>>) {
+        self.any
+            .menu
+            .items
+            .extend(items.into_iter().map(MenuItem::into_any));
+    }
+
+    pub fn selected_item(&self) -> Option<MenuItem<A>> {
+        self.any.menu.selected_item().map(MenuItem::from_any)
+    }
+
+    /// Returns a typed copy of the menu's items.
+    pub fn items(&self) -> Vec<MenuItem<A>> {
+        self.any
+            .menu
+            .items
+            .iter()
+            .cloned()
+            .map(MenuItem::from_any)
+            .collect()
+    }
+
+    /// Select the menu item whose on-select action equals the given action. If no such item exists,
+    /// this clears the selection.
+    ///
+    /// This is primarily useful when items are dynamically generated and correspond to some backing data that's captured by the action.
+    pub fn set_selected_by_action(&mut self, action: &A, ctx: &mut ViewContext<Self>)
+    where
+        A: PartialEq,
+    {
+        self.any.menu.set_selected_by_action(
+            &|item_action| item_action.downcast_ref::<A>() == Some(action),
+            ctx,
+        )
+    }
+
+    #[cfg(test)]
+    pub fn mimic_confirm(&mut self, ctx: &mut ViewContext<Self>) {
+        if let Some(item) = self.selected_item() {
+            match item {
+                MenuItem::Item(fields) => {
+                    if let Some(on_select_action) = fields.on_select_action() {
+                        ctx.dispatch_typed_action(on_select_action);
+                    }
+                }
+                MenuItem::ItemsRow { items } => {
+                    if let Some(on_select_action) = self
+                        .any
+                        .menu
+                        .selected_item_index
+                        .and_then(|i| items.get(i))
+                        .and_then(|item| item.on_select_action())
+                    {
+                        ctx.dispatch_typed_action(on_select_action);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+impl AnyMenu {
+    fn new() -> Self {
         Self {
             prevent_interaction_with_other_elements: false,
             border: None,
@@ -2258,7 +2415,7 @@ impl<A: Action + Clone> Menu<A> {
             origin: None,
             window_id: Default::default(),
             submenu_width: DEFAULT_WIDTH,
-            menu: SubMenu::new(vec![]),
+            menu: AnySubMenu::new(vec![]),
             submenu_being_shown_for_item_index: None,
             ignore_hover_when_covered: false,
             safe_triangle: None,
@@ -2282,54 +2439,6 @@ impl<A: Action + Clone> Menu<A> {
         self.window_id.get().copied()
     }
 
-    pub fn with_border(mut self, border: Border) -> Self {
-        self.border = Some(border);
-        self
-    }
-
-    pub fn with_width(mut self, width: f32) -> Self {
-        self.submenu_width = width;
-        self
-    }
-
-    pub fn with_menu_variant(mut self, menu_variant: MenuVariant) -> Self {
-        self.menu.with_menu_variant(menu_variant);
-        self
-    }
-
-    /// Prevents interactions with any other elements outside of the [`Menu`]. All events are
-    /// handled by this element and are _not_ propagated further down the element hierarchy.
-    pub fn prevent_interaction_with_other_elements(mut self) -> Self {
-        self.prevent_interaction_with_other_elements = true;
-        self
-    }
-
-    pub fn with_drop_shadow(mut self) -> Self {
-        self.with_drop_shadow = true;
-        self
-    }
-
-    /// Prevent menu item clicks and Enter from dispatching their typed actions
-    /// directly. Selection and close events still occur normally.
-    pub fn without_item_action_dispatch(mut self) -> Self {
-        self.dispatch_item_actions = false;
-        self
-    }
-
-    /// If true, menu items won't fire hover events when covered by another element.
-    /// This is useful when a sidecar panel overlays the menu.
-    pub fn with_ignore_hover_when_covered(mut self) -> Self {
-        self.ignore_hover_when_covered = true;
-        self
-    }
-
-    /// Enable safe triangle tracking for suppressing intermediate hovers
-    /// when moving toward a sidecar/submenu.
-    pub fn with_safe_triangle(mut self) -> Self {
-        self.safe_triangle = Some(SafeTriangle::new());
-        self
-    }
-
     /// Set or clear the target rect for the safe triangle. The rect should be the
     /// bounding box of the sidecar/submenu panel that the user is moving toward.
     pub fn set_safe_zone_target(&mut self, rect: Option<RectF>) {
@@ -2350,6 +2459,7 @@ impl<A: Action + Clone> Menu<A> {
     pub fn set_width(&mut self, width: f32) {
         self.submenu_width = width;
     }
+
     pub fn set_width_match_position_id(&mut self, position_id: Option<String>) {
         self.width_match_position_id = position_id;
     }
@@ -2402,39 +2512,12 @@ impl<A: Action + Clone> Menu<A> {
         self.menu.with_height(height);
     }
 
-    pub fn set_items(
-        &mut self,
-        items: impl IntoIterator<Item = MenuItem<A>>,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        self.menu.items = items.into_iter().collect();
-        // No need to ctx.notify, since reset_selection will.
-        self.reset_selection(ctx);
-    }
-
-    #[allow(dead_code)]
-    pub fn add_item(&mut self, item: MenuItem<A>) {
-        self.menu.items.push(item);
-    }
-
-    pub fn add_items(&mut self, items: impl IntoIterator<Item = MenuItem<A>>) {
-        self.menu.items.extend(items);
-    }
-
-    pub fn reset_selection(&mut self, ctx: &mut ViewContext<Self>) {
+    pub fn reset_selection(&mut self, ctx: &mut dyn MenuViewContext) {
         self.menu.reset_selection(ctx)
-    }
-
-    pub fn selected_item(&self) -> Option<MenuItem<A>> {
-        self.menu.selected_item()
     }
 
     pub fn is_empty(&self) -> bool {
         self.menu.is_empty()
-    }
-
-    pub fn items(&self) -> &[MenuItem<A>] {
-        self.menu.items()
     }
 
     pub fn items_len(&self) -> usize {
@@ -2454,70 +2537,90 @@ impl<A: Action + Clone> Menu<A> {
     }
 
     /// Select the menu item at the given index. If the index is out of bounds, this clears the selection.
-    pub fn set_selected_by_index(&mut self, selected_index: usize, ctx: &mut ViewContext<Self>) {
+    pub fn set_selected_by_index(&mut self, selected_index: usize, ctx: &mut dyn MenuViewContext) {
         self.menu.set_selected_by_index(selected_index, ctx);
     }
 
     /// Select the menu item with the given name. If no such item exists, this clears the selection.
     /// Returns true if the item was found and selected, false otherwise.
-    pub fn set_selected_by_name<S>(&mut self, selected_item: S, ctx: &mut ViewContext<Self>) -> bool
+    pub fn set_selected_by_name<S>(
+        &mut self,
+        selected_item: S,
+        ctx: &mut dyn MenuViewContext,
+    ) -> bool
     where
         S: AsRef<str>,
     {
         self.menu.set_selected_by_name(selected_item, ctx)
     }
 
-    /// Select the menu item whose on-select action equals the given action. If no such item exists,
-    /// this clears the selection.
-    ///
-    /// This is primarily useful when items are dynamically generated and correspond to some backing data that's captured by the action.
-    pub fn set_selected_by_action(&mut self, action: &A, ctx: &mut ViewContext<Self>)
-    where
-        A: PartialEq,
-    {
-        self.menu.set_selected_by_action(action, ctx)
-    }
-
-    fn select(&mut self, action: SelectAction, ctx: &mut ViewContext<Self>) {
+    fn select(&mut self, action: SelectAction, ctx: &mut dyn MenuViewContext) {
         self.menu.select(action, ctx);
     }
 
-    pub fn select_previous(&mut self, ctx: &mut ViewContext<Self>) {
+    pub fn select_previous(&mut self, ctx: &mut dyn MenuViewContext) {
         self.select(SelectAction::Previous, ctx);
     }
 
-    pub fn select_next(&mut self, ctx: &mut ViewContext<Self>) {
+    pub fn select_next(&mut self, ctx: &mut dyn MenuViewContext) {
         self.select(SelectAction::Next, ctx);
     }
 
     /// Select the first selectable item in the menu. No-op if no item is selectable.
-    pub fn select_first(&mut self, ctx: &mut ViewContext<Self>) {
+    pub fn select_first(&mut self, ctx: &mut dyn MenuViewContext) {
         self.menu.select_first_selectable(ctx);
     }
 
-    #[cfg(test)]
-    pub fn mimic_confirm(&mut self, ctx: &mut ViewContext<Self>) {
-        if let Some(item) = self.selected_item() {
-            match item {
-                MenuItem::Item(MenuItemFields {
-                    on_select_action: Some(on_select_action),
-                    ..
-                }) => {
-                    ctx.dispatch_typed_action(&on_select_action);
-                }
-                MenuItem::ItemsRow { items } => {
-                    if let Some(on_select_action) = self
-                        .menu
-                        .selected_item_index
-                        .and_then(|i| items.get(i))
-                        .and_then(|item| item.on_select_action().cloned())
-                    {
-                        ctx.dispatch_typed_action(&on_select_action);
-                    }
-                }
-                _ => {}
+    fn handle_action(&mut self, action: &MenuAction, ctx: &mut dyn MenuViewContext) {
+        if let MenuAction::HoverSubmenuLeafNode { position, .. } = action
+            && let Some(st) = &mut self.safe_triangle
+        {
+            if st.should_suppress_hover(*position) {
+                return;
             }
+            st.update_position(*position);
         }
+
+        self.menu
+            .handle_action(action, self.dispatch_item_actions, ctx)
+    }
+
+    fn render(&self, app: &AppContext) -> Box<dyn Element> {
+        let safe_zone_anchor_row = self
+            .safe_triangle
+            .as_ref()
+            .filter(|st| st.is_suppressing())
+            .and(self.menu.hovered_row_index);
+        let window_id = self.window_id(app);
+        let submenu_width = self
+            .width_match_position_id
+            .as_deref()
+            .and_then(|position_id| {
+                window_id.and_then(|window_id| {
+                    app.element_position_by_id_at_last_frame(window_id, position_id)
+                })
+            })
+            .map(|bounds| bounds.width())
+            .unwrap_or(self.submenu_width);
+
+        self.menu.render(
+            self.border,
+            submenu_width,
+            self.with_drop_shadow,
+            self.origin,
+            window_id,
+            self.prevent_interaction_with_other_elements,
+            self.dispatch_item_actions,
+            self.ignore_hover_when_covered,
+            safe_zone_anchor_row,
+            self.submenu_being_shown_for_item_index,
+            self.flatten_bottom_corners,
+            self.pinned_footer_builder.as_deref(),
+            self.pinned_header_builder.as_deref(),
+            self.content_top_padding_override,
+            self.content_bottom_padding_override,
+            app,
+        )
     }
 }
 
@@ -2541,12 +2644,8 @@ impl<A: Action + Clone> Entity for Menu<A> {
     type Event = Event;
 }
 
-impl<A: Action + Clone> SubMenu<A> {
-    fn action_accessibility_contents(
-        &mut self,
-        action: &MenuAction,
-        _: &mut ViewContext<Menu<A>>,
-    ) -> ActionAccessibilityContent {
+impl AnySubMenu {
+    fn action_accessibility_contents(&self, action: &MenuAction) -> ActionAccessibilityContent {
         use ActionAccessibilityContent::*;
         use MenuAction::*;
 
@@ -2554,26 +2653,28 @@ impl<A: Action + Clone> SubMenu<A> {
             Select(_) => {
                 let menu_item = match self.selected_item() {
                     Some(item) => match item {
-                        MenuItem::Item(fields) => format!("{} Selected", fields.get_a11y_text()),
-                        MenuItem::ItemsRow { items } => {
+                        AnyMenuItem::Item(fields) => format!("{} Selected", fields.get_a11y_text()),
+                        AnyMenuItem::ItemsRow { items } => {
                             let selected_item_text = items
                                 .get(self.selected_item_index.unwrap_or_default())
                                 .map_or_else(|| "", |item| item.get_a11y_text());
                             format!("{selected_item_text} Selected")
                         }
-                        MenuItem::Separator => String::from(""),
-                        MenuItem::Submenu { fields, .. } => {
+                        AnyMenuItem::Separator => String::from(""),
+                        AnyMenuItem::Submenu { fields, .. } => {
                             format!("{} Expanded", fields.get_a11y_text())
                         }
-                        MenuItem::Header { fields, .. } => {
+                        AnyMenuItem::Header { fields, .. } => {
                             format!("{} Selected", fields.get_a11y_text())
                         }
                     },
                     None => String::from(""),
                 };
 
-                let instructions = if matches!(self.selected_item(), Some(MenuItem::Submenu { .. }))
-                {
+                let instructions = if matches!(
+                    self.selected_item(),
+                    Some(AnyMenuItem::Submenu { .. })
+                ) {
                     "Press the up key or the down key to select a menu item. Press the right key to open the submenu"
                 } else {
                     "Press the up key or the down key to select a menu item"
@@ -2615,7 +2716,7 @@ impl<A: Action + Clone> SubMenu<A> {
         &mut self,
         action: &MenuAction,
         dispatch_item_actions: bool,
-        ctx: &mut ViewContext<Menu<A>>,
+        ctx: &mut dyn MenuViewContext,
     ) {
         match action {
             MenuAction::HoverSubmenuWithChildren(depth, selection) => {
@@ -2660,7 +2761,7 @@ impl<A: Action + Clone> SubMenu<A> {
             MenuAction::Enter => {
                 if let Some(action) = self.selected_action_for_enter(ctx) {
                     if dispatch_item_actions {
-                        ctx.dispatch_typed_action(&action);
+                        ctx.dispatch_typed_action(action.as_action());
                     } else {
                         ctx.emit(Event::ItemSelected);
                     }
@@ -2679,27 +2780,17 @@ impl<A: Action + Clone> TypedActionView for Menu<A> {
     fn action_accessibility_contents(
         &mut self,
         action: &MenuAction,
-        ctx: &mut ViewContext<Self>,
+        _: &mut ViewContext<Self>,
     ) -> ActionAccessibilityContent {
-        self.menu.action_accessibility_contents(action, ctx)
+        self.any.menu.action_accessibility_contents(action)
     }
 
     fn handle_action(&mut self, action: &MenuAction, ctx: &mut ViewContext<Self>) {
-        if let MenuAction::HoverSubmenuLeafNode { position, .. } = action
-            && let Some(st) = &mut self.safe_triangle
-        {
-            if st.should_suppress_hover(*position) {
-                return;
-            }
-            st.update_position(*position);
-        }
-
-        self.menu
-            .handle_action(action, self.dispatch_item_actions, ctx)
+        self.any.handle_action(action, ctx)
     }
 }
 
-impl<A: Action + Clone> SubMenu<A> {
+impl AnySubMenu {
     fn should_reverse_layout(
         &self,
         window: Option<WindowId>,
@@ -2899,41 +2990,7 @@ impl<A: Action + Clone> View for Menu<A> {
     }
 
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
-        let safe_zone_anchor_row = self
-            .safe_triangle
-            .as_ref()
-            .filter(|st| st.is_suppressing())
-            .and(self.menu.hovered_row_index);
-        let window_id = self.window_id(app);
-        let submenu_width = self
-            .width_match_position_id
-            .as_deref()
-            .and_then(|position_id| {
-                window_id.and_then(|window_id| {
-                    app.element_position_by_id_at_last_frame(window_id, position_id)
-                })
-            })
-            .map(|bounds| bounds.width())
-            .unwrap_or(self.submenu_width);
-
-        self.menu.render(
-            self.border,
-            submenu_width,
-            self.with_drop_shadow,
-            self.origin,
-            window_id,
-            self.prevent_interaction_with_other_elements,
-            self.dispatch_item_actions,
-            self.ignore_hover_when_covered,
-            safe_zone_anchor_row,
-            self.submenu_being_shown_for_item_index,
-            self.flatten_bottom_corners,
-            self.pinned_footer_builder.as_deref(),
-            self.pinned_header_builder.as_deref(),
-            self.content_top_padding_override,
-            self.content_bottom_padding_override,
-            app,
-        )
+        self.any.render(app)
     }
 }
 

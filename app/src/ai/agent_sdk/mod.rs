@@ -59,6 +59,7 @@ use crate::ai::agent::api::convert_conversation::{
 };
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent_sdk::driver::harness::{HarnessKind, harness_kind};
+use crate::ai::agent_sdk::driver::mcp_startup::harness_takes_computer_use_config;
 use crate::ai::agent_sdk::driver::{AgentDriverOptions, AgentRunPrompt, Task};
 use crate::ai::agent_sdk::mcp_config::build_mcp_servers_from_specs;
 use crate::ai::agent_sdk::setup_observability::{
@@ -713,7 +714,12 @@ fn build_execution_task_and_options(
         anyhow::bail!("An execution that skips its initial turn requires an idle window");
     }
     let providers = execution_config::providers(config.providers);
+    let hooks = driver::hooks::RunHooks {
+        sources: execution_config::agent_hook_sources(config.agent_hook_sources)?,
+        surface: driver::hooks::run_surface_for(true),
+    };
     let mut factory_skill_dirs = execution_config::factory_skill_dirs(config.factory_skill_dirs)?;
+    let factory_definition_sha = execution_config::factory_definition_sha(config.factory_branch)?;
     let definition_skill_dirs = factory_skill_dirs.clone();
     merge_skill_dirs(&mut factory_skill_dirs, skill_discovery_dirs);
     let task = Task {
@@ -756,12 +762,16 @@ fn build_execution_task_and_options(
             )?;
             workspace.factory_skill_dirs = Some(factory_skill_dirs);
             workspace.definition_skill_dirs = Some(definition_skill_dirs);
+            workspace.factory_definition_sha = factory_definition_sha;
             workspace
         },
-        computer_use_config: (selected_harness == Harness::Oz).then(|| {
+        computer_use_config: harness_takes_computer_use_config(selected_harness).then(|| {
             (
                 config.computer_use_enabled,
-                config.computer_use_model_id.map(Into::into),
+                config
+                    .computer_use_model_id
+                    .filter(|_| selected_harness == Harness::Oz)
+                    .map(Into::into),
             )
         }),
         selected_harness,
@@ -783,6 +793,7 @@ fn build_execution_task_and_options(
         mcp_startup_timeout: args
             .and_then(|args| args.mcp_startup_timeout)
             .map(Into::into),
+        hooks,
     };
     Ok((
         options,
@@ -1631,6 +1642,7 @@ impl AgentDriverRunner {
                     skip_initial_turn: args.skip_initial_turn,
                     strict_mcp_startup: args.strict_mcp_startup,
                     mcp_startup_timeout: args.mcp_startup_timeout.map(|duration| duration.into()),
+                    hooks: Default::default(),
                 };
 
                 Ok((
@@ -2623,6 +2635,9 @@ fn command_to_telemetry_event(command: &CliCommand) -> CliTelemetryEvent {
                 }
             }
             HarnessSupportCommand::NotifyUser(_) => CliTelemetryEvent::HarnessSupportNotifyUser,
+            HarnessSupportCommand::WaitForEvents(_) => {
+                CliTelemetryEvent::HarnessSupportWaitForEvents
+            }
             HarnessSupportCommand::FinishTask(finish_args) => {
                 CliTelemetryEvent::HarnessSupportFinishTask {
                     success: finish_args.status == TaskStatus::Success,

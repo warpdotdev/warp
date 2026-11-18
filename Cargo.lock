@@ -315,10 +315,13 @@ dependencies = [
 name = "ai"
 version = "0.1.0"
 dependencies = [
+ "ai_types",
  "anyhow",
  "arborium",
  "async-channel",
  "async-fs",
+ "async-lock",
+ "async-process",
  "async-trait",
  "base16ct",
  "base64 0.22.1",
@@ -326,6 +329,7 @@ dependencies = [
  "bytes",
  "cfg-if",
  "chrono",
+ "command",
  "computer_use",
  "derivative",
  "dirs 6.0.0",
@@ -3300,6 +3304,25 @@ dependencies = [
  "windows 0.62.2",
  "x11rb",
  "zbus",
+]
+
+[[package]]
+name = "computer_use_mcp"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "base64 0.22.1",
+ "command",
+ "computer_use",
+ "libc",
+ "log",
+ "rmcp",
+ "schemars 1.0.4",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]
@@ -10545,6 +10568,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tower",
+ "uuid",
 ]
 
 [[package]]
@@ -15336,6 +15360,7 @@ dependencies = [
  "command",
  "command-corrections",
  "computer_use",
+ "computer_use_mcp",
  "concat-idents",
  "console_error_panic_hook",
  "content_inspector",
@@ -15979,7 +16004,7 @@ dependencies = [
 [[package]]
 name = "warp_multi_agent_api"
 version = "0.0.0"
-source = "git+https://github.com/warpdotdev/warp-proto-apis.git?rev=16db5e6a578dbb6fc25b96ee429ecf5301a9507d#16db5e6a578dbb6fc25b96ee429ecf5301a9507d"
+source = "git+https://github.com/warpdotdev/warp-proto-apis.git?rev=7e78c26ae5e1b93807c3db81ee009e25a57d9c9b#7e78c26ae5e1b93807c3db81ee009e25a57d9c9b"
 dependencies = [
  "prost",
  "prost-reflect",
