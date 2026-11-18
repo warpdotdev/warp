@@ -121,6 +121,7 @@ fn selective_refresh_keeps_unrequested_credential_and_deadline() -> Result<()> {
                 Ok((store.expires_at, store.provider_refresh_at.clone()))
             })?;
             let content = fs::read(directory.join("credentials"))?;
+            let gh_content = fs::read(directory.join("gh/hosts.yml"))?;
             for host in ["gitlab.com", "dev.azure.com"] {
                 let provider = provider_for_host(host).unwrap();
                 apply_partial_response(&owner, other_response(host), Some(&[provider]))?;
@@ -131,6 +132,7 @@ fn selective_refresh_keeps_unrequested_credential_and_deadline() -> Result<()> {
                         before.1[&TaskGitCredentialProvider::Github]
                     );
                     assert_eq!(fs::read(directory.join("credentials"))?, content);
+                    assert_eq!(fs::read(directory.join("gh/hosts.yml"))?, gh_content);
                     Ok(())
                 })?;
             }
