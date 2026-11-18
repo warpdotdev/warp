@@ -114,6 +114,7 @@ use crate::ai::mcp::JSONTransportType;
 use crate::server::server_api::ServerApi;
 use crate::server::server_api::harness_support::HarnessSupportClient;
 use crate::terminal::CLIAgent;
+use crate::terminal::shell::ShellType;
 
 /// Format slug sent to the server when creating the conversation: its history is stored as
 /// native MAA `ConversationData`, which the driver uploads itself.
@@ -359,6 +360,7 @@ impl ThirdPartyHarness for AcpHarness {
         task_id: Option<AmbientAgentTaskId>,
         server_api: Arc<ServerApi>,
         terminal_driver: ModelHandle<TerminalDriver>,
+        _: ShellType,
         resume: Option<ResumePayload>,
         resolved_env_vars: &HashMap<OsString, OsString>,
         skill_dirs: &[PathBuf],

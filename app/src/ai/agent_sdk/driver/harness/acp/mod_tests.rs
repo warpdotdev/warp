@@ -175,6 +175,7 @@ fn initial_files_reach_the_acp_runner_without_changing_the_pty_prompt() {
                 None,
                 server_api.clone(),
                 terminal_driver,
+                ShellType::Zsh,
                 None,
                 &HashMap::new(),
                 &[],

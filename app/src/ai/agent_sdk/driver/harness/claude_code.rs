@@ -148,6 +148,7 @@ impl ThirdPartyHarness for ClaudeHarness {
         task_id: Option<AmbientAgentTaskId>,
         server_api: Arc<ServerApi>,
         terminal_driver: ModelHandle<TerminalDriver>,
+        shell_type: ShellType,
         resume: Option<ResumePayload>,
         resolved_env_vars: &HashMap<OsString, OsString>,
         skill_dirs: &[PathBuf],
@@ -196,6 +197,7 @@ impl ThirdPartyHarness for ClaudeHarness {
             task_id,
             server_api,
             terminal_driver,
+            shell_type,
             claude_resume,
             &resolved_mcp_servers.configs,
         )?))
@@ -267,14 +269,15 @@ enum ClaudeRunnerState {
 }
 
 struct ClaudeHarnessRunner {
+    command: String,
     /// The CLI name used to invoke Claude Code.
     cli_name: String,
     /// Held so the temp file is cleaned up when the runner is dropped.
-    temp_prompt_file: NamedTempFile,
+    _temp_prompt_file: NamedTempFile,
     /// Held so the system prompt temp file is cleaned up when the runner is dropped.
-    temp_system_prompt_file: Option<NamedTempFile>,
+    _temp_system_prompt_file: Option<NamedTempFile>,
     /// Held so the MCP config temp file lives until the CLI exits.
-    temp_mcp_config_file: Option<NamedTempFile>,
+    _temp_mcp_config_file: Option<NamedTempFile>,
     client: Arc<dyn HarnessSupportClient>,
     server_api: Arc<ServerApi>,
     terminal_driver: ModelHandle<TerminalDriver>,
@@ -301,6 +304,7 @@ impl ClaudeHarnessRunner {
         task_id: Option<AmbientAgentTaskId>,
         server_api: Arc<ServerApi>,
         terminal_driver: ModelHandle<TerminalDriver>,
+        shell_type: ShellType,
         resume: Option<ClaudeResumeInfo>,
         resolved_mcp_servers: &HashMap<String, JSONMCPServer>,
     ) -> Result<Self, AgentDriverError> {
@@ -338,12 +342,28 @@ impl ClaudeHarnessRunner {
             .transpose()
             .map_err(AgentDriverError::ConfigBuildFailed)?;
         let client: Arc<dyn HarnessSupportClient> = server_api.clone();
+        let command = claude_command(
+            cli_command,
+            &session_id,
+            &temp_file.path().display().to_string(),
+            temp_system_prompt_file
+                .as_ref()
+                .map(|file| file.path().display().to_string())
+                .as_deref(),
+            temp_mcp_config_file
+                .as_ref()
+                .map(|file| file.path().display().to_string())
+                .as_deref(),
+            preexisting_conversation_id.is_some(),
+            shell_type,
+        );
 
         Ok(Self {
+            command,
             cli_name: cli_command.to_string(),
-            temp_prompt_file: temp_file,
-            temp_system_prompt_file,
-            temp_mcp_config_file,
+            _temp_prompt_file: temp_file,
+            _temp_system_prompt_file: temp_system_prompt_file,
+            _temp_mcp_config_file: temp_mcp_config_file,
             client,
             server_api,
             terminal_driver,
@@ -497,36 +517,11 @@ impl HarnessRunner for ClaudeHarnessRunner {
             .await
             .map_err(AgentDriverError::ConfigBuildFailed)?;
 
-        let cli_name = self.cli_name.clone();
-        let session_id = self.session_id;
-        let prompt_path = self.temp_prompt_file.path().display().to_string();
-        let system_prompt_path = self
-            .temp_system_prompt_file
-            .as_ref()
-            .map(|file| file.path().display().to_string());
-        let mcp_config_path = self
-            .temp_mcp_config_file
-            .as_ref()
-            .map(|file| file.path().display().to_string());
-        let resuming = self.preexisting_conversation_id.is_some();
+        let command = self.command.clone();
         let terminal_driver = self.terminal_driver.clone();
         let command_handle = match foreground
             .spawn(move |_, ctx| {
-                terminal_driver.update(ctx, |driver, ctx| {
-                    let shell_type = driver
-                        .active_session_shell_type(ctx)
-                        .unwrap_or(ShellType::Bash);
-                    let command = claude_command(
-                        &cli_name,
-                        &session_id,
-                        &prompt_path,
-                        system_prompt_path.as_deref(),
-                        mcp_config_path.as_deref(),
-                        resuming,
-                        shell_type,
-                    );
-                    driver.execute_command(&command, ctx)
-                })
+                terminal_driver.update(ctx, |driver, ctx| driver.execute_command(&command, ctx))
             })
             .await??
             .await

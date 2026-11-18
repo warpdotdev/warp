@@ -33,6 +33,7 @@ use crate::server::server_api::ServerApi;
 use crate::server::server_api::harness_support::HarnessSupportClient;
 use crate::terminal::CLIAgent;
 use crate::terminal::model::block::BlockId;
+use crate::terminal::shell::ShellType;
 
 pub(crate) struct GeminiHarness;
 
@@ -68,6 +69,7 @@ impl ThirdPartyHarness for GeminiHarness {
         _task_id: Option<AmbientAgentTaskId>,
         server_api: Arc<ServerApi>,
         terminal_driver: ModelHandle<TerminalDriver>,
+        _: ShellType,
         _resume: Option<ResumePayload>,
         _resolved_env_vars: &HashMap<OsString, OsString>,
         skill_dirs: &[PathBuf],

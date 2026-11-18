@@ -40,6 +40,7 @@ use crate::server::server_api::harness_support::{HarnessSupportClient, upload_to
 use crate::terminal::CLIAgent;
 use crate::terminal::cli_agent_sessions::{CLIAgentSessionStatus, CLIAgentSessionsModel};
 use crate::terminal::model::block::{BlockId, SerializedBlock};
+use crate::terminal::shell::ShellType;
 use crate::util::path::resolve_executable;
 
 pub(crate) mod acp;
@@ -318,6 +319,7 @@ pub(crate) trait ThirdPartyHarness: Send + Sync {
         task_id: Option<AmbientAgentTaskId>,
         server_api: Arc<ServerApi>,
         terminal_driver: ModelHandle<TerminalDriver>,
+        shell_type: ShellType,
         resume: Option<ResumePayload>,
         resolved_env_vars: &HashMap<OsString, OsString>,
         skill_dirs: &[PathBuf],
