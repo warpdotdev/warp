@@ -120,13 +120,27 @@ It is not Cursor's result shape. Binary file content is summarized as `is_binary
   deny) keeps that one child back: it shows up in the model's result as a failed child with
   your `user_message`, and the other children launch. Server-side subagents (Warp's own
   research, advice, and shell helpers) never fire it.
-- `beforeSubmitPrompt` does not fire for the first prompt of an Oz cloud run, because the server
-  resolves that prompt. It fires for later prompts. `attachments` lists the files the person
-  attached (`{ "type": "file", "file_path" }`, in path order) and then the rule files whose
-  content went with the prompt (`{ "type": "rule", "file_path" }`; Warp's `WARP.md` and
-  `AGENTS.md` files for the working directory and its ancestors, plus global rules). A rule file
-  for another part of the repository, which the agent can read later but whose content was not
-  sent, is not listed. Images and other attachment kinds with no file on disk are not listed.
+- `beforeSubmitPrompt` fires for the first prompt of an Oz cloud run as well as for later
+  prompts. The run's first prompt is stored on the server, so when a `beforeSubmitPrompt` hook is
+  configured Warp fetches its text before starting the run and your hook sees it as `prompt`;
+  the task's attachment files are listed as `file` attachments. A `continue: false` (or exit 2)
+  on that prompt ends the run as failed with your `user_message`, since the run has nothing else
+  to do. If the text cannot be fetched the run goes on without the hook and says so in a warning,
+  unless the hook's source is `strict`, in which case the run ends as failed.
+- The first prompt's text is the run's first user message exactly as the conversation stores
+  it: the task's prompt (with the agent's base prompt first when the run has one, and a
+  `/<skill>` prefix when the run was started with a skill). Attachments are not listed in the
+  text; they are in `attachments`. When the run continues an earlier execution's inputs (a
+  handoff), or several prompts were queued before the run started, the hook sees the first
+  message of the run, the one that starts it. A server older than warp-server #22256 returns
+  the prompt in the shape it builds for third-party harnesses instead, which can add an
+  `Attached files:` section, inline a skill's text, or append a `<system-reminder>` block.
+- `beforeSubmitPrompt.attachments` lists the files the person attached
+  (`{ "type": "file", "file_path" }`, in path order) and then the rule files whose content went
+  with the prompt (`{ "type": "rule", "file_path" }`; Warp's `WARP.md` and `AGENTS.md` files for
+  the working directory and its ancestors, plus global rules). A rule file for another part of
+  the repository, which the agent can read later but whose content was not sent, is not listed.
+  Images and other attachment kinds with no file on disk are not listed.
 - `stop` fires only for a turn that completed (`status: "completed"`); a cancelled or failed turn
   does not fire it.
 - `postToolUse.duration` and `postToolUseFailure.duration` are the time the tool ran, in
@@ -168,3 +182,4 @@ with the run. `architecture.md` §7.1 has the rules.
 - `attachments` on `beforeSubmitPrompt`, and `model`/`model_id` on `sessionStart` and the first
   `beforeSubmitPrompt` of a conversation.
 - `subagentStart` for the children of a `run_agents` call.
+- `beforeSubmitPrompt` for the first prompt of an Oz cloud run.
