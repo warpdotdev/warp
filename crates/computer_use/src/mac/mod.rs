@@ -15,6 +15,7 @@ pub use recording::Recorder;
 use util::{display_scale_factor_for_window, main_display_scale_factor};
 use warpui_core::r#async::Timer;
 
+use crate::click_sequence::ClickSequence;
 use crate::{Action, ActionResult, Options, Target, TargetedAction};
 
 pub fn is_supported_on_current_platform() -> bool {
@@ -153,6 +154,7 @@ impl super::Actor for Actor {
         // window target, deliver events through the HID tap, and treat coordinates as global
         // pixels. This keeps behavior byte-identical to the pre-existing implementation.
         let background = options.background_enabled;
+        let mut clicks = ClickSequence::default();
         for targeted in actions {
             let target = if background {
                 targeted.target
@@ -181,6 +183,7 @@ impl super::Actor for Actor {
             // For a window target, translate window-local coordinates through the containing
             // display's point mapping.
             let action = remap_action_for_target(&targeted.action, target)?;
+            let click_state = clicks.next(target, &action);
             match &action {
                 Action::Wait(duration) => {
                     Timer::after(*duration).await;
@@ -189,9 +192,9 @@ impl super::Actor for Actor {
                     if let Some(at) = at {
                         self.mouse.move_to(*at).await?;
                     }
-                    self.mouse.button_down(button)?;
+                    self.mouse.button_down(button, click_state)?;
                 }
-                Action::MouseUp { button } => self.mouse.button_up(button)?,
+                Action::MouseUp { button } => self.mouse.button_up(button, click_state)?,
                 Action::MouseMove { to } => self.mouse.move_to(*to).await?,
                 Action::MouseWheel {
                     at,

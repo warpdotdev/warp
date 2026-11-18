@@ -180,27 +180,7 @@ fn pending_command_waits_for_final_bootstrap_precmd() {
         assert!(input.read(&app, |input, _| input.has_pending_command()));
         assert!(events.borrow().is_empty());
 
-        terminal.update(&mut app, |terminal, ctx| {
-            {
-                let mut model = terminal.model.lock();
-                let session_id = model.block_list().active_block().session_id().unwrap();
-                let completion_metadata = CompletionMetadata::default();
-                model.command_finished(CommandFinishedValue {
-                    completion_metadata: completion_metadata.clone(),
-                    session_id: Some(session_id.as_u64()),
-                });
-                model.precmd_with_completion_metadata(PrecmdValue {
-                    completion_metadata,
-                    prompt_metadata: PromptMetadata {
-                        session_id: Some(session_id.as_u64()),
-                        ..Default::default()
-                    },
-                });
-            }
-            terminal.model_event_dispatcher().update(ctx, |_, ctx| {
-                ctx.emit(ModelEvent::BootstrapPrecmdDone);
-            });
-        });
+        finish_bootstrap_precmd(&terminal, &mut app);
 
         assert!(!input.read(&app, |input, _| input.has_pending_command()));
         assert_eq!(events.borrow().len(), 1);
@@ -226,6 +206,156 @@ fn unshared_terminal_executes_command_locally() {
         let events = events.borrow();
         assert_eq!(events[0].0, "echo local");
         assert!(matches!(&events[0].1, CommandExecutionSource::User));
+    });
+}
+
+fn finish_bootstrap_precmd(terminal: &ViewHandle<TerminalView>, app: &mut App) {
+    terminal.update(app, |terminal, ctx| {
+        {
+            let mut model = terminal.model.lock();
+            let session_id = model.block_list().active_block().session_id().unwrap();
+            let completion_metadata = CompletionMetadata::default();
+            model.command_finished(CommandFinishedValue {
+                completion_metadata: completion_metadata.clone(),
+                session_id: Some(session_id.as_u64()),
+            });
+            model.precmd_with_completion_metadata(PrecmdValue {
+                completion_metadata,
+                prompt_metadata: PromptMetadata {
+                    session_id: Some(session_id.as_u64()),
+                    ..Default::default()
+                },
+            });
+        }
+        terminal.model_event_dispatcher().update(ctx, |_, ctx| {
+            ctx.emit(ModelEvent::BootstrapPrecmdDone);
+        });
+    });
+}
+
+#[test]
+fn exact_pending_command_does_not_concatenate_leftover_input() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        finish_bootstrap_precmd(&terminal, &mut app);
+        let events = subscribe_to_execute_command_events(&mut app, &terminal);
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+        input.update(&mut app, |input, ctx| {
+            input.editor.update(ctx, |editor, ctx| {
+                editor.set_buffer_text("export CI=true", ctx);
+                editor
+                    .select_ranges_by_byte_offset([ByteOffset::from(0)..ByteOffset::from(0)], ctx);
+            });
+        });
+
+        terminal.update(&mut app, |terminal, ctx| {
+            terminal.execute_command_or_set_pending("export PAGER=cat", ctx);
+        });
+
+        assert_eq!(events.borrow().len(), 1);
+        assert_eq!(events.borrow()[0].0, "export PAGER=cat");
+        assert!(!input.read(&app, |input, _| input.has_pending_command()));
+    });
+}
+
+#[test]
+fn exact_pending_command_ignores_editor_changes_while_waiting() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let events = subscribe_to_execute_command_events(&mut app, &terminal);
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+        terminal.update(&mut app, |terminal, ctx| {
+            terminal.execute_command_or_set_pending("export PAGER=cat", ctx);
+        });
+        assert!(input.read(&app, |input, _| input.has_pending_command()));
+        assert!(events.borrow().is_empty());
+        input.update(&mut app, |input, ctx| {
+            input.user_replace_editor_text("echo changed while waiting", ctx);
+        });
+
+        finish_bootstrap_precmd(&terminal, &mut app);
+        terminal.update(&mut app, |terminal, ctx| {
+            terminal.execute_pending_command((), ctx);
+        });
+
+        assert_eq!(events.borrow().len(), 1);
+        assert_eq!(events.borrow()[0].0, "export PAGER=cat");
+        assert!(!input.read(&app, |input, _| input.has_pending_command()));
+    });
+}
+
+#[test]
+fn submit_current_input_executes_editor_contents_instead_of_pending_payload() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        finish_bootstrap_precmd(&terminal, &mut app);
+        let events = subscribe_to_execute_command_events(&mut app, &terminal);
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+        input.update(&mut app, |input, ctx| {
+            input.set_pending_command("echo programmatic", ctx);
+            input.user_replace_editor_text("echo synchronized", ctx);
+        });
+
+        input.update(&mut app, |input, ctx| {
+            input.submit_current_input(ctx);
+        });
+
+        assert_eq!(events.borrow().len(), 1);
+        assert_eq!(events.borrow()[0].0, "echo synchronized");
+        assert!(!input.read(&app, |input, _| input.has_pending_command()));
+    });
+}
+
+#[test]
+fn exact_pending_command_retries_with_shared_session_attribution() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        finish_bootstrap_precmd(&terminal, &mut app);
+        let events = subscribe_to_execute_command_events(&mut app, &terminal);
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+        terminal.update(&mut app, |terminal, ctx| {
+            terminal
+                .model
+                .lock()
+                .set_shared_session_status(SharedSessionStatus::ActiveSharer);
+            terminal.execute_command_or_set_pending("export PAGER=cat", ctx);
+        });
+        assert!(input.read(&app, |input, _| input.has_pending_command()));
+        assert!(events.borrow().is_empty());
+        let participant_id = ParticipantId::new();
+        let participant_id_for_manager = participant_id.clone();
+        let presence_manager = app.add_model(move |_| {
+            PresenceManager::new_for_sharer(
+                participant_id_for_manager,
+                UserUid::new("mock_firebase_uid"),
+            )
+        });
+        input.update(&mut app, |input, ctx| {
+            input.set_shared_session_presence_manager(presence_manager);
+            input.user_replace_editor_text("export CI=true", ctx);
+        });
+
+        terminal.update(&mut app, |terminal, ctx| {
+            terminal.execute_pending_command((), ctx);
+        });
+        terminal.update(&mut app, |terminal, ctx| {
+            terminal.execute_pending_command((), ctx);
+        });
+
+        assert_eq!(events.borrow().len(), 1);
+        assert_eq!(events.borrow()[0].0, "export PAGER=cat");
+        match &events.borrow()[0].1 {
+            CommandExecutionSource::SharedSession {
+                participant_id: actual,
+                ..
+            } => assert_eq!(actual, &participant_id),
+            _ => panic!("expected shared-session attribution"),
+        }
+        assert!(!input.read(&app, |input, _| input.has_pending_command()));
     });
 }
 

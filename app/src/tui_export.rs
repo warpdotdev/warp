@@ -49,6 +49,7 @@ pub use crate::ai::agent_conversations_model::{
     AgentManagementFilters, AgentRunDisplayStatus, HarnessFilter, OwnerFilter,
     query_conversation_entries,
 };
+pub use crate::ai::agent_sdk::authenticate_then_execute;
 pub use crate::ai::ambient_agents::AmbientAgentTaskId;
 pub use crate::ai::ambient_agents::telemetry::{
     CloudAgentTelemetryEvent, HandoffEntryPoint, HandoffSurface,
@@ -194,6 +195,7 @@ pub use crate::server::server_api::TranscribeError;
 pub use crate::server::server_api::ai::{
     AIClient, AgentConfigSnapshot, AttachmentInput, SpawnAgentRequest, SpawnAgentResponse,
 };
+pub use crate::server::server_api::factory::FactoryGitTokenResponse;
 pub use crate::server::team_scope::RequestTeamScope;
 pub use crate::server::telemetry::{SlashMenuSource, TelemetryEvent};
 pub use crate::settings::{AISettingsChangedEvent, InputSettings};

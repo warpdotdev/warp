@@ -13,7 +13,7 @@ use super::*;
 fn response(preview_count: usize) -> ListRunPreviewsResponse {
     serde_json::from_value(json!({
         "execution_id": 42,
-        "previews": vec![json!({}); preview_count],
+        "previews": vec![json!({"port":3000}); preview_count],
     }))
     .unwrap()
 }

@@ -56,12 +56,12 @@ Tests cost real maintenance, and a bad test costs more than no test. Skip or del
 Don't chase a coverage number. Coverage says a line executed, not that anything was verified, and a target reliably turns into a ceiling.
 
 ## Where unit tests live
-- Put unit tests in separate files named `${filename}_tests.rs` or `mod_test.rs`.
+- Put unit tests in separate files named `${filename}_tests.rs` or `mod_tests.rs`.
 - Include the test module at the end of the corresponding source file:
 
 ```rust
 #[cfg(test)]
-#[path = "filename_tests.rs"] // or "mod_test.rs"
+#[path = "filename_tests.rs"] // or "mod_tests.rs"
 mod tests;
 ```
 

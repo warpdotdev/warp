@@ -298,6 +298,16 @@ struct NotifyUserRequest {
 }
 
 #[derive(serde::Serialize)]
+struct WaitForEventsRequest<'a> {
+    run_ids: &'a [String],
+}
+
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+pub struct WaitForEventsResponse {
+    pub waiting_on_run_ids: Vec<String>,
+}
+
+#[derive(serde::Serialize)]
 struct FinishTaskRequest {
     success: bool,
     summary: String,
@@ -407,6 +417,9 @@ pub trait HarnessSupportClient: 'static + Send + Sync {
 
     /// Send a progress notification to the task's originating platform.
     async fn notify_user(&self, message: &str) -> Result<()>;
+
+    /// Register the runs whose lifecycle or message events this run is waiting for.
+    async fn wait_for_events(&self, run_ids: &[String]) -> Result<WaitForEventsResponse>;
 
     /// Report task completion or failure. The server derives PR links/branches from
     /// artifacts already reported via `report_artifact`.
@@ -662,6 +675,14 @@ impl HarnessSupportClient for ServerApi {
             &NotifyUserRequest {
                 message: message.to_string(),
             },
+        )
+        .await
+    }
+
+    async fn wait_for_events(&self, run_ids: &[String]) -> Result<WaitForEventsResponse> {
+        self.post_public_api(
+            "harness-support/wait-for-events",
+            &WaitForEventsRequest { run_ids },
         )
         .await
     }

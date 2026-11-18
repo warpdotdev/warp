@@ -14,6 +14,7 @@ use uuid::Uuid;
 use warpui::ModelSpawner;
 use warpui::r#async::FutureExt as _;
 
+use super::git_credentials::restricted::protected_environment_key;
 use super::{AgentDriver, AgentDriverError};
 use crate::terminal::shell::ShellType;
 
@@ -250,7 +251,13 @@ fn merge(
             } else {
                 log::warn!("Skipping malformed .warp.vars PATH");
             }
-        } else if reserved_key(key) || protected.keys().any(|name| same_key(name, key)) {
+        } else if reserved_key(key)
+            || protected.keys().any(|name| same_key(name, key))
+            || (protected
+                .get(OsStr::new("WARP_GITHUB_CREDENTIAL_MODE"))
+                .is_some_and(|mode| mode == "restricted_installation")
+                && protected_environment_key(&key.to_ascii_uppercase()))
+        {
             log::warn!("Skipping protected .warp.vars key {key}");
         } else {
             environment.insert(key.into(), value.into());

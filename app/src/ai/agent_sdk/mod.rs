@@ -15,6 +15,7 @@ use anyhow::Context;
 pub use driver::AgentDriver;
 use driver::AgentDriverError;
 use driver::agent_setup::configured_skills::{self, merge_skill_dirs};
+use driver::git_credentials::restricted::{CredentialStoreGuard, ManagedStoreOwner};
 pub(crate) use driver::harness::{ClaudeHarness, task_env_vars, validate_cli_installed};
 use telemetry::CliTelemetryEvent;
 use tracing::Instrument as _;
@@ -43,6 +44,7 @@ use warp_core::features::FeatureFlag;
 use warp_errors::{report_error, report_if_error};
 use warp_graphql::object_permissions::OwnerType;
 use warp_graphql::queries::execution_config::ExecutionConfiguration;
+use warp_graphql::queries::task_restricted_git_credentials::GitHubCredentialMode;
 use warp_isolation_platform::IsolationPlatformError;
 #[cfg(not(target_family = "wasm"))]
 use warp_logging::log_file_path;
@@ -57,6 +59,7 @@ use crate::ai::agent::api::convert_conversation::{
 };
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent_sdk::driver::harness::{HarnessKind, harness_kind};
+use crate::ai::agent_sdk::driver::mcp_startup::harness_takes_computer_use_config;
 use crate::ai::agent_sdk::driver::{AgentDriverOptions, AgentRunPrompt, Task};
 use crate::ai::agent_sdk::mcp_config::build_mcp_servers_from_specs;
 use crate::ai::agent_sdk::setup_observability::{
@@ -711,7 +714,12 @@ fn build_execution_task_and_options(
         anyhow::bail!("An execution that skips its initial turn requires an idle window");
     }
     let providers = execution_config::providers(config.providers);
+    let hooks = driver::hooks::RunHooks {
+        sources: execution_config::agent_hook_sources(config.agent_hook_sources)?,
+        surface: driver::hooks::run_surface_for(true),
+    };
     let mut factory_skill_dirs = execution_config::factory_skill_dirs(config.factory_skill_dirs)?;
+    let factory_definition_sha = execution_config::factory_definition_sha(config.factory_branch)?;
     let definition_skill_dirs = factory_skill_dirs.clone();
     merge_skill_dirs(&mut factory_skill_dirs, skill_discovery_dirs);
     let task = Task {
@@ -729,6 +737,8 @@ fn build_execution_task_and_options(
         task_id: Some(task_id),
         execution_id: Some(execution_id.to_owned()),
         use_factory_repositories,
+        github_credential_mode: GitHubCredentialMode::Legacy,
+        credential_store_owner: None,
         experimental: None,
         parent_run_id: config.parent_run_id.map(|id| id.into_inner()),
         should_share: FeatureFlag::AgentSharedSessions.is_enabled(),
@@ -752,12 +762,16 @@ fn build_execution_task_and_options(
             )?;
             workspace.factory_skill_dirs = Some(factory_skill_dirs);
             workspace.definition_skill_dirs = Some(definition_skill_dirs);
+            workspace.factory_definition_sha = factory_definition_sha;
             workspace
         },
-        computer_use_config: (selected_harness == Harness::Oz).then(|| {
+        computer_use_config: harness_takes_computer_use_config(selected_harness).then(|| {
             (
                 config.computer_use_enabled,
-                config.computer_use_model_id.map(Into::into),
+                config
+                    .computer_use_model_id
+                    .filter(|_| selected_harness == Harness::Oz)
+                    .map(Into::into),
             )
         }),
         selected_harness,
@@ -779,6 +793,7 @@ fn build_execution_task_and_options(
         mcp_startup_timeout: args
             .and_then(|args| args.mcp_startup_timeout)
             .map(Into::into),
+        hooks,
     };
     Ok((
         options,
@@ -907,6 +922,8 @@ impl AgentDriverRunner {
         // Local CLI-created runs may not have a task yet, so those setup events explicitly no-op.
         let mut task_id: Option<AmbientAgentTaskId> =
             args.task_id.as_deref().and_then(|s| s.parse().ok());
+        let credentials = task_id
+            .map(|task_id| CredentialStoreGuard::new(ManagedStoreOwner::Task(task_id.to_string())));
         // Set up and run the driver, reporting any errors back to the server.
         let result: Result<(), AgentDriverError> = async {
             Self::set_ambient_agent_task_id(&foreground, task_id).await?;
@@ -1116,6 +1133,7 @@ impl AgentDriverRunner {
                         output_format,
                         share_requests,
                         task,
+                        credentials,
                     )
                 })
                 .await??;
@@ -1295,10 +1313,9 @@ impl AgentDriverRunner {
         task_id_str: &str,
         configure_git_credentials_with_github: bool,
         use_factory_repositories: bool,
+        github_credential_mode: GitHubCredentialMode,
     ) -> Result<(), AgentDriverError> {
-        if driver::git_credentials::restricted_github_mode()
-            .map_err(AgentDriverError::ConfigBuildFailed)?
-        {
+        if github_credential_mode == GitHubCredentialMode::RestrictedInstallation {
             let ai_client = foreground
                 .spawn(|_, ctx| ServerApiProvider::as_ref(ctx).get_ai_client())
                 .await?;
@@ -1471,12 +1488,17 @@ impl AgentDriverRunner {
                     std::env::var_os(FACTORY_ID_ENV),
                 )
             });
+        let github_credential_mode = driver::git_credentials::credential_mode(
+            std::env::var("WARP_GITHUB_CREDENTIAL_MODE").ok().as_deref(),
+        )
+        .map_err(AgentDriverError::ConfigBuildFailed)?;
         if let Some(task_id_str) = args.task_id.as_ref() {
             Self::bootstrap_git_credentials_for_task(
                 foreground,
                 task_id_str,
                 args.configure_git_credentials_with_github,
                 use_factory_repositories,
+                github_credential_mode,
             )
             .await?;
         }
@@ -1521,6 +1543,7 @@ impl AgentDriverRunner {
                 })
                 .await?
                 .map_err(AgentDriverError::ConfigBuildFailed)?;
+            options.github_credential_mode = github_credential_mode;
             options.team_scope = agent_driver_team_scope;
             let task_id = options
                 .task_id
@@ -1587,6 +1610,8 @@ impl AgentDriverRunner {
                     task_id,
                     execution_id: args.execution_id.clone(),
                     use_factory_repositories,
+                    github_credential_mode,
+                    credential_store_owner: None,
                     experimental: None,
                     parent_run_id: None,
                     should_share,
@@ -1617,6 +1642,7 @@ impl AgentDriverRunner {
                     skip_initial_turn: args.skip_initial_turn,
                     strict_mcp_startup: args.strict_mcp_startup,
                     mcp_startup_timeout: args.mcp_startup_timeout.map(|duration| duration.into()),
+                    hooks: Default::default(),
                 };
 
                 Ok((
@@ -2180,6 +2206,7 @@ impl AgentDriverRunner {
         output_format: OutputFormat,
         share_requests: Option<Vec<ShareRequest>>,
         task: driver::Task,
+        credentials: Option<CredentialStoreGuard>,
     ) -> Result<(), AgentDriverError> {
         maybe_warn_team_api_key(ctx);
         let driver = AgentDriver::create(driver_options, ctx)?;
@@ -2195,7 +2222,10 @@ impl AgentDriverRunner {
                 .in_scope(|| driver.run(task, ctx))
                 .instrument(span);
 
-            ctx.spawn(agent_future, |_, result, ctx| match result {
+            ctx.spawn(async move {
+                let _credentials = credentials;
+                agent_future.await
+            }, |_, result, ctx| match result {
                 Ok(()) => {
                     ctx.terminate_app(TerminationMode::ForceTerminate, None);
                 }
@@ -2290,7 +2320,6 @@ fn launch_command(
     command: CliCommand,
     global_options: GlobalOptions,
 ) -> anyhow::Result<()> {
-    let parent_span = tracing::Span::current();
     let requires_auth = command_requires_auth(&command);
 
     if !requires_auth {
@@ -2298,24 +2327,38 @@ fn launch_command(
     }
 
     let cli_name = warp_cli::binary_name().unwrap_or_else(|| "warp".to_string());
+    authenticate_then_execute(
+        global_options.api_key.clone(),
+        &format!("You are not logged in - please log in with `{cli_name} login` to continue."),
+        ctx,
+        move |ctx| dispatch_command(ctx, command.clone(), global_options.clone()),
+    )
+}
+
+/// Establishes IAP access and validates credentials before executing a command once.
+pub fn authenticate_then_execute(
+    pending_api_key: Option<String>,
+    login_hint: &str,
+    ctx: &mut AppContext,
+    execute: impl FnOnce(&mut AppContext) -> anyhow::Result<()> + 'static,
+) -> anyhow::Result<()> {
+    let parent_span = tracing::Span::current();
 
     let auth_state = AuthStateProvider::handle(ctx).as_ref(ctx).get();
-    let Some(authentication) =
-        command_authentication(global_options.api_key.clone(), auth_state.is_logged_in())
+    let Some(authentication) = command_authentication(pending_api_key, auth_state.is_logged_in())
     else {
-        return Err(anyhow::anyhow!(
-            "You are not logged in - please log in with `{cli_name} login` to continue."
-        ));
+        return Err(anyhow::anyhow!("{}", login_hint));
     };
 
     // On staging the warp-server is fronted by IAP, so establish an IAP token
     // before *any* warp-server request.
     let iap = IapManager::handle(ctx);
     if !iap.as_ref(ctx).is_enabled() || iap.as_ref(ctx).has_valid_token() {
-        authenticate_and_dispatch(ctx, command, global_options, authentication, parent_span);
+        authenticate_and_execute(ctx, parent_span, authentication, execute);
         return Ok(());
     }
 
+    let mut execute = Some(execute);
     let mut handled = false;
     let parent_span_for_iap = parent_span.clone();
     ctx.subscribe_to_model(&iap, move |_, event, ctx| {
@@ -2328,16 +2371,18 @@ fn launch_command(
                 if IapManager::handle(ctx).as_ref(ctx).has_valid_token() =>
             {
                 handled = true;
-                authenticate_and_dispatch(
-                    ctx,
-                    command.clone(),
-                    global_options.clone(),
-                    authentication.clone(),
-                    parent_span.clone(),
-                );
+                if let Some(execute) = execute.take() {
+                    authenticate_and_execute(
+                        ctx,
+                        parent_span.clone(),
+                        authentication.clone(),
+                        execute,
+                    );
+                }
             }
             IapManagerEvent::AccessUnavailable => {
                 handled = true;
+                execute = None;
                 report_fatal_error(
                     anyhow::anyhow!("Timed out establishing IAP access to warp-server."),
                     ctx,
@@ -2352,18 +2397,18 @@ fn launch_command(
     Ok(())
 }
 
-/// Subscribes to auth events, authenticates, and dispatches the command once
+/// Subscribes to auth events, authenticates, and execute the closure once
 /// auth completes. Assumes IAP access (if applicable) is already established.
-fn authenticate_and_dispatch(
+fn authenticate_and_execute(
     ctx: &mut AppContext,
-    command: CliCommand,
-    global_options: GlobalOptions,
-    authentication: CommandAuthentication,
     parent_span: tracing::Span,
+    authentication: CommandAuthentication,
+    execute: impl FnOnce(&mut AppContext) -> anyhow::Result<()> + 'static,
 ) {
     let cli_name = warp_cli::binary_name().unwrap_or_else(|| "warp".to_string());
 
     // Subscribe to auth events and wait for validation before running the command.
+    let mut execute_once = Some(execute);
     let mut dispatched = false;
     ctx.subscribe_to_model(&AuthManager::handle(ctx), move |_, event, ctx| {
         let _guard = parent_span.enter();
@@ -2373,12 +2418,15 @@ fn authenticate_and_dispatch(
         match event {
             AuthManagerEvent::AuthComplete => {
                 dispatched = true;
-                if let Err(err) = dispatch_command(ctx, command.clone(), global_options.clone()) {
+                if let Some(execute) = execute_once.take()
+                    && let Err(err) = execute(ctx)
+                {
                     report_fatal_error(err, ctx);
                 }
             }
             AuthManagerEvent::NeedsReauth => {
                 dispatched = true;
+                execute_once = None;
                 let auth_state = AuthStateProvider::handle(ctx).as_ref(ctx).get();
                 let message = if auth_state.is_api_key_authenticated() {
                     "Your API key is invalid. Please provide a valid key via '--api-key' or the WARP_API_KEY environment variable.".to_string()
@@ -2389,6 +2437,7 @@ fn authenticate_and_dispatch(
             }
             AuthManagerEvent::AuthFailed(err) => {
                 dispatched = true;
+                execute_once = None;
                 report_fatal_error(anyhow::anyhow!("Authentication failed: {err:#}"), ctx);
             }
             _ => {}
@@ -2582,6 +2631,9 @@ fn command_to_telemetry_event(command: &CliCommand) -> CliTelemetryEvent {
                 }
             }
             HarnessSupportCommand::NotifyUser(_) => CliTelemetryEvent::HarnessSupportNotifyUser,
+            HarnessSupportCommand::WaitForEvents(_) => {
+                CliTelemetryEvent::HarnessSupportWaitForEvents
+            }
             HarnessSupportCommand::FinishTask(finish_args) => {
                 CliTelemetryEvent::HarnessSupportFinishTask {
                     success: finish_args.status == TaskStatus::Success,

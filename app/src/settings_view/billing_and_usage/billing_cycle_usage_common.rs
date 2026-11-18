@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use thousands::Separable;
+use warp_core::features::FeatureFlag;
 use warp_core::ui::appearance::Appearance;
 use warpui::Element;
 use warpui::elements::{
@@ -21,7 +22,7 @@ use crate::ui_components::blended_colors;
 use crate::workspaces::team::Team;
 use crate::workspaces::workspace::{
     AiCreditsUsageAndCostSubjectType, AiCreditsUsageAndCostType, AiCreditsUsageBucket,
-    BillingCycleUsageEntry, WorkspaceMember,
+    BillingCycleUsageEntry, ChargeUnit, WorkspaceMember,
 };
 
 // for a bunch of this (min fill ratio, cost type order, ... )
@@ -29,6 +30,7 @@ use crate::workspaces::workspace::{
 pub const ROW_BORDER_RADIUS: f32 = 8.;
 pub const ROW_BORDER_WIDTH: f32 = 1.;
 pub const TOOLTIP_GAP: f32 = 6.;
+pub const CENTS_PER_CREDIT: f64 = 1.8;
 
 const COST_TYPE_ORDER: &[AiCreditsUsageAndCostType] = &[
     AiCreditsUsageAndCostType::BaseLimit,
@@ -270,6 +272,18 @@ pub fn format_cost_cents(cents: f64) -> String {
     }
 }
 
+pub fn format_usage_cost(credits: f64, cost_cents: f64, charge_unit: ChargeUnit) -> String {
+    format_cost_cents(
+        if FeatureFlag::CreditEquivalentBillingUsage.is_enabled()
+            && charge_unit == ChargeUnit::Cents
+        {
+            credits * CENTS_PER_CREDIT
+        } else {
+            cost_cents
+        },
+    )
+}
+
 /// Section subheader (e.g. "Team totals", "Member usage"). One step below
 /// the v2 page's bold section title.
 pub fn render_section_subheader(label: &str, appearance: &Appearance) -> Box<dyn Element> {
@@ -284,7 +298,7 @@ pub fn render_section_subheader(label: &str, appearance: &Appearance) -> Box<dyn
 pub fn render_breakdown_tooltip(
     segments: &[BarSegment],
     total_credits: f64,
-    total_cost_cents: f64,
+    charge_unit: ChargeUnit,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
@@ -311,8 +325,10 @@ pub fn render_breakdown_tooltip(
         column.add_child(render_tooltip_row(
             Some(cost_type_color(&line.cost_type)),
             label,
-            line.credits,
-            line.cost_cents,
+            (
+                line.credits,
+                format_usage_cost(line.credits, line.cost_cents, charge_unit),
+            ),
             sub,
             main,
             font_family,
@@ -331,8 +347,14 @@ pub fn render_breakdown_tooltip(
     column.add_child(render_tooltip_row(
         /* no swatch on the total row */ None,
         "Total usage".to_string(),
-        total_credits,
-        total_cost_cents,
+        (
+            total_credits,
+            format_usage_cost(
+                total_credits,
+                segments.iter().map(|segment| segment.cost_cents).sum(),
+                charge_unit,
+            ),
+        ),
         main,
         main,
         font_family,
@@ -358,12 +380,10 @@ pub fn render_breakdown_tooltip(
 
 /// Single tooltip row: `[swatch + label] [spacer] [credits / cost]` with
 /// fixed-width right-aligned number columns.
-#[allow(clippy::too_many_arguments)]
 fn render_tooltip_row(
     swatch_color: Option<ColorU>,
     label: String,
-    credits: f64,
-    cost_cents: f64,
+    (credits, cost): (f64, String),
     label_color: ColorU,
     value_color: ColorU,
     font_family: warpui::fonts::FamilyId,
@@ -402,7 +422,7 @@ fn render_tooltip_row(
         .with_color(value_color)
         .with_style(style)
         .finish();
-    let cost_text = Text::new_inline(format_cost_cents(cost_cents), font_family, 12.)
+    let cost_text = Text::new_inline(cost, font_family, 12.)
         .with_color(value_color)
         .with_style(style)
         .finish();

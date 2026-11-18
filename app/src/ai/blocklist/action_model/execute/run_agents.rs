@@ -251,6 +251,7 @@ impl RunAgentsExecutor {
             .and_then(|c| c.run_id());
 
         let RunAgentsRequest {
+            delegated_github_coauthor_user_uid,
             metadata,
             execution_mode: run_execution_mode,
             harness_type,
@@ -298,6 +299,7 @@ impl RunAgentsExecutor {
                     None, /* lifecycle_subscription */
                     parent_conversation_id,
                     parent_run_id.clone(),
+                    delegated_github_coauthor_user_uid.clone(),
                     team_scope,
                     exec_ctx,
                 )

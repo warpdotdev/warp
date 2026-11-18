@@ -3,9 +3,10 @@
 use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use ai::skills::{
-    SKILL_PROVIDER_DEFINITIONS, parse_bundled_skill, read_skills_for_skills_dirs,
+    SKILL_PROVIDER_DEFINITIONS, SkillScope, parse_bundled_skill, read_skills_for_skills_dirs,
     resolve_skills_dirs,
 };
 use futures::future::join_all;
@@ -24,6 +25,9 @@ use super::environment::{
     FACTORY_REPO_CLONE_URL_ENV_VAR, FACTORY_REPO_DIR_ENV_VAR,
     prepend_factory_definition_clone_for_values,
 };
+use super::harness::HarnessKind;
+use super::harness::acp::sidecar_launch_file_roots;
+use super::harness::launch_warmup::LaunchFileWarmup;
 use super::{
     AgentDriver, AgentDriverError, StandbyWorkspace, WorkspaceState, environment, mcp_startup,
 };
@@ -31,6 +35,8 @@ use crate::ai::agent_sdk::environment_snapshot::{
     EnvironmentSnapshot, EnvironmentSnapshotReporter,
 };
 use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
+#[cfg(feature = "local_tty")]
+use crate::ai::blocklist::hooks::HookRuntime;
 use crate::ai::cloud_environments::{GithubRepo, SourceRepo};
 use crate::ai::skills::{
     SkillManager, SkillWatcher, factory_deferred_repositories_skill_path, filter_skills_by_spec,
@@ -50,17 +56,28 @@ impl AgentDriver {
         mcp_specs: Vec<MCPSpec>,
         global_skills: GlobalSkillResolution,
         setup_events: &SetupClientEventReporter,
+        runner_preparation: bool,
     ) -> Result<PathBuf, AgentDriverError> {
         // Standby resolves global skills before this call to check checkout names before any clone.
         let mut workspace = foreground
             .spawn(|me, _| match me.workspace.take() {
                 Some(WorkspaceState::Pending(workspace)) => Some(workspace),
-                Some(WorkspaceState::Prepared(_)) | None => None,
+                Some(
+                    WorkspaceState::Prepared(_)
+                    | WorkspaceState::RunnerPrepared(_)
+                    | WorkspaceState::PendingRunner(_),
+                )
+                | None => None,
             })
             .await?
             .ok_or(AgentDriverError::InvalidRuntimeState)?;
         let prepared_configuration = workspace.clone();
+        Self::replace_prewarmed_mcp_environment(foreground, Default::default()).await?;
         bootstrap_terminal(foreground, setup_events).await?;
+        // A standby has no launch to yield to, so the warm-up is left to finish.
+        if harness != Harness::Oz {
+            LaunchFileWarmup::start(sidecar_launch_file_roots(harness), setup_events);
+        }
         Self::initialize_setup_vars(foreground, false).await?;
         setup_events
             .record_result(
@@ -90,6 +107,7 @@ impl AgentDriver {
                 prepend_factory_definition_clone_for_values(
                     env_value(FACTORY_REPO_CLONE_URL_ENV_VAR),
                     env_value(FACTORY_REPO_DIR_ENV_VAR),
+                    workspace.factory_definition_sha.as_deref(),
                     shell_type,
                     &mut workspace.setup_commands,
                 );
@@ -115,14 +133,19 @@ impl AgentDriver {
         foreground
             .spawn(move |me, _| {
                 me.harness_working_dir = working_dir;
-                me.workspace = Some(WorkspaceState::Prepared(StandbyWorkspace {
+                let prepared = StandbyWorkspace {
                     harness,
                     configuration: prepared_configuration,
                     repositories,
-                }));
+                };
+                me.workspace = Some(if runner_preparation {
+                    WorkspaceState::RunnerPrepared(prepared)
+                } else {
+                    WorkspaceState::Prepared(prepared)
+                });
             })
             .await?;
-        if harness != Harness::Oz {
+        if runner_preparation || harness != Harness::Oz {
             return Ok(prepared.harness_working_dir);
         }
         let managed_mcp_client = foreground
@@ -337,10 +360,26 @@ pub(crate) async fn clone_global_skill_repos(
 /// It's assumed that `prepare_environment` registers all cloned repositories
 /// with the `DetectedRepositories` model, so that we can scan for skills
 /// here.
+///
+/// With cwd scoping enabled, listings use the ordinary ancestor-directory scoping and the harness
+/// working directory stands in for the cwd until the terminal publishes one; otherwise every
+/// environment skill is listed regardless of cwd.
 pub(crate) async fn load_environment_skills(
     foreground: &ModelSpawner<AgentDriver>,
     repos: Vec<SourceRepo>,
 ) {
+    if let Err(err) = foreground
+        .spawn(|me, ctx| {
+            if me.cwd_scoped_cloud_skills_enabled() {
+                SkillManager::handle(ctx).update(ctx, |manager, _| {
+                    manager.set_cloud_working_dir(me.harness_working_dir.clone());
+                });
+            }
+        })
+        .await
+    {
+        log::warn!("Failed to set skill working directory: {err}");
+    }
     if repos.is_empty() {
         log::info!("No environment repositories for skill loading");
         return;
@@ -441,7 +480,7 @@ pub(crate) async fn load_environment_skills(
     }
 
     let load_skills_result = foreground
-        .spawn(move |_, ctx| {
+        .spawn(move |me, ctx| {
             let skills = SkillWatcher::read_local_skills_for_repos(&repo_paths, ctx);
             if !skills.is_empty() {
                 log::info!("Loaded {} environment skill(s)", skills.len());
@@ -449,7 +488,9 @@ pub(crate) async fn load_environment_skills(
                 log::info!("No environment skills found");
             }
             SkillManager::handle(ctx).update(ctx, |manager, _| {
-                manager.set_cloud_environment(true);
+                if !me.cwd_scoped_cloud_skills_enabled() {
+                    manager.set_cloud_environment(true);
+                }
                 manager.handle_skills_added(skills);
             });
         })
@@ -461,6 +502,10 @@ pub(crate) async fn load_environment_skills(
 }
 
 /// Load explicitly requested global skills by reading directly from disk.
+///
+/// Global skill repositories are unregistered sibling clones, so their skills are never cwd
+/// ancestors. With cwd scoping enabled they are registered at home precedence so the selection stays
+/// listed from every cwd; otherwise they rely on the unscoped cloud listing.
 pub(crate) async fn load_global_skills(
     foreground: &ModelSpawner<AgentDriver>,
     specs: Vec<SkillSpec>,
@@ -500,7 +545,7 @@ pub(crate) async fn load_global_skills(
         })
         .await;
 
-    let skills = match load_result {
+    let mut skills = match load_result {
         Ok(skills) => skills,
         Err(err) => {
             log::warn!("Failed to load global skills: {err}");
@@ -515,10 +560,17 @@ pub(crate) async fn load_global_skills(
 
     log::info!("Loaded {} global skill(s)", skills.len());
     let add_result = foreground
-        .spawn(move |_, ctx| {
+        .spawn(move |me, ctx| {
             SkillManager::handle(ctx).update(ctx, |manager, _| {
-                manager.set_cloud_environment(true);
-                manager.handle_skills_added(skills);
+                if me.cwd_scoped_cloud_skills_enabled() {
+                    for skill in &mut skills {
+                        skill.scope = SkillScope::Home;
+                    }
+                    manager.add_home_tier_skills(skills);
+                } else {
+                    manager.set_cloud_environment(true);
+                    manager.handle_skills_added(skills);
+                }
             });
         })
         .await;
@@ -565,13 +617,125 @@ pub(crate) async fn load_skills_dirs(foreground: &ModelSpawner<AgentDriver>) {
                 log::info!("WARP_SKILL_DIRS: loaded {} skill(s)", skills.len());
             }
             SkillManager::handle(ctx).update(ctx, |manager, _| {
-                manager.add_skills_dirs_skills(skills);
+                manager.add_home_tier_skills(skills);
             });
         })
         .await;
     if let Err(err) = load_result {
         log::warn!("Failed to load WARP_SKILL_DIRS skills: {err}");
     }
+}
+
+/// How long a run with hooks waits for the login shell's PATH before its first hook. Reading it
+/// starts an interactive login shell, which normally takes well under a second and a few seconds
+/// with heavy shell startup files.
+pub(crate) const LOGIN_SHELL_PATH_WAIT: Duration = Duration::from_secs(10);
+
+/// Starts reading the login shell's PATH for hooks when the run has any. Call it after environment
+/// preparation, so the PATH includes what the setup commands added to the shell's startup files.
+pub(crate) async fn start_login_shell_path_capture(
+    foreground: &ModelSpawner<AgentDriver>,
+) -> Result<(), AgentDriverError> {
+    #[cfg(feature = "local_tty")]
+    foreground
+        .spawn(|me, ctx| {
+            if me.hooks.sources.is_empty() || !HookRuntime::is_installed(ctx) {
+                return;
+            }
+            HookRuntime::handle(ctx).update(ctx, |runtime, ctx| {
+                runtime.start_login_shell_path_capture(ctx);
+            });
+        })
+        .await?;
+    #[cfg(not(feature = "local_tty"))]
+    let _ = foreground;
+    Ok(())
+}
+
+/// Prepares the run's agent hooks before its first request: records the run on the hook runtime,
+/// loads the sources its execution configuration selected, once, finding repository sources among
+/// `cloned_repositories`, and then waits for the login shell's PATH so every hook in the run gets
+/// the same one. Fails when a strict source cannot be loaded; any other problem is a diagnostic.
+pub(crate) async fn setup_hooks_for_run(
+    foreground: &ModelSpawner<AgentDriver>,
+    cloned_repositories: Vec<SourceRepo>,
+) -> Result<(), AgentDriverError> {
+    foreground
+        .spawn(|me, ctx| me.prepare_hooks_for_run(ctx))
+        .await?;
+    foreground
+        .spawn(move |me, ctx| me.load_hook_sources_for_run(&cloned_repositories, ctx))
+        .await??;
+    wait_for_login_shell_path(foreground, LOGIN_SHELL_PATH_WAIT).await
+}
+
+/// Waits up to `within` for the login shell's PATH when a hook is active, and fixes the PATH every
+/// hook in the run gets. When the PATH cannot be read in time, hooks keep this process's PATH and
+/// the run's output says so; the run goes on.
+pub(crate) async fn wait_for_login_shell_path(
+    foreground: &ModelSpawner<AgentDriver>,
+    within: Duration,
+) -> Result<(), AgentDriverError> {
+    #[cfg(feature = "local_tty")]
+    {
+        use ai::hooks::{
+            DiagnosticSeverity, HookDiagnostic, HookSourceId, HookSourceKind, HookSourceLocation,
+        };
+        use warpui::r#async::FutureExt as _;
+
+        let capture = foreground
+            .spawn(|_, ctx| {
+                if !HookRuntime::is_active(ctx) {
+                    return None;
+                }
+                HookRuntime::handle(ctx)
+                    .update(ctx, |runtime, ctx| runtime.login_shell_path_capture(ctx))
+            })
+            .await?;
+        let Some(capture) = capture else {
+            return Ok(());
+        };
+        let outcome = capture.with_timeout(within).await;
+        foreground
+            .spawn(move |_, ctx| {
+                let unread = HookRuntime::handle(ctx).update(ctx, |runtime, _| {
+                    runtime.settle_login_shell_path(outcome, within)
+                });
+                if let Some(message) = unread {
+                    log::warn!("{message}");
+                    HookRuntime::as_ref(ctx)
+                        .messenger()
+                        .diagnostic(HookDiagnostic {
+                            source: HookSourceId {
+                                kind: HookSourceKind::FactoryWide,
+                                location: HookSourceLocation::Named("login shell".to_owned()),
+                            },
+                            severity: DiagnosticSeverity::Warning,
+                            message,
+                        });
+                }
+            })
+            .await?;
+    }
+    #[cfg(not(feature = "local_tty"))]
+    let _ = (foreground, within);
+    Ok(())
+}
+
+/// Fails a run whose execution configuration selected hooks for a harness that does not run them.
+pub(crate) async fn refuse_hooks_for_other_harness(
+    foreground: &ModelSpawner<AgentDriver>,
+    harness: &HarnessKind,
+) -> Result<(), AgentDriverError> {
+    let has_hooks = foreground
+        .spawn(|me, _| !me.hooks.sources.is_empty())
+        .await?;
+    if has_hooks {
+        return Err(AgentDriverError::HooksRequireOzHarness {
+            harness: format!("{harness:?}"),
+        });
+    }
+    Ok(())
 }
 
 /// Loads the bundled instructions that let an active Factory run discover and clone deferred repos.
@@ -592,7 +756,7 @@ pub(crate) async fn load_factory_deferred_repositories_skill(
     if let Err(error) = foreground
         .spawn(move |_, ctx| {
             SkillManager::handle(ctx).update(ctx, |manager, _| {
-                manager.add_skills_dirs_skills(vec![skill]);
+                manager.add_home_tier_skills(vec![skill]);
             });
         })
         .await

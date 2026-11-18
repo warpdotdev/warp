@@ -9,6 +9,13 @@ enum GitHubCredentialMode {
   RESTRICTED_INSTALLATION
 }
 
+enum TaskGitCredentialProvider {
+  GITHUB
+  GITLAB
+  AZURE_DEVOPS
+  CODE_STORAGE
+}
+
 """
 Directs the executor to defer this fragment when the `if` argument is true or undefined.
 """
@@ -2897,6 +2904,9 @@ enum PlatformErrorCode {
   """Principal lacks permission for the requested operation."""
   NOT_AUTHORIZED
 
+  """The operation is not supported for the current resource state."""
+  OPERATION_NOT_SUPPORTED
+
   """Referenced resource does not exist."""
   RESOURCE_NOT_FOUND
 
@@ -2924,16 +2934,23 @@ type PopulateMerkleTreeCacheOutput implements Response {
 union PopulateMerkleTreeCacheResult = PopulateMerkleTreeCacheOutput | UserFacingError
 
 input PrewarmedSandboxConfigInput {
+  githubCredentialContractVersion: Int
+  runnerPreparationContractVersion: Int
   sandboxId: ID!
+  supportsAgentHooks: Boolean
+  supportsDeferredRepositories: Boolean
 }
 
 union PrewarmedSandboxConfigResult = PrewarmedSandboxConfiguration | UserFacingError
 
 type PrewarmedSandboxConfiguration {
+  preparationKind: String!
+  runnerPreparationContractVersion: Int
   environmentVariables: [PrewarmedSandboxVariable!]!
   expiresAt: Time!
   fingerprint: String!
   gitCredentials: [TaskGitCredential!]!
+  githubCredentialMode: GitHubCredentialMode!
   managedSecrets: [TaskSecretEntry!]!
   sandboxId: ID!
   spec: PrewarmedSandboxSpec!
@@ -4011,7 +4028,7 @@ type Task {
   """
   Configuration for the active cloud execution. Requires the execution's workload token.
   """
-  executionConfig(executionId: ID!, supportsDeferredRepositories: Boolean = false): ExecutionConfiguration!
+  executionConfig(executionId: ID!, supportsDeferredRepositories: Boolean = false, supportsAgentHooks: Boolean = false): ExecutionConfiguration!
 
   """The ID of the task."""
   taskId: ID!
@@ -4062,6 +4079,11 @@ type TaskGitCredential {
 input TaskGitCredentialsInput {
   githubCredentialContractVersion: Int
   """
+  Refresh only these providers. Omitted or null refreshes all providers.
+  Requires acceptsPartialRefresh and a nonempty list.
+  """
+  providers: [TaskGitCredentialProvider!]
+  """
   Whether the caller can handle a response in which one forge's credential is
   fresh and another's failed. A caller that opts in must merge the fresh
   credentials over its existing stores rather than rebuilding them from the
@@ -4088,12 +4110,13 @@ type TaskGitCredentialsOutput implements Response {
   """
   Hosts whose credential could not be issued this cycle because of a
   transient failure. A host listed here is distinct from one that is simply
-  absent from `credentials`: absent means the run has no repository on that
-  forge and needs no credential there, while listed here means the caller
-  should keep whatever it already has for that host and retry.
+  absent from `credentials`: for a requested provider, absence means no
+  credential is available, while listed here means issuance failed.
+  Providers not requested must be left unchanged.
 
   Only populated when the request set `acceptsPartialRefresh`; otherwise a
-  failure on any forge fails the whole request.
+  failure on any forge fails the whole request. An explicit providers list
+  preserves these failures even when no selected provider succeeds.
   """
   failedHosts: [String!]!
   responseContext: ResponseContext!
@@ -5313,6 +5336,14 @@ type ExecutionSkillSpec {
   spec: String!
 }
 
+type FactoryBranchExecutionConfig {
+  factoryId: ID!
+  branchId: ID!
+  branch: String!
+  sourceSha: String!
+  repositoryUrl: String!
+}
+
 enum ExecutionRepositoryRefType {
   COMMIT_SHA
   BRANCH
@@ -5391,6 +5422,7 @@ type ExecutionConfiguration {
   mcpServersJson: String!
   skills: [ExecutionSkillSpec!]!
   factorySkillDirs: [String!]!
+  factoryBranch: FactoryBranchExecutionConfig
   computerUseEnabled: Boolean!
   computerUseModelId: String
   inferenceProviders: InferenceProviderClientConfigs
@@ -5403,6 +5435,57 @@ type ExecutionConfiguration {
   idleOnCompleteSeconds: Int
   idleOnFailSeconds: Int
   snapshotDisabled: Boolean!
+  """
+  Hook directories the run loads: the agent's entries first, then the
+  factory's, each in declared order. Duplicates are not merged.
+  """
+  agentHookSources: [AgentHookSource!]!
+}
+
+"""
+The file format of an agent hook directory. It selects how the client reads the
+directory.
+"""
+enum AgentHookFormat {
+  CURSOR
+}
+
+"""The part of the factory configuration that declared an agent hook source."""
+enum AgentHookLevel {
+  FACTORY
+  AGENT
+}
+
+"""
+What a run with no human does after a hook from this source asks for approval.
+The tool call is denied either way.
+"""
+enum AgentHookOnAsk {
+  DENY
+  FAIL_RUN
+}
+
+type AgentHookRepository {
+  forge: CodeForge!
+  owner: String!
+  name: String!
+}
+
+type AgentHookSource {
+  format: AgentHookFormat!
+  """
+  The repository that contains the hook directory, or null when path is an
+  absolute directory on the worker.
+  """
+  repository: AgentHookRepository
+  """
+  A directory relative to the repository root when repository is set;
+  otherwise an absolute directory on the worker.
+  """
+  path: String!
+  level: AgentHookLevel!
+  strict: Boolean!
+  onAsk: AgentHookOnAsk!
 }
 
 enum CodeForge {

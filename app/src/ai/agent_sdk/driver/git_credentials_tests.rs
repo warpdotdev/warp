@@ -265,7 +265,13 @@ fn retained_scope_refresh_subprocess() {
                 })
             });
         let ai_client: Arc<dyn AIClient> = Arc::new(ai_client);
-        futures::executor::block_on(try_refresh("task-one", &ai_client, captured_scope)).unwrap();
+        futures::executor::block_on(try_refresh(
+            "task-one",
+            &ai_client,
+            captured_scope,
+            GitHubCredentialMode::Legacy,
+        ))
+        .unwrap();
     }
 }
 

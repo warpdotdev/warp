@@ -1,0 +1,1 @@
+{ "version": 1, "hooks": { "stop": [ { "command": "./hooks/stop.sh", "loop_limit": 2 } ] } }

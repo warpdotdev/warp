@@ -139,7 +139,7 @@ use warp_graphql::queries::task_git_credentials::{
 use warp_graphql::queries::task_restricted_git_credentials::{
     RestrictedTaskGitCredentials, RestrictedTaskGitCredentialsInput,
     RestrictedTaskGitCredentialsOutput, RestrictedTaskGitCredentialsResult,
-    RestrictedTaskGitCredentialsVariables,
+    RestrictedTaskGitCredentialsVariables, TaskGitCredentialProvider,
 };
 #[cfg(not(target_family = "wasm"))]
 use warp_graphql::queries::task_secrets::{ManagedSecretValue, TaskSecretsInput};
@@ -298,6 +298,8 @@ impl TaskStatusUpdate {
 /// JSON payload sent to the public `POST /agent/run` API.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SpawnAgentRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delegated_github_coauthor_user_uid: Option<String>,
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub metadata: HashMap<String, String>,
     /// None for skill-only or conversation-only invocations; omitted on the wire.
@@ -431,6 +433,8 @@ pub struct RunFollowupRequest {
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SendAgentMessageRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delegated_github_coauthor_user_uid: Option<String>,
     pub to: Vec<String>,
     pub subject: String,
     pub body: String,
@@ -463,11 +467,22 @@ pub struct AgentMessageHeader {
 pub struct AgentRunEvent {
     #[serde(flatten)]
     pub kind: AgentRunEventKind,
+    /// The run this event belongs to, including the notified run for `WaitedOn`.
     pub run_id: String,
+    /// Event-specific payload, defined by `kind`; never a subscription or routing key.
     pub ref_id: Option<String>,
     pub execution_id: Option<String>,
     pub occurred_at: String,
     pub sequence: i64,
+}
+
+impl AgentRunEvent {
+    pub fn waited_on_by(&self, recipient_run_id: &str) -> Option<&str> {
+        if self.kind != AgentRunEventKind::WaitedOn || self.run_id != recipient_run_id {
+            return None;
+        }
+        self.ref_id.as_deref().filter(|waiter| !waiter.is_empty())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -488,9 +503,14 @@ pub enum AgentRunEventKind {
     Cancelled {
         reason: Option<String>,
     },
+    /// A message arrived for this run; `ref_id` is the message ID.
     NewMessage,
+    /// This run started a child; `ref_id` is the child run ID.
     ChildAgentStarted,
+    /// This run linked a session; `ref_id` is the session UUID.
     RunSessionLinked,
+    /// The event's run is being waited on; `ref_id` identifies the waiter.
+    WaitedOn,
     LegacyStarted,
     LegacyIdle,
     LegacyRestarted,
@@ -508,6 +528,7 @@ impl AgentRunEventKind {
             Self::Errored { .. } => Some(LifecycleEventType::Errored),
             Self::Blocked { .. } => Some(LifecycleEventType::Blocked),
             Self::Cancelled { .. } => Some(LifecycleEventType::Cancelled),
+            Self::WaitedOn => Some(LifecycleEventType::Waiting),
             Self::NewMessage | Self::ChildAgentStarted | Self::RunSessionLinked | Self::Unknown => {
                 None
             }
@@ -542,6 +563,8 @@ impl<'de> serde::Deserialize<'de> for AgentRunEventKind {
             ChildAgentStarted,
             #[serde(rename = "run_session_linked")]
             RunSessionLinked,
+            #[serde(rename = "run_waited_on")]
+            WaitedOn,
             #[serde(rename = "run_started")]
             LegacyStarted,
             #[serde(rename = "run_idle")]
@@ -612,6 +635,7 @@ impl<'de> serde::Deserialize<'de> for AgentRunEventKind {
             WireEventType::NewMessage => Self::NewMessage,
             WireEventType::ChildAgentStarted => Self::ChildAgentStarted,
             WireEventType::RunSessionLinked => Self::RunSessionLinked,
+            WireEventType::WaitedOn => Self::WaitedOn,
             WireEventType::LegacyStarted => Self::LegacyStarted,
             WireEventType::LegacyIdle => Self::LegacyIdle,
             WireEventType::LegacyRestarted => Self::LegacyRestarted,
@@ -662,6 +686,7 @@ impl serde::Serialize for AgentRunEventKind {
             Self::NewMessage => "new_message",
             Self::ChildAgentStarted => "child_agent_started",
             Self::RunSessionLinked => "run_session_linked",
+            Self::WaitedOn => "run_waited_on",
             Self::LegacyStarted => "run_started",
             Self::LegacyIdle => "run_idle",
             Self::LegacyRestarted => "run_restarted",
@@ -1282,7 +1307,13 @@ pub struct ListRunPreviewsResponse {
 }
 
 #[derive(Debug, serde::Deserialize)]
-pub struct RunPreview {}
+pub struct RunPreview {
+    pub port: u16,
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub url: Option<String>,
+}
 
 impl<'de> serde::Deserialize<'de> for ListRunsResponse {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
@@ -1896,7 +1927,9 @@ pub trait AIClient: 'static + Send + Sync {
         &self,
         task_id: String,
         workload_token: String,
+        accepts_partial_refresh: bool,
         use_factory_repositories: bool,
+        providers: Option<Vec<TaskGitCredentialProvider>>,
     ) -> Result<RestrictedTaskGitCredentialsOutput, TaskGitCredentialsError>;
 
     /// Authorizes a REMOTE-2661 debug agent prompt against a retained environment-setup-failure
@@ -3481,15 +3514,18 @@ impl AIClient for ServerApi {
         &self,
         task_id: String,
         workload_token: String,
+        accepts_partial_refresh: bool,
         use_factory_repositories: bool,
+        providers: Option<Vec<TaskGitCredentialProvider>>,
     ) -> Result<RestrictedTaskGitCredentialsOutput, TaskGitCredentialsError> {
         let variables = RestrictedTaskGitCredentialsVariables {
             input: RestrictedTaskGitCredentialsInput {
                 task_id: cynic::Id::new(task_id),
                 workload_token,
-                accepts_partial_refresh: Some(false),
+                accepts_partial_refresh: Some(accepts_partial_refresh),
                 use_factory_repositories: use_factory_repositories.then_some(true),
                 github_credential_contract_version: Some(1),
+                providers,
             },
             request_context: get_request_context(),
         };

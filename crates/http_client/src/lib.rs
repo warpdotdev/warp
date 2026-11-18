@@ -181,6 +181,18 @@ impl Client {
         Self::from_client_builder(client_builder).expect("should not fail to create client")
     }
 
+    /// Creates an external client without loading certificates or using proxies.
+    #[cfg(feature = "test-util")]
+    pub fn new_external_for_test() -> Self {
+        let mut client = Self::new_for_test();
+        client.include_warp_headers = false;
+        #[cfg(target_family = "wasm")]
+        {
+            client.omit_credentials = true;
+        }
+        client
+    }
+
     pub fn from_client_builder(client_builder: reqwest::ClientBuilder) -> reqwest::Result<Self> {
         client_builder.build().map(|client| Self {
             wrapped: client,

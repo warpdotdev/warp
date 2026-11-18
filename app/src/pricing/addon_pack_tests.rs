@@ -91,14 +91,14 @@ fn description_promises_a_better_rate_only_when_the_catalog_offers_one() {
         discounted,
         "Add-on credits are purchased in prepaid packages that roll over each billing cycle and \
          expire after one year. The more you purchase, the better the per-credit rate. Once your \
-         base plan credits are used, add-on credits will be consumed."
+         included credits are used, add-on credits will be consumed."
     );
 
     let flat = addon_credits_description(&[usage_pack(555, 1_000), usage_pack(1_111, 2_000)]);
     assert_eq!(
         flat,
         "Add-on credits are purchased in prepaid packages that roll over each billing cycle and \
-         expire after one year. Once your base plan credits are used, add-on credits will be \
+         expire after one year. Once your included credits are used, add-on credits will be \
          consumed."
     );
 }

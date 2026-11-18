@@ -47,6 +47,10 @@ pub struct UploadArtifactArgs {
     /// Description for the uploaded artifact.
     #[arg(long = "description")]
     pub description: Option<String>,
+
+    /// Short title shown on the artifact's badge.
+    #[arg(long = "title", hide = true)]
+    pub title: Option<String>,
 }
 
 #[derive(Debug, Clone, Args)]

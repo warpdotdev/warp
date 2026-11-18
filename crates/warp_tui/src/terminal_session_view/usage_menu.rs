@@ -369,7 +369,12 @@ pub(super) fn render(
 
     if let Some(base) = &info.base_credits {
         body = body.child(TuiText::new(" ").with_style(muted).truncate().finish());
-        for row in credit_section("Base credits", base, builder.success_glyph_style(), builder) {
+        for row in credit_section(
+            "Included personal credits",
+            base,
+            builder.success_glyph_style(),
+            builder,
+        ) {
             body = body.child(row);
         }
     }
