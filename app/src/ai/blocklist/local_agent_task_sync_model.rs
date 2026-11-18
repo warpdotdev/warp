@@ -115,6 +115,23 @@ impl LocalAgentTaskSyncModel {
         }
     }
 
+    /// Enqueues a progress update for new input, even when progress was previously reported.
+    pub(crate) fn on_prompt_submitted(
+        &mut self,
+        task_id: AmbientAgentTaskId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.enqueue_update(
+            task_id,
+            LocalTaskUpdate {
+                task_state: Some(AgentTaskState::InProgress),
+                force_task_state: true,
+                ..LocalTaskUpdate::default()
+            },
+            ctx,
+        );
+    }
+
     /// Resolves once the task has no pending or in-flight `update_agent_task`
     /// calls in this model's queue. Resolves immediately when the task is
     /// already idle. Callers should bound the wait with a timeout.
