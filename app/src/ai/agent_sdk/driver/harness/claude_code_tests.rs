@@ -1064,3 +1064,68 @@ fn prepare_claude_settings_merges_existing_settings() {
         Value::Bool(true)
     );
 }
+
+#[test]
+fn sets_manual_permission_mode_when_settings_file_is_missing() {
+    let tmp = TempDir::new().unwrap();
+    let claude_settings_path = tmp.path().join(".claude/settings.json");
+
+    set_manual_permission_mode_if_unset(&claude_settings_path).unwrap();
+
+    let claude_settings: Value =
+        serde_json::from_slice(&fs::read(claude_settings_path).unwrap()).unwrap();
+    assert_eq!(
+        claude_settings,
+        serde_json::json!({"permissions": {"defaultMode": "default"}})
+    );
+}
+
+#[test]
+fn sets_manual_permission_mode_alongside_existing_settings() {
+    let tmp = TempDir::new().unwrap();
+    let claude_settings_path = tmp.path().join("settings.json");
+    fs::write(
+        &claude_settings_path,
+        r#"{"skipDangerousModePermissionPrompt":true,"permissions":{"allow":["Bash(ls:*)"]}}"#,
+    )
+    .unwrap();
+
+    set_manual_permission_mode_if_unset(&claude_settings_path).unwrap();
+
+    let claude_settings: Value =
+        serde_json::from_slice(&fs::read(claude_settings_path).unwrap()).unwrap();
+    assert_eq!(
+        claude_settings,
+        serde_json::json!({
+            "skipDangerousModePermissionPrompt": true,
+            "permissions": {"allow": ["Bash(ls:*)"], "defaultMode": "default"},
+        })
+    );
+}
+
+#[test]
+fn keeps_a_configured_permission_mode() {
+    let tmp = TempDir::new().unwrap();
+    let claude_settings_path = tmp.path().join("settings.json");
+    let configured = r#"{"permissions":{"defaultMode":"acceptEdits"}}"#;
+    fs::write(&claude_settings_path, configured).unwrap();
+
+    set_manual_permission_mode_if_unset(&claude_settings_path).unwrap();
+
+    assert_eq!(
+        fs::read_to_string(claude_settings_path).unwrap(),
+        configured
+    );
+}
+
+#[test]
+fn leaves_settings_alone_when_permissions_is_not_an_object() {
+    let tmp = TempDir::new().unwrap();
+    let claude_settings_path = tmp.path().join("settings.json");
+    let malformed = r#"{"permissions":"allow-all"}"#;
+    fs::write(&claude_settings_path, malformed).unwrap();
+
+    set_manual_permission_mode_if_unset(&claude_settings_path).unwrap();
+
+    assert_eq!(fs::read_to_string(claude_settings_path).unwrap(), malformed);
+}

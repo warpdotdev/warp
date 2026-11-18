@@ -835,9 +835,44 @@ fn prepare_claude_settings(claude_settings_path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Makes Manual (`default`) the permission mode Claude sessions start in, unless the settings
+/// already choose one.
+pub(crate) fn default_claude_sessions_to_manual_permission_mode() -> Result<()> {
+    set_manual_permission_mode_if_unset(&claude_config_dir()?.join(CLAUDE_SETTINGS_FILE_NAME))
+}
+
+fn set_manual_permission_mode_if_unset(claude_settings_path: &Path) -> Result<()> {
+    let mut settings: Map<String, Value> = read_json_file_or_default(claude_settings_path)?;
+    let Some(permissions) = settings
+        .entry(CLAUDE_PERMISSIONS_SETTING)
+        .or_insert_with(|| Value::Object(Map::new()))
+        .as_object_mut()
+    else {
+        log::warn!("Claude settings `permissions` is not an object; leaving its mode unset");
+        return Ok(());
+    };
+    if permissions.contains_key(CLAUDE_DEFAULT_MODE_SETTING) {
+        return Ok(());
+    }
+    // With no mode configured, claude-agent-acp starts a session in Auto, where Claude Code
+    // decides on tool calls itself instead of asking its client for permission.
+    permissions.insert(
+        CLAUDE_DEFAULT_MODE_SETTING.to_owned(),
+        Value::String(CLAUDE_MANUAL_PERMISSION_MODE.to_owned()),
+    );
+    write_json_file(
+        claude_settings_path,
+        &settings,
+        "Failed to serialize Claude settings",
+    )
+}
+
 const ANTHROPIC_API_KEY_ENV: &str = "ANTHROPIC_API_KEY";
 const CLAUDE_JSON_FILE_NAME: &str = ".claude.json";
 const CLAUDE_SETTINGS_FILE_NAME: &str = "settings.json";
+const CLAUDE_PERMISSIONS_SETTING: &str = "permissions";
+const CLAUDE_DEFAULT_MODE_SETTING: &str = "defaultMode";
+const CLAUDE_MANUAL_PERMISSION_MODE: &str = "default";
 const ANTHROPIC_API_KEY_SUFFIX_LEN: usize = 20;
 
 #[derive(Default, Deserialize, Serialize, Debug)]
