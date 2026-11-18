@@ -845,6 +845,7 @@ fn prepare_codex_config_toml(
         set_codex_openai_base_url(&mut doc, url);
     }
     set_codex_check_for_update_on_startup(&mut doc, false);
+    disable_codex_native_orchestration(&mut doc);
     set_codex_model(&mut doc, third_party_harness_model_config);
     set_codex_model_reasoning_effort(&mut doc, third_party_harness_model_config);
 
@@ -887,6 +888,14 @@ fn set_codex_openai_base_url(doc: &mut toml_edit::DocumentMut, base_url: &str) {
 
 fn set_codex_check_for_update_on_startup(doc: &mut toml_edit::DocumentMut, enabled: bool) {
     doc[CODEX_CHECK_FOR_UPDATE_ON_STARTUP_KEY] = toml_edit::value(enabled);
+}
+
+fn disable_codex_native_orchestration(doc: &mut toml_edit::DocumentMut) {
+    // Native children bypass Oz's task tracking. Model-selected multi-agent v2 ignores the legacy
+    // feature toggle, so both the agents setting and feature overrides must be disabled.
+    doc["agents"]["enabled"] = toml_edit::value(false);
+    doc["features"]["multi_agent"] = toml_edit::value(false);
+    doc["features"]["multi_agent_v2"] = toml_edit::value(false);
 }
 
 fn set_codex_model_reasoning_effort(

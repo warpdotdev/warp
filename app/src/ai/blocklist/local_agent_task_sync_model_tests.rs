@@ -658,6 +658,42 @@ fn emit_cli_status(
 }
 
 #[test]
+fn prompt_submission_bypasses_cached_progress_without_a_cli_session() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+        let (model, counter) = install_model_with_call_counter(&mut app);
+        let task_id = fixed_task_id();
+        for expected_calls in 1..=3 {
+            model.update(&mut app, |model, ctx| {
+                model.on_prompt_submitted(task_id, ctx);
+            });
+            model
+                .update(&mut app, |model, _| model.wait_for_idle(task_id))
+                .with_timeout(Duration::from_secs(5))
+                .await
+                .expect("prompt progress update must finish");
+            assert_eq!(counter.load(Ordering::SeqCst), expected_calls);
+        }
+    });
+}
+
+#[test]
+fn prompt_submission_reporting_failure_does_not_block_the_caller() {
+    App::test((), |mut app| async move {
+        let (model, _) = install_model_with_constant_result(&mut app, false);
+        let task_id = fixed_task_id();
+        model.update(&mut app, |model, ctx| {
+            model.on_prompt_submitted(task_id, ctx);
+        });
+        model
+            .update(&mut app, |model, _| model.wait_for_idle(task_id))
+            .with_timeout(Duration::from_secs(5))
+            .await
+            .expect("a failed progress update must drain without blocking prompt submission");
+    });
+}
+
+#[test]
 fn cli_prompt_submit_bypasses_cached_in_progress_for_claude_and_codex() {
     for (agent, agent_name) in [(CLIAgent::Claude, "claude"), (CLIAgent::Codex, "codex")] {
         App::test((), move |mut app| async move {

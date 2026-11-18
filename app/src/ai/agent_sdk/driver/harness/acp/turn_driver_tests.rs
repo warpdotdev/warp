@@ -263,6 +263,7 @@ fn prompt_text(prompt: &Value) -> String {
 
 #[derive(Debug, Clone, PartialEq)]
 enum HostEvent {
+    PromptSubmitted,
     BeginTurn {
         stream: ResponseStreamId,
         initiator: Option<ParticipantId>,
@@ -302,6 +303,7 @@ struct RecordingHost {
     begin_gate: Mutex<Option<oneshot::Receiver<()>>>,
     apply_gate: Mutex<Option<oneshot::Receiver<()>>>,
     snapshot_gate: Mutex<Option<oneshot::Receiver<()>>>,
+    task_state: Mutex<&'static str>,
     /// The next `apply_actions` fails, as when the conversation has gone.
     fail_next_apply: Mutex<bool>,
     actions: Mutex<Vec<(ResponseStreamId, Vec<ClientAction>)>>,
@@ -318,6 +320,7 @@ impl RecordingHost {
             begin_gate: Mutex::default(),
             apply_gate: Mutex::default(),
             snapshot_gate: Mutex::default(),
+            task_state: Mutex::new("in_progress"),
             fail_next_apply: Mutex::new(false),
             actions: Mutex::default(),
         }
@@ -430,6 +433,11 @@ fn message_texts(actions: &[ClientAction]) -> Vec<String> {
 
 #[async_trait]
 impl TurnHost for RecordingHost {
+    async fn on_prompt_submitted(&self) {
+        *self.task_state.lock() = "in_progress";
+        self.record(HostEvent::PromptSubmitted);
+    }
+
     async fn begin_turn(&self, initiator: Option<ParticipantId>) -> Result<ExternalHarnessTurn> {
         let n = {
             let mut opened = self.streams_opened.lock();
@@ -754,6 +762,7 @@ fn a_follow_up_mid_turn_is_steered_into_the_turn_when_the_agent_supports_it() {
     let (driver, mut mapper, mut fixture) = start_steering();
     let script = async {
         let first = fixture.agent.next_prompt().await;
+        *fixture.host.task_state.lock() = "waiting";
         fixture.agent.send_chunk("working").await;
 
         fixture.send_follow_up("steer").await;
@@ -828,6 +837,131 @@ fn a_follow_up_mid_turn_is_steered_into_the_turn_when_the_agent_supports_it() {
     );
     assert!(host.queued_rows.lock().is_empty());
     assert!(!state.is_settling());
+}
+
+#[test]
+fn initial_prompts_and_follow_up_turns_report_prompt_submission() {
+    let (driver, mut mapper, mut fixture) = start_default();
+    let script = async {
+        let first = fixture.agent.next_prompt().await;
+        assert!(matches!(
+            fixture.host.events().last(),
+            Some(HostEvent::PromptSubmitted)
+        ));
+        fixture.agent.respond(&first, "end_turn").await;
+        fixture.host.wait_for_finished(1).await;
+        fixture.send_follow_up("follow up").await;
+        let second = fixture.agent.next_prompt().await;
+        assert_eq!(prompt_text(&second), "follow up");
+        assert!(matches!(
+            fixture.host.events().last(),
+            Some(HostEvent::PromptSubmitted)
+        ));
+        fixture.agent.respond(&second, "end_turn").await;
+        fixture.host.wait_for_finished(2).await;
+        fixture.unbind()
+    };
+    let ((host, _), ()) = block_on(join(script, driver.run(&mut mapper)));
+    assert_eq!(
+        host.events()
+            .iter()
+            .filter(|event| matches!(event, HostEvent::PromptSubmitted))
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn steering_reports_new_input_before_delivery() {
+    let (driver, mut mapper, mut fixture) = start_steering();
+    let script = async {
+        let first = fixture.agent.next_prompt().await;
+        fixture.send_follow_up("wake").await;
+        let steer = fixture.agent.next_steer().await;
+        assert_eq!(*fixture.host.task_state.lock(), "in_progress");
+        assert!(matches!(
+            fixture.host.events().last(),
+            Some(HostEvent::PromptSubmitted)
+        ));
+        fixture.agent.answer_steer(&steer, "injected").await;
+        fixture.agent.respond(&first, "end_turn").await;
+        fixture.host.wait_for_finished(1).await;
+        fixture.unbind()
+    };
+    block_on(join(script, driver.run(&mut mapper)));
+}
+
+#[test]
+fn steering_acknowledgment_and_trailing_output_preserve_new_finish_or_wait_state() {
+    for task_state in ["succeeded", "waiting"] {
+        let (driver, mut mapper, mut fixture) = start_steering();
+        let script = async {
+            let first = fixture.agent.next_prompt().await;
+            fixture.send_follow_up("wake").await;
+            let steer = fixture.agent.next_steer().await;
+            assert_eq!(*fixture.host.task_state.lock(), "in_progress");
+            *fixture.host.task_state.lock() = task_state;
+            fixture.agent.answer_steer(&steer, "injected").await;
+            fixture.agent.send_chunk("trailing output").await;
+            fixture.agent.respond(&first, "end_turn").await;
+            fixture.host.wait_for_finished(1).await;
+            fixture.unbind()
+        };
+        let ((host, _), ()) = block_on(join(script, driver.run(&mut mapper)));
+        assert_eq!(*host.task_state.lock(), task_state);
+        assert_eq!(
+            host.events()
+                .iter()
+                .filter(|event| matches!(event, HostEvent::PromptSubmitted))
+                .count(),
+            2
+        );
+    }
+}
+
+#[test]
+fn tool_result_stream_boundaries_do_not_report_new_prompt_submission() {
+    let (driver, mut mapper, mut fixture) = start_default();
+    let script = async {
+        let first = fixture.agent.next_prompt().await;
+        *fixture.host.task_state.lock() = "waiting";
+        for (session_update, status) in [
+            ("tool_call", "in_progress"),
+            ("tool_call_update", "completed"),
+        ] {
+            fixture
+                .agent
+                .send(json!({
+                    "jsonrpc": "2.0",
+                    "method": "session/update",
+                    "params": {
+                        "sessionId": SESSION,
+                        "update": {
+                            "sessionUpdate": session_update,
+                            "toolCallId": "wait",
+                            "title": "wait-for-events",
+                            "kind": "execute",
+                            "status": status,
+                        },
+                    },
+                }))
+                .await;
+        }
+        fixture.agent.send_chunk("trailing output").await;
+        fixture.agent.respond(&first, "end_turn").await;
+        fixture.host.wait_for_finished(2).await;
+        fixture.unbind()
+    };
+    let ((host, _), ()) = block_on(join(script, driver.run(&mut mapper)));
+    assert_eq!(host.streams().len(), 2);
+    assert_eq!(*host.task_state.lock(), "waiting");
+    assert_eq!(
+        host.events()
+            .iter()
+            .filter(|event| matches!(event, HostEvent::PromptSubmitted))
+            .count(),
+        1
+    );
 }
 
 #[test]

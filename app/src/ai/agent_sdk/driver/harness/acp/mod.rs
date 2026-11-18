@@ -108,6 +108,7 @@ use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupS
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::ambient_agents::task::HarnessModelConfig;
 use crate::ai::attachment_utils::{DownloadedAttachment, attachments_download_dir};
+use crate::ai::blocklist::local_agent_task_sync_model::LocalAgentTaskSyncModel;
 use crate::ai::blocklist::{
     BlocklistAIController, BlocklistAIHistoryModel, ExternalHarnessCancel, ExternalHarnessPrompt,
     ExternalHarnessTurn, QueuedQueryId, ResponseStreamId,
@@ -1086,6 +1087,7 @@ impl HarnessRunner for AcpHarnessRunner {
             foreground: foreground.clone(),
             terminal_driver: self.terminal_driver.clone(),
             run_id,
+            task_id: self.task_id,
             conversation_id: local_conversation_id,
         });
         let turn = match setup_events
@@ -1338,11 +1340,28 @@ struct DriverTurnHost {
     foreground: ModelSpawner<AgentDriver>,
     terminal_driver: ModelHandle<TerminalDriver>,
     run_id: Option<String>,
+    task_id: Option<AmbientAgentTaskId>,
     conversation_id: AIConversationId,
 }
 
 #[async_trait]
 impl TurnHost for DriverTurnHost {
+    async fn on_prompt_submitted(&self) {
+        let Some(task_id) = self.task_id else {
+            return;
+        };
+        if let Err(error) = self
+            .foreground
+            .spawn(move |_, ctx| {
+                LocalAgentTaskSyncModel::handle(ctx)
+                    .update(ctx, |model, ctx| model.on_prompt_submitted(task_id, ctx));
+            })
+            .await
+        {
+            log::warn!("Could not enqueue progress for task {task_id}: {error}");
+        }
+    }
+
     /// `initiator` names the shared-session participant whose prompt opens the stream; `None`
     /// keeps the previous one, as the streams a tool round trip chains together all answer the
     /// same prompt.
