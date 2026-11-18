@@ -3468,7 +3468,22 @@ fn deferred_repository_semantic_skill_publication_without_initial_inventory() {
                             ManagedSecretValue::raw_value("1"),
                         );
                     }
-                    let driver = app.update(|ctx| AgentDriver::create(options, ctx).unwrap());
+                    // File publication does not require a host shell process.
+                    let terminal = add_window_with_terminal(&mut app, None);
+                    let driver = app.update(|ctx| {
+                        AgentDriver::create_with_terminal_factory(options, ctx, |options, ctx| {
+                            assert!(!options.should_share);
+                            assert!(options.task_id.is_none());
+                            let driver = super::terminal::TerminalDriver::create_from_existing_view(
+                                terminal, ctx,
+                            );
+                            driver.update(ctx, |driver, _| {
+                                driver.launch_env_vars_for_test = Some(options.env_vars);
+                            });
+                            Ok(driver)
+                        })
+                        .unwrap()
+                    });
                     let foreground = driver.update(&mut app, |driver, ctx| {
                         let Some(super::WorkspaceState::Pending(workspace)) =
                             driver.workspace.take()
