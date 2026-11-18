@@ -116,6 +116,7 @@ impl LocalAgentTaskSyncModel {
     }
 
     /// Enqueues a progress update for new input, even when progress was previously reported.
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
     pub(crate) fn on_prompt_submitted(
         &mut self,
         task_id: AmbientAgentTaskId,
