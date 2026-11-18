@@ -759,6 +759,31 @@ fn wait_for_idle_resolves_after_updates_deliver_and_terminal_state_is_confirmed(
             model.confirmed_terminal_state(&task_id)
         });
         assert_eq!(confirmed, Some(AgentTaskState::Succeeded));
+        assert_eq!(
+            model.update(&mut app, |model, _| model
+                .latest_delivered_task_state(&task_id)),
+            Some(AgentTaskState::Succeeded)
+        );
+
+        emit_cli_status(
+            &cli_sessions_model,
+            &mut app,
+            terminal_view_id,
+            CLIAgentSessionStatus::InProgress,
+        );
+        model
+            .update(&mut app, |model, _| model.wait_for_idle(task_id))
+            .await;
+        assert_eq!(
+            model.update(&mut app, |model, _| model
+                .latest_delivered_task_state(&task_id)),
+            Some(AgentTaskState::InProgress)
+        );
+        assert_eq!(
+            model.update(&mut app, |model, _| model
+                .confirmed_terminal_state(&task_id)),
+            Some(AgentTaskState::Succeeded)
+        );
     });
 }
 
@@ -802,7 +827,20 @@ fn confirmed_terminal_state_remembers_blocked() {
 #[test]
 fn failed_delivery_does_not_confirm_terminal_state() {
     App::test((), |mut app| async move {
-        let (model, cli_sessions_model) = install_model_with_constant_result(&mut app, false);
+        app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+        let cli_sessions_model = app.add_singleton_model(|_| CLIAgentSessionsModel::new());
+        let mut mock = MockAIClient::new();
+        mock.expect_update_agent_task()
+            .returning(|_, state, _, _, _, _, _| {
+                if state == Some(AgentTaskState::Succeeded) {
+                    Err(anyhow!("network error"))
+                } else {
+                    Ok(())
+                }
+            });
+        let model = app.add_singleton_model(|ctx| {
+            LocalAgentTaskSyncModel::new_with_ai_client_for_test(Arc::new(mock), ctx)
+        });
         let terminal_view_id = warpui::EntityId::new();
         let task_id = fixed_task_id();
 
@@ -825,6 +863,11 @@ fn failed_delivery_does_not_confirm_terminal_state() {
             model.confirmed_terminal_state(&task_id)
         });
         assert_eq!(confirmed, None);
+        assert_eq!(
+            model.update(&mut app, |model, _| model
+                .latest_delivered_task_state(&task_id)),
+            Some(AgentTaskState::InProgress)
+        );
     });
 }
 

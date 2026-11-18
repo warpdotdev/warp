@@ -2081,7 +2081,7 @@ impl AgentDriver {
                 {
                     report_error!(e);
                 }
-                let (finished, cause, interrupt_watch) =
+                let (mut finished, cause, interrupt_watch) =
                     match Self::run_until_end(task, &foreground, &background).await {
                         Ok(outcome) => outcome,
                         Err(error) => {
@@ -2109,6 +2109,17 @@ impl AgentDriver {
                             "Sandbox deadline approaching (WARP_SANDBOX_DEADLINE); aborting \
                              run_internal to allow recording finalization"
                         );
+                        if let Some(task_id) = task_id {
+                            finished = Some(
+                                Self::resolve_sandbox_deadline(
+                                    task_id,
+                                    finished.unwrap_or(Err(AgentDriverError::InvalidRuntimeState)),
+                                    &server_api,
+                                    &foreground,
+                                )
+                                .await,
+                            );
+                        }
                     }
                     RunEndCause::Signal(Interrupt::Terminate) => {
                         log::warn!(
@@ -2221,6 +2232,38 @@ impl AgentDriver {
             }
 
             result
+        }
+    }
+
+    async fn resolve_sandbox_deadline(
+        task_id: AmbientAgentTaskId,
+        result: Result<(), AgentDriverError>,
+        server_api: &Arc<dyn AIClient>,
+        foreground: &ModelSpawner<Self>,
+    ) -> Result<(), AgentDriverError> {
+        Self::flush_task_status_before_exit(task_id, false, server_api, foreground).await;
+        let latest_state = foreground
+            .spawn(move |_, ctx| {
+                LocalAgentTaskSyncModel::as_ref(ctx).latest_delivered_task_state(&task_id)
+            })
+            .await?;
+        match latest_state {
+            Some(
+                state @ (AgentTaskState::Succeeded
+                | AgentTaskState::Failed
+                | AgentTaskState::Error
+                | AgentTaskState::Cancelled
+                | AgentTaskState::Blocked),
+            ) => {
+                tracing::info!(
+                    tags.cloud_agent = true,
+                    %task_id,
+                    task_state = ?state,
+                    "sandbox deadline fired while idle; skipping task state report"
+                );
+                Ok(())
+            }
+            Some(AgentTaskState::InProgress | AgentTaskState::Claimed) | None => result,
         }
     }
 
