@@ -23,7 +23,7 @@ use crate::agent::action_result::{
     AIAgentActionResultType, RequestCommandOutputResult, RunAgentsResult,
 };
 use crate::hooks::adapters::HookInput;
-use crate::hooks::model::{HookEnvelope, HookPayload, TurnStopStatus};
+use crate::hooks::model::{HookEnvelope, HookPayload, PromptAttachmentKind, TurnStopStatus};
 
 /// The stdin payloads for one firing of `spec`'s event: one per part of a tool action that
 /// `part_matches` accepts (a Cursor script sees a batched read or edit as one event per file), and
@@ -365,16 +365,22 @@ fn insert_mcp_call_fields(
 fn encode_before_submit_prompt(envelope: &HookEnvelope, input: &mut Map<String, Value>) {
     let HookPayload::PromptSubmit {
         text,
-        attachments_summary,
+        attachments,
         provenance: _,
     } = &envelope.payload
     else {
         return;
     };
     input.insert("prompt".to_owned(), json!(text));
-    let attachments = attachments_summary
+    let attachments = attachments
         .iter()
-        .map(|path| json!({ "type": "file", "file_path": path }))
+        .map(|attachment| {
+            let kind = match attachment.kind {
+                PromptAttachmentKind::File => "file",
+                PromptAttachmentKind::Rule => "rule",
+            };
+            json!({ "type": kind, "file_path": attachment.path.to_string_lossy() })
+        })
         .collect::<Vec<_>>();
     input.insert("attachments".to_owned(), Value::Array(attachments));
 }

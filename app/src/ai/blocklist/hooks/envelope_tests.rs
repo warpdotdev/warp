@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use ai::agent::action_result::RequestCommandOutputResult;
 use ai::hooks::{HOOK_PROTOCOL_VERSION, HookBoundary, HookPayload, HookSurface, RunMetadata};
+use chrono::Local;
 use warp_core::execution_mode::ExecutionMode;
 use warpui::App;
 
@@ -11,10 +12,85 @@ use crate::ai::blocklist::hooks::RunIdentity;
 use crate::ai::blocklist::hooks::test_utils::{
     add_child_conversation, hook_test_app, install_test_hooks, mock_active_session, shell_action,
 };
+use crate::ai::blocklist::{RequestInput, ResponseStreamId};
 use crate::test_util::settings::{
     initialize_settings_for_tests_with_mode,
     initialize_settings_for_tests_with_mode_and_headlessness,
 };
+
+#[test]
+fn a_boundary_before_a_request_names_that_requests_model_not_the_last_exchanges() {
+    App::test((), |mut app| async move {
+        let harness = hook_test_app(&mut app);
+        let site_model = || LLMId::from("next-model");
+        let no_exchange = app.read(|ctx| {
+            let before = EnvelopeSite::before_request(
+                harness.conversation_id,
+                site_model(),
+                &harness.active_session,
+            );
+            let plain = EnvelopeSite::new(harness.conversation_id, &harness.active_session);
+            (
+                envelope_for_session_start(false, &before, ctx).model_id,
+                envelope_for_session_start(false, &plain, ctx).model_id,
+            )
+        });
+        assert_eq!(no_exchange, (Some(site_model()), None));
+
+        app.update(|ctx| {
+            BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                let task_id = history
+                    .conversation(&harness.conversation_id)
+                    .unwrap()
+                    .get_root_task_id()
+                    .clone();
+                history
+                    .update_conversation_for_new_request_input_for_test(
+                        RequestInput {
+                            conversation_id: harness.conversation_id,
+                            input_messages: Vec::from([(task_id, vec![])]),
+                            working_directory: None,
+                            model_id: LLMId::from("last-model"),
+                            coding_model_id: LLMId::from("test-coding-model"),
+                            cli_agent_model_id: LLMId::from("test-cli-agent-model"),
+                            computer_use_model_id: LLMId::from("test-computer-use-model"),
+                            shared_session_response_initiator: None,
+                            request_start_ts: Local::now(),
+                            supported_tools_override: None,
+                        },
+                        ResponseStreamId::new_for_test(),
+                        harness.terminal_view_id,
+                        ctx,
+                    )
+                    .unwrap();
+            });
+        });
+        let with_exchange = app.read(|ctx| {
+            let before = EnvelopeSite::before_request(
+                harness.conversation_id,
+                site_model(),
+                &harness.active_session,
+            );
+            let plain = EnvelopeSite::new(harness.conversation_id, &harness.active_session);
+            (
+                envelope_for_prompt_submit(
+                    "again".to_owned(),
+                    Vec::new(),
+                    PromptProvenance::User,
+                    &before,
+                    ctx,
+                )
+                .model_id,
+                envelope_for_tool_pre(&shell_action("a1", "ls"), &plain, ctx).model_id,
+            )
+        });
+        assert_eq!(
+            with_exchange,
+            (Some(site_model()), Some(LLMId::from("last-model"))),
+            "a prompt names the model it will be sent with; a tool event names its exchange's"
+        );
+    });
+}
 
 #[test]
 fn tool_pre_envelope_carries_the_action_and_common_fields() {

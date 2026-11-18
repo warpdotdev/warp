@@ -1,10 +1,15 @@
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use ai::hooks::test_util::{ScriptedRunner, test_binding, test_source_id};
 use ai::hooks::{DeclaredBinding, HookBoundary, HookNoticeKind, HookPayload, PromptProvenance};
 use warpui::{App, SingletonEntity};
 
 use super::*;
-use crate::ai::agent::CancellationReason;
 use crate::ai::agent::conversation::{AIConversation, ConversationStatus};
+use crate::ai::agent::{
+    AIAgentAttachment, AnyFileContent, CancellationReason, FileContext, ImageContext,
+};
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::ai::blocklist::hooks::test_utils::{
     controller_harness, conversation_status, exchange_count, hook_test_app,
@@ -20,10 +25,47 @@ fn prompt_binding() -> DeclaredBinding {
     )
 }
 
+fn test_model() -> LLMId {
+    LLMId::from("test-model")
+}
+
 fn user_prompt(text: &str) -> SubmittedPrompt {
     SubmittedPrompt {
         text: text.to_owned(),
+        attachments: Vec::new(),
         provenance: PromptProvenance::User,
+    }
+}
+
+fn file_attachment(path: &str) -> PromptAttachment {
+    PromptAttachment {
+        kind: PromptAttachmentKind::File,
+        path: PathBuf::from(path),
+    }
+}
+
+fn rule_attachment(path: &str) -> PromptAttachment {
+    PromptAttachment {
+        kind: PromptAttachmentKind::Rule,
+        path: PathBuf::from(path),
+    }
+}
+
+fn file_reference(name: &str, path: &str) -> AIAgentAttachment {
+    AIAgentAttachment::FilePathReference {
+        file_id: name.to_owned(),
+        file_name: name.to_owned(),
+        file_path: path.to_owned(),
+    }
+}
+
+fn rule_file(path: &str) -> FileContext {
+    FileContext {
+        file_name: path.to_owned(),
+        content: AnyFileContent::StringContent("be nice".to_owned()),
+        line_range: None,
+        last_modified: None,
+        line_count: 1,
     }
 }
 
@@ -36,6 +78,7 @@ fn prompt_submit_reaches_the_adapter_with_the_text_and_conversation() {
         let preparation = app.update(|ctx| {
             prepare_turn(
                 Some(user_prompt("fix the build")),
+                test_model(),
                 harness.conversation_id,
                 &harness.active_session,
                 ctx,
@@ -51,16 +94,21 @@ fn prompt_submit_reaches_the_adapter_with_the_text_and_conversation() {
         let envelope = &harness.hooks.adapter.encoded_envelopes()[0];
         assert_eq!(envelope.boundary(), HookBoundary::PromptSubmit);
         assert_eq!(envelope.conversation_id, harness.conversation_id);
+        assert_eq!(
+            envelope.model_id,
+            Some(test_model()),
+            "the event names the model the request uses, with no exchange to read it from"
+        );
         let HookPayload::PromptSubmit {
             text,
-            attachments_summary,
+            attachments,
             provenance,
         } = &envelope.payload
         else {
             panic!("expected a prompt.submit payload");
         };
         assert_eq!(text, "fix the build");
-        assert!(attachments_summary.is_empty());
+        assert!(attachments.is_empty());
         assert_eq!(*provenance, PromptProvenance::User);
         assert_eq!(
             envelope.turn_id,
@@ -68,6 +116,142 @@ fn prompt_submit_reaches_the_adapter_with_the_text_and_conversation() {
             "the prompt's envelope carries the turn it starts"
         );
         assert!(envelope.turn_id.is_some());
+    });
+}
+
+#[test]
+fn the_prompts_attachments_reach_the_adapter() {
+    App::test((), |mut app| async move {
+        let harness = hook_test_app(&mut app);
+        app.update(|ctx| harness.hooks.install_bindings(vec![prompt_binding()], ctx));
+        let prompt = SubmittedPrompt {
+            text: "review these".to_owned(),
+            attachments: vec![
+                file_attachment("/work/repo/src/lib.rs"),
+                rule_attachment("/work/repo/AGENTS.md"),
+            ],
+            provenance: PromptProvenance::User,
+        };
+
+        let preparation = app.update(|ctx| {
+            prepare_turn(
+                Some(prompt),
+                test_model(),
+                harness.conversation_id,
+                &harness.active_session,
+                ctx,
+            )
+        });
+        let TurnPreparation::Pending(decision) = preparation else {
+            panic!("a prompt hook applies, so the send waits for it");
+        };
+        decision.await;
+        settle(&mut app, |_| harness.hooks.runner.invocation_count() == 1).await;
+
+        let envelope = &harness.hooks.adapter.encoded_envelopes()[0];
+        let HookPayload::PromptSubmit { attachments, .. } = &envelope.payload else {
+            panic!("expected a prompt.submit payload");
+        };
+        assert_eq!(
+            attachments,
+            &[
+                file_attachment("/work/repo/src/lib.rs"),
+                rule_attachment("/work/repo/AGENTS.md"),
+            ]
+        );
+    });
+}
+
+#[test]
+fn attachments_are_the_inputs_file_references_then_its_active_rules() {
+    let referenced_attachments = HashMap::from([
+        (
+            "b.rs".to_owned(),
+            file_reference("b.rs", "/work/repo/src/b.rs"),
+        ),
+        (
+            "a.rs".to_owned(),
+            file_reference("a.rs", "/work/repo/src/a.rs"),
+        ),
+        (
+            "notes".to_owned(),
+            AIAgentAttachment::PlainText("not a file".to_owned()),
+        ),
+    ]);
+    let context: Arc<[AIAgentContext]> = Arc::from(vec![
+        AIAgentContext::Image(ImageContext {
+            data: String::new(),
+            mime_type: "image/png".to_owned(),
+            file_name: "shot.png".to_owned(),
+            is_figma: false,
+        }),
+        AIAgentContext::ProjectRules {
+            root_path: "/work/repo".to_owned(),
+            active_rules: vec![
+                rule_file("/home/dev/.agents/AGENTS.md"),
+                rule_file("/work/repo/WARP.md"),
+            ],
+            additional_rule_paths: vec!["/work/repo/crates/x/AGENTS.md".to_owned()],
+        },
+    ]);
+    let input = AIAgentInput::UserQuery {
+        query: "hi".to_owned(),
+        context,
+        static_query_type: None,
+        referenced_attachments,
+        user_query_mode: Default::default(),
+        running_command: None,
+        intended_agent: None,
+        base: None,
+    };
+
+    assert_eq!(
+        attachments_in(&input),
+        vec![
+            file_attachment("/work/repo/src/a.rs"),
+            file_attachment("/work/repo/src/b.rs"),
+            rule_attachment("/home/dev/.agents/AGENTS.md"),
+            rule_attachment("/work/repo/WARP.md"),
+        ],
+        "files in path order, then the rules whose content went out; an image, a text \
+         attachment, and a rule only listed by path are not files the model reads"
+    );
+    assert!(
+        attachments_in(&AIAgentInput::AgentWake).is_empty(),
+        "an input Warp built has no attachments"
+    );
+}
+
+#[test]
+fn a_prompt_sent_with_file_attachments_reports_them_to_the_hook() {
+    App::test((), |mut app| async move {
+        let harness = controller_harness(&mut app);
+        app.update(|ctx| harness.hooks.install_bindings(vec![prompt_binding()], ctx));
+        let conversation_id = app.update(|ctx| {
+            BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                history.start_new_conversation(harness.terminal_id(), false, false, false, ctx)
+            })
+        });
+        harness.update_controller(&mut app, |controller, ctx| {
+            controller.send_user_query_in_conversation_with_attachments(
+                "look at this".to_owned(),
+                conversation_id,
+                None,
+                HashMap::from([(
+                    "spec.md".to_owned(),
+                    file_reference("spec.md", "/work/repo/docs/spec.md"),
+                )]),
+                None,
+                ctx,
+            );
+        });
+        settle(&mut app, |app| exchange_count(app, conversation_id) == 1).await;
+
+        let envelope = &harness.hooks.adapter.encoded_envelopes()[0];
+        let HookPayload::PromptSubmit { attachments, .. } = &envelope.payload else {
+            panic!("expected a prompt.submit payload");
+        };
+        assert_eq!(attachments, &[file_attachment("/work/repo/docs/spec.md")]);
     });
 }
 
@@ -87,6 +271,7 @@ fn prompt_submit_does_not_fire_for_a_shared_session_viewer() {
             let preparation = app.update(|ctx| {
                 prepare_turn(
                     Some(user_prompt("mirrored")),
+                    test_model(),
                     conversation_id,
                     &harness.active_session,
                     ctx,
@@ -124,6 +309,7 @@ fn every_prompt_starts_a_new_turn_and_the_turns_envelopes_carry_its_id() {
             let preparation = app.update(|ctx| {
                 prepare_turn(
                     prompt,
+                    test_model(),
                     harness.conversation_id,
                     &harness.active_session,
                     ctx,
