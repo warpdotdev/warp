@@ -192,6 +192,18 @@ pub(super) fn factory_skill_dirs(dirs: Vec<String>) -> anyhow::Result<Vec<PathBu
         .collect()
 }
 
+/// The run's Factory experiment values. Experiments are optional, so a value that is not a JSON
+/// object is dropped rather than failing the run.
+pub(super) fn experimental(json: Option<&str>) -> Option<Map<String, Value>> {
+    match serde_json::from_str(json?) {
+        Ok(values) => Some(values),
+        Err(error) => {
+            log::warn!("Ignoring execution experiment values that are not a JSON object: {error}");
+            None
+        }
+    }
+}
+
 /// The hook directories the execution configuration selected, in the order the server sent them.
 /// A value this client does not know (a newer format, level, on-ask setting, or forge) fails the
 /// run rather than dropping the entry, because declared hooks are never silently skipped. Paths are

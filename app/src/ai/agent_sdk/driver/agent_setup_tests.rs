@@ -227,20 +227,36 @@ fn standby_provider_setup_precedes_workspace_preparation() {
 
 #[test]
 fn environment_skill_setup_uses_harness_working_dir_as_listing_fallback() {
-    assert_environment_skill_listing_fallback(true, false);
+    assert_environment_skill_listing_fallback(true, false, false);
 }
 
 #[test]
 fn environment_skill_setup_without_cwd_scoping_sets_no_listing_fallback() {
-    assert_environment_skill_listing_fallback(false, false);
+    assert_environment_skill_listing_fallback(false, false, false);
 }
 
 #[test]
 fn skill_delta_experiment_uses_harness_working_dir_as_listing_fallback() {
-    assert_environment_skill_listing_fallback(false, true);
+    assert_environment_skill_listing_fallback(false, true, false);
 }
 
-fn assert_environment_skill_listing_fallback(flag_enabled: bool, skill_deltas: bool) {
+/// A standby loads skills before it has an assignment, which leaves every skill listed. A run that
+/// opts into scoping when it is assigned to that sandbox still gets scoped listings.
+#[test]
+fn skill_delta_experiment_scopes_listings_a_standby_left_unscoped() {
+    assert_environment_skill_listing_fallback(false, true, true);
+}
+
+#[test]
+fn environment_skill_setup_without_cwd_scoping_keeps_a_standby_unscoped() {
+    assert_environment_skill_listing_fallback(false, false, true);
+}
+
+fn assert_environment_skill_listing_fallback(
+    flag_enabled: bool,
+    skill_deltas: bool,
+    unscoped_by_standby: bool,
+) {
     App::test((), move |mut app| async move {
         let _flag = FeatureFlag::CwdScopedCloudSkills.override_enabled(flag_enabled);
         initialize_app_for_terminal_view(&mut app);
@@ -259,6 +275,13 @@ fn assert_environment_skill_listing_fallback(flag_enabled: bool, skill_deltas: b
             driver
         });
         let foreground = driver.update(&mut app, |_, ctx| ctx.spawner());
+        if unscoped_by_standby {
+            app.update(|ctx| {
+                SkillManager::handle(ctx).update(ctx, |manager, _| {
+                    manager.set_cloud_environment(true);
+                });
+            });
+        }
         load_environment_skills(&foreground, Vec::new()).await;
 
         let project_skill = |name: &str, dir: &Path| ParsedSkill {
@@ -284,12 +307,17 @@ fn assert_environment_skill_listing_fallback(flag_enabled: bool, skill_deltas: b
                 .collect::<Vec<_>>()
         });
 
+        let scoped = flag_enabled || skill_deltas;
         assert_eq!(
             names.contains(&"harness".to_string()),
-            flag_enabled || skill_deltas,
+            scoped || unscoped_by_standby,
             "{names:?}"
         );
-        assert!(!names.contains(&"sibling".to_string()), "{names:?}");
+        assert_eq!(
+            names.contains(&"sibling".to_string()),
+            !scoped && unscoped_by_standby,
+            "{names:?}"
+        );
     });
 }
 

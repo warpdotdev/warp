@@ -134,6 +134,21 @@ fn execution_factory_skill_directories_are_relative_and_unambiguous() {
 }
 
 #[test]
+fn execution_experiment_values_are_a_json_object_or_absent() {
+    assert_eq!(experimental(None), None);
+    assert_eq!(
+        experimental(Some(r#"{"skillsListingDeltas":true,"future":1}"#)),
+        Some(Map::from_iter([
+            ("skillsListingDeltas".to_owned(), Value::Bool(true)),
+            ("future".to_owned(), Value::from(1)),
+        ]))
+    );
+    for invalid in ["", "null", "[true]", r#"{"skillsListingDeltas":"#] {
+        assert_eq!(experimental(Some(invalid)), None, "{invalid:?}");
+    }
+}
+
+#[test]
 fn a_repository_hook_path_stays_inside_its_repository() {
     for valid in [".", ".cursor", "tools/hooks", "./hooks"] {
         assert!(hook_repository_path(valid).is_ok(), "{valid}");

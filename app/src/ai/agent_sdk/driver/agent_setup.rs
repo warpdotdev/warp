@@ -372,6 +372,9 @@ pub(crate) async fn load_environment_skills(
         .spawn(|me, ctx| {
             if me.cwd_scoped_cloud_skills_enabled() {
                 SkillManager::handle(ctx).update(ctx, |manager, _| {
+                    // A standby loads skills before its assignment says whether the run scopes
+                    // listings, so the unscoped listing it may have turned on is turned off here.
+                    manager.set_cloud_environment(false);
                     manager.set_cloud_working_dir(me.harness_working_dir.clone());
                 });
             }

@@ -98,6 +98,7 @@ fn paired_execution_launch_keeps_inventory_separate_from_eager_membership() {
                 }],
                 "setupCommands": ["prepare-workspace"], "sessionSharingAcls": [],
                 "skipInitialTurn": true, "snapshotDisabled": true, "agentHookSources": [],
+                "experimentalJson": null,
             }))
             .unwrap();
             let (options, _, _, _) = app.update(|ctx| {
@@ -224,6 +225,7 @@ fn paired_execution_rejects_a_different_task_or_execution() {
                 "deferredRepositories": [],
                 "setupCommands": [], "sessionSharingAcls": [],
                 "skipInitialTurn": false, "snapshotDisabled": false, "agentHookSources": [],
+                "experimentalJson": null,
             }))
             .unwrap();
             let result = app.update(|ctx| {
@@ -257,6 +259,7 @@ fn execution_config_with_hooks(hooks: serde_json::Value) -> serde_json::Value {
         "computerUseEnabled": false, "repositories": [], "deferredRepositories": [],
         "setupCommands": [], "sessionSharingAcls": [],
         "skipInitialTurn": false, "snapshotDisabled": false, "agentHookSources": hooks,
+        "experimentalJson": null,
     })
 }
 
@@ -342,6 +345,27 @@ fn execution_hook_sources_reach_the_driver_in_order() {
                     policy: ai::hooks::HookSourcePolicy::default(),
                 },
             ]
+        );
+    });
+}
+
+/// A run's Factory experiment values reach the driver from the execution configuration, so a run
+/// that bootstraps this way opts into the same experiments as one that reads its task.
+#[test]
+fn execution_experiment_values_reach_the_driver() {
+    App::test((), |mut app| async move {
+        let options = options_for(&mut app, execution_config_with_hooks(json!([]))).unwrap();
+        assert_eq!(options.experimental, None);
+
+        let mut config = execution_config_with_hooks(json!([]));
+        config["experimentalJson"] = json!(r#"{"skillsListingDeltas":true}"#);
+        let options = options_for(&mut app, config).unwrap();
+        assert_eq!(
+            options.experimental,
+            Some(serde_json::Map::from_iter([(
+                "skillsListingDeltas".to_owned(),
+                json!(true)
+            )]))
         );
     });
 }
@@ -445,6 +469,7 @@ fn deferred_capability_bootstrap_subprocess() {
         "factoryBranch": null, "computerUseEnabled": false, "repositories": eager,
         "setupCommands": [], "sessionSharingAcls": [],
         "skipInitialTurn": false, "snapshotDisabled": false, "agentHookSources": [],
+        "experimentalJson": null,
     });
     if supports_deferred_repositories && scenario != "missing" {
         config["deferredRepositories"] = deferred;
