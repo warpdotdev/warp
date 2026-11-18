@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use ai::hooks::test_util::{ScriptedRunner, test_binding, test_source_id};
@@ -61,6 +61,7 @@ use crate::ai::agent_sdk::task_env_vars;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::hooks::test_utils::{self, TestHooks, install_test_hooks};
 use crate::ai::blocklist::hooks::{HookRuntime, RunSurface};
+use crate::ai::blocklist::local_agent_task_sync_model::LocalAgentTaskSyncModel;
 use crate::ai::blocklist::orchestration_events::{
     OrchestrationEventService, PendingEvent, PendingEventDetail,
 };
@@ -71,11 +72,167 @@ use crate::ai::blocklist::{
 use crate::ai::cloud_environments::{GithubRepo, SourceRepo};
 use crate::ai::llms::LLMId;
 use crate::ai::skills::{SkillDescriptor, SkillManager};
+use crate::server::server_api::ServerApiProvider;
+use crate::terminal::CLIAgent;
+use crate::terminal::cli_agent_sessions::{CLIAgentSessionsModel, CLIAgentSessionsModelEvent};
 use crate::test_util::assert_eventually;
 use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
 use crate::workspace::view::tests::initialize_app as initialize_workspace_test_app;
 
 // ── IdleTimeoutSender tests ──────────────────────────────────────────────────────
+
+#[test]
+fn sandbox_deadline_preserves_only_a_settled_latest_turn() {
+    if std::env::var_os("WARP_TEST_SANDBOX_DEADLINE").is_none() {
+        let output = ProcessCommand::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "ai::agent_sdk::driver::tests::sandbox_deadline_preserves_only_a_settled_latest_turn",
+                "--nocapture",
+            ])
+            .env("WARP_TEST_SANDBOX_DEADLINE", "1")
+            .env("WARP_ISOLATION_PLATFORM", "docker")
+            .env("WARP_WORKLOAD_TOKEN", "test-workload-token")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    for (settled, follow_up, delay_follow_up, expected_report) in [
+        (true, false, false, None),
+        (true, true, false, Some(AgentTaskState::Failed)),
+        (false, false, false, Some(AgentTaskState::Failed)),
+        (true, true, true, Some(AgentTaskState::Failed)),
+    ] {
+        App::test((), move |mut app| async move {
+            let reports = Arc::new(Mutex::new(Vec::new()));
+            let reports_for_mock = reports.clone();
+            let (release_update, wait_for_release) = std::sync::mpsc::channel();
+            let wait_for_release = Mutex::new(wait_for_release);
+            let delay_update = Arc::new(AtomicBool::new(false));
+            let delay_update_for_mock = delay_update.clone();
+            let _updates = {
+                let mut server = ChannelState::mock_server();
+                server
+                    .mock("POST", "/graphql/v2?op=UpdateAgentTask")
+                    .with_body_from_request(move |request| {
+                        let body: serde_json::Value =
+                            serde_json::from_slice(request.body().unwrap()).unwrap();
+                        reports_for_mock
+                            .lock()
+                            .unwrap()
+                            .push(body["variables"]["input"]["taskState"].clone());
+                        if delay_update_for_mock.load(Ordering::SeqCst)
+                            && body["variables"]["input"]["taskState"] == "IN_PROGRESS"
+                        {
+                            wait_for_release
+                                .lock()
+                                .unwrap()
+                                .recv_timeout(super::TASK_STATUS_FLUSH_TIMEOUT * 3)
+                                .unwrap();
+                        }
+                        json!({"data": {"updateAgentTask": {
+                            "__typename": "UpdateAgentTaskOutput",
+                            "responseContext": {"serverVersion": null}
+                        }}})
+                        .to_string()
+                        .into_bytes()
+                    })
+                    .create()
+            };
+            initialize_app_for_terminal_view(&mut app);
+            let ai_client = app.read(|ctx| ServerApiProvider::as_ref(ctx).get_ai_client());
+            let sync = LocalAgentTaskSyncModel::handle(&app);
+            let task_id: AmbientAgentTaskId = HOOK_TASK_ID.parse().unwrap();
+            let terminal = add_window_with_terminal(&mut app, None);
+            let terminal_id = terminal.id();
+            sync.update(&mut app, |model, ctx| {
+                model.register_cli_session(terminal_id, task_id, ctx);
+            });
+            if settled {
+                CLIAgentSessionsModel::handle(&app).update(&mut app, |_, ctx| {
+                    ctx.emit(CLIAgentSessionsModelEvent::StatusChanged {
+                        terminal_view_id: terminal_id,
+                        agent: CLIAgent::Claude,
+                        status: CLIAgentSessionStatus::Success,
+                        is_prompt_submit: false,
+                        session_context: Box::default(),
+                    });
+                });
+            }
+            sync.update(&mut app, |model, _| model.wait_for_idle(task_id))
+                .await;
+            reports.lock().unwrap().clear();
+            delay_update.store(delay_follow_up, Ordering::SeqCst);
+            if follow_up {
+                CLIAgentSessionsModel::handle(&app).update(&mut app, |_, ctx| {
+                    ctx.emit(CLIAgentSessionsModelEvent::StatusChanged {
+                        terminal_view_id: terminal_id,
+                        agent: CLIAgent::Claude,
+                        status: CLIAgentSessionStatus::InProgress,
+                        is_prompt_submit: true,
+                        session_context: Box::default(),
+                    });
+                });
+            }
+            let temp = TempDir::new().unwrap();
+            let driver = app.add_model(|ctx| {
+                let terminal_driver =
+                    super::terminal::TerminalDriver::create_from_existing_view(terminal, ctx);
+                AgentDriver::new_for_test(temp.path().to_path_buf(), terminal_driver, ctx)
+            });
+            let foreground = driver.update(&mut app, |_, ctx| ctx.spawner());
+            let result = AgentDriver::resolve_sandbox_deadline(
+                task_id,
+                Err(AgentDriverError::SandboxDeadlineReached {
+                    on_free_plan: false,
+                }),
+                &ai_client,
+                &foreground,
+            )
+            .await;
+            if delay_follow_up {
+                assert_eq!(
+                    sync.read(&app, |model, _| model.latest_delivered_task_state(&task_id)),
+                    Some(AgentTaskState::Succeeded)
+                );
+                assert!(matches!(
+                    result,
+                    Err(AgentDriverError::SandboxDeadlineReached { .. })
+                ));
+                release_update.send(()).unwrap();
+            }
+            AgentDriver::flush_task_status_before_exit(
+                task_id,
+                result.is_ok(),
+                &ai_client,
+                &foreground,
+            )
+            .await;
+            if let Err(error) = &result {
+                assert!(matches!(
+                    error,
+                    AgentDriverError::SandboxDeadlineReached { .. }
+                ));
+                super::report_driver_error(task_id, error, &ai_client).await;
+            }
+            assert_eq!(result.is_ok(), expected_report.is_none());
+            let mut expected = Vec::new();
+            if follow_up {
+                expected.push(json!("IN_PROGRESS"));
+            }
+            if let Some(state) = expected_report {
+                expected.push(serde_json::to_value(state).unwrap());
+            }
+            assert_eq!(*reports.lock().unwrap(), expected);
+        });
+    }
+}
 
 #[test]
 fn setup_timeout_does_not_retain_a_potentially_running_command() {
