@@ -127,16 +127,14 @@ It is not Cursor's result shape. Binary file content is summarized as `is_binary
   on that prompt ends the run as failed with your `user_message`, since the run has nothing else
   to do. If the text cannot be fetched the run goes on without the hook and says so in a warning,
   unless the hook's source is `strict`, in which case the run ends as failed.
-- The first prompt's text is the prompt as the server resolves it for a harness: the agent's
-  base prompt when it has one, a blank line, then the task's prompt. For a run started with one
-  prompt and nothing else, that is exactly the run's first user message. In a few cases it is
-  not: when the task has attachments, an `Attached files:` section listing their paths is
-  appended (the same files are in `attachments` as `file` entries); when the run was started
-  with a skill, the skill's text is inlined at the top instead of the `/<skill>` prefix the
-  conversation shows; when the run continues an earlier execution's inputs (a handoff), those
-  inputs are inlined before the prompt; and when several prompts were queued before the run
-  started, they are joined into one. A version of this text that matches the stored first
-  message exactly is possible follow-up work on the server.
+- The first prompt's text is the run's first user message exactly as the conversation stores
+  it: the task's prompt (with the agent's base prompt first when the run has one, and a
+  `/<skill>` prefix when the run was started with a skill). Attachments are not listed in the
+  text; they are in `attachments`. When the run continues an earlier execution's inputs (a
+  handoff), or several prompts were queued before the run started, the hook sees the first
+  message of the run, the one that starts it. A server older than warp-server #22256 returns
+  the prompt in the shape it builds for third-party harnesses instead, which can add an
+  `Attached files:` section, inline a skill's text, or append a `<system-reminder>` block.
 - `beforeSubmitPrompt.attachments` lists the files the person attached
   (`{ "type": "file", "file_path" }`, in path order) and then the rule files whose content went
   with the prompt (`{ "type": "rule", "file_path" }`; Warp's `WARP.md` and `AGENTS.md` files for
