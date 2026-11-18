@@ -266,22 +266,18 @@ fn setup_timeout_does_not_retain_a_potentially_running_command() {
 }
 
 #[test]
-fn driver_keeps_uninterpreted_factory_experiments() {
-    App::test((), |mut app| async move {
-        initialize_workspace_test_app(&mut app);
-        let experimental: serde_json::Map<String, serde_json::Value> =
-            serde_json::from_value(json!({
-                "identityOnlySystemPrompt": true,
-                "private-uid-sentinel": "secret-value-sentinel"
-            }))
-            .unwrap();
-        let mut options = crate::ai::agent_sdk::tests::agent_driver_options();
-        options.experimental = Some(experimental.clone());
-        let driver = app.update(|ctx| AgentDriver::create(options, ctx).unwrap());
-        driver.read(&app, |driver, _| {
-            assert_eq!(driver.experimental, Some(experimental));
+fn driver_keeps_skills_listing_deltas() {
+    for enabled in [false, true] {
+        App::test((), move |mut app| async move {
+            initialize_workspace_test_app(&mut app);
+            let mut options = crate::ai::agent_sdk::tests::agent_driver_options();
+            options.skills_listing_deltas = enabled;
+            let driver = app.update(|ctx| AgentDriver::create(options, ctx).unwrap());
+            driver.read(&app, |driver, _| {
+                assert_eq!(driver.skills_listing_deltas, enabled);
+            });
         });
-    });
+    }
 }
 
 #[test]
@@ -1662,10 +1658,7 @@ fn load_overlap_repo_as_env_and_global(flag_enabled: bool, skill_deltas: bool) {
             let terminal_driver =
                 super::terminal::TerminalDriver::create_from_existing_view(terminal_view, ctx);
             let mut driver = AgentDriver::new_for_test(working_dir.clone(), terminal_driver, ctx);
-            driver.experimental = Some(serde_json::Map::from_iter([(
-                "skillsListingDeltas".into(),
-                serde_json::Value::Bool(skill_deltas),
-            )]));
+            driver.skills_listing_deltas = skill_deltas;
             driver
         });
 

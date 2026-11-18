@@ -1,6 +1,6 @@
 use warp_graphql::queries::execution_config::{
-    ExecutionRepositoryRef, FactoryBranchExecutionConfig, SessionSharingAccessLevel,
-    SessionSharingSubjectType,
+    ExecutionRepositoryRef, FactoryBranchExecutionConfig, FactoryExperimentValue,
+    SessionSharingAccessLevel, SessionSharingSubjectType,
 };
 
 use super::*;
@@ -155,6 +155,38 @@ fn a_worker_hook_path_is_absolute() {
     for invalid in ["", "etc/hooks", "./hooks", " /etc/hooks"] {
         assert!(hook_worker_path(invalid).is_err(), "{invalid:?}");
     }
+}
+
+#[test]
+fn skills_listing_deltas_reads_only_a_boolean_value_for_its_key() {
+    let experiment = |key: &str, value_json: &str| FactoryExperimentValue {
+        key: key.to_owned(),
+        value_json: value_json.to_owned(),
+    };
+    assert!(skills_listing_deltas(&[experiment(
+        SKILLS_LISTING_DELTAS_EXPERIMENT,
+        "true"
+    )]));
+    assert!(skills_listing_deltas(&[
+        experiment("other", "true"),
+        experiment(SKILLS_LISTING_DELTAS_EXPERIMENT, "true"),
+    ]));
+    assert!(!skills_listing_deltas(&[experiment(
+        SKILLS_LISTING_DELTAS_EXPERIMENT,
+        "false"
+    )]));
+    for not_a_bool in ["\"true\"", "1", "null", "{}", "not json"] {
+        assert!(
+            !skills_listing_deltas(&[experiment(SKILLS_LISTING_DELTAS_EXPERIMENT, not_a_bool)]),
+            "{not_a_bool}"
+        );
+    }
+    assert!(!skills_listing_deltas(&[experiment("other", "true")]));
+    assert!(!skills_listing_deltas(&[]));
+    assert_eq!(
+        requested_experiment_keys(),
+        [SKILLS_LISTING_DELTAS_EXPERIMENT]
+    );
 }
 
 #[test]

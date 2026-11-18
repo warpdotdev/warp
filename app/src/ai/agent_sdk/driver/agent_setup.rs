@@ -6,8 +6,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use ai::skills::{
-    SKILL_PROVIDER_DEFINITIONS, SkillScope, parse_bundled_skill, read_skills_for_skills_dirs,
-    resolve_skills_dirs,
+    ParsedSkill, SKILL_PROVIDER_DEFINITIONS, SkillScope, parse_bundled_skill,
+    read_skills_for_skills_dirs, resolve_skills_dirs,
 };
 use futures::future::join_all;
 use itertools::Itertools as _;
@@ -119,7 +119,10 @@ impl AgentDriver {
                 )
             })
             .await?;
-        let prepared = prepare_workspace(
+        let PreparedWorkspace {
+            harness_working_dir,
+            repositories,
+        } = prepare_workspace(
             foreground,
             harness,
             workspace,
@@ -128,15 +131,44 @@ impl AgentDriver {
         )
         .await?;
         Self::read_setup_vars(foreground, false, harness == Harness::Oz).await?;
-        let working_dir = prepared.harness_working_dir.clone();
-        let repositories = prepared.repositories.clone();
+        let working_dir = harness_working_dir.clone();
+        foreground
+            .spawn(move |me, _| me.harness_working_dir = working_dir)
+            .await?;
+        let skills = if runner_preparation || harness != Harness::Oz {
+            PreparedSkills::default()
+        } else {
+            let managed_mcp_client = foreground
+                .spawn(|_, ctx| ServerApiProvider::as_ref(ctx).get_managed_mcp_client())
+                .await?;
+            let mcp_result = setup_events
+                .record_result(
+                    SetupStep::McpServerStartup,
+                    mcp_startup::start_task_and_profile_mcp_servers(
+                        &mcp_specs,
+                        managed_mcp_client,
+                        mcp_startup::McpStartupMode::Standby,
+                        task_id,
+                        foreground,
+                    ),
+                )
+                .await;
+            Self::handle_mcp_startup_result(mcp_result, foreground).await?;
+            read_skills(
+                foreground,
+                repositories.clone(),
+                global_skills,
+                setup_events,
+            )
+            .await
+        };
         foreground
             .spawn(move |me, _| {
-                me.harness_working_dir = working_dir;
                 let prepared = StandbyWorkspace {
                     harness,
                     configuration: prepared_configuration,
                     repositories,
+                    skills,
                 };
                 me.workspace = Some(if runner_preparation {
                     WorkspaceState::RunnerPrepared(prepared)
@@ -145,33 +177,7 @@ impl AgentDriver {
                 });
             })
             .await?;
-        if runner_preparation || harness != Harness::Oz {
-            return Ok(prepared.harness_working_dir);
-        }
-        let managed_mcp_client = foreground
-            .spawn(|_, ctx| ServerApiProvider::as_ref(ctx).get_managed_mcp_client())
-            .await?;
-        let mcp_result = setup_events
-            .record_result(
-                SetupStep::McpServerStartup,
-                mcp_startup::start_task_and_profile_mcp_servers(
-                    &mcp_specs,
-                    managed_mcp_client,
-                    mcp_startup::McpStartupMode::Standby,
-                    task_id,
-                    foreground,
-                ),
-            )
-            .await;
-        Self::handle_mcp_startup_result(mcp_result, foreground).await?;
-        load_skills(
-            foreground,
-            prepared.repositories,
-            global_skills,
-            setup_events,
-        )
-        .await;
-        Ok(prepared.harness_working_dir)
+        Ok(harness_working_dir)
     }
 }
 
@@ -260,25 +266,93 @@ pub(crate) async fn prepare_workspace(
     })
 }
 
-/// Loads workspace, global, and configured-directory skills without making load failures fatal.
-pub(crate) async fn load_skills(
+/// Skill files read before the run that registers them exists, so none of them is in the
+/// `SkillManager` yet.
+#[derive(Default)]
+pub(crate) struct PreparedSkills {
+    pub environment: Vec<ParsedSkill>,
+    pub global: Vec<ParsedSkill>,
+}
+
+/// Where a run's environment and global skills come from.
+pub(crate) enum RunSkills {
+    /// Read from the cloned repositories and the global selection when the run loads them.
+    FromRepositories {
+        repositories: Vec<SourceRepo>,
+        global_skills: GlobalSkillResolution,
+    },
+    /// Read ahead of time by a standby sandbox.
+    Prepared(PreparedSkills),
+}
+
+/// Reads workspace and global skill files without registering them, so a standby can do the file
+/// work before it knows which listing mode its assignment will choose.
+pub(crate) async fn read_skills(
     foreground: &ModelSpawner<AgentDriver>,
     repositories: Vec<SourceRepo>,
     global_skills: GlobalSkillResolution,
     setup_events: &SetupClientEventReporter,
-) {
-    setup_events
+) -> PreparedSkills {
+    let environment = setup_events
         .record_value(
             SetupStep::EnvironmentSkillLoading,
-            load_environment_skills(foreground, repositories),
+            read_environment_skills(foreground, repositories),
         )
         .await;
-    setup_events
+    let global = setup_events
         .record_value(
             SetupStep::GlobalSkillLoading,
-            load_global_skills(foreground, global_skills.specs, global_skills.repos),
+            read_global_skills(foreground, global_skills.specs, global_skills.repos),
         )
         .await;
+    PreparedSkills {
+        environment,
+        global,
+    }
+}
+
+/// Loads workspace, global, and configured-directory skills without making load failures fatal.
+pub(crate) async fn load_skills(
+    foreground: &ModelSpawner<AgentDriver>,
+    skills: RunSkills,
+    setup_events: &SetupClientEventReporter,
+) {
+    match skills {
+        RunSkills::FromRepositories {
+            repositories,
+            global_skills,
+        } => {
+            setup_events
+                .record_value(
+                    SetupStep::EnvironmentSkillLoading,
+                    load_environment_skills(foreground, repositories),
+                )
+                .await;
+            setup_events
+                .record_value(
+                    SetupStep::GlobalSkillLoading,
+                    load_global_skills(foreground, global_skills.specs, global_skills.repos),
+                )
+                .await;
+        }
+        RunSkills::Prepared(PreparedSkills {
+            environment,
+            global,
+        }) => {
+            setup_events
+                .record_value(
+                    SetupStep::EnvironmentSkillLoading,
+                    register_environment_skills(foreground, environment),
+                )
+                .await;
+            setup_events
+                .record_value(
+                    SetupStep::GlobalSkillLoading,
+                    register_global_skills(foreground, global),
+                )
+                .await;
+        }
+    }
     setup_events
         .record_value(SetupStep::SkillsDirsLoading, load_skills_dirs(foreground))
         .await;
@@ -356,39 +430,26 @@ pub(crate) async fn clone_global_skill_repos(
 }
 
 /// Load skills from environment repositories.
-///
-/// It's assumed that `prepare_environment` registers all cloned repositories
-/// with the `DetectedRepositories` model, so that we can scan for skills
-/// here.
-///
-/// With cwd scoping enabled, listings use the ordinary ancestor-directory scoping and the harness
-/// working directory stands in for the cwd until the terminal publishes one; otherwise every
-/// environment skill is listed regardless of cwd.
 pub(crate) async fn load_environment_skills(
     foreground: &ModelSpawner<AgentDriver>,
     repos: Vec<SourceRepo>,
 ) {
-    if let Err(err) = foreground
-        .spawn(|me, ctx| {
-            if me.cwd_scoped_cloud_skills_enabled() {
-                SkillManager::handle(ctx).update(ctx, |manager, _| {
-                    // Undo the unscoped listing a warm (standby) sandbox may have enabled before
-                    // its assignment arrived. It ran this same skill load while `experimental` was
-                    // still unset, so it called `set_cloud_environment(true)`. That setting lives on
-                    // the `SkillManager` singleton, so without this reset it would override the cwd
-                    // scoping this run opted into via experiments.
-                    manager.set_cloud_environment(false);
-                    manager.set_cloud_working_dir(me.harness_working_dir.clone());
-                });
-            }
-        })
-        .await
-    {
-        log::warn!("Failed to set skill working directory: {err}");
-    }
+    let skills = read_environment_skills(foreground, repos).await;
+    register_environment_skills(foreground, skills).await;
+}
+
+/// Reads skills from environment repositories once their metadata index is ready.
+///
+/// It's assumed that `prepare_environment` registers all cloned repositories
+/// with the `DetectedRepositories` model, so that we can scan for skills
+/// here.
+pub(crate) async fn read_environment_skills(
+    foreground: &ModelSpawner<AgentDriver>,
+    repos: Vec<SourceRepo>,
+) -> Vec<ParsedSkill> {
     if repos.is_empty() {
         log::info!("No environment repositories for skill loading");
-        return;
+        return Vec::new();
     }
     safe_info!(
         safe: ("Loading skills from {} environment repositories", repos.len()),
@@ -429,7 +490,7 @@ pub(crate) async fn load_environment_skills(
         Ok(result) => result,
         Err(err) => {
             log::warn!("Failed to prepare environment skill loading: {err}");
-            return;
+            return Vec::new();
         }
     };
 
@@ -485,40 +546,72 @@ pub(crate) async fn load_environment_skills(
         }
     }
 
-    let load_skills_result = foreground
-        .spawn(move |me, ctx| {
-            let skills = SkillWatcher::read_local_skills_for_repos(&repo_paths, ctx);
-            if !skills.is_empty() {
-                log::info!("Loaded {} environment skill(s)", skills.len());
-            } else {
+    match foreground
+        .spawn(move |_, ctx| SkillWatcher::read_local_skills_for_repos(&repo_paths, ctx))
+        .await
+    {
+        Ok(skills) => {
+            if skills.is_empty() {
                 log::info!("No environment skills found");
+            } else {
+                log::info!("Loaded {} environment skill(s)", skills.len());
             }
+            skills
+        }
+        Err(err) => {
+            log::warn!("Failed to load environment skills: {err}");
+            Vec::new()
+        }
+    }
+}
+
+/// Registers environment skills under the run's listing mode.
+///
+/// With cwd scoping enabled, listings use the ordinary ancestor-directory scoping and the harness
+/// working directory stands in for the cwd until the terminal publishes one; otherwise every
+/// environment skill is listed regardless of cwd.
+pub(crate) async fn register_environment_skills(
+    foreground: &ModelSpawner<AgentDriver>,
+    skills: Vec<ParsedSkill>,
+) {
+    if let Err(err) = foreground
+        .spawn(move |me, ctx| {
             SkillManager::handle(ctx).update(ctx, |manager, _| {
-                if !me.cwd_scoped_cloud_skills_enabled() {
+                if me.cwd_scoped_cloud_skills_enabled() {
+                    manager.set_cloud_working_dir(me.harness_working_dir.clone());
+                } else if !skills.is_empty() {
+                    // A run with no environment skills keeps the ordinary cwd scoping, which
+                    // local runs rely on.
                     manager.set_cloud_environment(true);
                 }
                 manager.handle_skills_added(skills);
             });
         })
-        .await;
-
-    if let Err(err) = load_skills_result {
-        log::warn!("Failed to load environment skills: {err}");
+        .await
+    {
+        log::warn!("Failed to register environment skills: {err}");
     }
 }
 
 /// Load explicitly requested global skills by reading directly from disk.
-///
-/// Global skill repositories are unregistered sibling clones, so their skills are never cwd
-/// ancestors. With cwd scoping enabled they are registered at home precedence so the selection stays
-/// listed from every cwd; otherwise they rely on the unscoped cloud listing.
 pub(crate) async fn load_global_skills(
     foreground: &ModelSpawner<AgentDriver>,
     specs: Vec<SkillSpec>,
     repos: Vec<GithubRepo>,
 ) {
+    let skills = read_global_skills(foreground, specs, repos).await;
+    register_global_skills(foreground, skills).await;
+}
+
+/// Reads the requested global skills from their cloned repositories, without depending on
+/// `RepoMetadataModel`.
+pub(crate) async fn read_global_skills(
+    foreground: &ModelSpawner<AgentDriver>,
+    specs: Vec<SkillSpec>,
+    repos: Vec<GithubRepo>,
+) -> Vec<ParsedSkill> {
     if specs.is_empty() || repos.is_empty() {
-        return;
+        return Vec::new();
     }
     safe_info!(
         safe: ("Loading {} global skill(s) from {} repo(s)", specs.len(), repos.len()),
@@ -534,8 +627,6 @@ pub(crate) async fn load_global_skills(
             let mut all_skills = Vec::new();
             for repo in &repos {
                 let repo_path = me.working_dir.join(&repo.repo);
-                // Read skills from all known provider directories on disk,
-                // without depending on RepoMetadataModel.
                 let skill_dirs = SKILL_PROVIDER_DEFINITIONS
                     .iter()
                     .map(|def| repo_path.join(&def.skills_path));
@@ -551,20 +642,34 @@ pub(crate) async fn load_global_skills(
         })
         .await;
 
-    let mut skills = match load_result {
-        Ok(skills) => skills,
+    match load_result {
+        Ok(skills) => {
+            if skills.is_empty() {
+                log::info!("No global skills matched the requested specs");
+            } else {
+                log::info!("Loaded {} global skill(s)", skills.len());
+            }
+            skills
+        }
         Err(err) => {
             log::warn!("Failed to load global skills: {err}");
-            return;
+            Vec::new()
         }
-    };
+    }
+}
 
+/// Registers global skills under the run's listing mode.
+///
+/// Global skill repositories are unregistered sibling clones, so their skills are never cwd
+/// ancestors. With cwd scoping enabled they are registered at home precedence so the selection stays
+/// listed from every cwd; otherwise they rely on the unscoped cloud listing.
+pub(crate) async fn register_global_skills(
+    foreground: &ModelSpawner<AgentDriver>,
+    mut skills: Vec<ParsedSkill>,
+) {
     if skills.is_empty() {
-        log::info!("No global skills matched the requested specs");
         return;
     }
-
-    log::info!("Loaded {} global skill(s)", skills.len());
     let add_result = foreground
         .spawn(move |me, ctx| {
             SkillManager::handle(ctx).update(ctx, |manager, _| {

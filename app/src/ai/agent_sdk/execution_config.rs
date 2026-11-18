@@ -11,8 +11,8 @@ use warp_graphql::ai::AgentHarness;
 use warp_graphql::queries::execution_config::{
     AgentHookFormat, AgentHookLevel, AgentHookOnAsk, AgentHookSource, CloudProviderClientConfigs,
     CodeForge, ExecutionRepository, ExecutionRepositoryRefType, FactoryBranchExecutionConfig,
-    SessionSharingAccessLevel, SessionSharingAclSpec, SessionSharingSubjectType,
-    SourceRepo as ConfigSourceRepo,
+    FactoryExperimentValue, SessionSharingAccessLevel, SessionSharingAclSpec,
+    SessionSharingSubjectType, SourceRepo as ConfigSourceRepo,
 };
 
 use super::driver::environment::ResolvedRepository;
@@ -192,16 +192,22 @@ pub(super) fn factory_skill_dirs(dirs: Vec<String>) -> anyhow::Result<Vec<PathBu
         .collect()
 }
 
-/// The run's Factory experiment values. Experiments are optional, so a value that is not a JSON
-/// object is dropped rather than failing the run.
-pub(super) fn experimental(json: Option<&str>) -> Option<Map<String, Value>> {
-    match serde_json::from_str(json?) {
-        Ok(values) => Some(values),
-        Err(error) => {
-            log::warn!("Ignoring execution experiment values that are not a JSON object: {error}");
-            None
-        }
-    }
+/// The Factory experiment that scopes cloud skill listings to the working directory. It is the
+/// only experiment this client reads.
+pub(super) const SKILLS_LISTING_DELTAS_EXPERIMENT: &str = "skillsListingDeltas";
+
+/// The Factory experiment keys this client asks the server for.
+pub(super) fn requested_experiment_keys() -> Vec<String> {
+    vec![SKILLS_LISTING_DELTAS_EXPERIMENT.to_owned()]
+}
+
+/// Whether the run's Factory experiments enable skill listing deltas. An absent key or a value
+/// that is not a JSON boolean leaves them off.
+pub(super) fn skills_listing_deltas(experiments: &[FactoryExperimentValue]) -> bool {
+    experiments
+        .iter()
+        .find(|experiment| experiment.key == SKILLS_LISTING_DELTAS_EXPERIMENT)
+        .is_some_and(|experiment| serde_json::from_str(&experiment.value_json).unwrap_or(false))
 }
 
 /// The hook directories the execution configuration selected, in the order the server sent them.

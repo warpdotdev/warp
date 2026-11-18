@@ -23,6 +23,9 @@ pub struct PrewarmedSandboxConfigInput {
     pub runner_preparation_contract_version: Option<i32>,
     pub supports_deferred_repositories: Option<bool>,
     pub supports_agent_hooks: Option<bool>,
+    /// The Factory experiment keys whose values an assignment should carry.
+    #[cynic(skip_serializing_if = "Option::is_none")]
+    pub experiment_keys: Option<Vec<String>>,
 }
 
 #[derive(cynic::QueryFragment)]

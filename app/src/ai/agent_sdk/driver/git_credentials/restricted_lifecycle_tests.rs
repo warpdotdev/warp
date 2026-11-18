@@ -7,6 +7,7 @@ use warp_graphql::platform_error::PlatformErrorInfo;
 
 use super::tests::{response, validated_response, with_home};
 use super::*;
+use crate::ai::agent_sdk::execution_config::requested_experiment_keys;
 use crate::ai::agent_sdk::standby::{StandbyClock, renew_standby_credentials};
 use crate::ai::mcp::{MCPServer, MCPServerExt as _, TemplatableMCPServerManager, TransportType};
 use crate::server::server_api::ai::MockAIClient;
@@ -207,9 +208,11 @@ impl PrewarmedSandboxClient for RenewalClient {
         &self,
         sandbox_id: &str,
         supports_deferred_repositories: bool,
+        experiment_keys: Vec<String>,
     ) -> Result<PrewarmedSandboxConfiguration> {
         assert_eq!(sandbox_id, "sandbox");
         assert!(supports_deferred_repositories);
+        assert_eq!(experiment_keys, requested_experiment_keys());
         self.requests.fetch_add(1, Ordering::SeqCst);
         self.started.0.send(()).await?;
         if self.pending {

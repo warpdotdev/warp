@@ -131,7 +131,7 @@ fn execution_bootstrap_response() -> Value {
                         "idleOnFailSeconds": null,
                         "snapshotDisabled": false,
                         "agentHookSources": [],
-                        "experimentalJson": null
+                        "experiments": []
                     },
                     "attachments": [{
                         "fileId": "file-one",
@@ -168,6 +168,7 @@ fn mock_execution_bootstrap(
             "variables": {
                 "executionId": "1",
                 "supportsDeferredRepositories": supports_deferred_repositories,
+                "experimentKeys": ["experiment"],
                 "secretsInput": {"taskId": "task-one", "workloadToken": workload_token},
                 "taskInput": {"taskId": "task-one"}
             }
@@ -245,6 +246,7 @@ fn execution_bootstrap_fetches_config_secrets_and_attachments_once() {
             "1",
             "token-success".into(),
             supports_deferred_repositories,
+            vec!["experiment".into()],
         ))
         .unwrap();
         assert_eq!(data.config.task_id.inner(), "task-one");
@@ -301,6 +303,7 @@ fn execution_bootstrap_preserves_secret_errors_with_task_configuration() {
         "1",
         "token-errors".into(),
         false,
+        vec!["experiment".into()],
     ))
     .unwrap();
     assert_eq!(data.config.execution_id.inner(), "1");
@@ -326,6 +329,7 @@ fn execution_bootstrap_rejects_configuration_errors() {
         "1",
         "token-config-error".into(),
         false,
+        vec!["experiment".into()],
     ))
     .err()
     .expect("configuration errors must abort bootstrap");

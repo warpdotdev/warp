@@ -46,9 +46,10 @@ impl PrewarmedSandboxClient for FakeClient {
         &self,
         sandbox_id: &str,
         supports_deferred_repositories: bool,
+        experiment_keys: Vec<String>,
     ) -> anyhow::Result<PrewarmedSandboxConfiguration> {
         panic!(
-            "Unexpected configuration fetch for {sandbox_id}: support={supports_deferred_repositories}"
+            "Unexpected configuration fetch for {sandbox_id}: support={supports_deferred_repositories} experiment_keys={experiment_keys:?}"
         )
     }
 
@@ -259,7 +260,7 @@ pub(super) fn execution_config() -> ExecutionConfiguration {
         idle_on_fail_seconds: None,
         snapshot_disabled: true,
         agent_hook_sources: Vec::new(),
-        experimental_json: None,
+        experiments: Vec::new(),
     }
 }
 

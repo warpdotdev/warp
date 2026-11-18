@@ -730,8 +730,8 @@ pub struct AgentDriverOptions {
     pub use_factory_repositories: bool,
     pub github_credential_mode: GitHubCredentialMode,
     pub(crate) credential_store_owner: Option<ManagedStoreOwner>,
-    /// Server-provided experiments for this run.
-    pub experimental: Option<serde_json::Map<String, serde_json::Value>>,
+    /// Whether the run's Factory experiments scope cloud skill listings to the working directory.
+    pub skills_listing_deltas: bool,
     /// Parent run ID for child orchestration flows, if this task was spawned by another run.
     pub parent_run_id: Option<String>,
     /// Whether the agent run should share its session.
@@ -804,7 +804,7 @@ struct RunConfiguration {
     use_factory_repositories: bool,
     github_credential_mode: GitHubCredentialMode,
     credential_store_owner: Option<ManagedStoreOwner>,
-    experimental: Option<serde_json::Map<String, serde_json::Value>>,
+    skills_listing_deltas: bool,
     parent_run_id: Option<String>,
     idle_on_complete: Option<Duration>,
     idle_on_fail: Option<Duration>,
@@ -846,7 +846,7 @@ fn split_run_options(
         use_factory_repositories,
         github_credential_mode,
         credential_store_owner,
-        experimental,
+        skills_listing_deltas,
         parent_run_id,
         should_share,
         idle_on_complete,
@@ -996,7 +996,7 @@ fn split_run_options(
             use_factory_repositories,
             github_credential_mode,
             credential_store_owner,
-            experimental,
+            skills_listing_deltas,
             parent_run_id,
             idle_on_complete,
             idle_on_fail,
@@ -1033,6 +1033,9 @@ pub(crate) struct StandbyWorkspace {
     pub configuration: environment::WorkspaceConfiguration,
     /// Repositories to scan for skills, carried over from the preparation.
     pub repositories: Vec<crate::ai::cloud_environments::SourceRepo>,
+    /// Skill files read from those repositories and the global selection, registered once the
+    /// assigned run knows its listing mode.
+    pub skills: agent_setup::PreparedSkills,
 }
 
 /// A run's workspace, before or after setup.
@@ -1076,7 +1079,7 @@ pub struct AgentDriver {
     use_factory_repositories: bool,
     github_credential_mode: GitHubCredentialMode,
     credential_store_owner: Option<ManagedStoreOwner>,
-    pub experimental: Option<serde_json::Map<String, serde_json::Value>>,
+    skills_listing_deltas: bool,
     team_scope: Option<HeadlessTeamScope>,
     bedrock_oidc_credentials: Option<BedrockOidcCredentialsConfig>,
 
@@ -1518,13 +1521,7 @@ impl From<PrepareEnvironmentError> for AgentDriverError {
 
 impl AgentDriver {
     fn cwd_scoped_cloud_skills_enabled(&self) -> bool {
-        FeatureFlag::CwdScopedCloudSkills.is_enabled()
-            || self
-                .experimental
-                .as_ref()
-                .and_then(|experiments| experiments.get("skillsListingDeltas"))
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(false)
+        FeatureFlag::CwdScopedCloudSkills.is_enabled() || self.skills_listing_deltas
     }
 
     fn idle_timeout_sender<T: Send + 'static>(
@@ -1657,7 +1654,7 @@ impl AgentDriver {
             use_factory_repositories: false,
             github_credential_mode: GitHubCredentialMode::Legacy,
             credential_store_owner: None,
-            experimental: None,
+            skills_listing_deltas: false,
             team_scope: None,
             bedrock_oidc_credentials: None,
             harness: None,
@@ -1712,7 +1709,7 @@ impl AgentDriver {
             use_factory_repositories,
             github_credential_mode,
             credential_store_owner,
-            experimental,
+            skills_listing_deltas,
             parent_run_id,
             idle_on_complete,
             idle_on_fail,
@@ -1761,7 +1758,7 @@ impl AgentDriver {
         self.github_credential_mode = github_credential_mode;
         self.credential_store_owner = credential_store_owner;
         self.factory_repository_contract = use_factory_repositories;
-        self.experimental = experimental;
+        self.skills_listing_deltas = skills_listing_deltas;
         self.parent_run_id = parent_run_id;
         self.idle_on_complete = idle_on_complete;
         self.idle_on_fail = idle_on_fail;
@@ -2525,23 +2522,13 @@ impl AgentDriver {
                 .await?;
             let workspace = workspace.ok_or(AgentDriverError::InvalidRuntimeState)?;
             let runner_preparation = matches!(&workspace, WorkspaceState::PendingRunner(_));
-            let (global_skill_resolution, prepared_workspace) = match workspace {
-                // A standby sandbox already cloned the repositories and ran the setup
-                // commands, so the run resumes from those results.
-                WorkspaceState::Prepared(prepared) => {
-                    let global_skill_resolution =
-                        agent_setup::resolve_global_skills(&foreground).await?;
-                    let harness_working_dir = foreground
-                        .spawn(|me, _| me.harness_working_dir.clone())
-                        .await?;
-                    (
-                        global_skill_resolution,
-                        agent_setup::PreparedWorkspace {
-                            harness_working_dir,
-                            repositories: prepared.repositories,
-                        },
-                    )
-                }
+            let (run_skills, cloned_repositories) = match workspace {
+                // A standby sandbox already cloned the repositories, ran the setup commands, and
+                // read the skill files, so the run resumes from those results.
+                WorkspaceState::Prepared(prepared) => (
+                    agent_setup::RunSkills::Prepared(prepared.skills),
+                    prepared.repositories,
+                ),
                 WorkspaceState::Pending(mut workspace)
                 | WorkspaceState::PendingRunner(mut workspace) => {
                     let launch_file_warmup = match &task.harness {
@@ -2658,7 +2645,13 @@ impl AgentDriver {
                         )
                         .await?;
                     }
-                    (global_skill_resolution, prepared)
+                    (
+                        agent_setup::RunSkills::FromRepositories {
+                            repositories: prepared.repositories.clone(),
+                            global_skills: global_skill_resolution,
+                        },
+                        prepared.repositories,
+                    )
                 }
                 WorkspaceState::RunnerPrepared(_) => {
                     return Err(AgentDriverError::InvalidRuntimeState);
@@ -2707,17 +2700,10 @@ impl AgentDriver {
                     // After environment preparation, so the login shell's PATH includes what the
                     // setup commands added to its startup files; it overlaps skill loading.
                     agent_setup::start_login_shell_path_capture(&foreground).await?;
-                    let cloned_repositories = prepared_workspace.repositories.clone();
                     // Load skills from repos synchronously so the initial message includes them.
                     // File trees are ready after prepare_environment and global skill repo
                     // cloning above.
-                    agent_setup::load_skills(
-                        &foreground,
-                        prepared_workspace.repositories,
-                        global_skill_resolution,
-                        &setup_events,
-                    )
-                    .await;
+                    agent_setup::load_skills(&foreground, run_skills, &setup_events).await;
                     if factory_repository_contract {
                         agent_setup::load_factory_deferred_repositories_skill(&foreground).await;
                     }

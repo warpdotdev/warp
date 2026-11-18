@@ -2938,6 +2938,11 @@ type PopulateMerkleTreeCacheOutput implements Response {
 union PopulateMerkleTreeCacheResult = PopulateMerkleTreeCacheOutput | UserFacingError
 
 input PrewarmedSandboxConfigInput {
+  """
+  The Factory experiment keys whose values an assignment should carry. Absent
+  means no keys.
+  """
+  experimentKeys: [String!]
   githubCredentialContractVersion: Int
   runnerPreparationContractVersion: Int
   sandboxId: ID!
@@ -4032,7 +4037,7 @@ type Task {
   """
   Configuration for the active cloud execution. Requires the execution's workload token.
   """
-  executionConfig(executionId: ID!, supportsDeferredRepositories: Boolean = false, supportsAgentHooks: Boolean = false): ExecutionConfiguration!
+  executionConfig(executionId: ID!, supportsDeferredRepositories: Boolean = false, supportsAgentHooks: Boolean = false, experimentKeys: [String!] = []): ExecutionConfiguration!
 
   """The ID of the task."""
   taskId: ID!
@@ -5449,7 +5454,18 @@ type ExecutionConfiguration {
   The run's Factory experiment values as a JSON object, or null when it has
   none.
   """
-  experimentalJson: String
+  experimentalJson: String @deprecated(reason: "Use experiments instead")
+  """
+  The run's Factory experiment values for the keys the client asked for, in the
+  order asked. A key the run has no value for is omitted.
+  """
+  experiments: [FactoryExperimentValue!]!
+}
+
+"""One Factory experiment value, as JSON text."""
+type FactoryExperimentValue {
+  key: String!
+  valueJson: String!
 }
 
 """
