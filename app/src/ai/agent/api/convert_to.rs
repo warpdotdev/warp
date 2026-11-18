@@ -242,6 +242,7 @@ pub(super) fn convert_input(
                 context,
                 runtime_skill,
                 attachments_dir,
+                resolved_prompt: _,
             } => {
                 return Ok(api::request::Input {
                     context: Some(convert_context(context.as_ref())),

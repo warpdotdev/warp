@@ -1,4 +1,6 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use ai::hooks::test_util::{ScriptedRunner, test_binding, test_source_id};
@@ -9,12 +11,13 @@ use super::*;
 use crate::ai::agent::conversation::{AIConversation, ConversationStatus};
 use crate::ai::agent::{
     AIAgentAttachment, AnyFileContent, CancellationReason, FileContext, ImageContext,
+    ResolvedRunPrompt,
 };
-use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::ai::blocklist::hooks::test_utils::{
     controller_harness, conversation_status, exchange_count, hook_test_app,
     let_background_work_settle, settle,
 };
+use crate::ai::blocklist::{BlocklistAIControllerEvent, BlocklistAIHistoryModel};
 
 fn prompt_binding() -> DeclaredBinding {
     test_binding(
@@ -220,6 +223,164 @@ fn attachments_are_the_inputs_file_references_then_its_active_rules() {
         attachments_in(&AIAgentInput::AgentWake).is_empty(),
         "an input Warp built has no attachments"
     );
+}
+
+#[test]
+fn a_runs_first_prompt_carries_the_tasks_attachments_then_the_active_rules() {
+    let context: Arc<[AIAgentContext]> = Arc::from(vec![AIAgentContext::ProjectRules {
+        root_path: "/work/repo".to_owned(),
+        active_rules: vec![rule_file("/work/repo/AGENTS.md")],
+        additional_rule_paths: Vec::new(),
+    }]);
+    let input = AIAgentInput::StartFromAmbientRunPrompt {
+        ambient_run_id: "run".to_owned(),
+        context: context.clone(),
+        runtime_skill: None,
+        attachments_dir: Some("/work/attachments".to_owned()),
+        resolved_prompt: Some(ResolvedRunPrompt {
+            text: "Fix the build".to_owned(),
+            attachments: vec![
+                PathBuf::from("/work/attachments/a.png"),
+                PathBuf::from("/work/attachments/b.txt"),
+            ],
+        }),
+    };
+    assert_eq!(
+        attachments_in(&input),
+        vec![
+            file_attachment("/work/attachments/a.png"),
+            file_attachment("/work/attachments/b.txt"),
+            rule_attachment("/work/repo/AGENTS.md"),
+        ]
+    );
+    let unresolved = AIAgentInput::StartFromAmbientRunPrompt {
+        ambient_run_id: "run".to_owned(),
+        context,
+        runtime_skill: None,
+        attachments_dir: None,
+        resolved_prompt: None,
+    };
+    assert!(
+        attachments_in(&unresolved).is_empty(),
+        "a run prompt the client never saw has no attachments to report"
+    );
+}
+
+/// The run-start input, as the driver sends it once it has fetched the prompt for the hooks.
+fn run_start_input(text: &str) -> AIAgentInput {
+    AIAgentInput::StartFromAmbientRunPrompt {
+        ambient_run_id: "550e8400-e29b-41d4-a716-446655440a00".to_owned(),
+        context: Arc::from(Vec::new()),
+        runtime_skill: None,
+        attachments_dir: None,
+        resolved_prompt: Some(ResolvedRunPrompt {
+            text: text.to_owned(),
+            attachments: vec![PathBuf::from("/work/attachments/spec.md")],
+        }),
+    }
+}
+
+/// Every `RunPromptHalted` reason the controller announced.
+fn record_halted_run_prompts(
+    app: &mut App,
+    harness: &crate::ai::blocklist::hooks::test_utils::ControllerHarness,
+) -> Rc<RefCell<Vec<String>>> {
+    let reasons = Rc::new(RefCell::new(Vec::new()));
+    let log = reasons.clone();
+    let controller = harness.controller(app);
+    app.update(|ctx| {
+        ctx.subscribe_to_model(&controller, move |_, event, _| {
+            if let BlocklistAIControllerEvent::RunPromptHalted { reason, .. } = event {
+                log.borrow_mut().push(reason.clone());
+            }
+        });
+    });
+    reasons
+}
+
+#[test]
+fn a_runs_first_prompt_fires_prompt_submit_with_the_resolved_text() {
+    App::test((), |mut app| async move {
+        let harness = controller_harness(&mut app);
+        app.update(|ctx| harness.hooks.install_bindings(vec![prompt_binding()], ctx));
+        let halted = record_halted_run_prompts(&mut app, &harness);
+
+        harness.update_controller(&mut app, |controller, ctx| {
+            controller.send_custom_ai_input_query(run_start_input("Fix the build"), ctx);
+        });
+        settle(&mut app, |_| harness.hooks.adapter.encoded_count() == 1).await;
+
+        let envelope = &harness.hooks.adapter.encoded_envelopes()[0];
+        let HookPayload::PromptSubmit {
+            text,
+            attachments,
+            provenance,
+        } = &envelope.payload
+        else {
+            panic!("expected a prompt.submit payload");
+        };
+        assert_eq!(text, "Fix the build");
+        assert_eq!(attachments, &[file_attachment("/work/attachments/spec.md")]);
+        assert_eq!(*provenance, PromptProvenance::User);
+        settle(&mut app, |app| {
+            exchange_count(app, envelope.conversation_id) == 1
+        })
+        .await;
+        assert!(halted.borrow().is_empty());
+
+        // A run prompt the driver did not fetch for the hooks is not a prompt they can see.
+        harness.hooks.adapter.clear_encoded();
+        harness.update_controller(&mut app, |controller, ctx| {
+            controller.send_custom_ai_input_query(
+                AIAgentInput::StartFromAmbientRunPrompt {
+                    ambient_run_id: "550e8400-e29b-41d4-a716-446655440a00".to_owned(),
+                    context: Arc::from(Vec::new()),
+                    runtime_skill: None,
+                    attachments_dir: None,
+                    resolved_prompt: None,
+                },
+                ctx,
+            );
+        });
+        let_background_work_settle(&mut app).await;
+        assert_eq!(harness.hooks.adapter.encoded_count(), 0);
+    });
+}
+
+#[test]
+fn a_halted_first_run_prompt_is_announced_and_a_halted_typed_prompt_is_not() {
+    App::test((), |mut app| async move {
+        let harness = controller_harness(&mut app);
+        let binding = prompt_binding();
+        harness
+            .hooks
+            .runner
+            .script(binding.id.clone(), ScriptedRunner::deny_with("not today"));
+        app.update(|ctx| harness.hooks.install_bindings(vec![binding], ctx));
+        let halted = record_halted_run_prompts(&mut app, &harness);
+
+        harness.update_controller(&mut app, |controller, ctx| {
+            controller.send_custom_ai_input_query(run_start_input("Fix the build"), ctx);
+        });
+        settle(&mut app, |_| !halted.borrow().is_empty()).await;
+        assert_eq!(halted.borrow().as_slice(), ["not today".to_owned()]);
+        let conversation_id = harness.hooks.adapter.encoded_envelopes()[0].conversation_id;
+        assert_eq!(
+            exchange_count(&app, conversation_id),
+            0,
+            "no request went out"
+        );
+
+        let typed = harness.send_prompt(&mut app, "deploy");
+        settle(&mut app, |_| harness.hooks.messenger.notices().len() == 2).await;
+        let_background_work_settle(&mut app).await;
+        assert_eq!(exchange_count(&app, typed), 0);
+        assert_eq!(
+            halted.borrow().len(),
+            1,
+            "only a run's first prompt is announced"
+        );
+    });
 }
 
 #[test]
