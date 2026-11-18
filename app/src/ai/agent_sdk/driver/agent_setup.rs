@@ -372,6 +372,12 @@ pub(crate) async fn load_environment_skills(
         .spawn(|me, ctx| {
             if me.cwd_scoped_cloud_skills_enabled() {
                 SkillManager::handle(ctx).update(ctx, |manager, _| {
+                    // Undo the unscoped listing a warm (standby) sandbox may have enabled before
+                    // its assignment arrived. It ran this same skill load while `experimental` was
+                    // still unset, so it called `set_cloud_environment(true)`. That setting lives on
+                    // the `SkillManager` singleton, so without this reset it would override the cwd
+                    // scoping this run opted into via experiments.
+                    manager.set_cloud_environment(false);
                     manager.set_cloud_working_dir(me.harness_working_dir.clone());
                 });
             }

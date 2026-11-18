@@ -718,6 +718,8 @@ fn build_execution_task_and_options(
         sources: execution_config::agent_hook_sources(config.agent_hook_sources)?,
         surface: driver::hooks::run_surface_for(true),
     };
+    let experimental = execution_config::experimental(config.experimental_json.as_deref());
+    log_factory_experimental_config(experimental.as_ref());
     let mut factory_skill_dirs = execution_config::factory_skill_dirs(config.factory_skill_dirs)?;
     let factory_definition_sha = execution_config::factory_definition_sha(config.factory_branch)?;
     let definition_skill_dirs = factory_skill_dirs.clone();
@@ -739,7 +741,7 @@ fn build_execution_task_and_options(
         use_factory_repositories,
         github_credential_mode: GitHubCredentialMode::Legacy,
         credential_store_owner: None,
-        experimental: None,
+        experimental,
         parent_run_id: config.parent_run_id.map(|id| id.into_inner()),
         should_share: FeatureFlag::AgentSharedSessions.is_enabled(),
         idle_on_complete,
@@ -801,6 +803,22 @@ fn build_execution_task_and_options(
         config.conversation_id.map(|id| id.into_inner()),
         providers,
     ))
+}
+
+/// Records whether a run carries Factory experiment values, without their contents.
+fn log_factory_experimental_config(
+    experimental: Option<&serde_json::Map<String, serde_json::Value>>,
+) {
+    match experimental {
+        Some(values) => warp_core::safe_info!(
+            safe: ("factory_experimental_config state=read_uninterpreted key_count={}", values.len()),
+            full: ("factory_experimental_config state=read_uninterpreted key_count={}", values.len())
+        ),
+        None => warp_core::safe_info!(
+            safe: ("factory_experimental_config state=absent key_count=0"),
+            full: ("factory_experimental_config state=absent key_count=0")
+        ),
+    }
 }
 
 fn reconcile_task_harness(
@@ -2007,16 +2025,7 @@ impl AgentDriverRunner {
             Ok(None) => (None, None, None, None, Vec::new(), None, None),
             Err(err) => return Err(AgentDriverError::TaskMetadataFetchFailed(err)),
         };
-        match experimental.as_ref() {
-            Some(values) => warp_core::safe_info!(
-                safe: ("factory_experimental_config state=read_uninterpreted key_count={}", values.len()),
-                full: ("factory_experimental_config state=read_uninterpreted key_count={}", values.len())
-            ),
-            None => warp_core::safe_info!(
-                safe: ("factory_experimental_config state=absent key_count=0"),
-                full: ("factory_experimental_config state=absent key_count=0")
-            ),
-        }
+        log_factory_experimental_config(experimental.as_ref());
 
         // Validate the requested `--harness` against the task's harness setting. This avoids the
         // extra conversation-metadata roundtrip that would otherwise be needed downstream when the

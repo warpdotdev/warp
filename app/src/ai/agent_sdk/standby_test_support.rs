@@ -259,6 +259,7 @@ pub(super) fn execution_config() -> ExecutionConfiguration {
         idle_on_fail_seconds: None,
         snapshot_disabled: true,
         agent_hook_sources: Vec::new(),
+        experimental_json: None,
     }
 }
 
