@@ -16335,6 +16335,7 @@ dependencies = [
  "settings_value",
  "tempfile",
  "thiserror 2.0.17",
+ "tokio",
  "url",
  "uuid",
  "warp_core",
