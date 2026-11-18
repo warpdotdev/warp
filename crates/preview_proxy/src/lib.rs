@@ -37,6 +37,9 @@ const PREVIEW_CACHE_TTL: Duration = Duration::from_secs(15 * 60);
 const MISS_REFRESH_BACKOFF: Duration = Duration::from_secs(1);
 const ACCEPT_RETRY_DELAY: Duration = Duration::from_millis(100);
 const MAX_CONNECTIONS: usize = 256;
+const VIEWER_AUTHORIZATION_TIMEOUT: Duration = Duration::from_secs(5);
+const MAX_VIEWER_AUTHORIZATIONS: usize = 32;
+const MAX_VIEWER_CREDENTIAL_BYTES: usize = 8192;
 
 type Body = BoxBody<Bytes, hyper::Error>;
 #[derive(Clone, Debug)]
@@ -48,6 +51,25 @@ pub struct PreviewRecord {
 
 pub trait PortSource: Send + Sync {
     fn previews(&self) -> impl Future<Output = Result<Vec<PreviewRecord>>> + Send;
+
+    fn authorize_viewer(
+        &self,
+        _: ViewerAuthorization<'_>,
+    ) -> impl Future<Output = Result<()>> + Send {
+        async { bail!("Viewer authorization is unavailable") }
+    }
+}
+
+pub struct ViewerAuthorization<'a> {
+    pub preview_id: Uuid,
+    pub port: u16,
+    pub credential: &'a str,
+}
+
+#[derive(Clone, Copy)]
+pub enum CredentialPolicy {
+    Namespace,
+    DockerSandbox,
 }
 
 #[derive(Default)]
@@ -85,12 +107,37 @@ struct AuthorizedRoute {
 struct Routing<S> {
     listener_port: u16,
     source: Arc<S>,
+    credential_policy: CredentialPolicy,
+    viewer_capacity: Semaphore,
     upstream: UpstreamClient,
     cache: RwLock<PreviewCache>,
     refreshing: Mutex<()>,
 }
 
 impl<S: PortSource> Routing<S> {
+    async fn authorize_viewer(&self, route: &ParsedRoute, headers: &HeaderMap) -> bool {
+        let credential = match parse_viewer_credential(headers) {
+            Ok(Some(credential)) => credential,
+            Ok(None) => return matches!(self.credential_policy, CredentialPolicy::Namespace),
+            Err(()) => return false,
+        };
+        let Ok(_permit) = self.viewer_capacity.try_acquire() else {
+            return false;
+        };
+        matches!(
+            timeout(
+                VIEWER_AUTHORIZATION_TIMEOUT,
+                self.source.authorize_viewer(ViewerAuthorization {
+                    preview_id: route.id,
+                    port: route.port,
+                    credential,
+                }),
+            )
+            .await,
+            Ok(Ok(()))
+        )
+    }
+
     async fn authorize(&self, route: &ParsedRoute) -> Option<AuthorizedRoute> {
         let refresh_generation = self.cache.read().await.refresh_generation;
         if let Some(authorized) = self.authorize_from_cache(route).await {
@@ -242,8 +289,29 @@ fn parse_route(headers: &HeaderMap, listener_port: u16) -> Option<ParsedRoute> {
     Some(ParsedRoute { port, id, origin })
 }
 
+fn parse_viewer_credential(headers: &HeaderMap) -> std::result::Result<Option<&str>, ()> {
+    let Some(value) = unique_header(headers, "x-warp-preview-authorization")? else {
+        return Ok(None);
+    };
+    let credential = value.to_str().map_err(|_| ())?;
+    if credential.len() > MAX_VIEWER_CREDENTIAL_BYTES {
+        return Err(());
+    }
+    let Some(token) = credential.strip_prefix("Bearer ") else {
+        return Err(());
+    };
+    if token.is_empty()
+        || !token
+            .bytes()
+            .all(|byte| byte.is_ascii_graphic() && byte != b',')
+    {
+        return Err(());
+    }
+    Ok(Some(credential))
+}
+
 fn connection_nominates_identity(headers: &HeaderMap) -> bool {
-    const IDENTITY_HEADERS: [&str; 11] = [
+    const IDENTITY_HEADERS: [&str; 12] = [
         "host",
         "origin",
         "forwarded",
@@ -255,6 +323,7 @@ fn connection_nominates_identity(headers: &HeaderMap) -> bool {
         "x-original-uri",
         "x-warp-preview-id",
         "x-warp-preview-port",
+        "x-warp-preview-authorization",
     ];
     for value in headers.get_all(CONNECTION).iter() {
         let Ok(value) = value.to_str() else {
@@ -288,6 +357,14 @@ impl Drop for Proxy {
 
 impl Proxy {
     pub async fn bind(port: u16, source: Arc<impl PortSource + 'static>) -> Result<Self> {
+        Self::bind_with_policy(port, source, CredentialPolicy::Namespace).await
+    }
+
+    pub async fn bind_with_policy(
+        port: u16,
+        source: Arc<impl PortSource + 'static>,
+        credential_policy: CredentialPolicy,
+    ) -> Result<Self> {
         let listener = TcpListener::bind((Ipv4Addr::UNSPECIFIED, port))
             .await
             .context("Failed to bind preview listener")?;
@@ -296,6 +373,8 @@ impl Proxy {
         let routing = Arc::new(Routing {
             listener_port: port,
             source,
+            credential_policy,
+            viewer_capacity: Semaphore::new(MAX_VIEWER_AUTHORIZATIONS),
             upstream: upstream::new_client(cancel.clone()),
             cache: RwLock::new(PreviewCache::default()),
             refreshing: Mutex::new(()),
@@ -404,6 +483,9 @@ async fn forward<S: PortSource + 'static>(
     let Some(authorized) = routing.authorize(&route).await else {
         return Ok(empty(StatusCode::FORBIDDEN));
     };
+    if !routing.authorize_viewer(&route, request.headers()).await {
+        return Ok(empty(StatusCode::FORBIDDEN));
+    }
     let app_port = authorized.port;
     let downstream_upgrade = upgrade.as_ref().map(|_| hyper::upgrade::on(&mut request));
     prepare_headers(
@@ -498,7 +580,13 @@ fn prepare_headers(headers: &mut HeaderMap, port: u16, translated_origin: Option
         headers.insert(CONNECTION, HeaderValue::from_static("te"));
     }
     strip_credentials(headers);
-    for name in ["x-warp-cloud-agent-id", "x-warp-ambient-task-token"] {
+    for name in [
+        "x-warp-cloud-agent-id",
+        "x-warp-ambient-task-token",
+        "x-warp-ambient-workload-token",
+        "x-warp-prewarmed-sandbox-id",
+        "x-warp-prewarmed-sandbox-workload-token",
+    ] {
         headers.remove(name);
     }
     for name in [
