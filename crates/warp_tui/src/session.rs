@@ -230,8 +230,9 @@ pub fn run() -> Result<()> {
                         ctx.terminate_app(TerminationMode::ForceTerminate, None);
                         return;
                     };
-                    let login_hint =
-                        "You are not logged in - please open Warp Agent CLI to log in.";
+                    let login_hint = "Git access requires browser login and does not support \
+                                      API-key authentication. Unset WARP_API_KEY, restart Warp \
+                                      Agent CLI without --api-key, and sign in again using your browser.";
                     if let Err(error) =
                         authenticate_then_execute(None, login_hint, ctx, move |ctx| {
                             let factory = ServerApiProvider::as_ref(ctx).get_factory_client();
