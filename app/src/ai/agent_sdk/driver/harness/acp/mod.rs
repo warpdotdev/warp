@@ -83,7 +83,9 @@ use self::turn_driver::{
 };
 use super::super::terminal::{CommandHandle, TerminalDriver};
 use super::super::{AgentDriver, AgentDriverError, HarnessSetupStage};
-use super::claude_code::prepare_claude_environment_config;
+use super::claude_code::{
+    default_claude_sessions_to_manual_permission_mode, prepare_claude_environment_config,
+};
 use super::codex::{prepare_codex_environment_config, publish_skills_for_codex};
 use super::gemini::{prepare_gemini_environment_config, publish_skills_for_gemini};
 use super::harness_persistence::{
@@ -198,14 +200,17 @@ impl AcpHarness {
         third_party_harness_model_config: Option<&HarnessModelConfig>,
     ) -> Result<()> {
         match self.harness {
-            Harness::Claude => prepare_claude_environment_config(
-                workspace_root,
-                harness_working_dir,
-                resolved_env_vars,
-                skill_dirs,
-                factory_repository_contract,
-                HarnessSupportSkills::Bundled,
-            ),
+            Harness::Claude => {
+                prepare_claude_environment_config(
+                    workspace_root,
+                    harness_working_dir,
+                    resolved_env_vars,
+                    skill_dirs,
+                    factory_repository_contract,
+                    HarnessSupportSkills::Bundled,
+                )?;
+                default_claude_sessions_to_manual_permission_mode()
+            }
             // MCP servers are handed to the agent in `session/new` and the model is selected
             // through the session's config options, so neither is written into `config.toml`.
             Harness::Codex => {
