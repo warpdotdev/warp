@@ -71,8 +71,9 @@ use crate::ai::blocklist::orchestration_event_streamer::{
 use crate::ai::blocklist::orchestration_events::OrchestrationEventService;
 use crate::ai::blocklist::pending_cli_harness_prompt_queue::PendingCliHarnessPromptQueue;
 use crate::ai::blocklist::{
-    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, ConversationStatusUpdate, FinalizeReason,
-    QueuedQueryEvent, QueuedQueryModel, finalize_recording_for_conversation,
+    BlocklistAIControllerEvent, BlocklistAIHistoryEvent, BlocklistAIHistoryModel,
+    ConversationStatusUpdate, FinalizeReason, QueuedQueryEvent, QueuedQueryModel,
+    finalize_recording_for_conversation,
 };
 use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
 use crate::ai::document::ai_document_model::{AIDocumentModel, AIDocumentModelEvent};
@@ -4216,6 +4217,20 @@ impl AgentDriver {
                         .send_cloud_mode_setup_phase_ended_for_shared_session();
                 })
             });
+            // A hook that stops the run's first prompt leaves the run with nothing to do.
+            let halt_run_exit = run_exit.clone();
+            let controller = self
+                .terminal_driver
+                .as_ref(ctx)
+                .terminal_view()
+                .as_ref(ctx)
+                .ai_controller()
+                .clone();
+            ctx.subscribe_to_model(&controller, move |me, _, event, ctx| {
+                if let BlocklistAIControllerEvent::RunPromptHalted { reason, .. } = event {
+                    me.end_run_for_halted_prompt(halt_run_exit.clone(), reason, ctx);
+                }
+            });
             if self.skip_initial_turn && prepared_conversation_id.is_none() {
                 run_exit.complete_with_optional_idle(
                     self.idle_on_complete,
@@ -4568,55 +4583,49 @@ impl AgentDriver {
         if !self.skip_initial_turn {
             tracing::info!("Submitting initial AI query");
 
-            self.terminal_driver.update(ctx, |td, ctx| {
-                td.with_terminal_view(ctx, |terminal, ctx| match task_prompt {
-                    AgentRunPrompt::Local(prompt_str) => {
-                        if FeatureFlag::AgentView.is_enabled() {
-                            terminal.enter_agent_view(
-                                Some(prompt_str),
-                                restored_conversation_id,
-                                AgentViewEntryOrigin::Cli,
-                                ctx,
-                            );
-                        } else if let Some(conversation_id) = prepared_conversation_id {
-                            terminal.ai_controller().update(ctx, |controller, ctx| {
-                                controller.send_user_query_in_conversation_no_lrc_subagent(
-                                    prompt_str,
-                                    conversation_id,
-                                    None,
+            match task_prompt {
+                AgentRunPrompt::Local(prompt_str) => {
+                    self.terminal_driver.update(ctx, |td, ctx| {
+                        td.with_terminal_view(ctx, |terminal, ctx| {
+                            if FeatureFlag::AgentView.is_enabled() {
+                                terminal.enter_agent_view(
+                                    Some(prompt_str),
+                                    restored_conversation_id,
+                                    AgentViewEntryOrigin::Cli,
                                     ctx,
                                 );
-                            });
-                        } else {
-                            terminal.set_ai_input_mode_with_query(Some(&prompt_str), ctx);
-                            terminal
-                                .input()
-                                .update(ctx, |input, ctx| input.input_enter(ctx));
-                        }
-                    }
-                    AgentRunPrompt::ServerSide {
+                            } else if let Some(conversation_id) = prepared_conversation_id {
+                                terminal.ai_controller().update(ctx, |controller, ctx| {
+                                    controller.send_user_query_in_conversation_no_lrc_subagent(
+                                        prompt_str,
+                                        conversation_id,
+                                        None,
+                                        ctx,
+                                    );
+                                });
+                            } else {
+                                terminal.set_ai_input_mode_with_query(Some(&prompt_str), ctx);
+                                terminal
+                                    .input()
+                                    .update(ctx, |input, ctx| input.input_enter(ctx));
+                            }
+                        })
+                    });
+                }
+                AgentRunPrompt::ServerSide {
+                    skill,
+                    attachments_dir,
+                } => match self.task_id {
+                    Some(task_id) => self.send_run_prompt(
+                        task_id,
                         skill,
                         attachments_dir,
-                    } => {
-                        let Some(task_id) = self.task_id else {
-                            report_error!("ServerSide prompt without task_id");
-                            return;
-                        };
-                        let ambient_run_id = task_id.to_string();
-                        terminal.ai_controller().update(ctx, |controller, ctx| {
-                            controller.send_ai_input_with_context(
-                                |context| AIAgentInput::StartFromAmbientRunPrompt {
-                                    ambient_run_id: ambient_run_id.clone(),
-                                    context,
-                                    runtime_skill: skill.clone(),
-                                    attachments_dir: attachments_dir.clone(),
-                                },
-                                ctx,
-                            );
-                        });
-                    }
-                })
-            });
+                        queue_run_exit.clone(),
+                        ctx,
+                    ),
+                    None => report_error!("ServerSide prompt without task_id"),
+                },
+            }
         }
 
         if self.skip_initial_turn

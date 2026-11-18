@@ -2173,6 +2173,213 @@ fn execute_run_does_not_fire_session_start() {
     });
 }
 
+/// A driver about to send a run's server-side first prompt, with one `prompt.submit` binding
+/// installed (strict or not) and the task id set.
+fn driver_for_first_prompt(
+    app: &mut App,
+    working_dir: &Path,
+    strict: bool,
+    outcome: ai::hooks::HookProcessOutcome,
+) -> (
+    warpui::ModelHandle<AgentDriver>,
+    warpui::ViewHandle<crate::terminal::TerminalView>,
+    TestHooks,
+) {
+    let (driver, terminal, hooks) = driver_with_hooks(app, working_dir);
+    let binding = test_binding(
+        test_source_id("prompt"),
+        HookBoundary::PromptSubmit,
+        0,
+        None,
+    );
+    hooks.runner.script(binding.id.clone(), outcome);
+    app.update(|ctx| {
+        let mut active = ai::hooks::test_util::active_binding(binding, hooks.adapter.clone());
+        active.policy.strict = strict;
+        HookRegistry::handle(ctx).update(ctx, |registry, _| {
+            registry.install_snapshot_for_test(vec![active], Vec::new());
+        });
+    });
+    driver.update(app, |driver, _| {
+        driver.task_id = Some(HOOK_TASK_ID.parse().unwrap());
+        driver.skip_initial_turn = false;
+        driver.idle_on_fail = None;
+    });
+    (driver, terminal, hooks)
+}
+
+fn resolved_prompt_mock(
+    server: &mut mockito::ServerGuard,
+    status: usize,
+    body: &str,
+) -> mockito::Mock {
+    server
+        .mock("POST", "/api/v1/harness-support/resolve-prompt")
+        .with_status(status)
+        .with_body(body)
+        .expect(1)
+        .create()
+}
+
+/// How many requests went out on `terminal_id`, across its conversations.
+fn exchanges_on(app: &App, terminal_id: warpui::EntityId) -> usize {
+    BlocklistAIHistoryModel::handle(app).read(app, |history, _| {
+        history
+            .all_live_root_task_exchanges_for_terminal_surface(terminal_id)
+            .count()
+    })
+}
+
+/// The run's first prompt is fetched from the server for the prompt hooks, which see its text
+/// and the task's attachments; a hook that stops it ends the run as failed with its reason.
+#[test]
+fn a_hook_that_stops_the_first_run_prompt_ends_the_run_with_its_reason() {
+    let mut server = ChannelState::mock_server();
+    let resolved = resolved_prompt_mock(
+        &mut server,
+        200,
+        &json!({"prompt": "Fix the flaky test"}).to_string(),
+    );
+    App::test((), |mut app| async move {
+        let temp = TempDir::new().unwrap();
+        let attachments_dir = temp.path().join("attachments");
+        fs::create_dir_all(attachments_dir.join("handoff")).unwrap();
+        fs::write(attachments_dir.join("spec.md"), "spec").unwrap();
+        fs::write(attachments_dir.join("handoff").join("state.json"), "{}").unwrap();
+        let (driver, _terminal, hooks) = driver_for_first_prompt(
+            &mut app,
+            temp.path(),
+            false,
+            ScriptedRunner::deny_with("not today"),
+        );
+
+        let completion = driver.update(&mut app, |driver, ctx| {
+            driver.execute_run(
+                AgentRunPrompt::ServerSide {
+                    skill: None,
+                    attachments_dir: Some(attachments_dir.display().to_string()),
+                },
+                ctx,
+            )
+        });
+        let SDKConversationOutputStatus::Error { error } = completion.await.unwrap() else {
+            panic!("expected the run to end as failed");
+        };
+        let message = error.to_string();
+        assert!(
+            message.contains("stopped its first prompt") && message.contains("not today"),
+            "{message}"
+        );
+        let envelopes = hooks.adapter.encoded_envelopes();
+        assert_eq!(envelopes.len(), 1);
+        let ai::hooks::HookPayload::PromptSubmit {
+            text,
+            attachments,
+            provenance,
+        } = &envelopes[0].payload
+        else {
+            panic!("expected a prompt.submit payload");
+        };
+        assert_eq!(text, "Fix the flaky test");
+        assert_eq!(
+            attachments,
+            &[ai::hooks::PromptAttachment {
+                kind: ai::hooks::PromptAttachmentKind::File,
+                path: attachments_dir.join("spec.md"),
+            }],
+            "the handoff snapshot's subdirectory is not an attachment"
+        );
+        assert_eq!(*provenance, ai::hooks::PromptProvenance::User);
+    });
+    resolved.assert();
+}
+
+/// When the prompt cannot be fetched and a strict source owns a prompt hook, the run ends as
+/// failed rather than starting without the hook.
+#[test]
+fn a_first_run_prompt_that_cannot_be_fetched_fails_the_run_under_a_strict_source() {
+    let mut server = ChannelState::mock_server();
+    let resolved = resolved_prompt_mock(&mut server, 500, "boom");
+    App::test((), |mut app| async move {
+        let temp = TempDir::new().unwrap();
+        let (driver, terminal, hooks) = driver_for_first_prompt(
+            &mut app,
+            temp.path(),
+            true,
+            ScriptedRunner::exit_with(0, ""),
+        );
+
+        let completion = driver.update(&mut app, |driver, ctx| {
+            driver.execute_run(
+                AgentRunPrompt::ServerSide {
+                    skill: None,
+                    attachments_dir: None,
+                },
+                ctx,
+            )
+        });
+        let SDKConversationOutputStatus::Error { error } = completion.await.unwrap() else {
+            panic!("expected the run to end as failed");
+        };
+        assert!(
+            error.to_string().contains("could not be fetched"),
+            "{error}"
+        );
+        assert_eq!(
+            hooks.adapter.encoded_count(),
+            0,
+            "no prompt reached the hook"
+        );
+        assert_eq!(exchanges_on(&app, terminal.id()), 0, "no request went out");
+    });
+    resolved.assert();
+}
+
+/// When the prompt cannot be fetched and no strict source is involved, the run goes on without
+/// the hook and says so in a diagnostic.
+#[test]
+fn a_first_run_prompt_that_cannot_be_fetched_is_sent_without_the_hook_otherwise() {
+    let mut server = ChannelState::mock_server();
+    let resolved = resolved_prompt_mock(&mut server, 500, "boom");
+    App::test((), |mut app| async move {
+        let temp = TempDir::new().unwrap();
+        let (driver, terminal, hooks) = driver_for_first_prompt(
+            &mut app,
+            temp.path(),
+            false,
+            ScriptedRunner::deny_with("would have stopped it"),
+        );
+
+        let _completion = driver.update(&mut app, |driver, ctx| {
+            driver.execute_run(
+                AgentRunPrompt::ServerSide {
+                    skill: None,
+                    attachments_dir: None,
+                },
+                ctx,
+            )
+        });
+        let terminal_id = terminal.id();
+        test_utils::settle(&mut app, |app| exchanges_on(app, terminal_id) == 1).await;
+
+        assert_eq!(hooks.adapter.encoded_count(), 0, "the hook did not run");
+        let diagnostics = hooks.messenger.diagnostics();
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(
+            diagnostics[0].severity,
+            ai::hooks::DiagnosticSeverity::Warning
+        );
+        assert!(
+            diagnostics[0]
+                .message
+                .contains("beforeSubmitPrompt hooks did not run"),
+            "{}",
+            diagnostics[0].message
+        );
+    });
+    resolved.assert();
+}
+
 /// The whole path from a hook's `ask` to the end of the run: the model asks for a shell command,
 /// the pre-tool hook answers `ask` through the runner, nobody can answer it, and the hook's source
 /// is set to fail the run in that case.

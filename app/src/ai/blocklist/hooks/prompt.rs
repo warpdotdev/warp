@@ -40,32 +40,59 @@ pub(crate) struct SubmittedPrompt {
     pub provenance: PromptProvenance,
 }
 
-/// The files that go to the model with `input`: the files the person attached, in path order,
-/// then the rule files whose content the request carries. Rules the request only lists by path,
-/// and attachments with no file the model reads (images, blocks, documents, diffs), are left out.
+/// The files that go to the model with `input`: the files the person attached (or, for a run's
+/// first prompt, the task's attachments), in path order, then the rule files whose content the
+/// request carries. Rules the request only lists by path, and attachments with no file the model
+/// reads (images, blocks, documents, diffs), are left out.
 pub(crate) fn attachments_in(input: &AIAgentInput) -> Vec<PromptAttachment> {
-    let AIAgentInput::UserQuery {
-        referenced_attachments,
-        context,
-        ..
-    } = input
-    else {
-        return Vec::new();
+    let (mut files, context) = match input {
+        AIAgentInput::UserQuery {
+            referenced_attachments,
+            context,
+            ..
+        } => {
+            let files = referenced_attachments
+                .values()
+                .filter_map(|attachment| match attachment {
+                    AIAgentAttachment::FilePathReference { file_path, .. } => {
+                        Some(PathBuf::from(file_path))
+                    }
+                    AIAgentAttachment::PlainText(_)
+                    | AIAgentAttachment::DocumentContent { .. }
+                    | AIAgentAttachment::DriveObject { .. }
+                    | AIAgentAttachment::DiffHunk { .. }
+                    | AIAgentAttachment::DiffSet { .. }
+                    | AIAgentAttachment::Block(_) => None,
+                })
+                .collect::<Vec<_>>();
+            (files, context)
+        }
+        AIAgentInput::StartFromAmbientRunPrompt {
+            resolved_prompt: Some(prompt),
+            context,
+            ..
+        } => (prompt.attachments.clone(), context),
+        AIAgentInput::StartFromAmbientRunPrompt {
+            resolved_prompt: None,
+            ..
+        }
+        | AIAgentInput::AutoCodeDiffQuery { .. }
+        | AIAgentInput::ResumeConversation { .. }
+        | AIAgentInput::InitProjectRules { .. }
+        | AIAgentInput::CreateEnvironment { .. }
+        | AIAgentInput::TriggerPassiveSuggestion { .. }
+        | AIAgentInput::CreateNewProject { .. }
+        | AIAgentInput::CloneRepository { .. }
+        | AIAgentInput::CodeReview { .. }
+        | AIAgentInput::SummarizeConversation { .. }
+        | AIAgentInput::InvokeSkill { .. }
+        | AIAgentInput::ActionResult { .. }
+        | AIAgentInput::MessagesReceivedFromAgents { .. }
+        | AIAgentInput::EventsFromAgents { .. }
+        | AIAgentInput::PassiveSuggestionResult { .. }
+        | AIAgentInput::OrchestrationConfigUpdate { .. }
+        | AIAgentInput::AgentWake => return Vec::new(),
     };
-    let mut files = referenced_attachments
-        .values()
-        .filter_map(|attachment| match attachment {
-            AIAgentAttachment::FilePathReference { file_path, .. } => {
-                Some(PathBuf::from(file_path))
-            }
-            AIAgentAttachment::PlainText(_)
-            | AIAgentAttachment::DocumentContent { .. }
-            | AIAgentAttachment::DriveObject { .. }
-            | AIAgentAttachment::DiffHunk { .. }
-            | AIAgentAttachment::DiffSet { .. }
-            | AIAgentAttachment::Block(_) => None,
-        })
-        .collect::<Vec<_>>();
     files.sort();
     let rules = context
         .iter()
@@ -113,7 +140,10 @@ pub(crate) enum PromptDecision {
     /// Send the prompt.
     Proceed(PromptTicket),
     /// A hook stopped the prompt. The person was told why.
-    Halted(PromptTicket),
+    Halted {
+        ticket: PromptTicket,
+        reason: String,
+    },
     /// The prompt was given up on while its hooks ran: a newer prompt replaced it, or the
     /// conversation was cancelled.
     Cancelled,
@@ -297,9 +327,9 @@ async fn run_prompt_dispatch(
                 conversation_id,
                 action_id: None,
                 kind: HookNoticeKind::Denied,
-                text: reason,
+                text: reason.clone(),
             });
-            PromptDecision::Halted(ticket)
+            PromptDecision::Halted { ticket, reason }
         }
         None => PromptDecision::Proceed(ticket),
     }
@@ -347,7 +377,7 @@ pub(crate) fn finish_turn_preparation(
     }
     HookRuntime::handle(ctx).update(ctx, |runtime, _| {
         match decision {
-            PromptDecision::Proceed(ticket) | PromptDecision::Halted(ticket) => {
+            PromptDecision::Proceed(ticket) | PromptDecision::Halted { ticket, .. } => {
                 runtime.pending_prompts.settle(conversation_id, ticket);
             }
             PromptDecision::Cancelled => {}
