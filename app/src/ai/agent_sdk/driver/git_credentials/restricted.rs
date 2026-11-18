@@ -42,10 +42,11 @@ const AUTH_ENV: &[&str] = &[
 ];
 pub(super) const REFRESH_FALLBACK_INTERVAL: Duration = Duration::from_secs(60);
 const REFRESH_EXPIRY_BUFFER: TimeDelta = TimeDelta::minutes(10);
-const SUPPORTED_PROVIDERS: [TaskGitCredentialProvider; 3] = [
+const SUPPORTED_PROVIDERS: [TaskGitCredentialProvider; 4] = [
     TaskGitCredentialProvider::Github,
     TaskGitCredentialProvider::Gitlab,
     TaskGitCredentialProvider::AzureDevops,
+    TaskGitCredentialProvider::CodeStorage,
 ];
 
 const GIT_OVERRIDE_ENV: &[&str] = &[
@@ -345,6 +346,17 @@ fn provider_for_host(host: &str) -> Option<TaskGitCredentialProvider> {
         GITHUB_HOST => Some(TaskGitCredentialProvider::Github),
         "gitlab.com" => Some(TaskGitCredentialProvider::Gitlab),
         "dev.azure.com" => Some(TaskGitCredentialProvider::AzureDevops),
+        host if host
+            .strip_suffix(".code.storage")
+            .is_some_and(|organization| {
+                !organization.is_empty()
+                    && organization
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+            }) =>
+        {
+            Some(TaskGitCredentialProvider::CodeStorage)
+        }
         _ => None,
     }
 }

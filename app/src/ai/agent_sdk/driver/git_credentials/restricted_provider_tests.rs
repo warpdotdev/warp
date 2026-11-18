@@ -20,6 +20,111 @@ fn other_response(host: &str) -> RestrictedTaskGitCredentialsOutput {
 }
 
 #[test]
+fn bootstrap_accepts_code_storage_without_github() -> Result<()> {
+    with_home(
+        "provider_tests::bootstrap_accepts_code_storage_without_github",
+        &[
+            ("WARP_WORKLOAD_TOKEN", "test-workload"),
+            ("WARP_ISOLATION_PLATFORM", "docker"),
+        ],
+        |home| {
+            let mut client = MockAIClient::new();
+            client
+                .expect_get_restricted_task_git_credentials()
+                .times(1)
+                .returning(|_, _, partial, _, providers| {
+                    assert!(!partial);
+                    assert!(providers.is_none());
+                    Ok(other_response("warp-staging.code.storage"))
+                });
+            let client: Arc<dyn AIClient> = Arc::new(client);
+
+            block_on(bootstrap_restricted_credentials("task", &client, true))?;
+
+            assert_eq!(
+                fs::read_to_string(home.join(".git-credentials"))?,
+                "https://x-access-token:other-test-token@warp-staging.code.storage\n"
+            );
+            assert!(fs::read(home.join(".warp/github-git/task/credentials"))?.is_empty());
+            with_store("task", |store| {
+                let deadline = store.provider_refresh_at[&TaskGitCredentialProvider::CodeStorage];
+                assert_eq!(due_providers(store, deadline), SUPPORTED_PROVIDERS);
+                Ok(())
+            })
+        },
+    )
+}
+
+#[test]
+fn code_storage_refresh_rotates_token_without_touching_github() -> Result<()> {
+    with_home(
+        "provider_tests::code_storage_refresh_rotates_token_without_touching_github",
+        &[],
+        |home| {
+            let directory = prepare("task")?;
+            let owner = ManagedStoreOwner::from("task");
+            apply_refresh(&owner, Ok(validated_response()?))?;
+            let before = with_store(&owner, |store| {
+                Ok((store.expires_at, store.provider_refresh_at.clone()))
+            })?;
+            let github = fs::read(directory.join("credentials"))?;
+            write_git_credentials(&[GitCredential {
+                host: "warp-staging.code.storage".into(),
+                token: "old-token".into(),
+                username: None,
+                email: None,
+            }])?;
+
+            apply_partial_response(
+                &owner,
+                other_response("warp-staging.code.storage"),
+                Some(&[TaskGitCredentialProvider::CodeStorage]),
+            )?;
+
+            assert_eq!(
+                fs::read_to_string(home.join(".git-credentials"))?,
+                "https://x-access-token:other-test-token@warp-staging.code.storage\n"
+            );
+            assert_eq!(fs::read(directory.join("credentials"))?, github);
+            with_store(&owner, |store| {
+                assert_eq!(store.expires_at, before.0);
+                assert_eq!(
+                    store.provider_refresh_at[&TaskGitCredentialProvider::Github],
+                    before.1[&TaskGitCredentialProvider::Github]
+                );
+                assert!(
+                    store
+                        .provider_refresh_at
+                        .contains_key(&TaskGitCredentialProvider::CodeStorage)
+                );
+                Ok(())
+            })
+        },
+    )
+}
+
+#[test]
+fn code_storage_requires_an_organization_host() {
+    assert_eq!(
+        provider_for_host("warp.code.storage"),
+        Some(TaskGitCredentialProvider::CodeStorage)
+    );
+    for host in [
+        "code.storage",
+        ".code.storage",
+        "warpcode.storage",
+        "warp.code.storage.example.com",
+        "other.example.com",
+        "https://warp.code.storage",
+        "user@warp.code.storage",
+        "warp\n.code.storage",
+        "nested.warp.code.storage",
+    ] {
+        assert_eq!(provider_for_host(host), None, "{host:?}");
+    }
+}
+
+#[test]
 fn mixed_credentials_have_independent_deadlines_and_discover_absent_providers() -> Result<()> {
     with_home(
         "provider_tests::mixed_credentials_have_independent_deadlines_and_discover_absent_providers",
@@ -49,6 +154,7 @@ fn mixed_credentials_have_independent_deadlines_and_discover_absent_providers() 
                     vec![
                         TaskGitCredentialProvider::Gitlab,
                         TaskGitCredentialProvider::AzureDevops,
+                        TaskGitCredentialProvider::CodeStorage,
                     ]
                 );
                 assert_eq!(
@@ -153,10 +259,15 @@ fn selected_failures_retry_without_clearing_unrequested_github() -> Result<()> {
             })?;
             let mut response = other_response("gitlab.com");
             response.credentials.clear();
-            response.failed_hosts = vec!["gitlab.com".into(), "dev.azure.com".into()];
+            response.failed_hosts = vec![
+                "gitlab.com".into(),
+                "dev.azure.com".into(),
+                "warp-staging.code.storage".into(),
+            ];
             let selected = [
                 TaskGitCredentialProvider::Gitlab,
                 TaskGitCredentialProvider::AzureDevops,
+                TaskGitCredentialProvider::CodeStorage,
             ];
             assert!(apply_partial_response(&owner, response, Some(&selected)).is_err());
             with_store(&owner, |store| {
@@ -230,7 +341,8 @@ fn selective_request_uses_due_providers_only() -> Result<()> {
                         providers,
                         Some(vec![
                             TaskGitCredentialProvider::Gitlab,
-                            TaskGitCredentialProvider::AzureDevops
+                            TaskGitCredentialProvider::AzureDevops,
+                            TaskGitCredentialProvider::CodeStorage,
                         ])
                     );
                     Ok(other_response("gitlab.com"))
