@@ -126,13 +126,23 @@ It is not Cursor's result shape. Binary file content is summarized as `is_binary
   the task's attachment files are listed as `file` attachments. A `continue: false` (or exit 2)
   on that prompt ends the run as failed with your `user_message`, since the run has nothing else
   to do. If the text cannot be fetched the run goes on without the hook and says so in a warning,
-  unless the hook's source is `strict`, in which case the run ends as failed. `attachments` lists
-  the files the person attached (`{ "type": "file", "file_path" }`, in path order) and then the
-  rule files whose content went with the prompt (`{ "type": "rule", "file_path" }`; Warp's
-  `WARP.md` and `AGENTS.md` files for the working directory and its ancestors, plus global
-  rules). A rule file for another part of the repository, which the agent can read later but
-  whose content was not sent, is not listed. Images and other attachment kinds with no file on
-  disk are not listed.
+  unless the hook's source is `strict`, in which case the run ends as failed.
+- The first prompt's text is the prompt as the server resolves it for a harness: the agent's
+  base prompt when it has one, a blank line, then the task's prompt. For a run started with one
+  prompt and nothing else, that is exactly the run's first user message. In a few cases it is
+  not: when the task has attachments, an `Attached files:` section listing their paths is
+  appended (the same files are in `attachments` as `file` entries); when the run was started
+  with a skill, the skill's text is inlined at the top instead of the `/<skill>` prefix the
+  conversation shows; when the run continues an earlier execution's inputs (a handoff), those
+  inputs are inlined before the prompt; and when several prompts were queued before the run
+  started, they are joined into one. A version of this text that matches the stored first
+  message exactly is possible follow-up work on the server.
+- `beforeSubmitPrompt.attachments` lists the files the person attached
+  (`{ "type": "file", "file_path" }`, in path order) and then the rule files whose content went
+  with the prompt (`{ "type": "rule", "file_path" }`; Warp's `WARP.md` and `AGENTS.md` files for
+  the working directory and its ancestors, plus global rules). A rule file for another part of
+  the repository, which the agent can read later but whose content was not sent, is not listed.
+  Images and other attachment kinds with no file on disk are not listed.
 - `stop` fires only for a turn that completed (`status: "completed"`); a cancelled or failed turn
   does not fire it.
 - `postToolUse.duration` and `postToolUseFailure.duration` are the time the tool ran, in
