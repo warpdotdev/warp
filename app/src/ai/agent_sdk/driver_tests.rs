@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -103,14 +103,19 @@ fn sandbox_deadline_preserves_only_a_settled_latest_turn() {
         );
         return;
     }
-    for (settled, follow_up, expected_report) in [
-        (true, false, None),
-        (true, true, Some(AgentTaskState::Failed)),
-        (false, false, Some(AgentTaskState::Failed)),
+    for (settled, follow_up, delay_follow_up, expected_report) in [
+        (true, false, false, None),
+        (true, true, false, Some(AgentTaskState::Failed)),
+        (false, false, false, Some(AgentTaskState::Failed)),
+        (true, true, true, Some(AgentTaskState::Failed)),
     ] {
         App::test((), move |mut app| async move {
             let reports = Arc::new(Mutex::new(Vec::new()));
             let reports_for_mock = reports.clone();
+            let (release_update, wait_for_release) = std::sync::mpsc::channel();
+            let wait_for_release = Mutex::new(wait_for_release);
+            let delay_update = Arc::new(AtomicBool::new(false));
+            let delay_update_for_mock = delay_update.clone();
             let _updates = {
                 let mut server = ChannelState::mock_server();
                 server
@@ -122,6 +127,15 @@ fn sandbox_deadline_preserves_only_a_settled_latest_turn() {
                             .lock()
                             .unwrap()
                             .push(body["variables"]["input"]["taskState"].clone());
+                        if delay_update_for_mock.load(Ordering::SeqCst)
+                            && body["variables"]["input"]["taskState"] == "IN_PROGRESS"
+                        {
+                            wait_for_release
+                                .lock()
+                                .unwrap()
+                                .recv_timeout(super::TASK_STATUS_FLUSH_TIMEOUT * 3)
+                                .unwrap();
+                        }
                         json!({"data": {"updateAgentTask": {
                             "__typename": "UpdateAgentTaskOutput",
                             "responseContext": {"serverVersion": null}
@@ -154,6 +168,7 @@ fn sandbox_deadline_preserves_only_a_settled_latest_turn() {
             sync.update(&mut app, |model, _| model.wait_for_idle(task_id))
                 .await;
             reports.lock().unwrap().clear();
+            delay_update.store(delay_follow_up, Ordering::SeqCst);
             if follow_up {
                 CLIAgentSessionsModel::handle(&app).update(&mut app, |_, ctx| {
                     ctx.emit(CLIAgentSessionsModelEvent::StatusChanged {
@@ -181,6 +196,17 @@ fn sandbox_deadline_preserves_only_a_settled_latest_turn() {
                 &foreground,
             )
             .await;
+            if delay_follow_up {
+                assert_eq!(
+                    sync.read(&app, |model, _| model.latest_delivered_task_state(&task_id)),
+                    Some(AgentTaskState::Succeeded)
+                );
+                assert!(matches!(
+                    result,
+                    Err(AgentDriverError::SandboxDeadlineReached { .. })
+                ));
+                release_update.send(()).unwrap();
+            }
             AgentDriver::flush_task_status_before_exit(
                 task_id,
                 result.is_ok(),

@@ -2241,7 +2241,9 @@ impl AgentDriver {
         server_api: &Arc<dyn AIClient>,
         foreground: &ModelSpawner<Self>,
     ) -> Result<(), AgentDriverError> {
-        Self::flush_task_status_before_exit(task_id, false, server_api, foreground).await;
+        if !Self::flush_task_status_before_exit(task_id, false, server_api, foreground).await {
+            return result;
+        }
         let latest_state = foreground
             .spawn(move |_, ctx| {
                 LocalAgentTaskSyncModel::as_ref(ctx).latest_delivered_task_state(&task_id)
@@ -2284,13 +2286,15 @@ impl AgentDriver {
     ///
     /// Failed runs only get the drain: the caller reports the error itself via
     /// `report_driver_error` after receiving the result.
+    ///
+    /// Returns whether queued status updates finished draining before the timeout.
     async fn flush_task_status_before_exit(
         task_id: AmbientAgentTaskId,
         run_succeeded: bool,
         server_api: &Arc<dyn AIClient>,
         foreground: &ModelSpawner<Self>,
-    ) {
-        match foreground
+    ) -> bool {
+        let drained = match foreground
             .spawn(move |_, ctx| {
                 LocalAgentTaskSyncModel::handle(ctx)
                     .update(ctx, |model, _| model.wait_for_idle(task_id))
@@ -2302,13 +2306,19 @@ impl AgentDriver {
                     log::warn!(
                         "Timed out waiting for queued task status updates to flush for task {task_id}"
                     );
+                    false
+                } else {
+                    true
                 }
             }
-            Err(err) => log::warn!("Could not wait for the task status flush: {err}"),
-        }
+            Err(err) => {
+                log::warn!("Could not wait for the task status flush: {err}");
+                false
+            }
+        };
 
         if !run_succeeded {
-            return;
+            return drained;
         }
 
         let confirmed_terminal_state = foreground
@@ -2320,7 +2330,7 @@ impl AgentDriver {
             .flatten();
         if let Some(state) = confirmed_terminal_state {
             log::debug!("Task {task_id} already reported terminal state {state:?} before exit");
-            return;
+            return drained;
         }
 
         log::warn!(
@@ -2343,6 +2353,7 @@ impl AgentDriver {
                 "Failed to report the fallback SUCCEEDED state for task {task_id}"
             )));
         }
+        drained
     }
 
     /// Log all valid environment IDs for the user.
