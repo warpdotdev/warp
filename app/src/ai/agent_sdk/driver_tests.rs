@@ -3446,7 +3446,7 @@ fn deferred_repository_semantic_skill_publication_without_initial_inventory() {
                     let _capability = warp_core::features::FeatureFlag::FactoryDeferredRepositories
                         .override_enabled(!use_factory_repositories);
                     let should_activate = use_factory_repositories;
-                    initialize_workspace_test_app(&mut app);
+                    initialize_app_for_terminal_view(&mut app);
                     let root = TempDir::new().unwrap();
                     let skill_parent = root.path().join(skill_parent);
                     fs::write(&skill_parent, "existing file").unwrap();
