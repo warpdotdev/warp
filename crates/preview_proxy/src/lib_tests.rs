@@ -14,6 +14,129 @@ pub(super) struct Ports {
     resume: tokio::sync::Notify,
 }
 
+struct ViewerPorts {
+    port: u16,
+    allowed: AtomicBool,
+}
+
+impl PortSource for ViewerPorts {
+    async fn previews(&self) -> Result<Vec<PreviewRecord>> {
+        Ok(vec![preview(self.port)])
+    }
+
+    async fn authorize_viewer(&self, request: ViewerAuthorization<'_>) -> Result<()> {
+        anyhow::ensure!(
+            self.allowed.load(Ordering::SeqCst)
+                && request.preview_id == preview(self.port).id
+                && request.port == self.port
+                && request.credential == "Bearer viewer",
+            "Viewer rejected"
+        );
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn docker_rechecks_viewer_before_each_http_request_and_upgrade() {
+    let (app_port, app_task) = app().await;
+    let source = Arc::new(ViewerPorts {
+        port: app_port,
+        allowed: AtomicBool::new(true),
+    });
+    let mut proxy = Proxy::bind_with_policy(0, source.clone(), CredentialPolicy::DockerSandbox)
+        .await
+        .unwrap();
+    let mut stream = request(
+        proxy.port(),
+        app_port,
+        "Connection: close\r\nX-Warp-Preview-Authorization: Bearer viewer\r\nAuthorization: Bearer application\r\nCookie: app=visible; __Host-warp_preview_viewer=hidden\r\n",
+    )
+    .await;
+    let mut response = String::new();
+    stream.read_to_string(&mut response).await.unwrap();
+    assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    assert!(response.contains("Bearer application"), "{response}");
+    assert!(response.contains("app=visible"), "{response}");
+    assert!(!response.contains("Bearer viewer"), "{response}");
+    assert!(!response.contains("hidden"), "{response}");
+    assert!(!response.contains("x-warp-preview-"), "{response}");
+
+    source.allowed.store(false, Ordering::SeqCst);
+    let mut stream = request(
+        proxy.port(),
+        app_port,
+        "Connection: close\r\nX-Warp-Preview-Authorization: Bearer viewer\r\n",
+    )
+    .await;
+    assert!(headers(&mut stream).await.starts_with("HTTP/1.1 403"));
+    let mut upgrade = request(
+        proxy.port(),
+        app_port,
+        "Connection: upgrade\r\nUpgrade: websocket\r\nX-Warp-Preview-Authorization: Bearer viewer\r\n",
+    )
+    .await;
+    assert!(headers(&mut upgrade).await.starts_with("HTTP/1.1 403"));
+    proxy.shutdown().await;
+    app_task.abort();
+}
+
+#[tokio::test]
+async fn docker_rejects_missing_malformed_and_duplicate_viewer_credentials() {
+    let target = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+    let app_port = target.local_addr().unwrap().port();
+    let source = Arc::new(ViewerPorts {
+        port: app_port,
+        allowed: AtomicBool::new(true),
+    });
+    let mut proxy = Proxy::bind_with_policy(0, source, CredentialPolicy::DockerSandbox)
+        .await
+        .unwrap();
+    for extra in [
+        "",
+        "X-Warp-Preview-Authorization:\r\n",
+        "X-Warp-Preview-Authorization: Basic viewer\r\n",
+        "X-Warp-Preview-Authorization: Bearer\r\n",
+        "X-Warp-Preview-Authorization: Bearer view er\r\n",
+        "X-Warp-Preview-Authorization: Bearer viewer,other\r\n",
+        "X-Warp-Preview-Authorization: Bearer viewer\r\nX-Warp-Preview-Authorization: Bearer viewer\r\n",
+        "X-Warp-Preview-Authorization: Bearer wrong-viewer\r\n",
+    ] {
+        let mut stream = request(proxy.port(), app_port, extra).await;
+        assert!(headers(&mut stream).await.starts_with("HTTP/1.1 403"));
+    }
+    let mut nominated = request(
+        proxy.port(),
+        app_port,
+        "Connection: x-warp-preview-authorization\r\nX-Warp-Preview-Authorization: Bearer viewer\r\n",
+    )
+    .await;
+    assert!(headers(&mut nominated).await.starts_with("HTTP/1.1 400"));
+    assert_eq!(
+        target.into_std().unwrap().accept().unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock
+    );
+    proxy.shutdown().await;
+}
+
+#[tokio::test]
+async fn namespace_rejects_supplied_credentials_when_authorizer_is_unavailable() {
+    let target = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+    let app_port = target.local_addr().unwrap().port();
+    let mut proxy = Proxy::bind(0, Ports::new(vec![app_port])).await.unwrap();
+    let mut stream = request(
+        proxy.port(),
+        app_port,
+        "X-Warp-Preview-Authorization: Bearer viewer\r\n",
+    )
+    .await;
+    assert!(headers(&mut stream).await.starts_with("HTTP/1.1 403"));
+    assert_eq!(
+        target.into_std().unwrap().accept().unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock
+    );
+    proxy.shutdown().await;
+}
+
 impl Ports {
     pub(super) fn new(values: Vec<u16>) -> Arc<Self> {
         Arc::new(Self {
@@ -222,7 +345,7 @@ async fn normalizes_host_and_forwarded_headers_without_rewriting_application_cre
     let mut proxy = Proxy::bind(0, Ports::new(vec![app_port])).await.unwrap();
     let port = proxy.port();
     let mut stream = request(port, app_port,
-        "Connection: close, x-remove-me\r\nX-Remove-Me: hidden\r\nAuthorization: Bearer application\r\nCookie: __session=secret; app=visible; __Host-warp_preview_ingress=secret\r\nX-Nsc-Other: secret\r\nX-Warp-Preview-Authorization: secret\r\nX-Forwarded-Host: preview.example\r\nX-Forwarded-Proto: https\r\nX-Forwarded-Port: 443\r\n").await;
+        "Connection: close, x-remove-me\r\nX-Remove-Me: hidden\r\nAuthorization: Bearer application\r\nCookie: __session=secret; app=visible; __Host-warp_preview_ingress=secret\r\nX-Nsc-Other: secret\r\nX-Warp-Ambient-Workload-Token: secret\r\nX-Forwarded-Host: preview.example\r\nX-Forwarded-Proto: https\r\nX-Forwarded-Port: 443\r\n").await;
     let mut response = String::new();
     stream.read_to_string(&mut response).await.unwrap();
     assert!(response.starts_with("HTTP/1.1 200"));
@@ -735,6 +858,8 @@ async fn concurrent_cache_misses_share_successful_and_failed_refreshes() {
         let routing = Routing {
             listener_port: 0,
             source: source.clone(),
+            credential_policy: CredentialPolicy::Namespace,
+            viewer_capacity: Semaphore::new(MAX_VIEWER_AUTHORIZATIONS),
             upstream: upstream::new_client(cancel.clone()),
             cache: RwLock::new(PreviewCache::default()),
             refreshing: Mutex::new(()),
