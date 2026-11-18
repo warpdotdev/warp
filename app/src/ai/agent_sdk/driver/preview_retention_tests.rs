@@ -74,14 +74,18 @@ fn preview_retention_enabled_with_preview_urls_flag() {
 
 #[test]
 #[cfg(not(target_family = "wasm"))]
-fn preview_retention_only_applies_to_namespace() {
-    assert!(!is_namespace_sandbox(None));
-    assert!(!is_namespace_sandbox(Some(IsolationPlatformType::Docker)));
-    assert!(!is_namespace_sandbox(Some(
+fn preview_retention_only_applies_to_supported_hosted_sandboxes() {
+    assert!(!supports_preview_retention(None));
+    assert!(!supports_preview_retention(Some(
+        IsolationPlatformType::Docker
+    )));
+    assert!(!supports_preview_retention(Some(
         IsolationPlatformType::Kubernetes
     )));
-    assert!(is_namespace_sandbox(Some(IsolationPlatformType::Namespace)));
-    assert!(!is_namespace_sandbox(Some(
+    assert!(supports_preview_retention(Some(
+        IsolationPlatformType::Namespace
+    )));
+    assert!(supports_preview_retention(Some(
         IsolationPlatformType::DockerSandbox
     )));
 }
