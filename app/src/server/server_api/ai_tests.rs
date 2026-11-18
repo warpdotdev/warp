@@ -41,6 +41,7 @@ fn list_run_previews_uses_ambient_run_auth_and_reads_app_ports() {
             .mock("GET", format!("/api/v1/agent/runs/{task_id}/previews").as_str())
             .match_header(CLOUD_AGENT_ID_HEADER, task_id.to_string().as_str())
             .match_header(AMBIENT_WORKLOAD_TOKEN_HEADER, "test-workload-token")
+            .match_header("X-Warp-Preview-Authorization-Version", "1")
             .with_status(200)
             .with_body(
                 r#"{"execution_id":42,"previews":[{"id":"550e8400-e29b-41d4-a716-446655440003","url":"https://preview.example.test","port":3000}]}"#,
@@ -49,7 +50,7 @@ fn list_run_previews_uses_ambient_run_auth_and_reads_app_ports() {
             .create()
     };
     let api = execution_bootstrap_server_api();
-    let response = block_on(api.list_run_previews(&task_id)).unwrap();
+    let response = block_on(api.list_run_previews(&task_id, true)).unwrap();
     assert_eq!(response.execution_id, Some(42));
     assert_eq!(response.previews.len(), 1);
     assert_eq!(response.previews[0].port, 3000);
@@ -77,12 +78,13 @@ fn list_run_previews_no_execution_and_older_server() {
                     "GET",
                     format!("/api/v1/agent/runs/{task_id}/previews").as_str(),
                 )
+                .match_header("X-Warp-Preview-Authorization-Version", Matcher::Missing)
                 .with_status(status)
                 .with_body(body)
                 .expect(1)
                 .create()
         };
-        let result = block_on(execution_bootstrap_server_api().list_run_previews(&task_id));
+        let result = block_on(execution_bootstrap_server_api().list_run_previews(&task_id, false));
         if status == 200 {
             let response = result.unwrap();
             assert_eq!(response.execution_id, None);
