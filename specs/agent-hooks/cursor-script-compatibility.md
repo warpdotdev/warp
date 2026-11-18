@@ -104,10 +104,22 @@ It is not Cursor's result shape. Binary file content is summarized as `is_binary
 
 - Events that fire: `sessionStart`, `beforeSubmitPrompt`, `preToolUse`, `beforeShellExecution`,
   `beforeMCPExecution`, `postToolUse`, `afterShellExecution`, `afterMCPExecution`,
-  `postToolUseFailure`, `stop`, `afterAgentResponse`, `afterAgentThought`.
-- Not yet fired (parsed, with a warning): `sessionEnd`, `subagentStart`, `subagentStop`,
-  `beforeReadFile`, `afterFileEdit`, `preCompact`. Never fired: `beforeTabFileRead`,
-  `afterTabFileEdit`, `workspaceOpen`.
+  `postToolUseFailure`, `subagentStart`, `stop`, `afterAgentResponse`, `afterAgentThought`.
+- Not yet fired (parsed, with a warning): `sessionEnd`, `subagentStop`, `beforeReadFile`,
+  `afterFileEdit`, `preCompact`. Never fired: `beforeTabFileRead`, `afterTabFileEdit`,
+  `workspaceOpen`.
+- `subagentStart` fires once per child of a `run_agents` call (Cursor's `Task` tool), for every
+  child at once, before any child launches. `subagent_type` is always `generalPurpose`, so a
+  matcher of `""`, `"*"`, or `generalPurpose` sees every child and an `explore` or `shell`
+  matcher never does. `subagent_id` is an id Warp makes up for the child before it exists (the
+  child's own id only exists once it runs). `task` is the child's full prompt, `tool_call_id` is
+  the `run_agents` call, `subagent_model` is the child's model when one was named, and
+  `is_parallel_worker` is `true` when the call launches more than one child. `git_branch` is
+  never present. Warp adds `subagent_name`, `harness` (`oz`, `claude-code`, `codex`, ...), and
+  `execution_mode` (`local` or `remote`). A `deny` (or an `ask`, which this event treats as
+  deny) keeps that one child back: it shows up in the model's result as a failed child with
+  your `user_message`, and the other children launch. Server-side subagents (Warp's own
+  research, advice, and shell helpers) never fire it.
 - `beforeSubmitPrompt` does not fire for the first prompt of an Oz cloud run, because the server
   resolves that prompt. It fires for later prompts. `attachments` lists the files the person
   attached (`{ "type": "file", "file_path" }`, in path order) and then the rule files whose
@@ -155,3 +167,4 @@ with the run. `architecture.md` §7.1 has the rules.
 - `duration` on `postToolUse` and `postToolUseFailure` for every tool.
 - `attachments` on `beforeSubmitPrompt`, and `model`/`model_id` on `sessionStart` and the first
   `beforeSubmitPrompt` of a conversation.
+- `subagentStart` for the children of a `run_agents` call.

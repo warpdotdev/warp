@@ -3,13 +3,16 @@ use std::path::Path;
 use std::rc::Rc;
 
 use ai::hooks::test_util::{ScriptedRunner, test_binding, test_binding_id, test_source_id};
-use ai::hooks::{HookAsker, HookBoundary, HookNoticeKind, HookOnAsk, HookReason, HookVerdict};
+use ai::hooks::{
+    DenyCause, HookAsker, HookBoundary, HookNoticeKind, HookOnAsk, HookReason, HookVerdict,
+};
 use futures::executor::block_on;
 use warp_core::execution_mode::ExecutionMode;
 use warpui::App;
 
 use super::*;
 use crate::ai::blocklist::BlocklistAIHistoryModel;
+use crate::ai::blocklist::hooks::HookRuntimeEvent;
 use crate::ai::blocklist::hooks::test_utils::{
     HookTestApp, add_child_conversation, hook_test_app, install_test_hooks, set_working_directory,
     shell_action,

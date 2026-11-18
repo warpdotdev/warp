@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use ai::agent::action::FileEdit;
 use ai::hooks::{
-    DenyCause, DispatchOutcome, HookBoundary, HookExecutionHost, HookNotice, HookNoticeKind,
+    DispatchOutcome, HookBoundary, HookExecutionHost, HookNotice, HookNoticeKind,
     HookPermissionPolicy, MergedEffects, PermissionDecision, PermissionFloors, RunFacts,
     WarpPermissionResult,
 };
@@ -16,7 +16,7 @@ use warp_util::path::ShellFamily;
 use warpui::{AppContext, EntityId, ModelHandle, SingletonEntity};
 
 use super::envelope::{EnvelopeSite, envelope_for_tool_pre};
-use super::{HookRuntime, HookRuntimeEvent};
+use super::{HookRuntime, report_denial};
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::{AIAgentAction, AIAgentActionId, AIAgentActionType};
 use crate::ai::blocklist::BlocklistAIPermissions;
@@ -353,31 +353,7 @@ pub(crate) fn decide(
     let decision = HookPermissionPolicy::compose(merged, warp, &floors, run);
     match &decision {
         PermissionDecision::Deny { reason, cause } => {
-            messenger.notify(HookNotice {
-                conversation_id,
-                action_id: Some(action.id.clone()),
-                kind: HookNoticeKind::Denied,
-                text: reason.text.clone(),
-            });
-            // An outright deny outranks an ask, so only a denial for an unanswerable ask can end
-            // the run, and only when a hook that asked comes from a source that wants that.
-            let ends_the_run = match cause {
-                DenyCause::ApprovalUnavailable => merged.an_asker_fails_the_run(),
-                DenyCause::Hook
-                | DenyCause::RewriteUnsupported
-                | DenyCause::DeferralUnsupported => false,
-            };
-            if ends_the_run {
-                let reason = reason.text.clone();
-                let action_id = action.id.clone();
-                HookRuntime::handle(ctx).update(ctx, |_, ctx| {
-                    ctx.emit(HookRuntimeEvent::ApprovalUnavailable {
-                        conversation_id,
-                        action_id,
-                        reason,
-                    });
-                });
-            }
+            report_denial(conversation_id, &action.id, reason, *cause, merged, ctx);
         }
         PermissionDecision::RequireConfirmation {
             reason: Some(reason),

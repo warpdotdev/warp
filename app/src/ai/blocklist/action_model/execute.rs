@@ -359,6 +359,7 @@ impl BlocklistAIActionExecutor {
         let run_agents_executor = ctx.add_model(|_| {
             RunAgentsExecutor::new(
                 start_agent_executor.clone(),
+                active_session.clone(),
                 terminal_view_id,
                 team_context_resolver_for_run_agents,
             )

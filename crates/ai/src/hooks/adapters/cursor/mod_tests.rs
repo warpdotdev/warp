@@ -68,7 +68,7 @@ fn parse_turns_file_warnings_into_diagnostics_on_the_source() {
     let config = parsed(FULL_CONFIG);
     assert_eq!(config.format, HookFormat::Cursor);
     assert_eq!(config.source, test_source_id("hooks.json"));
-    assert_eq!(config.warnings.len(), 11);
+    assert_eq!(config.warnings.len(), 10);
     for warning in &config.warnings {
         assert_eq!(warning.source, config.source);
         assert_eq!(warning.severity, DiagnosticSeverity::Warning);

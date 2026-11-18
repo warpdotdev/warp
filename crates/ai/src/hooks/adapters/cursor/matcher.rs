@@ -5,8 +5,10 @@
 
 use std::borrow::Cow;
 
-use super::events::{CursorEventSpec, MatchedValue};
-use super::facets::{finished_shell_command, mcp_tool_call, pending_shell_command};
+use super::events::{CursorEventSpec, MatchedValue, SUBAGENT_TYPE};
+use super::facets::{
+    finished_shell_command, mcp_tool_call, pending_shell_command, subagent_launch,
+};
 use super::parts::{ToolPart, tool_parts};
 use super::sources::SourceCache;
 use crate::hooks::adapters::DeclaredBinding;
@@ -77,7 +79,9 @@ pub(super) fn matched_value<'a>(
             .or_else(|| finished_shell_command(payload).map(|finished| finished.command))
             .map(Cow::Borrowed),
         MatchedValue::McpToolName => mcp_tool_call(payload).map(|call| Cow::Borrowed(call.name)),
-        MatchedValue::SubagentType => None,
+        MatchedValue::SubagentType => {
+            subagent_launch(payload).map(|_| Cow::Borrowed(SUBAGENT_TYPE))
+        }
         MatchedValue::Literal(literal) => Some(Cow::Borrowed(literal)),
         MatchedValue::Everything => Some(Cow::Borrowed("")),
     }

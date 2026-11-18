@@ -21,7 +21,7 @@ use crate::agent::action_result::{
 use crate::diff_validation::ParsedDiff;
 use crate::hooks::adapters::cursor::test_support::{
     EVENT_FIXTURES, FIXTURE_CONVERSATION_ID, completed_shell, fixture_envelope, json, mcp_action,
-    shell_action, tool_failure, tool_pre, tool_result,
+    shell_action, subagent_start, tool_failure, tool_pre, tool_result,
 };
 use crate::hooks::model::{
     HookTurnId, PromptAttachment, PromptAttachmentKind, PromptProvenance, TurnStopStatus,
@@ -87,6 +87,7 @@ fn fixture_payload(event: CursorEvent) -> HookPayload {
             ],
             provenance: PromptProvenance::User,
         },
+        CursorEvent::SubagentStart => subagent_start(),
         CursorEvent::Stop => HookPayload::TurnStop {
             status: TurnStopStatus::Completed,
             continuation_count: 0,
@@ -101,7 +102,6 @@ fn fixture_payload(event: CursorEvent) -> HookPayload {
             duration: Some(Duration::from_secs(2)),
         },
         CursorEvent::SessionEnd
-        | CursorEvent::SubagentStart
         | CursorEvent::SubagentStop
         | CursorEvent::BeforeReadFile
         | CursorEvent::AfterFileEdit

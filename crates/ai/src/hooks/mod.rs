@@ -29,7 +29,8 @@ pub use model::{
     HookPayload, HookReason, HookSourceId, HookSourceKind, HookSourceLocation, HookSourcePolicy,
     HookSurface, HookTurnId, HookVerdict, MalformedOutputPolicy, MatcherTarget, MergedEffects,
     PermissionFacts, PromptAttachment, PromptAttachmentKind, PromptProvenance, RunMetadata,
-    TurnStopStatus, UnsupportedEffect, reduce_effects, validate_capabilities,
+    SubagentExecutionMode, SubagentLaunch, TurnStopStatus, UnsupportedEffect, reduce_effects,
+    validate_capabilities,
 };
 pub use notices::{HookMessenger, HookNotice, HookNoticeKind, LogOnlyMessenger};
 pub use permission::{

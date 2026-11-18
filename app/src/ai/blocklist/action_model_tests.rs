@@ -159,6 +159,7 @@ mod hooks {
                 | HookPayload::PromptSubmit { .. }
                 | HookPayload::ToolResult { .. }
                 | HookPayload::ToolFailure { .. }
+                | HookPayload::SubagentStart { .. }
                 | HookPayload::TurnStop { .. }
                 | HookPayload::ResponseComplete { .. }
                 | HookPayload::ReasoningComplete { .. } => None,

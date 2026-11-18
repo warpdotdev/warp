@@ -12,8 +12,8 @@ use crate::agent::action_result::{
 };
 use crate::hooks::adapters::cursor::events::CursorEvent;
 use crate::hooks::adapters::cursor::test_support::{
-    binding_for, completed_shell, fixture_envelope, mcp_action, shell_action, tool_failure,
-    tool_pre, tool_result,
+    binding_for, completed_shell, fixture_envelope, mcp_action, shell_action, subagent_start,
+    tool_failure, tool_pre, tool_result,
 };
 use crate::hooks::model::{HookPayload, PromptProvenance, TurnStopStatus};
 
@@ -339,6 +339,26 @@ fn literal_events_match_their_fixed_word() {
         Some("AgentThought"),
         thought
     ));
+}
+
+#[test]
+fn subagent_start_matches_on_cursors_general_purpose_type() {
+    let launch = subagent_start();
+    assert!(matches(CursorEvent::SubagentStart, None, launch.clone()));
+    assert!(matches(
+        CursorEvent::SubagentStart,
+        Some("^generalPurpose$"),
+        launch.clone()
+    ));
+    assert!(
+        !matches(CursorEvent::SubagentStart, Some("explore"), launch.clone()),
+        "every child Warp launches is a general-purpose worker"
+    );
+    assert!(
+        !matches(CursorEvent::SubagentStop, None, launch),
+        "subagentStop is not fired yet"
+    );
+    assert!(!matches(CursorEvent::SubagentStart, None, shell_pre("ls")));
 }
 
 #[test]

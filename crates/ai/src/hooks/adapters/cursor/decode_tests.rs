@@ -29,8 +29,9 @@ fn reasons(effects: &HookEffects) -> Vec<&str> {
 const OK: ProcessExit = ProcessExit::Code(0);
 
 /// The Phase 1 events, grouped by what a hook on them can do.
-const PERMISSION_EVENTS: [CursorEvent; 3] = [
+const PERMISSION_EVENTS: [CursorEvent; 4] = [
     CursorEvent::PreToolUse,
+    CursorEvent::SubagentStart,
     CursorEvent::BeforeShellExecution,
     CursorEvent::BeforeMcpExecution,
 ];
@@ -420,8 +421,15 @@ fn allow_deny_and_their_messages_decode_on_every_permission_event() {
             r#"{"permission":"deny","agent_message":"no","user_message":"Blocked"}"#,
         );
         assert_eq!(deny.verdict, HookVerdict::Deny);
-        assert_eq!(reasons(&deny), vec!["no"]);
-        assert_eq!(deny.user_notices, vec!["Blocked"]);
+        if event == CursorEvent::SubagentStart {
+            // Cursor documents no agent_message on subagentStart, so the user message is the
+            // reason the model reads and there is no separate notice.
+            assert_eq!(reasons(&deny), vec!["Blocked"]);
+            assert!(deny.user_notices.is_empty());
+        } else {
+            assert_eq!(reasons(&deny), vec!["no"]);
+            assert_eq!(deny.user_notices, vec!["Blocked"]);
+        }
 
         let silent_deny = decode(event, false, OK, r#"{"permission":"deny"}"#);
         assert_eq!(reasons(&silent_deny), vec!["Denied by hook ./check.sh."]);
@@ -442,12 +450,13 @@ fn allow_deny_and_their_messages_decode_on_every_permission_event() {
             r#"{"permission":"allow","user_message":"ok","agent_message":"remember to lint"}"#,
         );
         assert_eq!(allow_with_messages.verdict, HookVerdict::Allow);
-        let expected_notices: Vec<&str> = if event == CursorEvent::PreToolUse {
-            // Cursor documents preToolUse's user_message as shown only when denied.
-            vec![]
-        } else {
-            vec!["ok"]
-        };
+        let expected_notices: Vec<&str> =
+            if matches!(event, CursorEvent::PreToolUse | CursorEvent::SubagentStart) {
+                // Cursor documents these events' user_message as shown only when denied.
+                vec![]
+            } else {
+                vec!["ok"]
+            };
         assert_eq!(
             allow_with_messages.user_notices,
             expected_notices,
@@ -1156,6 +1165,12 @@ fn expected_fixture_effects(event: CursorEvent) -> HookEffects {
             ],
             ..Default::default()
         },
+        CursorEvent::SubagentStart => HookEffects {
+            verdict: HookVerdict::Deny,
+            // Cursor documents only `user_message` on this event, so it is the reason too.
+            reasons: vec![reason("Child agents are not allowed in this repository.")],
+            ..Default::default()
+        },
         CursorEvent::BeforeShellExecution => HookEffects {
             verdict: HookVerdict::Deny,
             reasons: vec![reason("Push without --force, or open a pull request.")],
@@ -1185,7 +1200,6 @@ fn expected_fixture_effects(event: CursorEvent) -> HookEffects {
         | CursorEvent::AfterAgentResponse
         | CursorEvent::AfterAgentThought => HookEffects::default(),
         CursorEvent::SessionEnd
-        | CursorEvent::SubagentStart
         | CursorEvent::SubagentStop
         | CursorEvent::BeforeReadFile
         | CursorEvent::AfterFileEdit

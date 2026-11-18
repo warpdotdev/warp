@@ -267,33 +267,33 @@ trait HookFormat { fn parse(&self, bytes: &[u8]) -> Result<Vec<HookDef>>;
 
 **Purpose and timing.** Fires before spawning a subagent (Cursor's Task tool); can deny creation. (Report 01 §3.6.)
 
-**Warp moment.** Warp has two kinds of subagent. Client-launched children via `run_agents`: `RunAgentsExecutor::execute` then per-child `StartAgentExecutor::dispatch` (`execute/run_agents.rs`, `execute/start_agent.rs`); the executor is async and the request is an owned clone. Server-side subagents (`SubagentType::{Cli, Research, Advice, ComputerUse, Summarization}`, report 03 §1.4) start inside warp-server; the client only sees `Message::Subagent` output after the fact.
+**Warp moment.** Warp has two kinds of subagent. Client-launched children via `run_agents`: built in `RunAgentsExecutor::dispatch_children_for_prepared_request` (`execute/run_agents.rs`, `app/src/ai/blocklist/hooks/subagent.rs`), which works out how each child would launch, fires one event per child at once, and then dispatches through `StartAgentExecutor::dispatch` only the children the hooks allowed. A child that cannot launch anyway (a rejected harness or mode, a remote child with no parent run) is never offered to the hooks. Server-side subagents (`SubagentType::{Cli, Research, Advice, ComputerUse, Summarization}`, report 03 §1.4) start inside warp-server; the client only sees `Message::Subagent` output after the fact.
 
 **Input fields** (for `run_agents` children).
 
 | Field | Status | Warp source or work needed |
 | --- | --- | --- |
-| `subagent_id` | Not available before launch | The child's server id arrives in `RunAgentsResult::Launched { agent_id }` after dispatch. A client-side placeholder could be generated earlier (small work), but it would not be the id Cursor's later `subagentStop` would use. |
-| `subagent_type` | Available with work | Cursor uses `generalPurpose`/`explore`/`shell`. Warp has `harness_type` plus local/remote `execution_mode` (`RunAgentsRequest`). Map to Warp-specific values. |
-| `task` | Available now | Composed child prompt (`compose_run_agents_child_prompt`). |
-| `parent_conversation_id` | Available now | The parent's `AIConversationId`. |
-| `tool_call_id` | Available now | `AIAgentActionId` of the `run_agents` call. |
-| `subagent_model` | Available now | `model_id` on the batch or the per-child override. |
-| `is_parallel_worker` | Available with work | Definitional. `true` when the batch has more than one child is one option. |
+| `subagent_id` | Available now | Built: a UUID Warp makes up for the child before it exists, so a script can tell the children of one call apart and a later `subagentStop` can carry the same id. It is not the child's own id, which only arrives in `RunAgentsResult::Launched { agent_id }` after dispatch; the executor logs the pair when it launches the child. |
+| `subagent_type` | Available now | Built: always `generalPurpose`, which is what every child Warp launches is; Cursor's `explore` and `shell` are kinds of subagent Warp does not have. A `subagentStart` matcher is tested against it, so `""`, `"*"`, and `generalPurpose` match every child. Warp's own facts go beside it as additions: `subagent_name`, `harness` (`oz`, or the third-party harness's name), and `execution_mode` (`local` or `remote`). |
+| `task` | Available now | Built: the composed child prompt (`compose_run_agents_child_prompt`). |
+| `parent_conversation_id` | Available now | Built: the parent's `AIConversationId`. |
+| `tool_call_id` | Available now | Built: `AIAgentActionId` of the `run_agents` call. |
+| `subagent_model` | Available now | Built: the per-child override, else the batch's `model_id`; absent when neither names a model. |
+| `is_parallel_worker` | Available now | Built: `true` when the call launches more than one child. |
 | `git_branch` | Not available | Warp does not create a branch for a child at launch; a child may create a worktree later on its own. |
 
 **Output fields.**
 
 | Field | Status | Mechanism |
 | --- | --- | --- |
-| `permission: allow/deny` | Supportable now | The executor is async; a deny resolves the action with the `denied_by_hook` result (section 3.0), so the reason reaches the model. |
-| `user_message` | Supportable with work | Message channel. |
+| `permission: allow/deny` | Supported | Built, per child as in Cursor: a denied child is left out of the launch and reported in the `run_agents` result as `failed` with the hook's reason, while its siblings launch; the action itself completes, so no `postToolUseFailure` fires for a denied child. A headless `ask`, and a cancelled firing, keep the child back the same way. An `ask` on an interactive surface also keeps the child back, with a reason saying no confirmation step exists for a child launch (a conservative choice awaiting David's decision; Cursor's adapter never produces one, since it reads `ask` as deny). |
+| `user_message` | Supported | Built: the `Denied` notice, and the reason the model reads when Cursor's `agent_message`-less schema leaves it as the only message. |
 
 **Blocking and modification.** Blockable: yes for `run_agents` (async executor). Modifiable: the request is owned, so prompt or model could be rewritten in a later phase (superset; Cursor documents no rewrite). Server-side subagents: not blockable and not observable before start.
 
 **Surface notes.** Child creation differs per front-end (hidden pane in GUI, background session in TUI, cloud run for remote), but the dispatch point is shared. Remote children need the hook in the child's runtime for their own tools, but the parent still fires `subagentStart` for the launch.
 
-**Verdict: Partial.** Full for client-launched children except `subagent_id` and `git_branch`. Server-side subagents cannot be gated without a server-emitted pre-start event.
+**Verdict: Partial.** Built in full for client-launched children; `git_branch` is omitted because Warp makes no branch at launch. Server-side subagents cannot be gated without a server-emitted pre-start event.
 
 ### 3.7 `subagentStop`
 
@@ -698,7 +698,7 @@ A `"*"` matcher on `preToolUse` will fire for the Warp-only names. Hook authors 
 
 `tool_input` uses Cursor's field names where Warp's action maps onto a Cursor tool, so a script written for Cursor reads it unchanged: a read is `{ file_path, lines }`; file edits name their file as `file_path` and a string replacement as `old_string` and `new_string`, with a top-level `file_path` when every edit in the batch is to one file; an MCP call's `tool_input` is the tool's own arguments, with the server named beside it as `mcp_server_id`, as the MCP events name it. A read of several files, or an edit batch over several files, fires one event per file (section 4.3), and the matcher is tested per file, so a `Delete` matcher selects the delete in a batch that also writes. The full list of differences a Cursor script sees is kept in `cursor-script-compatibility.md`.
 
-For `subagentStart`/`subagentStop`, Cursor matches on `generalPurpose`/`explore`/`shell`. Warp would match on its own type string (section 3.6).
+For `subagentStart`/`subagentStop`, Cursor matches on `generalPurpose`/`explore`/`shell`. Warp matches on `generalPurpose`, which every child it launches is (section 3.6).
 
 ### 4.3 Timeouts and process lifecycle
 
@@ -823,7 +823,7 @@ Three places where the hypothesis needs qualification:
 | `preToolUse` | Agent | Full as built (Partial as scoped) | The deny reason's wire result, `denied_by_hook`, shipped in Phase 1 for every tool with server rendering |
 | `postToolUse` | Agent | Partial | `additional_context` needs a `hook_context` field on `ToolCallResult` plus server rendering; the encoder and the per-action timer are built |
 | `postToolUseFailure` | Agent | Partial | Its only output, `additional_context`, needs the same server work; event and inputs are client-only |
-| `subagentStart` | Agent | Partial | No `subagent_id` before launch; server-side subagents invisible |
+| `subagentStart` | Agent | Partial | Built for `run_agents` children; server-side subagents invisible |
 | `subagentStop` | Agent | Partial | No counts for remote children; server-side subagents invisible |
 | `beforeShellExecution` | Agent | Full as built (Partial as scoped) | The deny reason's wire result, `denied_by_hook`, shipped in Phase 1 with server rendering |
 | `afterShellExecution` | Agent | Full | None significant |
@@ -849,7 +849,7 @@ Three places where the hypothesis needs qualification:
 | `preToolUse` | With work | Owned action; rewrites in a later phase | `BlocklistAIActionExecutor::try_to_execute_action` |
 | `postToolUse` | Yes | Yes (owned result); context needs server | `execute_future` wrapper in `execute.rs` |
 | `postToolUseFailure` | Yes | Context only (needs server) | Same |
-| `subagentStart` | Yes | Owned request; rewrites in a later phase | `RunAgentsExecutor` / `StartAgentExecutor::dispatch` |
+| `subagentStart` | Yes | Owned request; rewrites in a later phase | `RunAgentsExecutor::dispatch_children_for_prepared_request`, before `StartAgentExecutor::dispatch` |
 | `subagentStop` | Short deferral | Follow-up only | `inject_pending_events_for_request` |
 | `beforeShellExecution` | With work | Command string; rewrites in a later phase | `ShellCommandExecutor::execute` (pre-emit) |
 | `afterShellExecution` | Yes (on real exit) | Output | The completion funnel; for interact mode, the later poll that reports `CommandFinished` or `ShellRecovered` |
