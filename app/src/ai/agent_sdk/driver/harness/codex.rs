@@ -49,7 +49,6 @@ use crate::server::server_api::harness_support::HarnessSupportClient;
 use crate::terminal::CLIAgent;
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::terminal::model::block::BlockId;
-use crate::terminal::shell::ShellType;
 
 pub(crate) struct CodexHarness;
 
@@ -125,7 +124,7 @@ impl ThirdPartyHarness for CodexHarness {
         })))
     }
 
-    fn build_runner(
+    async fn build_runner(
         &self,
         prompt: &str,
         system_prompt: Option<&str>,
@@ -137,7 +136,7 @@ impl ThirdPartyHarness for CodexHarness {
         _task_id: Option<AmbientAgentTaskId>,
         server_api: Arc<ServerApi>,
         terminal_driver: ModelHandle<TerminalDriver>,
-        _: ShellType,
+        _: &ModelSpawner<AgentDriver>,
         resume: Option<ResumePayload>,
         resolved_env_vars: &HashMap<OsString, OsString>,
         skill_dirs: &[PathBuf],

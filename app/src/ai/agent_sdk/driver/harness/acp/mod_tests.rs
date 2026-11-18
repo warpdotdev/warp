@@ -164,26 +164,28 @@ fn initial_files_reach_the_acp_runner_without_changing_the_pty_prompt() {
             };
             let old_codex_home = std::env::var_os("CODEX_HOME");
             unsafe { std::env::set_var("CODEX_HOME", temp.path().join("codex")) };
-            let runner = harness.build_runner(
-                "inspect these",
-                None,
-                None,
-                Some("context"),
-                None,
-                temp.path(),
-                temp.path(),
-                None,
-                server_api.clone(),
-                terminal_driver,
-                ShellType::Zsh,
-                None,
-                &HashMap::new(),
-                &[],
-                false,
-                &HashMap::new(),
-                &ResolvedMCPServers::default(),
-                None,
-            );
+            let runner = harness
+                .build_runner(
+                    "inspect these",
+                    None,
+                    None,
+                    Some("context"),
+                    None,
+                    temp.path(),
+                    temp.path(),
+                    None,
+                    server_api.clone(),
+                    terminal_driver,
+                    &foreground,
+                    None,
+                    &HashMap::new(),
+                    &[],
+                    false,
+                    &HashMap::new(),
+                    &ResolvedMCPServers::default(),
+                    None,
+                )
+                .await;
             match old_codex_home {
                 Some(home) => unsafe { std::env::set_var("CODEX_HOME", home) },
                 None => unsafe { std::env::remove_var("CODEX_HOME") },

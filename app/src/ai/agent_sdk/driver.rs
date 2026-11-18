@@ -3627,16 +3627,8 @@ impl AgentDriver {
             .spawn(|me, _| Arc::clone(&me.resolved_env_vars))
             .await
             .map_err(|_| AgentDriverError::InvalidRuntimeState)?;
-        let (resume, shell_type) = foreground
-            .spawn(|me, ctx| {
-                (
-                    me.resume_payload.take(),
-                    me.terminal_driver
-                        .as_ref(ctx)
-                        .active_session_shell_type(ctx)
-                        .unwrap_or(ShellType::Bash),
-                )
-            })
+        let resume = foreground
+            .spawn(|me, _| me.resume_payload.take())
             .await
             .map_err(|_| AgentDriverError::InvalidRuntimeState)?;
 
@@ -3652,7 +3644,7 @@ impl AgentDriver {
                 task_id,
                 server_api.clone(),
                 terminal_driver,
-                shell_type,
+                foreground,
                 resume,
                 &resolved_env_vars,
                 &skill_dirs,
@@ -3660,7 +3652,8 @@ impl AgentDriver {
                 &secrets_for_harness,
                 &resolved_mcp_servers,
                 third_party_harness_model_config.as_ref(),
-            )?
+            )
+            .await?
             .into();
         runner
             .persistence()

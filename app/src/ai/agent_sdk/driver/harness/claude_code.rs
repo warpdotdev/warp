@@ -136,7 +136,7 @@ impl ThirdPartyHarness for ClaudeHarness {
         })))
     }
 
-    fn build_runner(
+    async fn build_runner(
         &self,
         prompt: &str,
         system_prompt: Option<&str>,
@@ -148,7 +148,7 @@ impl ThirdPartyHarness for ClaudeHarness {
         task_id: Option<AmbientAgentTaskId>,
         server_api: Arc<ServerApi>,
         terminal_driver: ModelHandle<TerminalDriver>,
-        shell_type: ShellType,
+        foreground: &ModelSpawner<AgentDriver>,
         resume: Option<ResumePayload>,
         resolved_env_vars: &HashMap<OsString, OsString>,
         skill_dirs: &[PathBuf],
@@ -189,18 +189,21 @@ impl ThirdPartyHarness for ClaudeHarness {
         }
         parts.push(prompt);
         let owned_prompt = parts.join("\n\n");
-        Ok(Box::new(ClaudeHarnessRunner::new(
-            self.cli_agent().command_prefix(),
-            &owned_prompt,
-            system_prompt,
-            harness_working_dir,
-            task_id,
-            server_api,
-            terminal_driver,
-            shell_type,
-            claude_resume,
-            &resolved_mcp_servers.configs,
-        )?))
+        Ok(Box::new(
+            ClaudeHarnessRunner::new(
+                self.cli_agent().command_prefix(),
+                &owned_prompt,
+                system_prompt,
+                harness_working_dir,
+                task_id,
+                server_api,
+                terminal_driver,
+                foreground,
+                claude_resume,
+                &resolved_mcp_servers.configs,
+            )
+            .await?,
+        ))
     }
 
     fn requires_verified_platform_plugin(&self) -> bool {
@@ -296,7 +299,7 @@ struct ClaudeHarnessRunner {
 
 impl ClaudeHarnessRunner {
     #[allow(clippy::too_many_arguments)]
-    fn new(
+    async fn new(
         cli_command: &str,
         prompt: &str,
         system_prompt: Option<&str>,
@@ -304,7 +307,7 @@ impl ClaudeHarnessRunner {
         task_id: Option<AmbientAgentTaskId>,
         server_api: Arc<ServerApi>,
         terminal_driver: ModelHandle<TerminalDriver>,
-        shell_type: ShellType,
+        foreground: &ModelSpawner<AgentDriver>,
         resume: Option<ClaudeResumeInfo>,
         resolved_mcp_servers: &HashMap<String, JSONMCPServer>,
     ) -> Result<Self, AgentDriverError> {
@@ -342,6 +345,16 @@ impl ClaudeHarnessRunner {
             .transpose()
             .map_err(AgentDriverError::ConfigBuildFailed)?;
         let client: Arc<dyn HarnessSupportClient> = server_api.clone();
+        let driver = terminal_driver.clone();
+        let shell_type = foreground
+            .spawn(move |_, ctx| {
+                driver
+                    .as_ref(ctx)
+                    .active_session_shell_type(ctx)
+                    .unwrap_or(ShellType::Bash)
+            })
+            .await
+            .map_err(|_| AgentDriverError::InvalidRuntimeState)?;
         let command = claude_command(
             cli_command,
             &session_id,
