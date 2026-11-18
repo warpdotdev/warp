@@ -17,6 +17,10 @@ use warp_server_auth::credentials::Credentials;
 
 use crate::auth::{AuthEvent, AuthSession, UserUid};
 
+#[cfg(not(target_family = "wasm"))]
+#[path = "preview_authorization.rs"]
+mod preview_authorization;
+
 /// Header key for the ambient agent workload token attached to authenticated requests.
 pub const AMBIENT_WORKLOAD_TOKEN_HEADER: &str = "X-Warp-Ambient-Workload-Token";
 
