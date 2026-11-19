@@ -8,7 +8,12 @@ use serde_json::{Value, json};
 use tempfile::NamedTempFile;
 use uuid::Uuid;
 
-pub(super) fn rehydrate_pi_transcript(transcript: &[u8], root: &Path, cwd: &Path) -> Result<Uuid> {
+pub(super) fn rehydrate_pi_transcript(
+    transcript: &[u8],
+    root: &Path,
+    cwd: &Path,
+    map_path: &Path,
+) -> Result<Uuid> {
     let header: Value = serde_json::from_slice(
         transcript
             .split(|byte| *byte == b'\n')
@@ -29,8 +34,7 @@ pub(super) fn rehydrate_pi_transcript(transcript: &[u8], root: &Path, cwd: &Path
         "Pi session working directory does not match the run"
     );
 
-    let map_path = session_map_path().context("Could not locate pi-acp session map")?;
-    let mut map: Value = match fs::read(&map_path) {
+    let mut map: Value = match fs::read(map_path) {
         Ok(bytes) => {
             serde_json::from_slice(&bytes).context("Failed to parse pi-acp session map")?
         }
@@ -74,7 +78,7 @@ pub(super) fn rehydrate_pi_transcript(transcript: &[u8], root: &Path, cwd: &Path
     Ok(session_id)
 }
 
-fn session_map_path() -> Option<PathBuf> {
+pub(super) fn session_map_path() -> Option<PathBuf> {
     Some(dirs::home_dir()?.join(".pi/pi-acp/session-map.json"))
 }
 

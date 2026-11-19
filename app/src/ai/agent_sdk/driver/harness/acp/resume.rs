@@ -34,7 +34,7 @@ use warpui::r#async::executor::Background;
 
 use super::super::claude_transcript::{ClaudeTranscriptEnvelope, rehydrate_claude_transcript};
 use super::super::codex_transcript::{CodexTranscriptEnvelope, rehydrate_codex_transcript};
-use super::super::pi_transcript::rehydrate_pi_transcript;
+use super::super::pi_transcript::{rehydrate_pi_transcript, session_map_path};
 use super::super::{fetch_transcript_bytes, fetch_transcript_envelope};
 use super::cli_transcript::CliTranscriptKind;
 use super::connection::{AcpConnection, RpcError};
@@ -228,7 +228,9 @@ pub(super) async fn rehydrate_cli_session(
                 .map_err(fetch_failure)?;
             let root = root.to_path_buf();
             tokio::task::spawn_blocking(move || {
-                rehydrate_pi_transcript(&transcript, &root, &cwd).map(|id| id.to_string())
+                let map_path = session_map_path().context("Could not locate pi-acp session map")?;
+                rehydrate_pi_transcript(&transcript, &root, &cwd, &map_path)
+                    .map(|id| id.to_string())
             })
             .await
         }

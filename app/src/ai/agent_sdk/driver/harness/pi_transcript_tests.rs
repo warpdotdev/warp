@@ -8,24 +8,17 @@ use warp_harness_usage::{CaptureDiagnostics, ExtractionOutcome, extract_pi, pars
 use super::*;
 use crate::ai::agent_sdk::driver::harness::pi_usage::capture_transcript_with_usage;
 use crate::ai::agent_sdk::driver::harness::transcript_persistence::JSONL_LIMITS;
-use crate::ai::agent_sdk::test_support::EnvVarGuard;
 
 #[test]
-#[serial_test::serial]
 fn restored_pi_history_survives_the_next_capture() {
-    let home = TempDir::new().unwrap();
-    let _home = EnvVarGuard::set(
-        if cfg!(windows) { "USERPROFILE" } else { "HOME" },
-        home.path(),
-    );
+    let map_dir = TempDir::new().unwrap();
+    let map_path = map_dir.path().join("session-map.json");
     let root = TempDir::new().unwrap();
     let cwd = TempDir::new().unwrap();
     let native_id = Uuid::new_v4();
     let header = json!({"type": "session", "version": 3, "id": native_id, "cwd": cwd.path()});
     let prior = r#"{"type":"message","id":"old","message":{"role":"assistant","content":[],"provider":"test","model":"model","usage":{"input":10,"output":2,"cacheRead":0,"cacheWrite":0}}}"#;
     let body = format!("{header}\n{prior}");
-    let map_path = session_map_path().unwrap();
-    fs::create_dir_all(map_path.parent().unwrap()).unwrap();
     let existing =
         json!({"sessionId": "other", "cwd": "/other", "sessionFile": "/other/file.jsonl"});
     fs::write(
@@ -34,7 +27,7 @@ fn restored_pi_history_survives_the_next_capture() {
     )
     .unwrap();
 
-    let id = rehydrate_pi_transcript(body.as_bytes(), root.path(), cwd.path()).unwrap();
+    let id = rehydrate_pi_transcript(body.as_bytes(), root.path(), cwd.path(), &map_path).unwrap();
 
     let map: Value = serde_json::from_slice(&fs::read(map_path).unwrap()).unwrap();
     assert_eq!(map["sessions"]["other"], existing);
@@ -76,32 +69,33 @@ fn restored_pi_history_survives_the_next_capture() {
 #[test]
 fn an_invalid_pi_header_cannot_write_outside_the_run_directory() {
     let root = TempDir::new().unwrap();
+    let map_path = root.path().join("session-map.json");
     let cwd = Path::new("/workspace");
     for header in [
         json!({"type": "message", "id": Uuid::new_v4(), "cwd": cwd}),
         json!({"type": "session", "id": "../../elsewhere", "cwd": cwd}),
         json!({"type": "session", "id": Uuid::new_v4(), "cwd": "/different"}),
     ] {
-        assert!(rehydrate_pi_transcript(header.to_string().as_bytes(), root.path(), cwd).is_err());
+        assert!(
+            rehydrate_pi_transcript(header.to_string().as_bytes(), root.path(), cwd, &map_path)
+                .is_err()
+        );
     }
     assert_eq!(fs::read_dir(root.path()).unwrap().count(), 0);
 }
 
 #[test]
-#[serial_test::serial]
 fn an_unreadable_pi_session_map_is_not_replaced() {
-    let home = TempDir::new().unwrap();
-    let _home = EnvVarGuard::set(
-        if cfg!(windows) { "USERPROFILE" } else { "HOME" },
-        home.path(),
-    );
+    let map_dir = TempDir::new().unwrap();
+    let map_path = map_dir.path().join("session-map.json");
     let root = TempDir::new().unwrap();
     let cwd = Path::new("/workspace");
     let header = json!({"type": "session", "id": Uuid::new_v4(), "cwd": cwd});
-    let map_path = session_map_path().unwrap();
-    fs::create_dir_all(map_path.parent().unwrap()).unwrap();
     fs::write(&map_path, b"invalid json").unwrap();
 
-    assert!(rehydrate_pi_transcript(header.to_string().as_bytes(), root.path(), cwd).is_err());
+    assert!(
+        rehydrate_pi_transcript(header.to_string().as_bytes(), root.path(), cwd, &map_path)
+            .is_err()
+    );
     assert_eq!(fs::read(map_path).unwrap(), b"invalid json");
 }

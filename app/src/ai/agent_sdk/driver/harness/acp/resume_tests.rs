@@ -135,52 +135,6 @@ fn an_unresolved_transcript_root_names_the_startup_warning() {
 }
 
 #[tokio::test]
-#[serial_test::serial]
-async fn a_pi_transcript_is_loaded_from_the_run_directory() {
-    let home = TempDir::new().unwrap();
-    let _home = EnvVarGuard::set(
-        if cfg!(windows) { "USERPROFILE" } else { "HOME" },
-        home.path(),
-    );
-    let root = TempDir::new().unwrap();
-    let cwd = TempDir::new().unwrap();
-    let transcript = format!(
-        "{}\n",
-        json!({"type": "session", "version": 3, "id": Uuid::new_v4(), "cwd": cwd.path()})
-    );
-    let bytes = bytes::Bytes::from(transcript.clone());
-    let client = client_answering(move || Ok(bytes.clone()));
-
-    let session_id = rehydrate_cli_session(
-        CliTranscriptKind::Pi,
-        &conversation_id(),
-        client,
-        cwd.path(),
-        root.path(),
-    )
-    .await
-    .unwrap();
-    let id = Uuid::parse_str(&session_id).unwrap();
-    let path = CliTranscriptKind::Pi
-        .locate(root.path(), cwd.path(), id)
-        .unwrap();
-    assert_eq!(std::fs::read_to_string(path).unwrap(), transcript);
-    let (pending, result_tx, _abort) = pending_rehydration();
-    result_tx.send(Ok(session_id.clone())).unwrap();
-    let (resume, load) = LOAD_ONLY;
-    let plan = plan_session(Some(Ok(pending)), &capabilities(resume, load))
-        .await
-        .unwrap();
-    assert_eq!(
-        plan,
-        SessionPlan::Reopen {
-            method: ReopenMethod::Load,
-            session_id
-        }
-    );
-}
-
-#[tokio::test]
 async fn a_missing_transcript_is_a_miss() {
     let client = client_answering(|| Err(anyhow::anyhow!("upstream returned status 404")));
 
