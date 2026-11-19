@@ -20,6 +20,10 @@ use futures_util::stream::AbortHandle;
 use futures_util::{SinkExt, StreamExt};
 use instant::Instant;
 use parking_lot::FairMutex;
+#[cfg(not(feature = "integration_tests"))]
+use session_sharing_protocol::common::SelectedAgentModel;
+#[cfg(not(any(test, feature = "integration_tests")))]
+use session_sharing_protocol::common::TelemetryContext;
 use session_sharing_protocol::common::{
     ActivePrompt, ActivePromptUpdate, AgentPromptFailureReason, AgentPromptRequest,
     AgentPromptRequestId, CommandExecutionFailureReason, CommandExecutionRequestId, ControlAction,
@@ -30,9 +34,7 @@ use session_sharing_protocol::common::{
     UniversalDeveloperInputContext, UniversalDeveloperInputContextUpdate, UserID, WindowSize,
     WriteToPtyFailureReason, WriteToPtyRequestId,
 };
-#[cfg(not(any(test, feature = "integration_tests")))]
-use session_sharing_protocol::common::{SelectedAgentModel, TelemetryContext};
-#[cfg(not(any(test, feature = "integration_tests")))]
+#[cfg(not(feature = "integration_tests"))]
 use session_sharing_protocol::sharer::InitPayload;
 use session_sharing_protocol::sharer::{
     AddGuestsResponse, DownstreamMessage, FailedToAddGuestsReason, FailedToInitializeSessionReason,
@@ -71,7 +73,12 @@ const PTY_READS_BATCH_THRESHOLD: Duration = Duration::from_millis(50);
 #[cfg(any(test, feature = "integration_tests"))]
 const PTY_READS_BATCH_THRESHOLD: Duration = Duration::from_millis(250);
 #[cfg_attr(any(test, feature = "integration_tests"), allow(dead_code))]
-const CREATE_SESSION_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(5);
+const CREATE_SESSION_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(15);
+pub(crate) const AMBIENT_SESSION_STARTUP_TIMEOUT: Duration = Duration::from_secs(45);
+
+#[derive(Debug, thiserror::Error)]
+#[error("Timed out starting session sharing")]
+pub(crate) struct SessionSharingStartupTimeout;
 #[cfg_attr(any(test, feature = "integration_tests"), allow(dead_code))]
 const AMBIENT_CREATE_SESSION_MAX_ATTEMPTS: usize = 3;
 const RECONNECT_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -250,6 +257,8 @@ struct CachedLatestState {
 #[derive(Clone)]
 #[cfg_attr(any(test, feature = "integration_tests"), allow(dead_code))]
 struct StartupConfig {
+    #[cfg(test)]
+    endpoint: String,
     scrollback: Scrollback,
     window_size: WindowSize,
     init_block_id: BlockId,
@@ -264,6 +273,8 @@ struct StartupConfig {
 struct StartupRetryState {
     current_attempt: usize,
     max_attempts: usize,
+    started_at: Instant,
+    initialization_sent: bool,
     timeout_abort_handle: Option<AbortHandle>,
     transport_abort_handle: Option<AbortHandle>,
 }
@@ -274,6 +285,8 @@ impl StartupRetryState {
         Self {
             current_attempt: 0,
             max_attempts,
+            started_at: Instant::now(),
+            initialization_sent: false,
             timeout_abort_handle: None,
             transport_abort_handle: None,
         }
@@ -403,6 +416,8 @@ pub struct Network {
     sharer_id: Option<ParticipantId>,
     startup_config: Option<StartupConfig>,
     source: SharedSessionSource,
+    #[cfg(test)]
+    test_max_websocket_message_bytes: Option<usize>,
 
     /// HashMap from event_no to the event. We keep these in memory to support reconnections
     /// until the server acks that they have been processed and are safe to remove.
@@ -459,6 +474,8 @@ impl Network {
             sharer_id: None,
             startup_config: None,
             source: SharedSessionSource::default(),
+            #[cfg(test)]
+            test_max_websocket_message_bytes: None,
             unacked_terminal_events: HashMap::new(),
             last_confirmed_event_no: None,
             no_progress_reconnects: 0,
@@ -596,6 +613,7 @@ impl Network {
 
     /// Close the websocket to the session-sharing-server.
     fn close(&mut self) {
+        self.abort_startup_handles();
         self.connection_generation += 1;
         if let Stage::Reconnecting { abort_handle, .. } = &self.stage {
             abort_handle.abort();
@@ -882,7 +900,7 @@ impl Network {
             Some(update.merge_into(current));
     }
 
-    #[cfg(not(any(test, feature = "integration_tests")))]
+    #[cfg(not(feature = "integration_tests"))]
     fn start_create_session_attempt(&mut self, ctx: &mut ModelContext<Self>) {
         if !matches!(self.stage, Stage::BeforeStarted { .. }) {
             return;
@@ -898,10 +916,15 @@ impl Network {
         let (ws_proxy_tx, ws_proxy_rx) = async_channel::unbounded();
         self.ws_proxy_tx = ws_proxy_tx;
         self.ws_proxy_rx = ws_proxy_rx.clone();
-        let (attempt, max_attempts) = match &mut self.stage {
+        let (attempt, max_attempts, elapsed) = match &mut self.stage {
             Stage::BeforeStarted { startup_retry } => {
                 startup_retry.current_attempt += 1;
-                (startup_retry.current_attempt, startup_retry.max_attempts)
+                startup_retry.initialization_sent = false;
+                (
+                    startup_retry.current_attempt,
+                    startup_retry.max_attempts,
+                    startup_retry.started_at.elapsed(),
+                )
             }
             Stage::StartedSuccessfully { .. } | Stage::Reconnecting { .. } | Stage::Finished => {
                 return;
@@ -909,24 +932,36 @@ impl Network {
         };
 
         if max_attempts > 1 {
-            let timeout_handle = ctx.spawn(
-                async move { Timer::after(CREATE_SESSION_ATTEMPT_TIMEOUT).await },
-                move |network, _, ctx| {
-                    network.handle_startup_attempt_timeout(attempt, ctx);
-                },
-            );
-            if let Stage::BeforeStarted { startup_retry } = &mut self.stage {
-                startup_retry.timeout_abort_handle = Some(timeout_handle.abort_handle());
+            let remaining = AMBIENT_SESSION_STARTUP_TIMEOUT.saturating_sub(elapsed);
+            if remaining.is_zero() {
+                self.handle_startup_failure(StartupFailure::Timeout, ctx);
+                return;
             }
+            self.schedule_startup_timeout(
+                attempt,
+                remaining.min(CREATE_SESSION_ATTEMPT_TIMEOUT),
+                ctx,
+            );
         }
 
+        let elapsed_ms = elapsed.as_millis();
+        sharer_info!(
+            self,
+            "Starting shared session creation; phase=connecting attempt={attempt} max_attempts={max_attempts} elapsed_ms={elapsed_ms}"
+        );
+        #[cfg(not(test))]
         let auth_client = ServerApiProvider::as_ref(ctx).get_auth_client();
+        #[cfg(not(test))]
         let anonymous_id = AuthStateProvider::as_ref(ctx).get().anonymous_id();
+        #[cfg(test)]
+        let create_endpoint = config.endpoint.clone();
         let connect_handle = ctx.spawn(
             async move {
+                #[cfg(not(test))]
                 let Some(create_endpoint) = connect_endpoint("/sessions/create".to_owned()) else {
                     anyhow::bail!("This channel does not support session-sharing.");
                 };
+                #[cfg(not(test))]
                 let user_id = UserID {
                     anonymous_id,
                     access_token: auth_client
@@ -935,6 +970,8 @@ impl Network {
                         .ok()
                         .and_then(|token| token.bearer_token()),
                 };
+                #[cfg(test)]
+                let user_id = UserID::default();
                 log::info!("Connecting to session sharing server");
                 let socket = WebSocket::connect(&create_endpoint, None::<&str>).await?;
                 log::info!("Connected to session sharing server; preparing initialization");
@@ -943,6 +980,15 @@ impl Network {
             move |network, conn, ctx| match conn {
                 Ok(((sink, stream), user_id)) => {
                     if !network.is_active_startup_attempt_callback(attempt) {
+                        return;
+                    }
+                    if matches!(
+                        &network.stage,
+                        Stage::BeforeStarted { startup_retry }
+                            if startup_retry.max_attempts > 1
+                                && startup_retry.started_at.elapsed() >= AMBIENT_SESSION_STARTUP_TIMEOUT
+                    ) {
+                        network.handle_startup_failure(StartupFailure::Timeout, ctx);
                         return;
                     }
                     network.clear_startup_transport_handle(attempt);
@@ -962,7 +1008,10 @@ impl Network {
                         selection: network.cached_latest_state.selection.clone(),
                         init_block_id: config.init_block_id.into(),
                         input_replica_id: config.input_replica_id.into(),
+                        #[cfg(not(test))]
                         telemetry_context: Some(TelemetryContext(telemetry_context().as_value())),
+                        #[cfg(test)]
+                        telemetry_context: None,
                         universal_developer_input_context: Some(UniversalDeveloperInputContext {
                             selected_model: Some(SelectedAgentModel::new(config.selected_model_id)),
                             ..universal_developer_input_context
@@ -982,7 +1031,15 @@ impl Network {
                         network.handle_startup_failure(StartupFailure::InitializeSend, ctx);
                         return;
                     }
-                    sharer_info!(network, "Sent session sharing initialization message");
+                    if let Stage::BeforeStarted { startup_retry } = &mut network.stage {
+                        startup_retry.initialization_sent = true;
+                        if startup_retry.max_attempts > 1 {
+                            let remaining = AMBIENT_SESSION_STARTUP_TIMEOUT
+                                .saturating_sub(startup_retry.started_at.elapsed());
+                            network.schedule_startup_timeout(attempt, remaining, ctx);
+                        }
+                    }
+                    sharer_info!(network, "Queued session sharing initialization; phase=initializing attempt={attempt}");
                     network.on_websocket_connected(
                         Some(attempt),
                         ws_proxy_rx.clone(),
@@ -1010,7 +1067,28 @@ impl Network {
         }
     }
 
-    #[cfg(not(any(test, feature = "integration_tests")))]
+    #[cfg(not(feature = "integration_tests"))]
+    fn schedule_startup_timeout(
+        &mut self,
+        attempt: usize,
+        timeout: Duration,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if let Stage::BeforeStarted { startup_retry } = &mut self.stage
+            && let Some(handle) = startup_retry.timeout_abort_handle.take()
+        {
+            handle.abort();
+        }
+        let handle = ctx.spawn(
+            async move { Timer::after(timeout).await },
+            move |network, _, ctx| network.handle_startup_attempt_timeout(attempt, ctx),
+        );
+        if let Stage::BeforeStarted { startup_retry } = &mut self.stage {
+            startup_retry.timeout_abort_handle = Some(handle.abort_handle());
+        }
+    }
+
+    #[cfg(not(feature = "integration_tests"))]
     fn handle_startup_attempt_timeout(&mut self, attempt: usize, ctx: &mut ModelContext<Self>) {
         if !self.is_active_startup_attempt_callback(attempt) {
             return;
@@ -1068,6 +1146,10 @@ impl Network {
                 &self.stage,
                 Stage::BeforeStarted { startup_retry }
                     if startup_retry.current_attempt < startup_retry.max_attempts
+                        && startup_retry.started_at.elapsed() < AMBIENT_SESSION_STARTUP_TIMEOUT
+                        // Once Initialize is queued, a lost acknowledgment doesn't prove creation failed.
+                        && (!startup_retry.initialization_sent
+                            || matches!(failure, StartupFailure::ServerRejected(_)))
             )
     }
 
@@ -1113,23 +1195,29 @@ impl Network {
 
         let attempt = startup_retry.current_attempt;
         let max_attempts = startup_retry.max_attempts;
+        let elapsed_ms = startup_retry.started_at.elapsed().as_millis();
+        let phase = if startup_retry.initialization_sent {
+            "initializing"
+        } else {
+            "connecting"
+        };
         let reason = failure.diagnostic_label();
         if self.should_retry_startup_failure(&failure) {
             if let Some(cause) = cause.as_ref() {
                 sharer_warn!(
                     self,
-                    "Shared session creation attempt failed, will retry; attempt={attempt} max_attempts={max_attempts} reason={reason} cause={cause:#}"
+                    "Shared session creation attempt failed, will retry; attempt={attempt} max_attempts={max_attempts} phase={phase} elapsed_ms={elapsed_ms} reason={reason} cause={cause:#}"
                 );
             } else {
                 sharer_warn!(
                     self,
-                    "Shared session creation attempt failed, will retry; attempt={attempt} max_attempts={max_attempts} reason={reason}"
+                    "Shared session creation attempt failed, will retry; attempt={attempt} max_attempts={max_attempts} phase={phase} elapsed_ms={elapsed_ms} reason={reason}"
                 );
             }
             self.abort_startup_handles();
             self.close_startup_transport();
 
-            #[cfg(not(any(test, feature = "integration_tests")))]
+            #[cfg(not(feature = "integration_tests"))]
             self.start_create_session_attempt(ctx);
             return;
         }
@@ -1137,12 +1225,12 @@ impl Network {
         if let Some(cause) = cause.as_ref() {
             sharer_warn!(
                 self,
-                "Shared session creation failed, retries exhausted; attempt={attempt} max_attempts={max_attempts} reason={reason} cause={cause:#}"
+                "Shared session creation failed, retries exhausted; attempt={attempt} max_attempts={max_attempts} phase={phase} elapsed_ms={elapsed_ms} reason={reason} cause={cause:#}"
             );
         } else {
             sharer_warn!(
                 self,
-                "Shared session creation failed, retries exhausted; attempt={attempt} max_attempts={max_attempts} reason={reason}"
+                "Shared session creation failed, retries exhausted; attempt={attempt} max_attempts={max_attempts} phase={phase} elapsed_ms={elapsed_ms} reason={reason}"
             );
         }
         self.abort_startup_handles();
@@ -1155,6 +1243,11 @@ impl Network {
             report_error!(&**cause);
         }
 
+        let cause = if matches!(failure, StartupFailure::Timeout) {
+            Some(Arc::new(anyhow::Error::new(SessionSharingStartupTimeout)))
+        } else {
+            cause
+        };
         ctx.emit(NetworkEvent::FailedToCreateSharedSession {
             reason: failure.failed_reason(),
             cause,
@@ -1337,6 +1430,11 @@ impl Network {
         let startup_send_failure_pending = Arc::new(AtomicBool::new(false));
         let receive_startup_send_failure_pending = startup_send_failure_pending.clone();
         let close_startup_send_failure_pending = startup_send_failure_pending.clone();
+        let max_websocket_message_bytes = SERVER_MAX_WEBSOCKET_MESSAGE_BYTES;
+        #[cfg(test)]
+        let max_websocket_message_bytes = self
+            .test_max_websocket_message_bytes
+            .unwrap_or(max_websocket_message_bytes);
         // Handle any messages we receive over the websocket.
         ctx.spawn_stream_local(
             stream,
@@ -1410,12 +1508,12 @@ impl Network {
                     let serialized = message.to_json();
                     match serialized {
                         Ok(serialized) => {
-                            if serialized.len() > SERVER_MAX_WEBSOCKET_MESSAGE_BYTES {
+                            if serialized.len() > max_websocket_message_bytes {
                                 if is_startup_initialize {
                                     log::warn!(
                                         "Shared session initialization exceeds websocket message limit; bytes={} limit={}",
                                         serialized.len(),
-                                        SERVER_MAX_WEBSOCKET_MESSAGE_BYTES,
+                                        max_websocket_message_bytes,
                                     );
                                     startup_send_failure_pending.store(true, Ordering::Release);
                                     startup_failure = Some(StartupFailure::InitializeTooLarge);
@@ -1424,7 +1522,7 @@ impl Network {
                                 log::warn!(
                                     "Skipping oversized message to shared session server; bytes={} limit={}",
                                     serialized.len(),
-                                    SERVER_MAX_WEBSOCKET_MESSAGE_BYTES,
+                                    max_websocket_message_bytes,
                                 );
                                 continue;
                             }
@@ -1511,6 +1609,12 @@ impl Network {
                 };
                 let attempt = startup_retry.current_attempt;
                 let max_attempts = startup_retry.max_attempts;
+                if max_attempts > 1
+                    && startup_retry.started_at.elapsed() >= AMBIENT_SESSION_STARTUP_TIMEOUT
+                {
+                    self.handle_startup_failure(StartupFailure::Timeout, ctx);
+                    return;
+                }
                 self.session_id = Some(session_id);
                 self.reconnect_token = Some(reconnect_token);
                 self.sharer_id = Some(sharer_id.clone());
@@ -2146,3 +2250,7 @@ impl Drop for Network {
 #[cfg(test)]
 #[path = "network_tests.rs"]
 mod tests;
+
+#[cfg(all(test, not(target_family = "wasm"), not(feature = "integration_tests")))]
+#[path = "startup_loopback_tests.rs"]
+mod startup_loopback_tests;

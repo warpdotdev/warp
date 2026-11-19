@@ -339,6 +339,38 @@ fn extend_shared_session_retention_emits_event_for_active_sharer() {
 }
 
 #[test]
+fn startup_timeout_is_preserved_through_terminal_view_event() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal_view = add_window_with_terminal(&mut app, None);
+        let driver =
+            app.update(|ctx| TerminalDriver::create_from_existing_view(terminal_view.clone(), ctx));
+        let (tx, rx) = oneshot::channel();
+        let shared = driver.update(&mut app, |driver, _| {
+            driver.session_share_tx = Some(tx);
+            driver.session_share_rx = Some(rx);
+            driver.wait_for_session_shared()
+        });
+
+        terminal_view.update(&mut app, |_, ctx| {
+            ctx.emit(Event::FailedToShareSession {
+                reason: "An internal error occurred. Please try sharing again.".to_string(),
+                cause: Some(Arc::new(anyhow::Error::new(
+                    super::SessionSharingStartupTimeout,
+                ))),
+            });
+        });
+
+        assert!(matches!(
+            shared.await,
+            Err(AgentDriverError::ShareSessionFailed {
+                error: ShareSessionError::Timeout,
+            })
+        ));
+    });
+}
+
+#[test]
 fn shared_session_failure_propagates_to_agent_driver_error() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
