@@ -591,6 +591,9 @@ pub enum FeatureFlag {
     /// raising it or moving the cursor.  Currently only supported on macOS.
     BackgroundComputerUse,
 
+    /// Exposes computer use to third-party agent harnesses through a stdio MCP server.
+    ComputerUseMcp,
+
     /// Enables video recording of computer-use sessions for cloud agents.
     VideoRecording,
 
@@ -1064,6 +1067,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::FileGlobV2Warnings,
     FeatureFlag::SummarizationViaMessageReplacement,
     FeatureFlag::LocalComputerUse,
+    FeatureFlag::ComputerUseMcp,
     FeatureFlag::VideoRecording,
     FeatureFlag::WindowsVideoRecording,
     FeatureFlag::OzLaunchModal,
@@ -1094,10 +1098,8 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::CtrlCCancelsThirdPartyHarness,
     FeatureFlag::WarpingModelName,
     FeatureFlag::StoredScreenshots,
-    FeatureFlag::PreviewUrlsMcp,
     FeatureFlag::GitMirrorCache,
     FeatureFlag::AgentPromptSteering,
-    FeatureFlag::ManagedMcpCredentialRefresh,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).

@@ -78,6 +78,7 @@ pub struct ExecutionConfiguration {
     pub mcp_servers_json: String,
     pub skills: Vec<ExecutionSkillSpec>,
     pub factory_skill_dirs: Vec<String>,
+    pub factory_branch: Option<FactoryBranchExecutionConfig>,
     pub computer_use_enabled: bool,
     pub computer_use_model_id: Option<String>,
     pub inference_providers: Option<InferenceProviderClientConfigs>,
@@ -92,6 +93,7 @@ pub struct ExecutionConfiguration {
     pub idle_on_fail_seconds: Option<i32>,
     pub snapshot_disabled: bool,
     pub agent_hook_sources: Vec<AgentHookSource>,
+    pub experimental_json: Option<String>,
 }
 
 #[derive(cynic::Enum, Clone, Copy, Debug, PartialEq, Eq)]
@@ -142,6 +144,11 @@ pub struct AgentHookSource {
 #[derive(cynic::QueryFragment, Debug)]
 pub struct ExecutionSkillSpec {
     pub spec: String,
+}
+
+#[derive(cynic::QueryFragment, Clone, Debug)]
+pub struct FactoryBranchExecutionConfig {
+    pub source_sha: String,
 }
 
 #[derive(cynic::Enum, Clone, Copy, Debug, PartialEq, Eq)]

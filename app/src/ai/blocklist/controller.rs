@@ -40,7 +40,9 @@ use self::response_stream::{PendingResume, RecoveryBudget, ResponseStream, Respo
 use super::action_model::{BlocklistAIActionEvent, BlocklistAIActionModel};
 use super::context_model::{BlocklistAIContextModel, PendingAttachment, PendingFile};
 use super::conversation_selection::{ConversationSelectionEvent, ConversationSelectionHandle};
-use super::history_model::BlocklistAIHistoryModel;
+use super::history_model::{
+    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, ConversationStatusUpdate,
+};
 use super::orchestration_event_streamer::{
     OrchestrationEventStreamer, OrchestrationEventStreamerEvent,
 };
@@ -205,6 +207,13 @@ pub enum BlocklistAIControllerEvent {
     ExecuteLocalHarnessCommand {
         command: String,
     },
+
+    /// An agent hook stopped the prompt an ambient agent run starts with, so the run has nothing
+    /// to do. `reason` is what the hook said, or Warp's default when it said nothing.
+    RunPromptHalted {
+        conversation_id: AIConversationId,
+        reason: String,
+    },
 }
 
 #[derive(Debug)]
@@ -296,10 +305,7 @@ impl RequestInput {
         app: &AppContext,
     ) -> Self {
         let llm_prefs = LLMPreferences::as_ref(app);
-        let model_id = llm_prefs
-            .get_active_base_model(scope, app, Some(terminal_surface_id))
-            .id
-            .clone();
+        let model_id = active_base_model_id(scope, terminal_surface_id, app);
         let coding_model_id = llm_prefs
             .get_active_coding_model(scope, app, Some(terminal_surface_id))
             .id
@@ -616,7 +622,7 @@ impl BlocklistAIController {
                         || treat_as_success
                     {
                         me.hold_or_finalize_turn(*conversation_id, ctx);
-                        me.start_held_turn_stop(*conversation_id, ctx);
+                        me.start_held_turn_stop_hooks(*conversation_id, ctx);
                     } else {
                         // This is an imperfect heuristic that practically speaking should have no effect.
                         //
@@ -761,6 +767,24 @@ impl BlocklistAIController {
             | OrchestrationEventStreamerEvent::ChildStatusChanged { .. }
             | OrchestrationEventStreamerEvent::WatchedRunStatusChanged { .. } => {}
         });
+        // A turn ends as cancelled or failed from many places (a cancelled or errored stream,
+        // actions cancelled with nothing to send back, a shell exit, a hook that ended the run),
+        // all of which set the status; the status change is the one place that sees them all.
+        let history_model = BlocklistAIHistoryModel::handle(ctx);
+        ctx.subscribe_to_model(&history_model, |me, _, event, ctx| {
+            let BlocklistAIHistoryEvent::UpdatedConversationStatus {
+                conversation_id,
+                terminal_surface_id,
+                update: ConversationStatusUpdate::Changed { prev_status },
+                new_status,
+            } = event
+            else {
+                return;
+            };
+            if *terminal_surface_id == me.terminal_surface_id {
+                me.stop_ended_turn(*conversation_id, prev_status, new_status, ctx);
+            }
+        });
         Self {
             input_model,
             context_model,
@@ -872,13 +896,23 @@ impl BlocklistAIController {
             input_query.input_query,
             InputQueryType::UserSubmittedQueryFromInput { .. }
         );
-        // Hooks see the prompt as it was typed, including any mode prefix. The copy is only made
-        // when a hook could fire, so the inactive path adds nothing beyond the check.
-        let submitted_prompt = (is_user_submitted_prompt && hooks::HookRuntime::is_active(ctx))
-            .then(|| hooks::prompt::SubmittedPrompt {
-                text: query.clone(),
-                provenance,
-            });
+        // Hooks see a typed prompt as it was typed, including any mode prefix, and a run's
+        // first prompt as the server resolved it, when the driver fetched it for them. The copy
+        // is only made when a hook could fire, so the inactive path adds nothing beyond the
+        // check.
+        let prompt_text = hooks::HookRuntime::is_active(ctx)
+            .then(|| match &input_query.input_query {
+                InputQueryType::UserSubmittedQueryFromInput { .. } => Some(query.clone()),
+                InputQueryType::AIInputType {
+                    ai_input:
+                        AIAgentInput::StartFromAmbientRunPrompt {
+                            resolved_prompt: Some(prompt),
+                            ..
+                        },
+                } => Some(prompt.text.clone()),
+                InputQueryType::AIInputType { .. } => None,
+            })
+            .flatten();
         let (query, user_query_mode) = if is_hook_follow_up {
             (query, UserQueryMode::Normal)
         } else {
@@ -994,6 +1028,11 @@ impl BlocklistAIController {
             }
             InputQueryType::AIInputType { ai_input } => ai_input,
         };
+        let submitted_prompt = prompt_text.map(|text| hooks::prompt::SubmittedPrompt {
+            text,
+            attachments: hooks::prompt::attachments_in(&ai_input),
+            provenance,
+        });
         inputs.push(ai_input);
 
         // Piggyback any pending orchestration config updates for this conversation.
@@ -1018,8 +1057,11 @@ impl BlocklistAIController {
         };
         // After the previous turn's actions are cancelled, so their `tool.failure` precedes this
         // turn's `prompt.submit`. With no hook to wait for, the request goes out right here.
+        let scope = ResolvedTeamScope::from_scope(&self.team_context(ctx));
+        let model_id = active_base_model_id(&scope, self.terminal_surface_id, ctx);
         match hooks::prompt::prepare_turn(
             submitted_prompt,
+            model_id,
             conversation_id,
             &self.active_session,
             ctx,
@@ -1037,7 +1079,8 @@ impl BlocklistAIController {
 
     /// Sends a query whose wait ended in its favor, or puts back what a query that is not sent
     /// took. A turn whose finalization was left to this query is finished if the query does not
-    /// go out.
+    /// go out. A halted prompt that would have started an ambient agent run is announced, since
+    /// the run's owner has to end the run.
     fn conclude_prepared_query(
         &mut self,
         prepared: PreparedQuery,
@@ -1049,11 +1092,23 @@ impl BlocklistAIController {
         let sent = if outcome.send {
             self.send_prepared_query(prepared, ctx)
         } else {
+            let starts_run = prepared
+                .inputs
+                .iter()
+                .any(|input| matches!(input, AIAgentInput::StartFromAmbientRunPrompt { .. }));
             Self::restore_dirty_events(conversation_id, prepared.taken_dirty_events, ctx);
+            if let (true, hooks::prompt::PromptDecision::Halted { reason, .. }) =
+                (starts_run, &decision)
+            {
+                ctx.emit(BlocklistAIControllerEvent::RunPromptHalted {
+                    conversation_id,
+                    reason: reason.clone(),
+                });
+            }
             false
         };
         if !sent && outcome.owes_earlier_turn {
-            self.settle_turn_after_stop(conversation_id, ctx);
+            self.settle_turn_after_stop_hooks(conversation_id, ctx);
         }
     }
 
@@ -1130,7 +1185,7 @@ impl BlocklistAIController {
 
     /// Runs the stop hooks of a turn [`Self::hold_or_finalize_turn`] held, once the turn's own
     /// stream is out of the way so a follow-up can be sent.
-    fn start_held_turn_stop(
+    fn start_held_turn_stop_hooks(
         &mut self,
         conversation_id: AIConversationId,
         ctx: &mut ModelContext<Self>,
@@ -1148,10 +1203,51 @@ impl BlocklistAIController {
                         me.finalize_held_turn(conversation_id, ctx)
                     }
                     hooks::turn::TurnStopResolution::FollowUpQueued => {
-                        me.settle_turn_after_stop(conversation_id, ctx)
+                        me.settle_turn_after_stop_hooks(conversation_id, ctx)
                     }
                 },
             );
+        }
+    }
+
+    /// Runs the stop hooks of a turn that a status change ended as cancelled or failed, once the
+    /// stream that ended it is out of the way. Nothing here waits for their answer; an Oz run
+    /// about to exit on that status does, and calls this itself first, since it may see the
+    /// status change before this controller does. A turn fires at most one stop, so the second
+    /// call for the same change does nothing.
+    pub(crate) fn stop_ended_turn(
+        &mut self,
+        conversation_id: AIConversationId,
+        prev_status: &ConversationStatus,
+        new_status: &ConversationStatus,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if hooks::turn::hold_ended_turn(
+            conversation_id,
+            prev_status,
+            new_status,
+            &self.active_session,
+            ctx,
+        ) {
+            self.start_ended_turn_stop_hooks(conversation_id, ctx);
+        }
+    }
+
+    /// Starts the stop hooks of `conversation_id`'s ended turns that are waiting to start, unless
+    /// the stream that ended one of them is still being cleaned up, in which case the stream's end
+    /// starts them.
+    fn start_ended_turn_stop_hooks(
+        &mut self,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if self.has_active_stream_for_conversation(conversation_id, ctx) {
+            return;
+        }
+        for stop in hooks::turn::start_ended_turn_stops(conversation_id, ctx) {
+            ctx.spawn(stop, move |_, outcome, ctx| {
+                hooks::turn::finish_ended_turn_stop(conversation_id, outcome, ctx);
+            });
         }
     }
 
@@ -1159,7 +1255,7 @@ impl BlocklistAIController {
     /// turn successful if nothing took the conversation over. A conversation that is not the one
     /// this surface is working in keeps its queue for the next drain: sending from here would go
     /// through the surface's own prompt path and cancel the conversation the person is in.
-    fn settle_turn_after_stop(
+    fn settle_turn_after_stop_hooks(
         &mut self,
         conversation_id: AIConversationId,
         ctx: &mut ModelContext<Self>,
@@ -4276,8 +4372,11 @@ impl BlocklistAIController {
                     self.handle_pending_events_ready(conversation_id, ctx);
                     // And run the stop hooks of a turn this stream ended, which may send a
                     // follow-up now that nothing is in flight for the conversation.
-                    self.start_held_turn_stop(conversation_id, ctx);
+                    self.start_held_turn_stop_hooks(conversation_id, ctx);
                 }
+                // A turn this stream ended as failed set its status before the stream was
+                // cleaned up, so its stop hooks waited for this point.
+                self.start_ended_turn_stop_hooks(conversation_id, ctx);
 
                 // Before cleaning up the response stream, check if we should attempt to resume.
                 // The resume inherits the failed request's remaining recovery budget, so
@@ -4573,6 +4672,18 @@ pub struct ClientIdentifiers {
     pub client_exchange_id: AIAgentExchangeId,
     /// Not populated for restored AI blocks.
     pub response_stream_id: Option<ResponseStreamId>,
+}
+
+/// The base model the next Agent Mode request from `terminal_surface_id` uses.
+fn active_base_model_id(
+    scope: &impl TeamScope,
+    terminal_surface_id: EntityId,
+    app: &AppContext,
+) -> LLMId {
+    LLMPreferences::as_ref(app)
+        .get_active_base_model(scope, app, Some(terminal_surface_id))
+        .id
+        .clone()
 }
 
 #[allow(clippy::too_many_arguments)]

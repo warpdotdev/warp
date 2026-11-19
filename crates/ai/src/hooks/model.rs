@@ -66,13 +66,13 @@ impl HookBoundary {
             | Self::ToolPre
             | Self::ToolResult
             | Self::ToolFailure
+            | Self::SubagentStart
             | Self::TurnStop
             | Self::ResponseComplete
             | Self::ReasoningComplete => true,
             Self::SessionEnd
             | Self::ToolPermissionRequest
             | Self::FileExposure
-            | Self::SubagentStart
             | Self::SubagentStop
             | Self::TurnInterrupt
             | Self::CompactionPre
@@ -331,6 +331,47 @@ pub enum PromptProvenance {
     },
 }
 
+/// A file that went to the model with a prompt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PromptAttachment {
+    pub kind: PromptAttachmentKind,
+    pub path: PathBuf,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PromptAttachmentKind {
+    /// A file the person attached to the prompt.
+    File,
+    /// A rule file whose content the request carries.
+    Rule,
+}
+
+/// A child agent a `run_agents` call is about to launch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubagentLaunch {
+    /// Names the child before it exists, so a hook that saw it start can recognize it again.
+    /// Warp makes it up for the launch; it is not the id the child gets once it runs.
+    pub subagent_id: Uuid,
+    pub name: String,
+    /// The prompt the child starts with.
+    pub task: String,
+    /// The model the child will use, when the call named one.
+    pub model_id: Option<String>,
+    /// `oz` for Warp's own harness, else the third-party harness's name.
+    pub harness: String,
+    pub execution_mode: SubagentExecutionMode,
+    /// Whether the call launches more than one child.
+    pub is_parallel_worker: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubagentExecutionMode {
+    /// In this process, as a conversation of its own.
+    Local,
+    /// As a cloud run.
+    Remote,
+}
+
 /// What Warp's own permission check knows at the time the boundary fires.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PermissionFacts {
@@ -392,7 +433,7 @@ pub enum HookPayload {
     },
     PromptSubmit {
         text: String,
-        attachments_summary: Vec<String>,
+        attachments: Vec<PromptAttachment>,
         provenance: PromptProvenance,
     },
     ToolPre {
@@ -411,6 +452,11 @@ pub enum HookPayload {
         cancellation_reason: Option<String>,
         /// How long the tool ran before failing, when the caller measured it.
         duration: Option<Duration>,
+    },
+    /// One child of a `run_agents` call, about to be launched. The call's action id is the
+    /// envelope's `action_id` and the parent is its `conversation_id`.
+    SubagentStart {
+        launch: SubagentLaunch,
     },
     TurnStop {
         status: TurnStopStatus,
@@ -435,6 +481,7 @@ impl HookPayload {
             Self::ToolPre { .. } => HookBoundary::ToolPre,
             Self::ToolResult { .. } => HookBoundary::ToolResult,
             Self::ToolFailure { .. } => HookBoundary::ToolFailure,
+            Self::SubagentStart { .. } => HookBoundary::SubagentStart,
             Self::TurnStop { .. } => HookBoundary::TurnStop,
             Self::ResponseComplete { .. } => HookBoundary::ResponseComplete,
             Self::ReasoningComplete { .. } => HookBoundary::ReasoningComplete,
@@ -449,6 +496,7 @@ impl HookPayload {
             | Self::ToolFailure { action, .. } => Some(action),
             Self::SessionStart { .. }
             | Self::PromptSubmit { .. }
+            | Self::SubagentStart { .. }
             | Self::TurnStop { .. }
             | Self::ResponseComplete { .. }
             | Self::ReasoningComplete { .. } => None,

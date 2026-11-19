@@ -151,6 +151,7 @@ impl fmt::Debug for PrewarmedSandboxPreparation {
 /// Supplies a standby configuration whose secrets must stay out of logs and saved app state.
 #[derive(Clone)]
 pub struct PrewarmedSandboxConfiguration {
+    pub runner_preparation: bool,
     pub sandbox_id: String,
     /// Identifies the configuration version that status reports and heartbeats must match.
     pub generation: String,
@@ -170,8 +171,20 @@ impl TryFrom<GraphqlConfiguration> for PrewarmedSandboxConfiguration {
     type Error = anyhow::Error;
 
     fn try_from(config: GraphqlConfiguration) -> Result<Self> {
+        let runner_preparation = match config.preparation_kind.as_str() {
+            "AGENT" => false,
+            "RUNNER" => {
+                ensure!(
+                    config.runner_preparation_contract_version == Some(1),
+                    "Unsupported runner preparation contract"
+                );
+                true
+            }
+            _ => bail!("Unknown standby preparation kind"),
+        };
         let preparation = config.spec;
         Ok(Self {
+            runner_preparation,
             sandbox_id: config.sandbox_id.inner().to_owned(),
             generation: config.fingerprint,
             preparation: PrewarmedSandboxPreparation {
@@ -242,6 +255,7 @@ impl PrewarmedSandboxState {
 /// Reports a preparation outcome for a specific configuration generation.
 #[derive(Debug, Serialize)]
 struct PrewarmedSandboxStatusInput {
+    runner_preparation_contract_version: i32,
     /// The server's name for the configuration generation.
     fingerprint: String,
     state: &'static str,
@@ -272,9 +286,9 @@ pub enum PrewarmedSandboxControlEvent {
     Unknown,
 }
 
-/// Decodes an assignment's execution configuration. A server that predates agent hooks sends no
-/// `agentHookSources`; it has none to send, so the run gets an empty list rather than failing to
-/// claim the assignment.
+/// Decodes an assignment's execution configuration. A server that predates `agentHookSources` or
+/// `experimentalJson` omits the field; it has no value to send, so the run gets an empty list or no
+/// experiment values rather than failing to claim the assignment.
 fn assignment_execution_config<'de, D>(
     deserializer: D,
 ) -> std::result::Result<Box<ExecutionConfiguration>, D::Error>
@@ -286,6 +300,9 @@ where
         config
             .entry("agentHookSources")
             .or_insert_with(|| serde_json::Value::Array(Vec::new()));
+        config
+            .entry("experimentalJson")
+            .or_insert(serde_json::Value::Null);
     }
     serde_json::from_value(value).map_err(serde::de::Error::custom)
 }
@@ -474,6 +491,7 @@ impl PrewarmedSandboxClient for ServerApi {
             input: PrewarmedSandboxConfigInput {
                 sandbox_id: sandbox_id.into(),
                 github_credential_contract_version: Some(1),
+                runner_preparation_contract_version: Some(1),
                 supports_deferred_repositories: Some(supports_deferred_repositories),
                 supports_agent_hooks: Some(true),
             },
@@ -517,6 +535,7 @@ impl PrewarmedSandboxClient for ServerApi {
         bounded_request(REQUEST_TIMEOUT, async {
             let url = Self::prewarmed_sandbox_url(sandbox_id, "status");
             let body = PrewarmedSandboxStatusInput {
+                runner_preparation_contract_version: 1,
                 fingerprint: generation.to_string(),
                 state: state.as_wire_value(),
                 manifest_hash: matches!(state, PrewarmedSandboxState::Ready)

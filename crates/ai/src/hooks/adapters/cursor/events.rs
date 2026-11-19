@@ -23,6 +23,10 @@ pub(super) const DEFAULT_LOOP_LIMIT: u32 = 5;
 /// more, or for no limit, gets this value.
 pub(super) const LOOP_LIMIT_HOST_CAP: u32 = 8;
 
+/// Cursor's subagent type for a general-purpose worker, which every child Warp launches is. The
+/// others Cursor names (`explore`, `shell`) are kinds of subagent Warp does not have.
+pub(super) const SUBAGENT_TYPE: &str = "generalPurpose";
+
 /// One of the event names Cursor's `hooks.json` accepts, in the order Cursor's reference lists
 /// them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumCount)]
@@ -82,7 +86,7 @@ pub(super) enum MatchedValue {
     CommandText,
     /// The MCP tool's own name, without the `MCP:` prefix.
     McpToolName,
-    /// The subagent type. No Phase 1 payload carries one.
+    /// The subagent type, which is [`SUBAGENT_TYPE`] for every child Warp launches.
     SubagentType,
     /// A fixed word Cursor documents for the event.
     Literal(&'static str),
@@ -294,7 +298,7 @@ pub(super) static CURSOR_EVENTS: [CursorEventSpec; CursorEvent::COUNT] = [
         event: CursorEvent::SubagentStart,
         name: "subagentStart",
         boundary: Some(HookBoundary::SubagentStart),
-        fires_in_phase_1: false,
+        fires_in_phase_1: true,
         matched_value: MatchedValue::SubagentType,
         documented_output: &["permission", "user_message"],
         may_produce: PERMISSION_EFFECTS,

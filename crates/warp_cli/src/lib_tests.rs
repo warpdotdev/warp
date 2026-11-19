@@ -27,6 +27,31 @@ fn identifies_worker_subcommands() {
 }
 
 #[test]
+fn parses_computer_use_mcp_worker() {
+    use crate::computer_use_mcp::ComputerUseModelFamily;
+
+    assert!(is_worker_invocation("computer-use-mcp"));
+    let args = Args::try_parse_from([
+        "warp",
+        "computer-use-mcp",
+        "--model-family",
+        "openai",
+        "--settle-ms",
+        "250",
+    ])
+    .unwrap();
+    let Some(Command::Worker(WorkerCommand::ComputerUseMcp(args))) = args.command() else {
+        panic!(
+            "expected the computer-use-mcp worker, got {:?}",
+            args.command()
+        );
+    };
+    assert_eq!(args.model_family, ComputerUseModelFamily::OpenAi);
+    assert_eq!(args.settle_ms, 250);
+    assert_eq!(args.max_long_edge_px, None);
+}
+
+#[test]
 fn execution_config_launch_requires_task_id() {
     let missing_task =
         Args::try_parse_from(["warp", "agent", "run", "--execution-id", "execution"]);
@@ -3753,6 +3778,58 @@ fn run_message_delivered_alias_parses() {
     };
 
     assert_eq!(delivered_args.message_id, "message-456");
+}
+
+#[test]
+fn wait_for_events_parses_target_runs() {
+    let args = Args::try_parse_from([
+        "warp",
+        "harness-support",
+        "--run-id",
+        "parent-run",
+        "wait-for-events",
+        "--run-ids",
+        "child-one",
+        "child-two",
+    ])
+    .unwrap();
+
+    let Some(Command::CommandLine(command)) = args.command else {
+        panic!("Expected CLI command");
+    };
+    let CliCommand::HarnessSupport(args) = command.as_ref() else {
+        panic!("Expected harness-support command");
+    };
+    let HarnessSupportCommand::WaitForEvents(wait) = &args.command else {
+        panic!("Expected wait-for-events command");
+    };
+    assert_eq!(args.run_id, "parent-run");
+    assert_eq!(wait.run_ids, ["child-one", "child-two"]);
+}
+
+#[test]
+fn wait_for_events_requires_target_runs() {
+    assert!(
+        Args::try_parse_from([
+            "warp",
+            "harness-support",
+            "--run-id",
+            "parent-run",
+            "wait-for-events",
+        ])
+        .is_err()
+    );
+    assert!(
+        Args::try_parse_from([
+            "warp",
+            "harness-support",
+            "--run-id",
+            "parent-run",
+            "wait-for-events",
+            "--run-ids",
+        ])
+        .is_err()
+    );
 }
 
 #[test]

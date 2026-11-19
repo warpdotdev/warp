@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::future::Future;
 use std::io::{self, Write};
 use std::path::PathBuf;
@@ -64,6 +64,7 @@ use crate::ai::aws_credentials::BedrockOidcCredentialsConfig;
 use crate::ai::bedrock_credentials;
 use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
 use crate::ai::blocklist::block::FinishReason;
+use crate::ai::blocklist::hooks::turn::ended_turn_stops_settled;
 use crate::ai::blocklist::local_agent_task_sync_model::LocalAgentTaskSyncModel;
 use crate::ai::blocklist::orchestration_event_streamer::{
     register_agent_event_consumer, unregister_agent_event_consumer,
@@ -71,8 +72,9 @@ use crate::ai::blocklist::orchestration_event_streamer::{
 use crate::ai::blocklist::orchestration_events::OrchestrationEventService;
 use crate::ai::blocklist::pending_cli_harness_prompt_queue::PendingCliHarnessPromptQueue;
 use crate::ai::blocklist::{
-    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, ConversationStatusUpdate, FinalizeReason,
-    QueuedQueryEvent, QueuedQueryModel, finalize_recording_for_conversation,
+    BlocklistAIControllerEvent, BlocklistAIHistoryEvent, BlocklistAIHistoryModel,
+    ConversationStatusUpdate, FinalizeReason, QueuedQueryEvent, QueuedQueryModel,
+    finalize_recording_for_conversation,
 };
 use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
 use crate::ai::document::ai_document_model::{AIDocumentModel, AIDocumentModelEvent};
@@ -98,6 +100,7 @@ use crate::terminal::cli_agent_sessions::{
     CLIAgentSessionStatus, CLIAgentSessionsModel, CLIAgentSessionsModelEvent,
 };
 use crate::terminal::model::BlockId;
+use crate::terminal::shell::ShellType;
 use crate::terminal::view::ConversationRestorationInNewPaneType;
 use crate::workspaces::user_workspaces::{HeadlessTeamScope, ResolvedTeamScope, UserWorkspaces};
 use crate::workspaces::workspace::BillingMetadata;
@@ -1076,8 +1079,10 @@ pub(crate) struct StandbyWorkspace {
 pub(crate) enum WorkspaceState {
     /// Set up when the run starts.
     Pending(environment::WorkspaceConfiguration),
+    PendingRunner(environment::WorkspaceConfiguration),
     /// Set up ahead of time by a standby sandbox, so the run skips preparation entirely.
     Prepared(StandbyWorkspace),
+    RunnerPrepared(StandbyWorkspace),
 }
 
 /// Owns a headless terminal for agent runs or standby resource preparation.
@@ -1800,6 +1805,9 @@ impl AgentDriver {
         // after `same_preparation` confirms it matches, so those results stand.
         self.workspace = match self.workspace.take() {
             prepared @ Some(WorkspaceState::Prepared(_)) => prepared,
+            Some(WorkspaceState::RunnerPrepared(_)) => {
+                Some(WorkspaceState::PendingRunner(workspace))
+            }
             _ => Some(WorkspaceState::Pending(workspace)),
         };
         self.skill_dirs = skill_dirs;
@@ -2106,7 +2114,7 @@ impl AgentDriver {
                 {
                     report_error!(e);
                 }
-                let (finished, cause, interrupt_watch) =
+                let (mut finished, cause, interrupt_watch) =
                     match Self::run_until_end(task, &foreground, &background).await {
                         Ok(outcome) => outcome,
                         Err(error) => {
@@ -2134,6 +2142,17 @@ impl AgentDriver {
                             "Sandbox deadline approaching (WARP_SANDBOX_DEADLINE); aborting \
                              run_internal to allow recording finalization"
                         );
+                        if let Some(task_id) = task_id {
+                            finished = Some(
+                                Self::resolve_sandbox_deadline(
+                                    task_id,
+                                    finished.unwrap_or(Err(AgentDriverError::InvalidRuntimeState)),
+                                    &server_api,
+                                    &foreground,
+                                )
+                                .await,
+                            );
+                        }
                     }
                     RunEndCause::Signal(Interrupt::Terminate) => {
                         log::warn!(
@@ -2249,6 +2268,40 @@ impl AgentDriver {
         }
     }
 
+    async fn resolve_sandbox_deadline(
+        task_id: AmbientAgentTaskId,
+        result: Result<(), AgentDriverError>,
+        server_api: &Arc<dyn AIClient>,
+        foreground: &ModelSpawner<Self>,
+    ) -> Result<(), AgentDriverError> {
+        if !Self::flush_task_status_before_exit(task_id, false, server_api, foreground).await {
+            return result;
+        }
+        let latest_state = foreground
+            .spawn(move |_, ctx| {
+                LocalAgentTaskSyncModel::as_ref(ctx).latest_delivered_task_state(&task_id)
+            })
+            .await?;
+        match latest_state {
+            Some(
+                state @ (AgentTaskState::Succeeded
+                | AgentTaskState::Failed
+                | AgentTaskState::Error
+                | AgentTaskState::Cancelled
+                | AgentTaskState::Blocked),
+            ) => {
+                tracing::info!(
+                    tags.cloud_agent = true,
+                    %task_id,
+                    task_state = ?state,
+                    "sandbox deadline fired while idle; skipping task state report"
+                );
+                Ok(())
+            }
+            Some(AgentTaskState::InProgress | AgentTaskState::Claimed) | None => result,
+        }
+    }
+
     /// Flushes task-status reporting before the process may exit: waits
     /// (bounded by [`TASK_STATUS_FLUSH_TIMEOUT`]) for `LocalAgentTaskSyncModel`
     /// to finish delivering queued `update_agent_task` calls, then — for
@@ -2266,13 +2319,15 @@ impl AgentDriver {
     ///
     /// Failed runs only get the drain: the caller reports the error itself via
     /// `report_driver_error` after receiving the result.
+    ///
+    /// Returns whether queued status updates finished draining before the timeout.
     async fn flush_task_status_before_exit(
         task_id: AmbientAgentTaskId,
         run_succeeded: bool,
         server_api: &Arc<dyn AIClient>,
         foreground: &ModelSpawner<Self>,
-    ) {
-        match foreground
+    ) -> bool {
+        let drained = match foreground
             .spawn(move |_, ctx| {
                 LocalAgentTaskSyncModel::handle(ctx)
                     .update(ctx, |model, _| model.wait_for_idle(task_id))
@@ -2284,13 +2339,19 @@ impl AgentDriver {
                     log::warn!(
                         "Timed out waiting for queued task status updates to flush for task {task_id}"
                     );
+                    false
+                } else {
+                    true
                 }
             }
-            Err(err) => log::warn!("Could not wait for the task status flush: {err}"),
-        }
+            Err(err) => {
+                log::warn!("Could not wait for the task status flush: {err}");
+                false
+            }
+        };
 
         if !run_succeeded {
-            return;
+            return drained;
         }
 
         let confirmed_terminal_state = foreground
@@ -2302,7 +2363,7 @@ impl AgentDriver {
             .flatten();
         if let Some(state) = confirmed_terminal_state {
             log::debug!("Task {task_id} already reported terminal state {state:?} before exit");
-            return;
+            return drained;
         }
 
         log::warn!(
@@ -2325,6 +2386,7 @@ impl AgentDriver {
                 "Failed to report the fallback SUCCEEDED state for task {task_id}"
             )));
         }
+        drained
     }
 
     /// Log all valid environment IDs for the user.
@@ -2494,9 +2556,9 @@ impl AgentDriver {
                     )
                 })
                 .await?;
-            let (global_skill_resolution, prepared_workspace) = match workspace
-                .ok_or(AgentDriverError::InvalidRuntimeState)?
-            {
+            let workspace = workspace.ok_or(AgentDriverError::InvalidRuntimeState)?;
+            let runner_preparation = matches!(&workspace, WorkspaceState::PendingRunner(_));
+            let (global_skill_resolution, prepared_workspace) = match workspace {
                 // A standby sandbox already cloned the repositories and ran the setup
                 // commands, so the run resumes from those results.
                 WorkspaceState::Prepared(prepared) => {
@@ -2513,23 +2575,48 @@ impl AgentDriver {
                         },
                     )
                 }
-                WorkspaceState::Pending(mut workspace) => {
+                WorkspaceState::Pending(mut workspace)
+                | WorkspaceState::PendingRunner(mut workspace) => {
                     let launch_file_warmup = match &task.harness {
                         HarnessKind::ThirdParty(harness) => {
                             LaunchFileWarmup::start(harness.launch_file_roots(), &setup_events)
                         }
                         HarnessKind::Oz | HarnessKind::Unsupported(_) => None,
                     };
-                    Self::initialize_setup_vars(&foreground, true).await?;
+                    if !runner_preparation {
+                        Self::initialize_setup_vars(&foreground, true).await?;
+                    }
                     let global_skill_resolution =
                         agent_setup::prepare_global_skills(&foreground, &setup_events).await?;
                     // The Factory definition checkout is run-scoped: the dispatch decides
                     // whether this run gets one by attaching the clone variables,
                     // independent of which environment the run executes in.
-                    environment::prepend_factory_definition_clone(
-                        &mut workspace.setup_commands,
-                        session_shell_type,
-                    );
+                    if runner_preparation {
+                        workspace = foreground
+                            .spawn(move |me, _| {
+                                let value = |name| {
+                                    me.resolved_env_vars
+                                        .get(OsStr::new(name))
+                                        .and_then(|value| value.to_str())
+                                        .unwrap_or_default()
+                                };
+                                environment::prepend_factory_definition_clone_for_values(
+                                    value(environment::FACTORY_REPO_CLONE_URL_ENV_VAR),
+                                    value(environment::FACTORY_REPO_DIR_ENV_VAR),
+                                    workspace.factory_definition_sha.as_deref(),
+                                    session_shell_type.unwrap_or(ShellType::Bash),
+                                    &mut workspace.setup_commands,
+                                );
+                                workspace
+                            })
+                            .await?;
+                    } else {
+                        environment::prepend_factory_definition_clone(
+                            &mut workspace.setup_commands,
+                            workspace.factory_definition_sha.as_deref(),
+                            session_shell_type,
+                        );
+                    }
                     let cloud_env_mcp_scan = if workspace.needs_preparation() {
                         // Subscribe to file-based MCP discovery BEFORE prepare_environment
                         // triggers the pipeline so no CloudEnvMcpScanComplete events are
@@ -2605,6 +2692,9 @@ impl AgentDriver {
                         .await?;
                     }
                     (global_skill_resolution, prepared)
+                }
+                WorkspaceState::RunnerPrepared(_) => {
+                    return Err(AgentDriverError::InvalidRuntimeState);
                 }
             };
             if matches!(&task.harness, HarnessKind::Oz) {
@@ -3515,6 +3605,13 @@ impl AgentDriver {
         let resolved_mcp_servers =
             Self::resolve_mcp_specs_to_json(&mcp_specs, secrets, managed_mcp_client, foreground)
                 .await?;
+        let harness_kind = harness.harness();
+        let resolved_mcp_servers = foreground
+            .spawn(move |me, ctx| {
+                me.with_builtin_computer_use_mcp(harness_kind, resolved_mcp_servers, ctx)
+            })
+            .await
+            .map_err(|_| AgentDriverError::InvalidRuntimeState)?;
         if !resolved_mcp_servers.configs.is_empty() {
             log::info!(
                 "Resolved {} MCP server(s) for third-party harness",
@@ -4145,6 +4242,20 @@ impl AgentDriver {
                         .send_cloud_mode_setup_phase_ended_for_shared_session();
                 })
             });
+            // A hook that stops the run's first prompt leaves the run with nothing to do.
+            let halt_run_exit = run_exit.clone();
+            let controller = self
+                .terminal_driver
+                .as_ref(ctx)
+                .terminal_view()
+                .as_ref(ctx)
+                .ai_controller()
+                .clone();
+            ctx.subscribe_to_model(&controller, move |_, _, event, _| {
+                if let BlocklistAIControllerEvent::RunPromptHalted { reason, .. } = event {
+                    Self::end_run_for_halted_prompt(halt_run_exit.clone(), reason);
+                }
+            });
             if self.skip_initial_turn && prepared_conversation_id.is_none() {
                 run_exit.complete_with_optional_idle(
                     self.idle_on_complete,
@@ -4267,7 +4378,7 @@ impl AgentDriver {
 
                 }
 
-                BlocklistAIHistoryEvent::UpdatedConversationStatus { terminal_surface_id: conversation_terminal_id, conversation_id, .. } => {
+                BlocklistAIHistoryEvent::UpdatedConversationStatus { terminal_surface_id: conversation_terminal_id, conversation_id, update, new_status } => {
                     if *conversation_terminal_id != terminal_id {
                         return;
                     }
@@ -4282,6 +4393,15 @@ impl AgentDriver {
                         log::warn!("No active conversation for terminal view {conversation_terminal_id} with id {conversation_id}");
                         return;
                     };
+
+                    // Events are delivered once the update that caused them is over, by which
+                    // time the status can have changed again (a denied action sets `InProgress`
+                    // on the way to the failure a hook asked for). The later change has an
+                    // event of its own, and that one decides; acting on this one would read
+                    // the later status before its stop hooks were recorded.
+                    if conversation.status() != new_status {
+                        return;
+                    }
 
                     if conversation.status().is_in_progress() {
                         // Conversation resumed or a new one started; cancel any
@@ -4332,51 +4452,37 @@ impl AgentDriver {
                         return;
                     }
 
-                    // Conversation is no longer in progress. Handle completion based on the result.
-                    if let Some(conversation_status) =
-                         conversation_output_status_from_conversation(conversation)
-                    {
-                        let output_status = match conversation_status {
-                            AmbientConversationStatus::Success => {
-                                SDKConversationOutputStatus::Success
-                            }
-                            AmbientConversationStatus::Cancelled { reason } => {
-                                SDKConversationOutputStatus::Cancelled { reason }
-                            }
-                            AmbientConversationStatus::Error { error } => {
-                                SDKConversationOutputStatus::Error { error }
-                            }
-                            AmbientConversationStatus::Blocked { blocked_action } => {
-                                SDKConversationOutputStatus::Blocked { blocked_action }
-                            }
-                        };
-
-                        // In-flight recoveries surface as TransientError above; terminal errors
-                        // must exit even when setup inspection retention was configured.
-                        let idle_window = idle_window_for_terminal_status(
-                            &output_status,
-                            me.idle_on_complete,
-                        );
-                        let outcome = terminal_status_log_outcome(&output_status);
-                        if let Some(idle_timeout) = idle_window {
-                            log::info!(
-                                "Ambient agent idle lifecycle: event=idle_timeout_scheduled task_id={:?} terminal_view_id={terminal_id:?} timeout={idle_timeout:?} outcome={outcome}",
-                                me.task_id
-                            );
-                        } else {
-                            log::info!(
-                                "Ambient agent idle lifecycle: event=run_completion_immediate task_id={:?} terminal_view_id={terminal_id:?} outcome={outcome}",
-                                me.task_id
-                            );
-                        }
-                        // Commit exiting synchronously before buffered events can restart the run.
-                        history_pending_start.settle(
-                            &run_exit,
-                            output_status,
-                            QueuedQueryModel::as_ref(ctx).has_pending_native_injections(*conversation_id),
-                            me.idle_on_complete,
-                        );
+                    // A turn that was cancelled or failed fires its stop hooks after its status
+                    // is set; the run ends once they are done, so a hook that records every
+                    // turn's end sees the last one. The controller records the stop from this
+                    // same event, but which of the two sees the event first is not fixed, so it
+                    // is recorded here as well before asking whether there is one to wait for.
+                    if let ConversationStatusUpdate::Changed { prev_status } = update {
+                        let controller = me
+                            .terminal_driver
+                            .as_ref(ctx)
+                            .terminal_view()
+                            .as_ref(ctx)
+                            .ai_controller()
+                            .clone();
+                        controller.update(ctx, |controller, ctx| {
+                            controller.stop_ended_turn(*conversation_id, prev_status, new_status, ctx);
+                        });
                     }
+                    if let Some(stops_settled) = ended_turn_stops_settled(*conversation_id, ctx) {
+                        log::info!(
+                            "Ambient agent idle lifecycle: event=run_exit_deferred task_id={:?} terminal_view_id={terminal_id:?} reason=turn_stop_hooks",
+                            me.task_id
+                        );
+                        let conversation_id = *conversation_id;
+                        let run_exit = run_exit.clone();
+                        let pending_start = history_pending_start.clone();
+                        ctx.spawn(stops_settled, move |me, _, ctx| {
+                            me.end_run_for_settled_conversation(conversation_id, &run_exit, &pending_start, ctx);
+                        });
+                        return;
+                    }
+                    me.end_run_for_settled_conversation(*conversation_id, &run_exit, &history_pending_start, ctx);
                 }
 
                 BlocklistAIHistoryEvent::SetActiveConversation { .. }
@@ -4459,55 +4565,49 @@ impl AgentDriver {
         if !self.skip_initial_turn {
             tracing::info!("Submitting initial AI query");
 
-            self.terminal_driver.update(ctx, |td, ctx| {
-                td.with_terminal_view(ctx, |terminal, ctx| match task_prompt {
-                    AgentRunPrompt::Local(prompt_str) => {
-                        if FeatureFlag::AgentView.is_enabled() {
-                            terminal.enter_agent_view(
-                                Some(prompt_str),
-                                restored_conversation_id,
-                                AgentViewEntryOrigin::Cli,
-                                ctx,
-                            );
-                        } else if let Some(conversation_id) = prepared_conversation_id {
-                            terminal.ai_controller().update(ctx, |controller, ctx| {
-                                controller.send_user_query_in_conversation_no_lrc_subagent(
-                                    prompt_str,
-                                    conversation_id,
-                                    None,
+            match task_prompt {
+                AgentRunPrompt::Local(prompt_str) => {
+                    self.terminal_driver.update(ctx, |td, ctx| {
+                        td.with_terminal_view(ctx, |terminal, ctx| {
+                            if FeatureFlag::AgentView.is_enabled() {
+                                terminal.enter_agent_view(
+                                    Some(prompt_str),
+                                    restored_conversation_id,
+                                    AgentViewEntryOrigin::Cli,
                                     ctx,
                                 );
-                            });
-                        } else {
-                            terminal.set_ai_input_mode_with_query(Some(&prompt_str), ctx);
-                            terminal
-                                .input()
-                                .update(ctx, |input, ctx| input.input_enter(ctx));
-                        }
-                    }
-                    AgentRunPrompt::ServerSide {
+                            } else if let Some(conversation_id) = prepared_conversation_id {
+                                terminal.ai_controller().update(ctx, |controller, ctx| {
+                                    controller.send_user_query_in_conversation_no_lrc_subagent(
+                                        prompt_str,
+                                        conversation_id,
+                                        None,
+                                        ctx,
+                                    );
+                                });
+                            } else {
+                                terminal.set_ai_input_mode_with_query(Some(&prompt_str), ctx);
+                                terminal
+                                    .input()
+                                    .update(ctx, |input, ctx| input.input_enter(ctx));
+                            }
+                        })
+                    });
+                }
+                AgentRunPrompt::ServerSide {
+                    skill,
+                    attachments_dir,
+                } => match self.task_id {
+                    Some(task_id) => self.send_run_prompt(
+                        task_id,
                         skill,
                         attachments_dir,
-                    } => {
-                        let Some(task_id) = self.task_id else {
-                            report_error!("ServerSide prompt without task_id");
-                            return;
-                        };
-                        let ambient_run_id = task_id.to_string();
-                        terminal.ai_controller().update(ctx, |controller, ctx| {
-                            controller.send_ai_input_with_context(
-                                |context| AIAgentInput::StartFromAmbientRunPrompt {
-                                    ambient_run_id: ambient_run_id.clone(),
-                                    context,
-                                    runtime_skill: skill.clone(),
-                                    attachments_dir: attachments_dir.clone(),
-                                },
-                                ctx,
-                            );
-                        });
-                    }
-                })
-            });
+                        queue_run_exit.clone(),
+                        ctx,
+                    ),
+                    None => report_error!("ServerSide prompt without task_id"),
+                },
+            }
         }
 
         if self.skip_initial_turn
@@ -4562,6 +4662,71 @@ impl AgentDriver {
             }
         });
         external_rx
+    }
+
+    /// Ends the run, now or after the idle window for its outcome, once the run's conversation
+    /// has settled on a status that ends it. Read from live state, since the decision can follow
+    /// the status change by the time its stop hooks took: a conversation that is under way again
+    /// by then is left alone.
+    fn end_run_for_settled_conversation(
+        &mut self,
+        conversation_id: AIConversationId,
+        run_exit: &IdleTimeoutSender<SDKConversationOutputStatus>,
+        pending_start: &PendingNativeStart,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let terminal_id = self.terminal_driver.as_ref(ctx).terminal_view().id();
+        let history_model = BlocklistAIHistoryModel::as_ref(ctx);
+        let Some(conversation) = history_model.conversation(&conversation_id) else {
+            log::warn!("No conversation with id {conversation_id} to end the run for");
+            return;
+        };
+        let status = conversation.status();
+        if !(status.is_done() || status.is_blocked()) {
+            log::info!(
+                "Ambient agent idle lifecycle: event=run_exit_skipped task_id={:?} terminal_view_id={terminal_id:?} status={status:?} reason=conversation_under_way_again",
+                self.task_id
+            );
+            return;
+        }
+        let Some(conversation_status) = conversation_output_status_from_conversation(conversation)
+        else {
+            return;
+        };
+        let output_status = match conversation_status {
+            AmbientConversationStatus::Success => SDKConversationOutputStatus::Success,
+            AmbientConversationStatus::Cancelled { reason } => {
+                SDKConversationOutputStatus::Cancelled { reason }
+            }
+            AmbientConversationStatus::Error { error } => {
+                SDKConversationOutputStatus::Error { error }
+            }
+            AmbientConversationStatus::Blocked { blocked_action } => {
+                SDKConversationOutputStatus::Blocked { blocked_action }
+            }
+        };
+
+        // In-flight recoveries surface as TransientError; terminal errors must not enter setup
+        // inspection retention after their stop hooks settle.
+        let idle_window = idle_window_for_terminal_status(&output_status, self.idle_on_complete);
+        let outcome = terminal_status_log_outcome(&output_status);
+        if let Some(idle_timeout) = idle_window {
+            log::info!(
+                "Ambient agent idle lifecycle: event=idle_timeout_scheduled task_id={:?} terminal_view_id={terminal_id:?} timeout={idle_timeout:?} outcome={outcome}",
+                self.task_id
+            );
+        } else {
+            log::info!(
+                "Ambient agent idle lifecycle: event=run_completion_immediate task_id={:?} terminal_view_id={terminal_id:?} outcome={outcome}",
+                self.task_id
+            );
+        }
+        pending_start.settle(
+            run_exit,
+            output_status,
+            QueuedQueryModel::as_ref(ctx).has_pending_native_injections(conversation_id),
+            self.idle_on_complete,
+        );
     }
 
     /// Write the inputs to an exchange to stdout.

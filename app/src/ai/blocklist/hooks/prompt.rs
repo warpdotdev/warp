@@ -5,12 +5,14 @@
 //! When no hook applies the controller sends at once, on the same call stack as today.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use ai::hooks::{
     HookBoundary, HookDispatcher, HookEnvelope, HookMessenger, HookNotice, HookNoticeKind,
-    HookVerdict, MergedEffects, PromptProvenance, RegistrySnapshot,
+    HookVerdict, MergedEffects, PromptAttachment, PromptAttachmentKind, PromptProvenance,
+    RegistrySnapshot,
 };
 use warpui::r#async::BoxFuture;
 use warpui::{AppContext, ModelHandle, SingletonEntity};
@@ -19,6 +21,8 @@ use super::envelope::{EnvelopeSite, envelope_for_prompt_submit};
 use super::session::{self, SessionEnv};
 use super::{HookRuntime, longest_matching_timeout, owns_turn_lifecycle};
 use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent::{AIAgentAttachment, AIAgentContext, AIAgentInput};
+use crate::ai::llms::LLMId;
 use crate::terminal::model::session::active_session::ActiveSession;
 
 /// Reason a halted prompt is reported with when the hook gave none.
@@ -32,7 +36,94 @@ pub(crate) const ASK_UNAVAILABLE_HALT_REASON: &str = "An agent hook asked for co
 /// side prompt of a run).
 pub(crate) struct SubmittedPrompt {
     pub text: String,
+    pub attachments: Vec<PromptAttachment>,
     pub provenance: PromptProvenance,
+}
+
+/// The files that go to the model with `input`: the files the person attached (or, for a run's
+/// first prompt, the task's attachments), in path order, then the rule files whose content the
+/// request carries. Rules the request only lists by path, and attachments with no file the model
+/// reads (images, blocks, documents, diffs), are left out.
+pub(crate) fn attachments_in(input: &AIAgentInput) -> Vec<PromptAttachment> {
+    let (mut files, context) = match input {
+        AIAgentInput::UserQuery {
+            referenced_attachments,
+            context,
+            ..
+        } => {
+            let files = referenced_attachments
+                .values()
+                .filter_map(|attachment| match attachment {
+                    AIAgentAttachment::FilePathReference { file_path, .. } => {
+                        Some(PathBuf::from(file_path))
+                    }
+                    AIAgentAttachment::PlainText(_)
+                    | AIAgentAttachment::DocumentContent { .. }
+                    | AIAgentAttachment::DriveObject { .. }
+                    | AIAgentAttachment::DiffHunk { .. }
+                    | AIAgentAttachment::DiffSet { .. }
+                    | AIAgentAttachment::Block(_) => None,
+                })
+                .collect::<Vec<_>>();
+            (files, context)
+        }
+        AIAgentInput::StartFromAmbientRunPrompt {
+            resolved_prompt: Some(prompt),
+            context,
+            ..
+        } => (prompt.attachments.clone(), context),
+        AIAgentInput::StartFromAmbientRunPrompt {
+            resolved_prompt: None,
+            ..
+        }
+        | AIAgentInput::AutoCodeDiffQuery { .. }
+        | AIAgentInput::ResumeConversation { .. }
+        | AIAgentInput::InitProjectRules { .. }
+        | AIAgentInput::CreateEnvironment { .. }
+        | AIAgentInput::TriggerPassiveSuggestion { .. }
+        | AIAgentInput::CreateNewProject { .. }
+        | AIAgentInput::CloneRepository { .. }
+        | AIAgentInput::CodeReview { .. }
+        | AIAgentInput::SummarizeConversation { .. }
+        | AIAgentInput::InvokeSkill { .. }
+        | AIAgentInput::ActionResult { .. }
+        | AIAgentInput::MessagesReceivedFromAgents { .. }
+        | AIAgentInput::EventsFromAgents { .. }
+        | AIAgentInput::PassiveSuggestionResult { .. }
+        | AIAgentInput::OrchestrationConfigUpdate { .. }
+        | AIAgentInput::AgentWake => return Vec::new(),
+    };
+    files.sort();
+    let rules = context
+        .iter()
+        .filter_map(|context| match context {
+            AIAgentContext::ProjectRules { active_rules, .. } => Some(active_rules),
+            AIAgentContext::Directory { .. }
+            | AIAgentContext::SelectedText(_)
+            | AIAgentContext::ExecutionEnvironment(_)
+            | AIAgentContext::CurrentTime { .. }
+            | AIAgentContext::Image(_)
+            | AIAgentContext::Codebase { .. }
+            | AIAgentContext::File(_)
+            | AIAgentContext::Git { .. }
+            | AIAgentContext::Repository { .. }
+            | AIAgentContext::PullRequest { .. }
+            | AIAgentContext::Skills { .. }
+            | AIAgentContext::Block(_) => None,
+        })
+        .flatten()
+        .map(|rule| PathBuf::from(&rule.file_name));
+    files
+        .into_iter()
+        .map(|path| PromptAttachment {
+            kind: PromptAttachmentKind::File,
+            path,
+        })
+        .chain(rules.map(|path| PromptAttachment {
+            kind: PromptAttachmentKind::Rule,
+            path,
+        }))
+        .collect()
 }
 
 /// What the controller must do before sending a prepared query.
@@ -49,7 +140,10 @@ pub(crate) enum PromptDecision {
     /// Send the prompt.
     Proceed(PromptTicket),
     /// A hook stopped the prompt. The person was told why.
-    Halted(PromptTicket),
+    Halted {
+        ticket: PromptTicket,
+        reason: String,
+    },
     /// The prompt was given up on while its hooks ran: a newer prompt replaced it, or the
     /// conversation was cancelled.
     Cancelled,
@@ -117,10 +211,12 @@ struct PromptDispatch {
 }
 
 /// Starts the turn `prompt` (or an input Warp built, when `None`) begins in `conversation_id`,
-/// and says what the controller must wait for before sending. With no active binding it returns
-/// [`TurnPreparation::Ready`].
+/// and says what the controller must wait for before sending. `model_id` is the model the
+/// request uses; the boundaries that fire before it goes out report it. With no active binding
+/// it returns [`TurnPreparation::Ready`].
 pub(crate) fn prepare_turn(
     prompt: Option<SubmittedPrompt>,
+    model_id: LLMId,
     conversation_id: AIConversationId,
     active_session: &ModelHandle<ActiveSession>,
     ctx: &mut AppContext,
@@ -128,7 +224,7 @@ pub(crate) fn prepare_turn(
     if !HookRuntime::is_installed(ctx) {
         return TurnPreparation::Ready;
     }
-    let barrier = session::barrier(conversation_id, active_session, ctx);
+    let barrier = session::barrier(conversation_id, model_id.clone(), active_session, ctx);
     if !HookRuntime::is_active(ctx) {
         return TurnPreparation::Ready;
     }
@@ -145,7 +241,7 @@ pub(crate) fn prepare_turn(
 
     let dispatch = prompt
         .filter(|_| owns_turn_lifecycle(conversation_id, ctx))
-        .and_then(|prompt| prompt_dispatch(prompt, conversation_id, active_session, ctx));
+        .and_then(|prompt| prompt_dispatch(prompt, model_id, conversation_id, active_session, ctx));
     if barrier.is_none() && dispatch.is_none() {
         return TurnPreparation::Ready;
     }
@@ -172,6 +268,7 @@ pub(crate) fn prepare_turn(
 /// Prepares the `prompt.submit` dispatch for `prompt`, or `None` when no binding would run.
 fn prompt_dispatch(
     prompt: SubmittedPrompt,
+    model_id: LLMId,
     conversation_id: AIConversationId,
     active_session: &ModelHandle<ActiveSession>,
     ctx: &mut AppContext,
@@ -181,9 +278,14 @@ fn prompt_dispatch(
     if !snapshot.has_bindings_for(HookBoundary::PromptSubmit) {
         return None;
     }
-    let site = EnvelopeSite::new(conversation_id, active_session);
-    let envelope =
-        envelope_for_prompt_submit(prompt.text, Vec::new(), prompt.provenance, &site, ctx);
+    let site = EnvelopeSite::before_request(conversation_id, model_id, active_session);
+    let envelope = envelope_for_prompt_submit(
+        prompt.text,
+        prompt.attachments,
+        prompt.provenance,
+        &site,
+        ctx,
+    );
     longest_matching_timeout(&snapshot, &envelope)?;
     let runtime = runtime.as_ref(ctx);
     Some(PromptDispatch {
@@ -225,9 +327,9 @@ async fn run_prompt_dispatch(
                 conversation_id,
                 action_id: None,
                 kind: HookNoticeKind::Denied,
-                text: reason,
+                text: reason.clone(),
             });
-            PromptDecision::Halted(ticket)
+            PromptDecision::Halted { ticket, reason }
         }
         None => PromptDecision::Proceed(ticket),
     }
@@ -275,7 +377,7 @@ pub(crate) fn finish_turn_preparation(
     }
     HookRuntime::handle(ctx).update(ctx, |runtime, _| {
         match decision {
-            PromptDecision::Proceed(ticket) | PromptDecision::Halted(ticket) => {
+            PromptDecision::Proceed(ticket) | PromptDecision::Halted { ticket, .. } => {
                 runtime.pending_prompts.settle(conversation_id, ticket);
             }
             PromptDecision::Cancelled => {}

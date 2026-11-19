@@ -29,6 +29,7 @@ use std::any::Any;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 
 use ai::agent::action_result::{
     InsertReviewCommentsResult, RequestCommandOutputResult, RunAgentsResult,
@@ -46,6 +47,7 @@ use futures::AsyncReadExt;
 use futures::FutureExt;
 use futures::future::BoxFuture;
 use grep::GrepExecutor;
+use instant::Instant;
 #[cfg(feature = "local_fs")]
 use mime_guess::from_path;
 use parking_lot::FairMutex;
@@ -241,6 +243,9 @@ struct AsyncExecutingAction {
     /// The conversation this action belongs to so cancellation and follow-up scheduling remain
     /// scoped even when several conversations have async actions in flight.
     conversation_id: AIConversationId,
+    /// When the executor started the action, after every check and confirmation, so hooks can
+    /// be told how long the tool itself ran.
+    started: Instant,
 }
 
 impl AsyncExecutingAction {
@@ -354,6 +359,7 @@ impl BlocklistAIActionExecutor {
         let run_agents_executor = ctx.add_model(|_| {
             RunAgentsExecutor::new(
                 start_agent_executor.clone(),
+                active_session.clone(),
                 terminal_view_id,
                 team_context_resolver_for_run_agents,
             )
@@ -874,6 +880,7 @@ impl BlocklistAIActionExecutor {
                     AsyncExecutingAction {
                         action: action_clone,
                         conversation_id,
+                        started: Instant::now(),
                     },
                 );
                 ctx.emit(BlocklistAIActionExecutorEvent::ExecutingAction {
@@ -888,6 +895,7 @@ impl BlocklistAIActionExecutor {
                         &running.action,
                         &result,
                         None,
+                        Some(running.started.elapsed()),
                         running.conversation_id,
                         &me.active_session,
                         ctx,
@@ -923,6 +931,7 @@ impl BlocklistAIActionExecutor {
             &action,
             &result,
             None,
+            Some(Duration::ZERO),
             conversation_id,
             &self.active_session,
             ctx,
@@ -1026,6 +1035,7 @@ impl BlocklistAIActionExecutor {
                 &running.action,
                 &result,
                 reason,
+                Some(running.started.elapsed()),
                 running.conversation_id,
                 &self.active_session,
                 ctx,

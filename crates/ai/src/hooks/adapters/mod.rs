@@ -64,6 +64,27 @@ pub enum HookConfigError {
     Invalid(String),
 }
 
+/// One stdin payload for a hook. A binding usually receives one per firing. A format whose tools
+/// work on one file at a time receives one per file of a batched action, each labeled by its
+/// file, so a script written for that format sees the same stream it would see from one call per
+/// file.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HookInput {
+    /// Names the part of the operation this input describes, when the firing was split into
+    /// several inputs. Reasons the hook gives are prefixed with it.
+    pub label: Option<String>,
+    pub payload: serde_json::Value,
+}
+
+impl HookInput {
+    pub fn whole(payload: serde_json::Value) -> Self {
+        Self {
+            label: None,
+            payload,
+        }
+    }
+}
+
 /// Reads one vendor's configuration format and translates between Warp's canonical model and that
 /// vendor's wire shapes. Vendor vocabulary stays behind this trait.
 pub trait HookFormatAdapter: Send + Sync {
@@ -77,12 +98,12 @@ pub trait HookFormatAdapter: Send + Sync {
 
     fn bindings(&self, config: &ParsedHookConfig) -> Vec<DeclaredBinding>;
 
-    /// Whether `binding`'s matcher selects this firing.
+    /// Whether `binding`'s matcher selects this firing, or any part of it.
     fn matches(&self, binding: &DeclaredBinding, envelope: &HookEnvelope) -> bool;
 
-    /// The JSON object the hook receives on stdin.
-    fn encode_input(&self, binding: &DeclaredBinding, envelope: &HookEnvelope)
-    -> serde_json::Value;
+    /// The JSON objects the hook receives on stdin, one process run each, in the order the
+    /// adapter wants their effects merged. Empty when the binding matched nothing in this firing.
+    fn encode_inputs(&self, binding: &DeclaredBinding, envelope: &HookEnvelope) -> Vec<HookInput>;
 
     /// Turns what the process did into typed effects, applying the vendor's exit-code and
     /// malformed-output rules under `policy`.

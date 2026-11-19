@@ -2255,6 +2255,7 @@ fn native_initial_prompt_uses_its_bound_conversation_without_agent_view() {
                         context,
                         runtime_skill: None,
                         attachments_dir: None,
+                        resolved_prompt: None,
                     },
                     ctx,
                 );

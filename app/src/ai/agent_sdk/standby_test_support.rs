@@ -245,6 +245,7 @@ pub(super) fn execution_config() -> ExecutionConfiguration {
         mcp_servers_json: "{}".into(),
         skills: Vec::new(),
         factory_skill_dirs: Vec::new(),
+        factory_branch: None,
         computer_use_enabled: false,
         computer_use_model_id: None,
         inference_providers: None,
@@ -258,6 +259,7 @@ pub(super) fn execution_config() -> ExecutionConfiguration {
         idle_on_fail_seconds: None,
         snapshot_disabled: true,
         agent_hook_sources: Vec::new(),
+        experimental_json: None,
     }
 }
 

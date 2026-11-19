@@ -16,7 +16,8 @@ use ai::agent::action_result::{
     ReadShellCommandOutputResult, RequestCommandOutputResult,
     TransferShellCommandControlToUserResult, WriteToLongRunningShellCommandResult,
 };
-use ai::hooks::{HookEnvelope, HookPayload};
+#[cfg(test)]
+use ai::hooks::HookEnvelope;
 use chrono::{DateTime, Local};
 use warp_core::command::ExitCode;
 use warp_terminal::model::BlockId;
@@ -64,10 +65,13 @@ impl ShellCompletions {
 
 /// Fires `tool.result` or `tool.failure` for a terminal result. Only conversations whose tool
 /// calls this client runs fire hooks; a result mirrored from another client does not.
+/// `duration` is how long the tool ran, from the moment the executor started it (after every
+/// check and confirmation) to this result; `None` when the action never started.
 pub(crate) fn observe_terminal_result(
     action: &AIAgentAction,
     result: &AIAgentActionResultType,
     cancellation_reason: Option<CancellationReason>,
+    duration: Option<Duration>,
     conversation_id: AIConversationId,
     active_session: &ModelHandle<ActiveSession>,
     ctx: &mut AppContext,
@@ -77,9 +81,9 @@ pub(crate) fn observe_terminal_result(
     }
     let site = EnvelopeSite::new(conversation_id, active_session);
     let envelope = if ran_and_returned(result) && cancellation_reason.is_none() {
-        envelope_for_tool_result(action, result, &site, ctx)
+        envelope_for_tool_result(action, result, duration, &site, ctx)
     } else {
-        envelope_for_tool_failure(action, result, cancellation_reason, &site, ctx)
+        envelope_for_tool_failure(action, result, cancellation_reason, duration, &site, ctx)
     };
     #[cfg(test)]
     record_observation(action, &envelope, ctx);
@@ -134,25 +138,10 @@ fn report_shell_completion(
             completed_ts: finished.completed_ts,
         });
     let site = EnvelopeSite::new(pending.conversation_id, active_session);
-    let envelope =
-        envelope_for_tool_result_with_duration(&pending.action, &result, duration, &site, ctx);
+    let envelope = envelope_for_tool_result(&pending.action, &result, duration, &site, ctx);
     #[cfg(test)]
     record_observation(&pending.action, &envelope, ctx);
     HookRuntime::as_ref(ctx).dispatch_detached(envelope, ctx);
-}
-
-fn envelope_for_tool_result_with_duration(
-    action: &AIAgentAction,
-    result: &AIAgentActionResultType,
-    duration: Option<Duration>,
-    site: &EnvelopeSite<'_>,
-    ctx: &AppContext,
-) -> HookEnvelope {
-    let mut envelope = envelope_for_tool_result(action, result, site, ctx);
-    if let HookPayload::ToolResult { duration: slot, .. } = &mut envelope.payload {
-        *slot = duration;
-    }
-    envelope
 }
 
 /// A long-running command's exit as one of the shell actions reported it.

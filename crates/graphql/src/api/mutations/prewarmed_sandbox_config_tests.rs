@@ -13,6 +13,7 @@ fn serializes_configuration_mutation_without_workload_token_input() {
         input: PrewarmedSandboxConfigInput {
             sandbox_id: "sandbox".into(),
             github_credential_contract_version: Some(1),
+            runner_preparation_contract_version: Some(1),
             supports_deferred_repositories: Some(true),
             supports_agent_hooks: Some(true),
         },
@@ -95,6 +96,7 @@ fn serializes_configuration_mutation_without_workload_token_input() {
         json!({
             "sandboxId": "sandbox",
             "githubCredentialContractVersion": 1,
+            "runnerPreparationContractVersion": 1,
             "supportsDeferredRepositories": true,
             "supportsAgentHooks": true
         })
@@ -194,6 +196,7 @@ fn rejects_invalid_workload_token_headers() {
             input: PrewarmedSandboxConfigInput {
                 sandbox_id: "sandbox".into(),
                 github_credential_contract_version: Some(1),
+                runner_preparation_contract_version: Some(1),
                 supports_deferred_repositories: Some(true),
                 supports_agent_hooks: Some(true),
             },

@@ -29,7 +29,7 @@ use warp_cli::environment::{EnvironmentCommand, ImageCommand};
 use warp_cli::federate::FederateCommand;
 use warp_cli::harness_support::{HarnessSupportCommand, ReportArtifactCommand, TaskStatus};
 use warp_cli::integration::IntegrationCommand;
-use warp_cli::mcp::MCPCommand;
+use warp_cli::mcp::{MCPCommand, MCPSpec};
 use warp_cli::memory_store::{MemoryCommand, MemoryStoreCommand};
 use warp_cli::model::ModelCommand;
 use warp_cli::provider::ProviderCommand;
@@ -59,6 +59,7 @@ use crate::ai::agent::api::convert_conversation::{
 };
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent_sdk::driver::harness::{HarnessKind, harness_kind};
+use crate::ai::agent_sdk::driver::mcp_startup::harness_takes_computer_use_config;
 use crate::ai::agent_sdk::driver::{AgentDriverOptions, AgentRunPrompt, Task};
 use crate::ai::agent_sdk::mcp_config::build_mcp_servers_from_specs;
 use crate::ai::agent_sdk::setup_observability::{
@@ -717,7 +718,10 @@ fn build_execution_task_and_options(
         sources: execution_config::agent_hook_sources(config.agent_hook_sources)?,
         surface: driver::hooks::run_surface_for(true),
     };
+    let experimental = execution_config::experimental(config.experimental_json.as_deref());
+    log_factory_experimental_config(experimental.as_ref());
     let mut factory_skill_dirs = execution_config::factory_skill_dirs(config.factory_skill_dirs)?;
+    let factory_definition_sha = execution_config::factory_definition_sha(config.factory_branch)?;
     let definition_skill_dirs = factory_skill_dirs.clone();
     merge_skill_dirs(&mut factory_skill_dirs, skill_discovery_dirs);
     let task = Task {
@@ -737,7 +741,7 @@ fn build_execution_task_and_options(
         use_factory_repositories,
         github_credential_mode: GitHubCredentialMode::Legacy,
         credential_store_owner: None,
-        experimental: None,
+        experimental,
         parent_run_id: config.parent_run_id.map(|id| id.into_inner()),
         should_share: FeatureFlag::AgentSharedSessions.is_enabled(),
         idle_on_complete,
@@ -760,12 +764,16 @@ fn build_execution_task_and_options(
             )?;
             workspace.factory_skill_dirs = Some(factory_skill_dirs);
             workspace.definition_skill_dirs = Some(definition_skill_dirs);
+            workspace.factory_definition_sha = factory_definition_sha;
             workspace
         },
-        computer_use_config: (selected_harness == Harness::Oz).then(|| {
+        computer_use_config: harness_takes_computer_use_config(selected_harness).then(|| {
             (
                 config.computer_use_enabled,
-                config.computer_use_model_id.map(Into::into),
+                config
+                    .computer_use_model_id
+                    .filter(|_| selected_harness == Harness::Oz)
+                    .map(Into::into),
             )
         }),
         selected_harness,
@@ -795,6 +803,22 @@ fn build_execution_task_and_options(
         config.conversation_id.map(|id| id.into_inner()),
         providers,
     ))
+}
+
+/// Records whether a run carries Factory experiment values, without their contents.
+fn log_factory_experimental_config(
+    experimental: Option<&serde_json::Map<String, serde_json::Value>>,
+) {
+    match experimental {
+        Some(values) => warp_core::safe_info!(
+            safe: ("factory_experimental_config state=read_uninterpreted key_count={}", values.len()),
+            full: ("factory_experimental_config state=read_uninterpreted key_count={}", values.len())
+        ),
+        None => warp_core::safe_info!(
+            safe: ("factory_experimental_config state=absent key_count=0"),
+            full: ("factory_experimental_config state=absent key_count=0")
+        ),
+    }
 }
 
 fn reconcile_task_harness(
@@ -1684,7 +1708,7 @@ impl AgentDriverRunner {
                     .ok_or(AgentDriverError::InvalidRuntimeState)?,
             };
 
-            Self::initialize_new_task(
+            task.mcp_specs = Self::initialize_new_task(
                 foreground,
                 server_api,
                 prompt_for_task_creation,
@@ -1722,47 +1746,51 @@ impl AgentDriverRunner {
         merged_config: AgentConfigSnapshot,
         team_scope: HeadlessTeamScope,
         driver_options: &mut AgentDriverOptions,
-    ) -> Result<(), AgentDriverError> {
+    ) -> Result<Vec<MCPSpec>, AgentDriverError> {
         let request_team_scope = RequestTeamScope::from_scope(&team_scope);
         driver_options.team_scope = Some(team_scope);
-        let environment = merged_config.environment_id.clone();
-        let task_config = if merged_config.is_empty() {
-            None
-        } else {
-            let mut config = merged_config;
-            // We don't set a worker, since this is a local run.
-            config.worker_host = None;
-            Some(config)
-        };
-
-        let task_id = match server_api
-            .create_agent_task(
-                prompt,
-                environment,
-                None,
-                task_config,
-                HashMap::new(),
-                request_team_scope,
-            )
+        let mut config = merged_config;
+        config.worker_host = None;
+        let output = server_api
+            .create_local_agent_task(prompt, config, request_team_scope)
             .await
-            .context("Failed to create task")
-        {
-            Ok(id) => {
-                log::info!("Created task: {id}");
-                Some(id)
-            }
-            Err(e) => {
-                report_error!(e);
-                // Continue without a task_id rather than failing entirely
-                None
-            }
-        };
-
-        // Set the task ID on the ServerApi so it's sent with all subsequent requests.
-        Self::set_ambient_agent_task_id(foreground, task_id).await?;
-        driver_options.task_id = task_id;
-
-        Ok(())
+            .context("Failed to negotiate local task configuration")
+            .map_err(AgentDriverError::ConfigBuildFailed)?;
+        let task_id = output
+            .task_id
+            .into_inner()
+            .parse::<AmbientAgentTaskId>()
+            .map_err(|error| AgentDriverError::ConfigBuildFailed(error.into()))?;
+        let mode = output.github_credential_mode.ok_or_else(|| {
+            AgentDriverError::ConfigBuildFailed(anyhow::anyhow!(
+                "Local GitHub policy is missing; upgrade the server"
+            ))
+        })?;
+        if mode != GitHubCredentialMode::Legacy {
+            return Err(AgentDriverError::ConfigBuildFailed(anyhow::anyhow!(
+                "Local runs require existing Git authentication; upgrade the server"
+            )));
+        }
+        let servers = output
+            .mcp_servers
+            .context("Local MCP configuration is missing")
+            .and_then(|json| {
+                serde_json::from_str::<Option<serde_json::Map<String, serde_json::Value>>>(&json)
+                    .map_err(Into::into)
+            })
+            .map_err(AgentDriverError::ConfigBuildFailed)?
+            .unwrap_or_default();
+        let specs = config_file::mcp_specs_from_mcp_servers(&servers)
+            .map_err(AgentDriverError::ConfigBuildFailed)?;
+        Self::set_ambient_agent_task_id(foreground, Some(task_id)).await?;
+        driver_options.task_id = Some(task_id);
+        driver_options.github_credential_mode = mode;
+        if servers.values().any(|server| {
+            server.get("warp_id").and_then(serde_json::Value::as_str) == Some("github")
+        }) {
+            driver_options.strict_mcp_startup = true;
+        }
+        Ok(specs)
     }
 
     /// Downloads regular and handoff attachments independently before the run begins.
@@ -1997,16 +2025,7 @@ impl AgentDriverRunner {
             Ok(None) => (None, None, None, None, Vec::new(), None, None),
             Err(err) => return Err(AgentDriverError::TaskMetadataFetchFailed(err)),
         };
-        match experimental.as_ref() {
-            Some(values) => warp_core::safe_info!(
-                safe: ("factory_experimental_config state=read_uninterpreted key_count={}", values.len()),
-                full: ("factory_experimental_config state=read_uninterpreted key_count={}", values.len())
-            ),
-            None => warp_core::safe_info!(
-                safe: ("factory_experimental_config state=absent key_count=0"),
-                full: ("factory_experimental_config state=absent key_count=0")
-            ),
-        }
+        log_factory_experimental_config(experimental.as_ref());
 
         // Validate the requested `--harness` against the task's harness setting. This avoids the
         // extra conversation-metadata roundtrip that would otherwise be needed downstream when the
@@ -2625,6 +2644,9 @@ fn command_to_telemetry_event(command: &CliCommand) -> CliTelemetryEvent {
                 }
             }
             HarnessSupportCommand::NotifyUser(_) => CliTelemetryEvent::HarnessSupportNotifyUser,
+            HarnessSupportCommand::WaitForEvents(_) => {
+                CliTelemetryEvent::HarnessSupportWaitForEvents
+            }
             HarnessSupportCommand::FinishTask(finish_args) => {
                 CliTelemetryEvent::HarnessSupportFinishTask {
                     success: finish_args.status == TaskStatus::Success,

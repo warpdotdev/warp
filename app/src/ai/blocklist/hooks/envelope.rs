@@ -3,7 +3,8 @@ use std::time::Duration;
 
 use ai::hooks::{
     ENVELOPE_SCHEMA_VERSION, HOOK_PROTOCOL_VERSION, HookEnvelope, HookExecutionHost, HookPayload,
-    HookSurface, PermissionFacts, PromptProvenance, TurnStopStatus,
+    HookSurface, PermissionFacts, PromptAttachment, PromptProvenance, SubagentLaunch,
+    TurnStopStatus,
 };
 use repo_metadata::repositories::DetectedRepositories;
 use uuid::Uuid;
@@ -14,8 +15,11 @@ use warpui::{AppContext, ModelHandle, SingletonEntity};
 
 use super::{HookRuntime, RunSurface};
 use crate::ai::agent::conversation::AIConversationId;
-use crate::ai::agent::{AIAgentAction, AIAgentActionResultType, CancellationReason};
+use crate::ai::agent::{
+    AIAgentAction, AIAgentActionId, AIAgentActionResultType, CancellationReason,
+};
 use crate::ai::blocklist::BlocklistAIHistoryModel;
+use crate::ai::llms::LLMId;
 use crate::auth::AuthStateProvider;
 use crate::terminal::model::session::active_session::ActiveSession;
 
@@ -24,6 +28,9 @@ pub(crate) struct EnvelopeSite<'a> {
     pub conversation_id: AIConversationId,
     /// The session whose working directory the operation runs in.
     pub active_session: &'a ModelHandle<ActiveSession>,
+    /// The model the request this boundary belongs to uses, for a boundary that fires before
+    /// the request exists. Otherwise the model is read from the conversation's latest exchange.
+    pub model_id: Option<LLMId>,
 }
 
 impl<'a> EnvelopeSite<'a> {
@@ -34,6 +41,20 @@ impl<'a> EnvelopeSite<'a> {
         Self {
             conversation_id,
             active_session,
+            model_id: None,
+        }
+    }
+
+    /// A site for a boundary that fires before the request using `model_id` goes out.
+    pub fn before_request(
+        conversation_id: AIConversationId,
+        model_id: LLMId,
+        active_session: &'a ModelHandle<ActiveSession>,
+    ) -> Self {
+        Self {
+            conversation_id,
+            active_session,
+            model_id: Some(model_id),
         }
     }
 
@@ -53,7 +74,8 @@ fn build(site: &EnvelopeSite<'_>, payload: HookPayload, ctx: &AppContext) -> Hoo
         .and_then(|cwd| repository_root(cwd, ctx))
         .into_iter()
         .collect();
-    let (exchange_id, model_id) = latest_exchange_facts(site.conversation_id, ctx);
+    let (exchange_id, exchange_model_id) = latest_exchange_facts(site.conversation_id, ctx);
+    let model_id = site.model_id.clone().or(exchange_model_id);
     let user_email = ctx
         .has_singleton_model::<AuthStateProvider>()
         .then(|| AuthStateProvider::as_ref(ctx).get().user_email())
@@ -176,6 +198,7 @@ pub(crate) fn envelope_for_tool_pre(
 pub(crate) fn envelope_for_tool_result(
     action: &AIAgentAction,
     result: &AIAgentActionResultType,
+    duration: Option<Duration>,
     site: &EnvelopeSite<'_>,
     ctx: &AppContext,
 ) -> HookEnvelope {
@@ -184,7 +207,7 @@ pub(crate) fn envelope_for_tool_result(
         HookPayload::ToolResult {
             action: action.action.clone(),
             result: result.clone(),
-            duration: None,
+            duration,
         },
         ctx,
     );
@@ -196,6 +219,7 @@ pub(crate) fn envelope_for_tool_failure(
     action: &AIAgentAction,
     result: &AIAgentActionResultType,
     cancellation_reason: Option<CancellationReason>,
+    duration: Option<Duration>,
     site: &EnvelopeSite<'_>,
     ctx: &AppContext,
 ) -> HookEnvelope {
@@ -206,7 +230,7 @@ pub(crate) fn envelope_for_tool_failure(
             result: result.clone(),
             cancellation_reason: cancellation_reason
                 .map(|reason| cancellation_reason_name(reason).to_owned()),
-            duration: None,
+            duration,
         },
         ctx,
     );
@@ -233,7 +257,7 @@ pub(crate) fn cancellation_reason_name(reason: CancellationReason) -> &'static s
 
 pub(crate) fn envelope_for_prompt_submit(
     text: String,
-    attachments_summary: Vec<String>,
+    attachments: Vec<PromptAttachment>,
     provenance: PromptProvenance,
     site: &EnvelopeSite<'_>,
     ctx: &AppContext,
@@ -242,11 +266,24 @@ pub(crate) fn envelope_for_prompt_submit(
         site,
         HookPayload::PromptSubmit {
             text,
-            attachments_summary,
+            attachments,
             provenance,
         },
         ctx,
     )
+}
+
+/// The envelope for one child of the `run_agents` call `action_id`, which fires in the parent
+/// conversation.
+pub(crate) fn envelope_for_subagent_start(
+    launch: SubagentLaunch,
+    action_id: &AIAgentActionId,
+    site: &EnvelopeSite<'_>,
+    ctx: &AppContext,
+) -> HookEnvelope {
+    let mut envelope = build(site, HookPayload::SubagentStart { launch }, ctx);
+    envelope.action_id = Some(action_id.clone());
+    envelope
 }
 
 pub(crate) fn envelope_for_turn_stop(

@@ -3,6 +3,23 @@ use serde_json::json;
 use super::{AgentRunEvent, AgentRunEventKind};
 
 #[test]
+fn waited_on_preserves_recipient_and_waiter_identities() {
+    let wire = json!({
+        "event_type": "run_waited_on",
+        "run_id": "recipient",
+        "ref_id": "waiter",
+        "execution_id": null,
+        "occurred_at": "2026-01-01T00:00:00Z",
+        "sequence": 42
+    });
+    let event: AgentRunEvent = serde_json::from_value(wire.clone()).unwrap();
+    assert_eq!(event.kind, AgentRunEventKind::WaitedOn);
+    assert_eq!(event.run_id, "recipient");
+    assert_eq!(event.ref_id.as_deref(), Some("waiter"));
+    assert_eq!(serde_json::to_value(event).unwrap(), wire);
+}
+
+#[test]
 fn lifecycle_details_roundtrip_in_the_existing_wire_shape() {
     for (wire, expected) in [
         (

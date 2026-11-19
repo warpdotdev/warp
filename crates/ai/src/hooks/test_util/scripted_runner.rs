@@ -20,10 +20,11 @@ impl RunnerHold {
     }
 }
 
-/// A runner that never spawns anything. Each binding id can be given an outcome; bindings without
-/// one get the default outcome (exit code 0, no output).
+/// A runner that never spawns anything. Each binding id can be given an outcome, and one part of
+/// a split firing its own; bindings without one get the default outcome (exit code 0, no output).
 pub struct ScriptedRunner {
     outcomes: Mutex<HashMap<HookBindingId, HookProcessOutcome>>,
+    part_outcomes: Mutex<HashMap<(HookBindingId, String), HookProcessOutcome>>,
     default_outcome: Mutex<HookProcessOutcome>,
     invocations: Mutex<Vec<HookInvocation>>,
     hold: Mutex<Option<async_channel::Receiver<()>>>,
@@ -39,6 +40,7 @@ impl ScriptedRunner {
     pub fn new() -> Self {
         Self {
             outcomes: Mutex::new(HashMap::new()),
+            part_outcomes: Mutex::new(HashMap::new()),
             default_outcome: Mutex::new(Self::exit_with(0, "")),
             invocations: Mutex::new(Vec::new()),
             hold: Mutex::new(None),
@@ -62,6 +64,7 @@ impl ScriptedRunner {
             stdout_truncated: false,
             stderr_tail: String::new(),
             duration: Duration::from_millis(1),
+            queued: Duration::ZERO,
         }
     }
 
@@ -75,6 +78,15 @@ impl ScriptedRunner {
             .lock()
             .expect("runner lock")
             .insert(binding, outcome);
+    }
+
+    /// Scripts the outcome of the binding's run for the part labeled `label`; its other runs
+    /// keep the binding's or the default outcome.
+    pub fn script_part(&self, binding: HookBindingId, label: &str, outcome: HookProcessOutcome) {
+        self.part_outcomes
+            .lock()
+            .expect("runner lock")
+            .insert((binding, label.to_owned()), outcome);
     }
 
     pub fn set_default_outcome(&self, outcome: HookProcessOutcome) {
@@ -92,12 +104,21 @@ impl ScriptedRunner {
 
 impl HookRunner for ScriptedRunner {
     fn run(&self, invocation: HookInvocation) -> BoxFuture<'static, HookProcessOutcome> {
-        let outcome = self
-            .outcomes
-            .lock()
-            .expect("runner lock")
-            .get(&invocation.binding)
-            .cloned()
+        let part_outcome = invocation.label.as_ref().and_then(|label| {
+            self.part_outcomes
+                .lock()
+                .expect("runner lock")
+                .get(&(invocation.binding.clone(), label.clone()))
+                .cloned()
+        });
+        let outcome = part_outcome
+            .or_else(|| {
+                self.outcomes
+                    .lock()
+                    .expect("runner lock")
+                    .get(&invocation.binding)
+                    .cloned()
+            })
             .unwrap_or_else(|| self.default_outcome.lock().expect("runner lock").clone());
         self.invocations
             .lock()

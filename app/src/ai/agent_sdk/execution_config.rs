@@ -10,8 +10,9 @@ use warp_cli::share::{ShareAccessLevel, ShareRequest, ShareSubject};
 use warp_graphql::ai::AgentHarness;
 use warp_graphql::queries::execution_config::{
     AgentHookFormat, AgentHookLevel, AgentHookOnAsk, AgentHookSource, CloudProviderClientConfigs,
-    CodeForge, ExecutionRepository, ExecutionRepositoryRefType, SessionSharingAccessLevel,
-    SessionSharingAclSpec, SessionSharingSubjectType, SourceRepo as ConfigSourceRepo,
+    CodeForge, ExecutionRepository, ExecutionRepositoryRefType, FactoryBranchExecutionConfig,
+    SessionSharingAccessLevel, SessionSharingAclSpec, SessionSharingSubjectType,
+    SourceRepo as ConfigSourceRepo,
 };
 
 use super::driver::environment::ResolvedRepository;
@@ -191,6 +192,18 @@ pub(super) fn factory_skill_dirs(dirs: Vec<String>) -> anyhow::Result<Vec<PathBu
         .collect()
 }
 
+/// The run's Factory experiment values. Experiments are optional, so a value that is not a JSON
+/// object is dropped rather than failing the run.
+pub(super) fn experimental(json: Option<&str>) -> Option<Map<String, Value>> {
+    match serde_json::from_str(json?) {
+        Ok(values) => Some(values),
+        Err(error) => {
+            log::warn!("Ignoring execution experiment values that are not a JSON object: {error}");
+            None
+        }
+    }
+}
+
 /// The hook directories the execution configuration selected, in the order the server sent them.
 /// A value this client does not know (a newer format, level, on-ask setting, or forge) fails the
 /// run rather than dropping the entry, because declared hooks are never silently skipped. Paths are
@@ -280,6 +293,25 @@ pub(crate) fn hook_worker_path(path: &str) -> anyhow::Result<PathBuf> {
         );
     }
     Ok(path)
+}
+
+pub(super) fn factory_definition_sha(
+    branch: Option<FactoryBranchExecutionConfig>,
+) -> anyhow::Result<Option<String>> {
+    branch
+        .map(|branch| {
+            let sha = branch.source_sha;
+            // The commit is inlined into a setup command, so only a full commit ID is accepted.
+            if sha.len() != 40
+                || !sha
+                    .bytes()
+                    .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+            {
+                bail!("Execution Factory branch commit is not a full commit SHA");
+            }
+            Ok(sha)
+        })
+        .transpose()
 }
 
 #[cfg(test)]

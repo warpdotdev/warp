@@ -15,6 +15,7 @@ fn runner() -> CommandHookRunner {
 fn invocation(cwd: &Path, command: &str, stdin: &[u8], timeout: Duration) -> HookInvocation {
     HookInvocation {
         binding: test_binding_id(test_source_id("hooks.json"), "beforeShellExecution", 0),
+        label: None,
         command: command.to_owned(),
         cwd: cwd.to_path_buf(),
         env: Vec::new(),
@@ -692,81 +693,128 @@ rm -f "$PWD/running.$$""#,
         );
     }
 
-    #[test]
-    fn waiting_for_a_slot_counts_against_the_deadline_and_a_waiter_that_gives_up_never_ran() {
-        let dir = TempDir::new().expect("tempdir");
-        write_script(dir.path(), "sleeper.sh", "sleep 3");
-        write_script(dir.path(), "late.sh", r#"touch "$PWD/late-ran""#);
+    /// Fills every slot with a sleeper for `hold`, then queues `command` behind them with
+    /// `timeout` and the given cancel flag. Returns the sleepers' outcomes and the waiter's.
+    fn run_behind_full_slots(
+        dir: &Path,
+        hold: Duration,
+        command: &str,
+        timeout: Duration,
+        cancel: Arc<AtomicBool>,
+    ) -> (Vec<HookProcessOutcome>, HookProcessOutcome) {
+        write_script(dir, "sleeper.sh", &format!("sleep {}", hold.as_secs_f64()));
         let runner = runner();
         let mut futures = (0..HOOK_MAX_CONCURRENT)
             .map(|_| {
                 runner.run(invocation(
-                    dir.path(),
+                    dir,
                     "./sleeper.sh",
                     b"{}",
                     Duration::from_secs(20),
                 ))
             })
             .collect::<Vec<_>>();
-        futures.push(runner.run(invocation(
+        let mut waiter = invocation(dir, command, b"{}", timeout);
+        waiter.cancel = cancel;
+        futures.push(runner.run(waiter));
+        let mut outcomes = block_on(join_all(futures));
+        let waiter = outcomes.pop().expect("the waiter's outcome");
+        (outcomes, waiter)
+    }
+
+    #[test]
+    fn a_waiter_keeps_its_whole_timeout_and_runs_once_a_slot_frees() {
+        let dir = TempDir::new().expect("tempdir");
+        let hold = GENEROUS_TIMEOUT;
+        write_script(dir.path(), "late.sh", r#"touch "$PWD/late-ran""#);
+        // A timeout shorter than the wait for a slot, so that counting the wait against it would
+        // have timed the waiter out before a slot freed, yet long enough for a shell to start on
+        // a loaded machine.
+        let timeout = LOAD_MARGIN;
+        let (sleepers, late) = run_behind_full_slots(
             dir.path(),
+            hold,
             "./late.sh",
-            b"{}",
-            Duration::from_millis(300),
-        )));
-        let outcomes = block_on(join_all(futures));
-        let late = outcomes.last().expect("the late hook's outcome");
-        assert_eq!(late.exit, ProcessExit::TimedOut);
-        // Well before the sleepers free a slot at about 3 s.
+            timeout,
+            Arc::new(AtomicBool::new(false)),
+        );
+        assert_eq!(late.exit, ProcessExit::Code(0));
         assert!(
-            late.duration < Duration::from_secs(2),
-            "gave up at its own deadline ({:?})",
+            dir.path().join("late-ran").exists(),
+            "the waiter ran once a slot freed"
+        );
+        assert!(
+            late.queued >= hold - Duration::from_millis(500),
+            "the wait for a slot is reported as queue time ({:?})",
+            late.queued
+        );
+        assert!(
+            late.duration < timeout,
+            "the run itself finished within its budget ({:?})",
             late.duration
         );
-        assert!(
-            !dir.path().join("late-ran").exists(),
-            "a waiter that timed out never ran"
-        );
-        for outcome in &outcomes[..HOOK_MAX_CONCURRENT] {
+        for outcome in &sleepers {
             assert_eq!(outcome.exit, ProcessExit::Code(0));
         }
     }
 
     #[test]
-    fn a_hook_that_waited_for_a_slot_runs_with_what_is_left_of_its_deadline() {
+    fn a_hook_that_waited_for_a_slot_is_timed_from_when_it_started() {
         let dir = TempDir::new().expect("tempdir");
-        let sleeper_hold = Duration::from_secs(2);
-        write_script(dir.path(), "sleeper.sh", "sleep 2");
+        let hold = Duration::from_secs(2);
         write_script(dir.path(), "slow.sh", "sleep 30");
-        let runner = runner();
         let timeout = Duration::from_secs(4);
-        let mut futures = (0..HOOK_MAX_CONCURRENT)
-            .map(|_| {
-                runner.run(invocation(
-                    dir.path(),
-                    "./sleeper.sh",
-                    b"{}",
-                    Duration::from_secs(20),
-                ))
-            })
-            .collect::<Vec<_>>();
-        futures.push(runner.run(invocation(dir.path(), "./slow.sh", b"{}", timeout)));
-        let outcomes = block_on(join_all(futures));
-        let slow = outcomes.last().expect("the slow hook's outcome");
-        assert_eq!(slow.exit, ProcessExit::TimedOut);
-        // It waited about two seconds for a slot and then had about two left to run. Had the
-        // deadline been taken after the wait, it would have run until about 6 s. The deadline is
-        // absolute, so a slow start on a loaded machine does not move it.
-        assert!(slow.duration >= timeout);
-        assert!(
-            slow.duration > sleeper_hold,
-            "the hook waited for a slot ({:?})",
-            slow.duration
+        let (_, slow) = run_behind_full_slots(
+            dir.path(),
+            hold,
+            "./slow.sh",
+            timeout,
+            Arc::new(AtomicBool::new(false)),
         );
+        assert_eq!(slow.exit, ProcessExit::TimedOut);
+        assert!(
+            slow.queued >= hold - Duration::from_millis(500),
+            "the hook waited for a slot ({:?})",
+            slow.queued
+        );
+        // The timeout is a budget for the run, so the wait is not taken out of it.
+        assert!(slow.duration >= timeout, "{:?}", slow.duration);
         assert!(
             slow.duration < timeout + Duration::from_millis(1500),
-            "the slot wait was not added on top of the timeout ({:?})",
+            "the run was stopped at its own timeout ({:?})",
             slow.duration
+        );
+    }
+
+    #[test]
+    fn a_waiter_that_is_cancelled_never_runs() {
+        let dir = TempDir::new().expect("tempdir");
+        write_script(dir.path(), "late.sh", r#"touch "$PWD/late-ran""#);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let canceller = std::thread::spawn({
+            let cancel = cancel.clone();
+            move || {
+                std::thread::sleep(Duration::from_millis(500));
+                cancel.store(true, Ordering::Release);
+            }
+        });
+        let (_, late) = run_behind_full_slots(
+            dir.path(),
+            Duration::from_secs(3),
+            "./late.sh",
+            Duration::from_secs(20),
+            cancel,
+        );
+        canceller.join().expect("canceller thread");
+        assert_eq!(late.exit, ProcessExit::Cancelled);
+        assert!(
+            !dir.path().join("late-ran").exists(),
+            "a waiter that was cancelled never ran"
+        );
+        assert!(
+            late.queued < Duration::from_secs(3),
+            "the wait ended at the cancellation, not when a slot freed ({:?})",
+            late.queued
         );
     }
 

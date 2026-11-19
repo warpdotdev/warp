@@ -26,7 +26,7 @@ use super::{
     GIT_CREDENTIALS_BOOTSTRAP_BACKOFF, GIT_CREDENTIALS_REFRESH_INTERVAL, GITHUB_HOST,
     GitCredential, READ_ONLY_CREDENTIAL_HELPER, TaskGitCredentialsError,
     ensure_workload_token_available, home_dir, is_retryable, record_host_identities,
-    unique_credentials_by_host, write_git_credentials,
+    unique_credentials_by_host, write_gh_hosts_yml, write_git_credentials,
 };
 use crate::server::retry_strategies::with_retry;
 use crate::server::server_api::ai::AIClient;
@@ -42,10 +42,11 @@ const AUTH_ENV: &[&str] = &[
 ];
 pub(super) const REFRESH_FALLBACK_INTERVAL: Duration = Duration::from_secs(60);
 const REFRESH_EXPIRY_BUFFER: TimeDelta = TimeDelta::minutes(10);
-const SUPPORTED_PROVIDERS: [TaskGitCredentialProvider; 3] = [
+const SUPPORTED_PROVIDERS: [TaskGitCredentialProvider; 4] = [
     TaskGitCredentialProvider::Github,
     TaskGitCredentialProvider::Gitlab,
     TaskGitCredentialProvider::AzureDevops,
+    TaskGitCredentialProvider::CodeStorage,
 ];
 
 const GIT_OVERRIDE_ENV: &[&str] = &[
@@ -345,6 +346,17 @@ fn provider_for_host(host: &str) -> Option<TaskGitCredentialProvider> {
         GITHUB_HOST => Some(TaskGitCredentialProvider::Github),
         "gitlab.com" => Some(TaskGitCredentialProvider::Gitlab),
         "dev.azure.com" => Some(TaskGitCredentialProvider::AzureDevops),
+        host if host
+            .strip_suffix(".code.storage")
+            .is_some_and(|organization| {
+                !organization.is_empty()
+                    && organization
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+            }) =>
+        {
+            Some(TaskGitCredentialProvider::CodeStorage)
+        }
         _ => None,
     }
 }
@@ -495,13 +507,17 @@ fn apply_github(store: &mut ManagedStore, response: &ValidatedCredentials) -> Re
             .is_none_or(|expiry| expiry > Instant::now()),
         "Restricted GitHub credential expired before installation"
     );
-    let content = response
+    let Some(github) = response
         .credentials
         .iter()
         .find(|credential| credential.host == GITHUB_HOST)
-        .map(|credential| format!("https://x-access-token:{}@github.com\n", credential.token))
-        .unwrap_or_default();
-    if let Err(error) = write_store(&store.directory, &content) {
+    else {
+        return clear_store(store);
+    };
+    let content = format!("https://x-access-token:{}@github.com\n", github.token);
+    if let Err(error) = write_store(&store.directory, &content).and_then(|()| {
+        write_gh_hosts_yml(std::slice::from_ref(github), &store.directory.join("gh"))
+    }) {
         store.refresh_at = None;
         if let Err(cleanup) = clear_store(store) {
             log::error!(
@@ -949,6 +965,7 @@ fn retry_due_providers(store: &mut ManagedStore, now: Instant) {
 }
 
 fn clear_store(store: &mut ManagedStore) -> Result<()> {
+    let mut cleanup_error = None;
     if let Err(write_error) = write_store(&store.directory, "") {
         let remove_result = (|| {
             let metadata = fs::symlink_metadata(&store.directory)?;
@@ -963,8 +980,18 @@ fn clear_store(store: &mut ManagedStore) -> Result<()> {
             }
         })();
         if let Err(remove_error) = remove_result {
-            return Err(CredentialStoreCleanupError(remove_error.context(write_error)).into());
+            cleanup_error = Some(remove_error.context(write_error));
         }
+    }
+    for name in ["hosts.yml", "hosts.yml.tmp"] {
+        if let Err(error) = fs::remove_file(store.directory.join("gh").join(name))
+            && error.kind() != ErrorKind::NotFound
+        {
+            cleanup_error = Some(anyhow::Error::new(error));
+        }
+    }
+    if let Some(error) = cleanup_error {
+        return Err(CredentialStoreCleanupError(error).into());
     }
     store.expires_at = None;
     Ok(())

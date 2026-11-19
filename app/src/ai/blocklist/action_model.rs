@@ -1311,10 +1311,12 @@ impl BlocklistAIActionModel {
             ctx,
         );
         let active_session = self.executor.as_ref(ctx).active_session().clone();
+        // A pending action never started, so there is no run to time.
         tool_result::observe_terminal_result(
             &pending_action,
             &cancelled_result,
             reason,
+            None,
             conversation_id,
             &active_session,
             ctx,

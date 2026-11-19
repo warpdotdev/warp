@@ -1,15 +1,48 @@
 //! The `tool_input` object for the tool events: the action's arguments as the model gave them, one
-//! hand-written JSON view per `AIAgentActionType`.
+//! hand-written JSON view per `AIAgentActionType`. Where Warp's action maps onto one of Cursor's
+//! tools, the view uses Cursor's field names (`file_path`, `old_string`, `new_string`, and the
+//! MCP arguments as the whole input) so a script written for Cursor reads it unchanged.
 
 use serde_json::{Map, Value, json};
+use uuid::Uuid;
 
 use super::{insert_some, range_view, serialized};
+use crate::agent::FileLocations;
 use crate::agent::action::{
     AIAgentActionType, AIAgentPtyWriteMode, CommentSide, FileEdit, InsertReviewComment,
     RunAgentsExecutionMode, ShellCommandDelay, SuggestPromptRequest,
 };
 use crate::diff_validation::ParsedDiff;
+use crate::hooks::adapters::cursor::parts::ToolPart;
 use crate::hooks::model::HookEnvelope;
+use crate::skills::SkillReference;
+
+/// The `tool_input` object for one part of an action: Cursor's single-file `Read` shape for one
+/// file of a read, the edits of one file for a split edit batch, and the whole action's input
+/// otherwise.
+pub(super) fn part_tool_input(part: &ToolPart<'_>, envelope: &HookEnvelope) -> Value {
+    match part {
+        ToolPart::Whole(action) => tool_input(action, envelope),
+        ToolPart::ReadFile(location) => read_file_input(location),
+        ToolPart::EditFile { file, title, edits } => {
+            let mut fields = Map::new();
+            insert_some(&mut fields, "file_path", *file);
+            insert_some(&mut fields, "title", *title);
+            fields.insert(
+                "edits".to_owned(),
+                Value::Array(edits.iter().map(|edit| file_edit_view(edit)).collect()),
+            );
+            Value::Object(fields)
+        }
+    }
+}
+
+fn read_file_input(location: &FileLocations) -> Value {
+    json!({
+        "file_path": location.name,
+        "lines": location.lines.iter().map(range_view).collect::<Vec<_>>(),
+    })
+}
 
 /// The `tool_input` object for `preToolUse` and the post-tool events: the action's arguments as
 /// the model gave them. Shell commands carry the working directory beside the command, as
@@ -86,6 +119,7 @@ pub(super) fn tool_input(action: &AIAgentActionType, envelope: &HookEnvelope) ->
         }
         AIAgentActionType::RequestFileEdits { file_edits, title } => {
             let mut fields = Map::new();
+            insert_some(&mut fields, "file_path", single_file(file_edits));
             insert_some(&mut fields, "title", title.as_deref());
             fields.insert(
                 "edits".to_owned(),
@@ -110,27 +144,22 @@ pub(super) fn tool_input(action: &AIAgentActionType, envelope: &HookEnvelope) ->
             Value::Object(fields)
         }
         AIAgentActionType::ReadMCPResource {
-            server_id,
+            server_id: _,
             name,
             uri,
         } => {
             let mut fields = Map::new();
-            insert_some(&mut fields, "server_id", server_id.map(|id| id.to_string()));
             fields.insert("name".to_owned(), json!(name));
             insert_some(&mut fields, "uri", uri.as_deref());
             Value::Object(fields)
         }
+        // The server is named beside `tool_input` (see [`mcp_server_id`]), so the input is the
+        // tool's own arguments, as a script that reads a parameter out of it expects.
         AIAgentActionType::CallMCPTool {
-            server_id,
-            name,
+            server_id: _,
+            name: _,
             input,
-        } => {
-            let mut fields = Map::new();
-            insert_some(&mut fields, "server_id", server_id.map(|id| id.to_string()));
-            fields.insert("name".to_owned(), json!(name));
-            fields.insert("input".to_owned(), input.clone());
-            Value::Object(fields)
-        }
+        } => input.clone(),
         AIAgentActionType::SuggestNewConversation { message_id } => {
             json!({ "message_id": message_id })
         }
@@ -260,9 +289,12 @@ pub(super) fn tool_input(action: &AIAgentActionType, envelope: &HookEnvelope) ->
             recording_id,
             should_persist,
         } => json!({ "recording_id": recording_id, "should_persist": should_persist }),
-        AIAgentActionType::ReadSkill(request) => {
-            json!({ "skill": serialized("skill", &request.skill) })
-        }
+        AIAgentActionType::ReadSkill(request) => match &request.skill {
+            SkillReference::Path(path) => {
+                json!({ "file_path": path.display_path(), "skill": true })
+            }
+            SkillReference::BundledSkillId(id) => json!({ "bundled_skill_id": id }),
+        },
         AIAgentActionType::FetchConversation { conversation_id } => {
             json!({ "conversation_id": conversation_id })
         }
@@ -328,20 +360,71 @@ pub(super) fn tool_input(action: &AIAgentActionType, envelope: &HookEnvelope) ->
     }
 }
 
+/// The MCP server an action addresses, which the tool events name beside `tool_input` as
+/// `mcp_server_id`. Only the MCP actions have one.
+pub(super) fn mcp_server_id(action: &AIAgentActionType) -> Option<Uuid> {
+    match action {
+        AIAgentActionType::CallMCPTool { server_id, .. }
+        | AIAgentActionType::ReadMCPResource { server_id, .. } => *server_id,
+        AIAgentActionType::RequestCommandOutput { .. }
+        | AIAgentActionType::WriteToLongRunningShellCommand { .. }
+        | AIAgentActionType::ReadShellCommandOutput { .. }
+        | AIAgentActionType::TransferShellCommandControlToUser { .. }
+        | AIAgentActionType::ReadFiles(_)
+        | AIAgentActionType::UploadArtifact(_)
+        | AIAgentActionType::SearchCodebase(_)
+        | AIAgentActionType::RequestFileEdits { .. }
+        | AIAgentActionType::Grep { .. }
+        | AIAgentActionType::FileGlob { .. }
+        | AIAgentActionType::FileGlobV2 { .. }
+        | AIAgentActionType::SuggestNewConversation { .. }
+        | AIAgentActionType::SuggestPrompt(_)
+        | AIAgentActionType::InitProject
+        | AIAgentActionType::OpenCodeReview
+        | AIAgentActionType::ReadDocuments(_)
+        | AIAgentActionType::EditDocuments(_)
+        | AIAgentActionType::CreateDocuments(_)
+        | AIAgentActionType::UseComputer(_)
+        | AIAgentActionType::InsertCodeReviewComments { .. }
+        | AIAgentActionType::RequestComputerUse(_)
+        | AIAgentActionType::StartRecording { .. }
+        | AIAgentActionType::StopRecording { .. }
+        | AIAgentActionType::ReadSkill(_)
+        | AIAgentActionType::FetchConversation { .. }
+        | AIAgentActionType::SendMessageToAgent { .. }
+        | AIAgentActionType::AskUserQuestion { .. }
+        | AIAgentActionType::RunAgents(_)
+        | AIAgentActionType::WaitForEvents { .. } => None,
+    }
+}
+
+/// The one file a batch of edits touches, when every edit names the same file. Cursor's `Write`
+/// and `Delete` edit one file, so a script reads the path from `file_path`.
+fn single_file(file_edits: &[FileEdit]) -> Option<&str> {
+    let mut files = file_edits.iter().map(FileEdit::file);
+    let first = files.next()??;
+    files.all(|file| file == Some(first)).then_some(first)
+}
+
 fn file_edit_view(edit: &FileEdit) -> Value {
     match edit {
         FileEdit::Edit(ParsedDiff::StrReplaceEdit {
             file,
             search,
             replace,
-        }) => json!({ "kind": "edit", "file": file, "search": search, "replace": replace }),
+        }) => json!({
+            "kind": "edit",
+            "file_path": file,
+            "old_string": search,
+            "new_string": replace,
+        }),
         FileEdit::Edit(ParsedDiff::V4AEdit {
             file,
             move_to,
             hunks,
         }) => json!({
             "kind": "edit",
-            "file": file,
+            "file_path": file,
             "move_to": move_to,
             "hunks": serialized("hunks", hunks),
         }),
@@ -351,11 +434,11 @@ fn file_edit_view(edit: &FileEdit) -> Value {
             allow_overwrite,
         } => json!({
             "kind": "create",
-            "file": file,
+            "file_path": file,
             "content": content,
             "allow_overwrite": allow_overwrite,
         }),
-        FileEdit::Delete { file } => json!({ "kind": "delete", "file": file }),
+        FileEdit::Delete { file } => json!({ "kind": "delete", "file_path": file }),
     }
 }
 

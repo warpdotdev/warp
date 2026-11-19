@@ -72,7 +72,7 @@ This section is a condensed reading of report 01. See that report for field-by-f
 | --- | --- | --- |
 | `conversation_id` | Available now | `AIConversationId` (`crates/ai_types/src/agent.rs`). Exists before the server assigns `ServerConversationToken`. |
 | `generation_id` | Available with work | Cursor's changes per user message. Warp maps it to a user-turn id allocated by the prompt-submit hook (section 3.14) and carried across every exchange of that turn; `AIConversation::turn_exchange_ids` (`app/src/ai/agent/conversation.rs`) already groups exchanges per turn. `AIAgentExchangeId`, which changes per request including tool-result follow-ups, is exposed separately as a request id. |
-| `model` | Available now | `RequestInput.model_id` (`LLMId`, `app/src/ai/blocklist/controller.rs`). The model actually used arrives later in `Message::ModelUsed`. |
+| `model` | Available now | The model the request uses, read the way `RequestInput.model_id` is (`LLMId`, `app/src/ai/blocklist/controller.rs`). `sessionStart` and `beforeSubmitPrompt` fire before their request exists, so the envelope site carries the model that request will use; every other event reads it from the conversation's latest exchange. The model actually used arrives later in `Message::ModelUsed`. |
 | `model_id` | Available now | Same `LLMId`. |
 | `model_params` | Available with work | Warp has no structured parameter list on the client. Send an empty array, or derive effort from the model id. |
 | `hook_event_name` | Available now | Set by the hook runner. |
@@ -221,7 +221,7 @@ trait HookFormat { fn parse(&self, bytes: &[u8]) -> Result<Vec<HookDef>>;
 | --- | --- | --- |
 | `tool_name`, `tool_input`, `tool_use_id`, `cwd` | As in 3.3 | The action is retained in `AsyncExecutingAction` until completion. |
 | `tool_output` | Available with work | JSON string of `AIAgentActionResultType`. The result types convert to proto for the server (`crates/ai/src/agent/action_result/convert.rs`) but do not all derive `Serialize`; a JSON encoder is needed. |
-| `duration` | Available with work | Shell results carry `start_ts`/`completed_ts`. Other tools need a timer between `ExecutingAction` and `FinishedAction`. |
+| `duration` | Available now | Built: the executor records when it starts an action, after every check and confirmation, and the completion funnel reports the elapsed time on `postToolUse` and `postToolUseFailure` for every tool, so approval wait is excluded as Cursor documents. A result known at once (a hook denial, a tool with no asynchronous work) reports zero; a pending action cancelled before it started reports none. `afterShellExecution` still takes the command's own `start_ts`/`completed_ts` when they are present. |
 
 **Output fields.**
 
@@ -267,33 +267,33 @@ trait HookFormat { fn parse(&self, bytes: &[u8]) -> Result<Vec<HookDef>>;
 
 **Purpose and timing.** Fires before spawning a subagent (Cursor's Task tool); can deny creation. (Report 01 §3.6.)
 
-**Warp moment.** Warp has two kinds of subagent. Client-launched children via `run_agents`: `RunAgentsExecutor::execute` then per-child `StartAgentExecutor::dispatch` (`execute/run_agents.rs`, `execute/start_agent.rs`); the executor is async and the request is an owned clone. Server-side subagents (`SubagentType::{Cli, Research, Advice, ComputerUse, Summarization}`, report 03 §1.4) start inside warp-server; the client only sees `Message::Subagent` output after the fact.
+**Warp moment.** Warp has two kinds of subagent. Client-launched children via `run_agents`: built in `RunAgentsExecutor::dispatch_children_for_prepared_request` (`execute/run_agents.rs`, `app/src/ai/blocklist/hooks/subagent.rs`), which works out how each child would launch, fires one event per child at once, and then dispatches through `StartAgentExecutor::dispatch` only the children the hooks allowed. A child that cannot launch anyway (a rejected harness or mode, a remote child with no parent run) is never offered to the hooks. Server-side subagents (`SubagentType::{Cli, Research, Advice, ComputerUse, Summarization}`, report 03 §1.4) start inside warp-server; the client only sees `Message::Subagent` output after the fact.
 
 **Input fields** (for `run_agents` children).
 
 | Field | Status | Warp source or work needed |
 | --- | --- | --- |
-| `subagent_id` | Not available before launch | The child's server id arrives in `RunAgentsResult::Launched { agent_id }` after dispatch. A client-side placeholder could be generated earlier (small work), but it would not be the id Cursor's later `subagentStop` would use. |
-| `subagent_type` | Available with work | Cursor uses `generalPurpose`/`explore`/`shell`. Warp has `harness_type` plus local/remote `execution_mode` (`RunAgentsRequest`). Map to Warp-specific values. |
-| `task` | Available now | Composed child prompt (`compose_run_agents_child_prompt`). |
-| `parent_conversation_id` | Available now | The parent's `AIConversationId`. |
-| `tool_call_id` | Available now | `AIAgentActionId` of the `run_agents` call. |
-| `subagent_model` | Available now | `model_id` on the batch or the per-child override. |
-| `is_parallel_worker` | Available with work | Definitional. `true` when the batch has more than one child is one option. |
+| `subagent_id` | Available now | Built: a UUID Warp makes up for the child before it exists, so a script can tell the children of one call apart and a later `subagentStop` can carry the same id. It is not the child's own id, which only arrives in `RunAgentsResult::Launched { agent_id }` after dispatch; the executor logs the pair when it launches the child. |
+| `subagent_type` | Available now | Built: always `generalPurpose`, which is what every child Warp launches is; Cursor's `explore` and `shell` are kinds of subagent Warp does not have. A `subagentStart` matcher is tested against it, so `""`, `"*"`, and `generalPurpose` match every child. Warp's own facts go beside it as additions: `subagent_name`, `harness` (`oz`, or the third-party harness's name), and `execution_mode` (`local` or `remote`). |
+| `task` | Available now | Built: the composed child prompt (`compose_run_agents_child_prompt`). |
+| `parent_conversation_id` | Available now | Built: the parent's `AIConversationId`. |
+| `tool_call_id` | Available now | Built: `AIAgentActionId` of the `run_agents` call. |
+| `subagent_model` | Available now | Built: the per-child override, else the batch's `model_id`; absent when neither names a model. |
+| `is_parallel_worker` | Available now | Built: `true` when the call launches more than one child. |
 | `git_branch` | Not available | Warp does not create a branch for a child at launch; a child may create a worktree later on its own. |
 
 **Output fields.**
 
 | Field | Status | Mechanism |
 | --- | --- | --- |
-| `permission: allow/deny` | Supportable now | The executor is async; a deny resolves the action with the `denied_by_hook` result (section 3.0), so the reason reaches the model. |
-| `user_message` | Supportable with work | Message channel. |
+| `permission: allow/deny` | Supported | Built, per child as in Cursor: a denied child is left out of the launch and reported in the `run_agents` result as `failed` with the hook's reason, while its siblings launch; the action itself completes, so no `postToolUseFailure` fires for a denied child. A headless `ask`, and a cancelled firing, keep the child back the same way. An `ask` on an interactive surface also keeps the child back, with a reason saying no confirmation step exists for a child launch (a conservative choice awaiting David's decision; Cursor's adapter never produces one, since it reads `ask` as deny). |
+| `user_message` | Supported | Built: the `Denied` notice, and the reason the model reads when Cursor's `agent_message`-less schema leaves it as the only message. |
 
 **Blocking and modification.** Blockable: yes for `run_agents` (async executor). Modifiable: the request is owned, so prompt or model could be rewritten in a later phase (superset; Cursor documents no rewrite). Server-side subagents: not blockable and not observable before start.
 
 **Surface notes.** Child creation differs per front-end (hidden pane in GUI, background session in TUI, cloud run for remote), but the dispatch point is shared. Remote children need the hook in the child's runtime for their own tools, but the parent still fires `subagentStart` for the launch.
 
-**Verdict: Partial.** Full for client-launched children except `subagent_id` and `git_branch`. Server-side subagents cannot be gated without a server-emitted pre-start event.
+**Verdict: Partial.** Built in full for client-launched children; `git_branch` is omitted because Warp makes no branch at launch. Server-side subagents cannot be gated without a server-emitted pre-start event.
 
 ### 3.7 `subagentStop`
 
@@ -502,7 +502,7 @@ A correction to report 03: user-attached files are sent as path references (`AIA
 | Field | Status | Warp source or work needed |
 | --- | --- | --- |
 | `prompt` | Available now | `query: String`. |
-| `attachments` | Available with work | `referenced_attachments` holds file references, blocks, drive objects, diffs, plan documents; images are `AIAgentContext::Image`. Map `FilePathReference` to `file` and `ProjectRules` paths to `rule`; other kinds are Warp extensions or omitted. |
+| `attachments` | Available now | Built: the files the person attached (every `FilePathReference` in the input's `referenced_attachments`, in path order) as `file`, then the rule files whose content the request carries (`ProjectRules.active_rules`, which includes global rules) as `rule`. Rules the request only lists by path (`additional_rule_paths`) are like Cursor's agent-requested rules and are not listed; images, blocks, drive objects, diffs, and plan documents have no file the model reads and are left out. |
 
 **Output fields.**
 
@@ -513,9 +513,9 @@ A correction to report 03: user-attached files are sent as path references (`AIA
 
 **Blocking and modification.** Blockable: yes (the split in `send_query`). Modifiable: the query is an owned `String`; Cursor's changelog claims prompt modification but its schema has no field (report 01 §3.14). Warp could offer a rewrite extension; the rewritten text would be visible in the transcript unless kept in display fields.
 
-**Surface notes.** Queued prompts (`QueuedQueryModel`) and shared-session prompts also pass through `send_query`. Oz runs: the first prompt is sent as `AIAgentInput::StartFromAmbientRunPrompt`, which carries only the run id; the server resolves the prompt text from the stored task (`app/src/ai/agent/mod.rs`, `api/convert_to.rs`). The client never sees that text, so that turn starts (turn id, session barrier) but `beforeSubmitPrompt` does not fire for an Oz run's initial prompt without a server change. Later prompts into the run (shared-session prompts) do pass through `send_query`. Hook-originated follow-ups (a `stop` or `subagentStop` `followup_message`) also pass this hook, with `HookFollowUp` provenance on the envelope so a hook can see and veto them; Cursor's schema has no provenance field, so exposing it in the Cursor payload would be a Warp extension field.
+**Surface notes.** Queued prompts (`QueuedQueryModel`) and shared-session prompts also pass through `send_query`. Oz runs: the first prompt is sent as `AIAgentInput::StartFromAmbientRunPrompt`, which carries the run id and no text; the server resolves the prompt text from the stored task (`app/src/ai/agent/mod.rs`, `api/convert_to.rs`). When a `beforeSubmitPrompt` hook is active, the driver fetches that text from the server first (`harness-support/resolve-prompt`, `AgentDriver::send_run_prompt` in `app/src/ai/agent_sdk/driver/hooks.rs`) and attaches it to the input as `resolved_prompt`, together with the task's attachment files, so the hook fires with the run's first user message as the server will store it; the text is for the hook only and is not sent back to the server. For a task on the Oz harness the endpoint (warp-server #22256) returns that message from the same builder the run's first request uses, so the hook's `prompt` and the stored message cannot drift; a server without that change returns the shape it builds for third-party harnesses (skill content inlined, an `Attached files:` section, replayed inputs, and for a factory's main agent a GitHub-label system reminder the native request puts in the system prompt). The endpoint is in the server's cloud-only route group, so a run on the local worker without a workload token cannot fetch the text and falls under the failed-fetch rule below. A halt ends the run as failed with the hook's reason: the controller announces it as `BlocklistAIControllerEvent::RunPromptHalted` because no conversation exists yet to fail. A prompt that cannot be fetched is sent without the hook and a warning diagnostic names each source that owns one, unless one of those sources is strict, in which case the run ends as failed. Without an active prompt hook nothing is fetched. Later prompts into the run (shared-session prompts) pass through `send_query` as typed. Hook-originated follow-ups (a `stop` or `subagentStop` `followup_message`) also pass this hook, with `HookFollowUp` provenance on the envelope so a hook can see and veto them; Cursor's schema has no provenance field, so exposing it in the Cursor payload would be a Warp extension field.
 
-**Verdict: Full.** The Oz initial prompt is a surface gap, not a field or output gap; it is listed in the matrix.
+**Verdict: Full.** The Oz initial prompt is covered by fetching its text for the hook; the matrix in `architecture.md` §10 records it.
 
 ### 3.15 `preCompact`
 
@@ -549,24 +549,24 @@ A correction to report 03: user-attached files are sent as path references (`AIA
 
 **Purpose and timing.** Fires when the agent loop ends; may auto-submit a follow-up. (Report 01 §3.16.)
 
-**Warp moment.** `hold_or_finalize_turn` in `controller.rs`, which replaces the two places that set `ConversationStatus::Success` at the end of a turn (the `Done` arm of the stream-finished handler, where `actions_to_queue` is found empty, and the `FinishedAction` subscription when the last action finishes with no follow-up); the dispatch starts once the turn's own stream has been cleaned up (`app/src/ai/blocklist/hooks/turn.rs`). Only a completed turn fires it in Phase 1; a cancelled or failed turn does not (report 03 §3j for the signals).
+**Warp moment.** `hold_or_finalize_turn` in `controller.rs`, which replaces the two places that set `ConversationStatus::Success` at the end of a turn (the `Done` arm of the stream-finished handler, where `actions_to_queue` is found empty, and the `FinishedAction` subscription when the last action finishes with no follow-up); the dispatch starts once the turn's own stream has been cleaned up (`app/src/ai/blocklist/hooks/turn.rs`). A cancelled or failed turn fires it too, from the conversation's status change to `Cancelled` or `Error` (the controller's subscription to `UpdatedConversationStatus`, which every path that ends a turn that way reaches; report 03 §3j for the signals), to be observed only: nothing is held, and the dispatch starts once the stream that ended the turn is cleaned up.
 
 **Input fields.**
 
 | Field | Status | Warp source or work needed |
 | --- | --- | --- |
-| `status` | Available with work | `completed` = stream `Done` with no actions, or the last action finished with no follow-up. `aborted` and `error` are defined in the payload but never sent in Phase 1, since a cancelled or failed turn is not a stop event. `TransientError` with a scheduled auto-resume is not terminal and does not fire. `WaitingForEvents` is not a stop. |
+| `status` | Available now | `completed` = stream `Done` with no actions, or the last action finished with no follow-up. `aborted` = the conversation's status changed to `Cancelled` from a status that had not finished (a cancelled stream, actions cancelled with nothing to send back). `error` = it changed to `Error` the same way (an errored stream, a shell exit, a hook that ended the run, a recovery that gave up). `TransientError` with a scheduled auto-resume is not terminal and does not fire. `WaitingForEvents` is not a stop. Each turn fires at most one stop: a turn whose completed stop already started fires nothing more when it is cancelled or fails under those hooks, and a change out of a finished status (`Error` to `Cancelled`) ends no turn. |
 | `loop_count` | Available now | Hook-runner state. |
 
 **Output fields.**
 
 | Field | Status | Mechanism |
 | --- | --- | --- |
-| `followup_message` | Supported | Appended to `QueuedQueryModel` by conversation id with `HookFollowUp` provenance and a `QueuedQueryOrigin::HookFollowUp` origin, sent through the normal prompt path (`dispatch_queued_warp_agent_prompt`, then `send_query`), so it passes the prompt-submit hook (section 3.14), gets its own turn id, is sent as written (no slash command or mode prefix is read from it), and queues behind any real user input. Honored only when `status` is `completed`; this is Warp's choice, since Cursor's `stop` docs state no status condition while its `subagentStop` docs do. Loop protection: per-binding counts within one continuation chain (`loop_limit`, default 5; `null` or more than 8 becomes 8) plus a host cap of 8 for the whole chain across all bindings, the same cap Claude Code documents; a refused follow-up ends the turn with a warning diagnostic naming the limit. Verdicts and `halt_turn` on this event are ignored with a diagnostic. |
+| `followup_message` | Supported | Appended to `QueuedQueryModel` by conversation id with `HookFollowUp` provenance and a `QueuedQueryOrigin::HookFollowUp` origin, sent through the normal prompt path (`dispatch_queued_warp_agent_prompt`, then `send_query`), so it passes the prompt-submit hook (section 3.14), gets its own turn id, is sent as written (no slash command or mode prefix is read from it), and queues behind any real user input. Honored only when `status` is `completed`, and refused with a warning diagnostic after an `aborted` or `error` stop; this is Warp's choice, since Cursor's `stop` docs state no status condition while its `subagentStop` docs do, and a follow-up after a cancellation or a failure would restart a turn the person or the failure ended. Loop protection: per-binding counts within one continuation chain (`loop_limit`, default 5; `null` or more than 8 becomes 8) plus a host cap of 8 for the whole chain across all bindings, the same cap Claude Code documents; a refused follow-up ends the turn with a warning diagnostic naming the limit. Verdicts and `halt_turn` on this event are ignored with a diagnostic. |
 
-**Blocking and modification.** Status finalization is held until the stop hooks answer: the conversation stays `InProgress` while they run, and `Success` is set only when they answered with no follow-up, when the follow-up could not be sent, or when the hold timed out (the longest matching binding's timeout, default 60 s; a late answer is discarded). A person's prompt during the hold takes the status and the follow-up queues behind it; the follow-up is still queued rather than dropped (a conservative choice awaiting David's decision). Cancelling the conversation drops the hold.
+**Blocking and modification.** For a completed turn, status finalization is held until the stop hooks answer: the conversation stays `InProgress` while they run, and `Success` is set only when they answered with no follow-up, when the follow-up could not be sent, or when the hold timed out (the longest matching binding's timeout, default 60 s; a late answer is discarded). A person's prompt during the hold takes the status and the follow-up queues behind it; the follow-up is still queued rather than dropped (a conservative choice awaiting David's decision). Cancelling the conversation drops the hold. For a cancelled or failed turn nothing is held: the status is already set, and the hooks only observe it.
 
-**Surface notes.** Oz: `Success` starts the idle-timeout exit (`driver.rs`); because the status is held, the idle exit cannot race a follow-up, and a queued follow-up keeps the conversation `InProgress` through its own request. A follow-up that cannot be sent yet stays queued with a warning and the turn is finalized; on an Oz run the queued row keeps the idle exit from firing. Local children: a stop hook on a child fires inside the parent process; make scope explicit in config.
+**Surface notes.** Oz: `Success` starts the idle-timeout exit (`driver.rs`); because the status is held, the idle exit cannot race a follow-up, and a queued follow-up keeps the conversation `InProgress` through its own request. A follow-up that cannot be sent yet stays queued with a warning and the turn is finalized; on an Oz run the queued row keeps the idle exit from firing. `Cancelled` and `Error` end the run too, and the driver waits for the turn's `aborted` or `error` stop before it does, for at most the longest matching binding's timeout plus 5 seconds, so a hook that records every turn's end sees the last one before the process ends and the snapshot is uploaded; `--idle-on-fail` and `--idle-on-complete` apply after the wait. The driver acts on a status event only while the conversation still has that status, since a denied action sets `InProgress` on its way to the `Error` a hook asked for and that stale event would otherwise read the `Error` before its stop was recorded; and it records the stop itself (through the controller's `stop_ended_turn`) before deciding whether to wait, in case it sees the change before the controller does. A turn fires at most one stop, so the second of the two to see the change records nothing. Local children: a stop hook on a child fires inside the parent process; make scope explicit in config.
 
 **Verdict: Full.**
 
@@ -574,7 +574,7 @@ A correction to report 03: user-attached files are sent as path references (`AIA
 
 **Purpose and timing.** Fires after the agent completes an assistant message. No documented output. (Report 01 §3.17.)
 
-**Warp moment.** Streaming text arrives via `AppendToMessageContent` into `AIAgentOutputMessageType::Text` (`convert_from.rs`, `conversation.rs`). There is no per-message completion event; the boundaries available are a new message id after a text message, or stream end (report 03 §3k). The Oz driver already treats the exchange as the boundary (`write_exchange_output`).
+**Warp moment.** Streaming text arrives via `AppendToMessageContent` into `AIAgentOutputMessageType::Text` (`convert_from.rs`, `conversation.rs`). There is no per-message completion event; the boundaries available are a new message id after a text message, or stream end (report 03 §3k). The Oz driver already treats the exchange as the boundary (`write_exchange_output`). A server tool call (the server's own `finish_task`, which the client never shows) is not a new message for this purpose: an Oz run's final answer is that call's summary, which the server sends as a text message that keeps growing after the call is added.
 
 **Input fields.**
 
@@ -680,6 +680,7 @@ Match targets per event follow report 01 §1.4. For the three tool events the ta
 | --- | --- |
 | `RequestCommandOutput` | `Shell` |
 | `ReadFiles` | `Read` |
+| `ReadSkill` of a skill on disk | `Read`, because a Cursor agent loads a skill by reading its `SKILL.md`, and Cursor scripts detect skill use that way; `tool_input` is `{ file_path, skill: true }` |
 | `RequestFileEdits` | `Write` (or `Delete` when every edit is a delete; judgment call) |
 | `Grep` | `Grep` |
 | `RunAgents` | `Task` |
@@ -691,11 +692,13 @@ Match targets per event follow report 01 §1.4. For the three tool events the ta
 | `SearchCodebase` | `SearchCodebase` |
 | `ReadMCPResource` | `MCPResource:<name>` |
 | `WriteToLongRunningShellCommand`, `ReadShellCommandOutput`, `TransferShellCommandControlToUser` | `ShellWrite`, `ShellRead`, `ShellHandoff` |
-| `ReadSkill`, `UseComputer`, `RequestComputerUse`, `StartRecording`, `StopRecording`, `ReadDocuments`, `EditDocuments`, `CreateDocuments`, `AskUserQuestion`, `SendMessageToAgent`, `FetchConversation`, `WaitForEvents`, `UploadArtifact`, `SuggestNewConversation`, `SuggestPrompt`, `InitProject`, `OpenCodeReview`, `InsertCodeReviewComments` | PascalCase variant name |
+| `ReadSkill` of a bundled skill (no file on disk; `tool_input` is `{ bundled_skill_id }`), `UseComputer`, `RequestComputerUse`, `StartRecording`, `StopRecording`, `ReadDocuments`, `EditDocuments`, `CreateDocuments`, `AskUserQuestion`, `SendMessageToAgent`, `FetchConversation`, `WaitForEvents`, `UploadArtifact`, `SuggestNewConversation`, `SuggestPrompt`, `InitProject`, `OpenCodeReview`, `InsertCodeReviewComments` | PascalCase variant name |
 
 A `"*"` matcher on `preToolUse` will fire for the Warp-only names. Hook authors who wrote for Cursor will see unfamiliar tool names and must allow by default. Cursor's `WebSearch`/`WebFetch` never appear because those tools run on warp-server.
 
-For `subagentStart`/`subagentStop`, Cursor matches on `generalPurpose`/`explore`/`shell`. Warp would match on its own type string (section 3.6).
+`tool_input` uses Cursor's field names where Warp's action maps onto a Cursor tool, so a script written for Cursor reads it unchanged: a read is `{ file_path, lines }`; file edits name their file as `file_path` and a string replacement as `old_string` and `new_string`, with a top-level `file_path` when every edit in the batch is to one file; an MCP call's `tool_input` is the tool's own arguments, with the server named beside it as `mcp_server_id`, as the MCP events name it. A read of several files, or an edit batch over several files, fires one event per file (section 4.3), and the matcher is tested per file, so a `Delete` matcher selects the delete in a batch that also writes. The full list of differences a Cursor script sees is kept in `cursor-script-compatibility.md`.
+
+For `subagentStart`/`subagentStop`, Cursor matches on `generalPurpose`/`explore`/`shell`. Warp matches on `generalPurpose`, which every child it launches is (section 3.6).
 
 ### 4.3 Timeouts and process lifecycle
 
@@ -703,7 +706,7 @@ Cursor publishes no default timeout. Claude Code defaults to 600 s for command h
 
 Warp has no shared subprocess timeout helper (report 04 §3.1). The pattern to copy is the LSP transport (`crates/lsp/src/transport.rs`): `select!` against a `Timer`, then SIGTERM, grace, SIGKILL. Spawn through `command::r#async::Command` (`crates/command/src/async.rs`), the only sanctioned API (clippy bans raw `std::process::Command`), using `new_with_process_group` so a timeout kills the hook's children too. Pipe stdin, stdout, and stderr; write the JSON, close stdin, read stdout to EOF, drain stderr to the hook log. The closest existing "JSON over stdio" code is the LSP transport, but it is framed and long-lived, so a small one-shot helper is new work.
 
-Matching hooks run concurrently (Cursor's CLI does; Claude and Codex do), at most four at a time across the process, and merge in a deterministic order: source priority, then the adapter's declared order (Cursor's event order, then array index). Failure policy follows report 01 §2.2: exit 2 is deny; other non-zero, crash, or timeout is fail-open unless `failClosed`; invalid JSON or schema mismatch is deny on the six permission hooks regardless of `failClosed`. Whatever is left of a hook's process tree is ended on every path, including after a normal exit (stop request, two seconds of grace, kill), so a hook gets no background work; stdout is capped at 1 MiB and a cut-off response is malformed output. `architecture.md` §9.1 has the full runner contract and the environment policy.
+Matching hooks run concurrently (Cursor's CLI does; Claude and Codex do), at most four at a time across the process, and merge in a deterministic order: source priority, then the adapter's declared order (Cursor's event order, then array index). A hook's `timeout` is a budget for its own run: the clock starts once it holds one of the four slots, and a wait for a slot ends only when a slot frees or the firing is cancelled, so a large batch of invocations does not split one budget among all of them. On the generic tool events a batched read or edit is one invocation per file, because Cursor's `Read`, `Write`, and `Delete` are single-file; the per-file runs of one hook merge first (any file's deny denies the whole call, with the file named in the reason), then hooks merge as above. Failure policy follows report 01 §2.2: exit 2 is deny; other non-zero, crash, or timeout is fail-open unless `failClosed`; invalid JSON or schema mismatch is deny on the six permission hooks regardless of `failClosed`. Whatever is left of a hook's process tree is ended on every path, including after a normal exit (stop request, two seconds of grace, kill), so a hook gets no background work; stdout is capped at 1 MiB and a cut-off response is malformed output. `architecture.md` §9.1 has the full runner contract and the environment policy.
 
 Windows: `new_with_process_group` is unix-only (report 04 §3.1), so a process group alone cannot clean up a timed-out hook's descendants there. The first phase adds per-child kill-on-close Job Objects to the `command` crate (the child is created without `CREATE_BREAKAWAY_FROM_JOB` and assigned to a nested job; one that cannot be assigned does not run), so Windows is supported in Phase 1 with the same cleanup guarantee as Unix. The command string runs under `cmd.exe /S /C`; the quoting, Unicode stdin, and no-orphan tests exist behind `cfg(windows)` and run first in CI.
 
@@ -806,7 +809,7 @@ The user's hypothesis is that GUI, TUI, Oz cloud runs, and orchestration childre
 Three places where the hypothesis needs qualification:
 
 1. **Remote orchestration children.** The parent's process holds only a `ConversationDriver::RemoteChild` placeholder; the child's tool calls happen on another machine. Hooks for that child run in the child's own Oz runtime under that worker's independently resolved configuration. The parent can still fire `subagentStart`/`subagentStop` for the launch and the result. Third-party harness children (`ExternalHarness`) execute no native tools at all, so native hooks do not apply to them.
-2. **Headless `ask`.** Oz runs and `warp agent run` without `--gui` have no approver. Hook `ask` degrades to `deny` there, with the reason recorded in the notice and delivered to the model in the tool result (section 4.7, section 3.0; the `denied_by_hook` result is the Phase 1 proto change). A local child of an interactive process can ask for approval because the user can reveal its initially hidden pane. Report 05 shows no vendor defines the headless case better: Cursor's docs are silent, Claude Code documents deny-with-reason for `-p`, and Codex treats `ask` as a failed hook. This is a behavior difference, not a configuration difference. An Oz run's initial prompt is also not visible to `beforeSubmitPrompt` (section 3.14).
+2. **Headless `ask`.** Oz runs and `warp agent run` without `--gui` have no approver. Hook `ask` degrades to `deny` there, with the reason recorded in the notice and delivered to the model in the tool result (section 4.7, section 3.0; the `denied_by_hook` result is the Phase 1 proto change). A local child of an interactive process can ask for approval because the user can reveal its initially hidden pane. Report 05 shows no vendor defines the headless case better: Cursor's docs are silent, Claude Code documents deny-with-reason for `-p`, and Codex treats `ask` as a failed hook. This is a behavior difference, not a configuration difference. An Oz run's initial prompt reaches `beforeSubmitPrompt` only because the driver fetches its text for the hook (section 3.14).
 3. **Message delivery and launcher configuration.** `user_message` goes to a toast, a TUI hint, or stdout depending on surface. Each launcher must produce an explicit source list before it finalizes the worker's registry.
 
 ## 5. Summary matrix
@@ -818,9 +821,9 @@ Three places where the hypothesis needs qualification:
 | `sessionStart` | Agent | Partial | `additional_context` needs a `hook_context` field on the request proto plus server rendering; `env` and inputs are client-only |
 | `sessionEnd` | Agent | Partial | No session-end moment in GUI/TUI; must be defined |
 | `preToolUse` | Agent | Full as built (Partial as scoped) | The deny reason's wire result, `denied_by_hook`, shipped in Phase 1 for every tool with server rendering |
-| `postToolUse` | Agent | Partial | `additional_context` needs a `hook_context` field on `ToolCallResult` plus server rendering; encoder and timer are client work |
+| `postToolUse` | Agent | Partial | `additional_context` needs a `hook_context` field on `ToolCallResult` plus server rendering; the encoder and the per-action timer are built |
 | `postToolUseFailure` | Agent | Partial | Its only output, `additional_context`, needs the same server work; event and inputs are client-only |
-| `subagentStart` | Agent | Partial | No `subagent_id` before launch; server-side subagents invisible |
+| `subagentStart` | Agent | Partial | Built for `run_agents` children; server-side subagents invisible |
 | `subagentStop` | Agent | Partial | No counts for remote children; server-side subagents invisible |
 | `beforeShellExecution` | Agent | Full as built (Partial as scoped) | The deny reason's wire result, `denied_by_hook`, shipped in Phase 1 with server rendering |
 | `afterShellExecution` | Agent | Full | None significant |
@@ -828,9 +831,9 @@ Three places where the hypothesis needs qualification:
 | `afterMCPExecution` | Agent | Full | None significant |
 | `beforeReadFile` | Agent | Full | Hook calls on four executors (`ReadFiles`, `ReadSkill`, `GetFiles`, `SearchCodebase` after the search runs); client work |
 | `afterFileEdit` | Agent | Full | Edit-string derivation when the user edited the diff |
-| `beforeSubmitPrompt` | Agent | Full | An Oz run's initial prompt is resolved server-side and cannot be seen without a server change; a hook `ask` halts the prompt because no confirmation step exists for one |
+| `beforeSubmitPrompt` | Agent | Full | An Oz run's initial prompt is fetched from the server for the hook when one is active, and a halt ends the run; a hook `ask` halts the prompt because no confirmation step exists for one |
 | `preCompact` | Agent | Blocked on server | Server must signal automatic compaction |
-| `stop` | Agent | Full | Finalization is held while the hooks run, bounded by their timeout; only a completed turn fires it |
+| `stop` | Agent | Full | A completed turn's finalization is held while the hooks run, bounded by their timeout; a cancelled or failed turn fires it as `aborted` or `error`, observed only, and an Oz run waits for that stop before it exits |
 | `afterAgentResponse` | Agent | Full | Message-boundary heuristic |
 | `afterAgentThought` | Agent | Full | None |
 | `beforeTabFileRead` | Tab | Not applicable | No inline completion |
@@ -846,7 +849,7 @@ Three places where the hypothesis needs qualification:
 | `preToolUse` | With work | Owned action; rewrites in a later phase | `BlocklistAIActionExecutor::try_to_execute_action` |
 | `postToolUse` | Yes | Yes (owned result); context needs server | `execute_future` wrapper in `execute.rs` |
 | `postToolUseFailure` | Yes | Context only (needs server) | Same |
-| `subagentStart` | Yes | Owned request; rewrites in a later phase | `RunAgentsExecutor` / `StartAgentExecutor::dispatch` |
+| `subagentStart` | Yes | Owned request; rewrites in a later phase | `RunAgentsExecutor::dispatch_children_for_prepared_request`, before `StartAgentExecutor::dispatch` |
 | `subagentStop` | Short deferral | Follow-up only | `inject_pending_events_for_request` |
 | `beforeShellExecution` | With work | Command string; rewrites in a later phase | `ShellCommandExecutor::execute` (pre-emit) |
 | `afterShellExecution` | Yes (on real exit) | Output | The completion funnel; for interact mode, the later poll that reports `CommandFinished` or `ShellRecovered` |

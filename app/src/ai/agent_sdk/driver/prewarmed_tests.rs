@@ -5,7 +5,9 @@ use chrono::TimeDelta;
 #[cfg(not(feature = "skip_login"))]
 use mockito::Matcher;
 use session_sharing_protocol::common::ParticipantId;
-use warp_graphql::queries::execution_config::{CodeForge, ExecutionRepository};
+use warp_graphql::queries::execution_config::{
+    CodeForge, ExecutionRepository, FactoryBranchExecutionConfig,
+};
 use warp_multi_agent_api as api;
 use warpui::App;
 
@@ -96,6 +98,144 @@ fn config() -> ExecutionConfiguration {
 }
 
 #[test]
+fn runner_setup_consumes_only_the_exact_prepared_prefix() {
+    let prepared = vec!["install-tools".into(), "configure-tools".into()];
+    let mut assigned = vec![
+        "install-tools".into(),
+        "configure-tools".into(),
+        "install-tools".into(),
+    ];
+    consume_runner_setup_commands(&mut assigned, &prepared).unwrap();
+    assert_eq!(assigned, ["install-tools"]);
+    let unchanged = assigned.clone();
+    assert!(consume_runner_setup_commands(&mut assigned, &prepared).is_err());
+    assert_eq!(assigned, unchanged);
+}
+
+#[test]
+fn empty_runner_setup_preserves_environment_fallback() {
+    let mut assigned = vec!["environment-setup".into()];
+    consume_runner_setup_commands(&mut assigned, &[]).unwrap();
+    assert_eq!(assigned, ["environment-setup"]);
+}
+
+#[test]
+fn runner_assignment_defers_workspace_and_switches_harness_with_run_values() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let root = tempfile::tempdir().unwrap();
+        let terminal = add_window_with_terminal(&mut app, None);
+        let driver = app.add_model(|ctx| {
+            let terminal = terminal::TerminalDriver::create_from_existing_view(terminal, ctx);
+            let mut driver = AgentDriver::new_for_test(root.path().into(), terminal, ctx);
+            Arc::make_mut(&mut driver.resolved_env_vars).insert(
+                "WARP_VARS_FILE".into(),
+                root.path().join(".warp.vars").into_os_string(),
+            );
+            driver
+        });
+        let foreground = driver.update(&mut app, |_, ctx| ctx.spawner());
+        let events = SetupClientEventReporter::standby(
+            Arc::new(MockAIClient::new()),
+            app.background_executor(),
+        );
+        AgentDriver::prepare_resources(
+            &foreground,
+            Harness::Oz,
+            vec![warp_cli::mcp::MCPSpec::Json("invalid".into())],
+            agent_setup::GlobalSkillResolution {
+                specs: Vec::new(),
+                repos: Vec::new(),
+            },
+            &events,
+            true,
+        )
+        .await
+        .unwrap();
+        driver.read(&app, |driver, _| {
+            assert!(matches!(
+                driver.workspace,
+                Some(WorkspaceState::RunnerPrepared(_))
+            ));
+            assert!(
+                !driver
+                    .resolved_env_vars
+                    .contains_key(OsStr::new("RUN_ONLY"))
+            );
+            assert!(
+                !driver
+                    .resolved_env_vars
+                    .contains_key(OsStr::new("RUN_SECRET"))
+            );
+            assert!(
+                !driver
+                    .skill_dirs
+                    .contains(&PathBuf::from("factory/.agents/skills"))
+            );
+        });
+        let vars_path = root.path().join(".warp.vars");
+        std::fs::write(&vars_path, "RUNNER_VALUE=prepared\n").unwrap();
+        AgentDriver::read_setup_vars(&foreground, false, false)
+            .await
+            .unwrap();
+        let mut configuration = config();
+        configuration.harness = warp_graphql::ai::AgentHarness::ClaudeCode;
+        configuration.setup_commands = vec!["run-only-setup".into()];
+        configuration.factory_skill_dirs = vec!["factory/.agents/skills".into()];
+        let (mut options, _, _, _) = app.update(|ctx| {
+            build_execution_task_and_options(
+                None,
+                HarnessTransport::Acp,
+                configuration,
+                RepositoryContract {
+                    supports_deferred_repositories: true,
+                    use_factory_repositories: false,
+                },
+                root.path().into(),
+                None,
+                Vec::new(),
+                ctx,
+            )
+            .unwrap()
+        });
+        options
+            .environment_variables
+            .insert("RUN_ONLY".into(), "assigned".into());
+        options.secrets.insert(
+            "RUN_SECRET".into(),
+            warp_managed_secrets::ManagedSecretValue::raw_value("secret"),
+        );
+        options.github_credential_mode = GitHubCredentialMode::RestrictedInstallation;
+        let (terminal, config) = split_run_options(options).unwrap();
+        driver.update(&mut app, |driver, ctx| {
+            driver
+                .apply_prewarmed_run_configuration(terminal, config, ctx)
+                .unwrap();
+            driver.merge_assignment_setup_vars(&mut HashMap::new());
+            let Some(WorkspaceState::PendingRunner(workspace)) = &driver.workspace else {
+                panic!("expected run workspace");
+            };
+            assert_eq!(workspace.setup_commands, ["run-only-setup"]);
+            assert_eq!(
+                driver.resolved_env_vars[OsStr::new("RUNNER_VALUE")],
+                "prepared"
+            );
+            assert_eq!(driver.resolved_env_vars[OsStr::new("RUN_ONLY")], "assigned");
+            assert_eq!(driver.resolved_env_vars[OsStr::new("RUN_SECRET")], "secret");
+            assert_eq!(
+                driver.github_credential_mode,
+                GitHubCredentialMode::RestrictedInstallation
+            );
+            assert_eq!(driver.skill_dirs, [PathBuf::from("factory/.agents/skills")]);
+        });
+        assert_eq!(
+            std::fs::read_to_string(vars_path).unwrap(),
+            "RUNNER_VALUE=prepared\n"
+        );
+    });
+}
+
+#[test]
 fn assignment_transport_defaults_to_pty_and_rejects_invalid_values() {
     assert_eq!(
         assignment_harness_transport(&HashMap::new()).unwrap(),
@@ -125,6 +265,37 @@ fn codex_pty_assignment_applies_run_environment_and_model() {
     );
 }
 
+#[test]
+fn third_party_assignment_omits_computer_use_config_without_computer_use_mcp() {
+    let _computer_use_mcp = FeatureFlag::ComputerUseMcp.override_enabled(false);
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let root = tempfile::tempdir().unwrap();
+        let mut configuration = config();
+        configuration.harness = warp_graphql::ai::AgentHarness::ClaudeCode;
+        configuration.model_id = Some("assigned-model".into());
+        configuration.computer_use_enabled = true;
+        validate_assignment(&configuration, true).unwrap();
+        let (options, ..) = app.update(|ctx| {
+            build_execution_task_and_options(
+                None,
+                HarnessTransport::Acp,
+                configuration,
+                RepositoryContract {
+                    supports_deferred_repositories: true,
+                    use_factory_repositories: true,
+                },
+                root.path().into(),
+                None,
+                Vec::new(),
+                ctx,
+            )
+            .unwrap()
+        });
+        assert_eq!(options.computer_use_config, None);
+    });
+}
+
 fn assert_third_party_assignment(
     server_harness: warp_graphql::ai::AgentHarness,
     harness: Harness,
@@ -132,6 +303,7 @@ fn assert_third_party_assignment(
     transport_name: &str,
 ) {
     let transport_name = transport_name.to_owned();
+    let _computer_use_mcp = FeatureFlag::ComputerUseMcp.override_enabled(true);
     App::test((), move |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
         let root = tempfile::tempdir().unwrap();
@@ -144,6 +316,8 @@ fn assert_third_party_assignment(
         configuration.harness = server_harness;
         configuration.model_id = Some("assigned-model".into());
         configuration.factory_skill_dirs = vec![".agents/skills".into()];
+        configuration.computer_use_enabled = true;
+        configuration.computer_use_model_id = Some("computer-use-model".into());
         let runtime_env = HashMap::from([
             ("WARP_HARNESS_TRANSPORT".into(), transport_name),
             ("WARP_API_KEY".into(), "run-key".into()),
@@ -175,7 +349,9 @@ fn assert_third_party_assignment(
             transport == HarnessTransport::Pty
         );
         assert_eq!(options.harness_transport, transport);
-        assert!(options.computer_use_config.is_none());
+        // Third-party harnesses get computer use through the computer use MCP server, which
+        // the harness's own model drives, so only the enablement carries over.
+        assert_eq!(options.computer_use_config, Some((true, None)));
         options.environment_variables = runtime_env;
         options.secrets.insert(
             "HARNESS_SECRET".into(),
@@ -422,6 +598,9 @@ fn prewarmed_config_conversion_and_state_binding_preserve_run_settings() {
         configuration.idle_on_complete_seconds = Some(17);
         configuration.idle_on_fail_seconds = Some(23);
         configuration.factory_skill_dirs = vec![".agents/skills".into()];
+        configuration.factory_branch = Some(FactoryBranchExecutionConfig {
+            source_sha: "0123456789abcdef0123456789abcdef01234567".into(),
+        });
         configuration.snapshot_disabled = true;
         let runtime_env = HashMap::from([
             ("WARP_API_KEY".into(), "assigned-key".into()),
@@ -450,6 +629,10 @@ fn prewarmed_config_conversion_and_state_binding_preserve_run_settings() {
         });
         assert_eq!(task.profile.as_deref(), Some("run-profile"));
         assert!(matches!(task.prompt, AgentRunPrompt::ServerSide { .. }));
+        assert_eq!(
+            options.workspace.factory_definition_sha.as_deref(),
+            Some("0123456789abcdef0123456789abcdef01234567")
+        );
         options.team_scope = Some(HeadlessTeamScope::Personal);
         options.environment_variables = runtime_env;
         let deadline = Utc::now() + TimeDelta::hours(1);
@@ -539,6 +722,7 @@ fn a_standby_loads_hooks_only_after_it_claims_a_task() {
                 repos: Vec::new(),
             },
             &setup_events,
+            false,
         )
         .await
         .expect("the standby prepares");
@@ -608,6 +792,9 @@ fn prewarmed_workspace_reuse_checks_setup_and_checkouts() {
     assert!(first.same_preparation(&second));
     second.setup_commands.push("different-setup".into());
     assert!(!first.same_preparation(&second));
+    let mut branch_run = first.clone();
+    branch_run.factory_definition_sha = Some("0123456789abcdef0123456789abcdef01234567".into());
+    assert!(!first.same_preparation(&branch_run));
 }
 
 fn completed_conversation(working_dir: &Path) -> AIConversation {

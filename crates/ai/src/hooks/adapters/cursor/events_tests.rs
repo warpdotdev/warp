@@ -122,7 +122,7 @@ fn boundaries_follow_the_architecture_mapping() {
 }
 
 #[test]
-fn twelve_events_fire_in_phase_1_and_the_rest_never_match() {
+fn thirteen_events_fire_in_phase_1_and_the_rest_never_match() {
     let fires = every_event()
         .filter(|event| event.spec().fires_in_phase_1)
         .collect::<Vec<_>>();
@@ -133,6 +133,7 @@ fn twelve_events_fire_in_phase_1_and_the_rest_never_match() {
             CursorEvent::PreToolUse,
             CursorEvent::PostToolUse,
             CursorEvent::PostToolUseFailure,
+            CursorEvent::SubagentStart,
             CursorEvent::BeforeShellExecution,
             CursorEvent::AfterShellExecution,
             CursorEvent::BeforeMcpExecution,

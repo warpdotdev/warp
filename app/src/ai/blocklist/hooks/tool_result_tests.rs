@@ -2,7 +2,7 @@ use ai::agent::action_result::{
     CallMCPToolResult, ReadFilesResult, RequestCommandOutputResult, RunAgentsResult,
 };
 use ai::hooks::test_util::{ScriptedRunner, test_binding, test_source_id};
-use ai::hooks::{DeclaredBinding, HookBoundary};
+use ai::hooks::{DeclaredBinding, HookBoundary, HookPayload};
 use chrono::Local;
 use warpui::{App, ModelHandle, SingletonEntity};
 
@@ -30,11 +30,28 @@ fn observe(
             action,
             &result,
             None,
+            None,
             harness.conversation_id,
             &harness.active_session,
             ctx,
         )
     });
+}
+
+/// The duration the adapter saw on the last tool event for `action_id`.
+fn last_duration_for(harness: &HookTestApp, action_id: &str) -> Option<Option<Duration>> {
+    match last_result_for(harness, action_id)? {
+        HookPayload::ToolResult { duration, .. } | HookPayload::ToolFailure { duration, .. } => {
+            Some(duration)
+        }
+        HookPayload::SessionStart { .. }
+        | HookPayload::PromptSubmit { .. }
+        | HookPayload::ToolPre { .. }
+        | HookPayload::SubagentStart { .. }
+        | HookPayload::TurnStop { .. }
+        | HookPayload::ResponseComplete { .. }
+        | HookPayload::ReasoningComplete { .. } => None,
+    }
 }
 
 fn boundaries(app: &App) -> Vec<HookBoundary> {
@@ -164,6 +181,11 @@ fn a_synchronous_completion_is_observed_once_as_a_result() {
             }]
         );
         settle(&mut app, |_| harness.hooks.adapter.encoded_count() == 1).await;
+        assert_eq!(
+            last_duration_for(&harness, "init"),
+            Some(Some(Duration::ZERO)),
+            "a result known at once took no time"
+        );
     });
 }
 
@@ -186,6 +208,11 @@ fn an_asynchronous_completion_is_observed_once_as_a_result() {
                 action_id: action.id.clone(),
                 boundary: HookBoundary::ToolResult,
             }]
+        );
+        settle(&mut app, |_| harness.hooks.adapter.encoded_count() == 1).await;
+        assert!(
+            matches!(last_duration_for(&harness, "read"), Some(Some(_))),
+            "an action that ran is timed from when it started"
         );
     });
 }
@@ -481,6 +508,7 @@ fn a_tool_that_ran_is_a_result_whatever_it_returned_and_one_that_did_not_is_a_fa
                 &shell_action("shell", "make"),
                 &completed("make", &block, 0),
                 Some(CancellationReason::ManuallyCancelled),
+                None,
                 harness.conversation_id,
                 &harness.active_session,
                 ctx,

@@ -703,17 +703,17 @@ fn retained_setup_failure_without_debug_agent_available_is_not_debug_routable() 
             let model = ambient_pane_model(task_id, SharedSessionStatus::NotShared);
             assert_ne!(
                 resolve_ai_query_routing(terminal_view_id, None, &model, ctx),
-                AIQueryRouting::RetainedSetupFailureDebug { task_id }
+                AIQueryRouting::LiveRemoteVm {
+                    is_executor: false,
+                    ambient_agent_task_id: Some(task_id),
+                }
             );
         });
     });
 }
 
-/// Once `debug_agent_available` is true (server-eligible) and the other conditions hold, the
-/// pane's follow-up routing must switch to the REMOTE-2661 debug path. The tombstone itself
-/// stays plain: the debug entry point is the pane's own input, not a CTA button.
 #[test]
-fn retained_setup_failure_with_debug_agent_available_enables_debug_routing() {
+fn retained_setup_failure_without_attached_viewer_requires_session_attachment() {
     App::test((), |mut app| async move {
         let TestHandles {
             terminal_view_id,
@@ -749,7 +749,10 @@ fn retained_setup_failure_with_debug_agent_available_enables_debug_routing() {
             let model = ambient_pane_model(task_id, SharedSessionStatus::NotShared);
             assert_eq!(
                 resolve_ai_query_routing(terminal_view_id, None, &model, ctx),
-                AIQueryRouting::RetainedSetupFailureDebug { task_id }
+                AIQueryRouting::LiveRemoteVm {
+                    is_executor: false,
+                    ambient_agent_task_id: Some(task_id),
+                }
             );
         });
     });
@@ -758,7 +761,7 @@ fn retained_setup_failure_with_debug_agent_available_enables_debug_routing() {
 /// In-session debug prompts stay in the retained sandbox rather than taking the ordinary
 /// server follow-up path, which starts a replacement execution.
 #[test]
-fn retained_setup_failure_with_a_conversation_still_routes_to_the_debug_followup() {
+fn retained_setup_failure_with_a_conversation_routes_to_the_attached_session() {
     App::test((), |mut app| async move {
         let TestHandles {
             terminal_view_id,
@@ -831,7 +834,10 @@ fn retained_setup_failure_stays_eligible_while_a_debug_turn_pins_the_window() {
             let model = ambient_pane_model(task_id, SharedSessionStatus::NotShared);
             assert_eq!(
                 resolve_ai_query_routing(terminal_view_id, None, &model, ctx),
-                AIQueryRouting::RetainedSetupFailureDebug { task_id },
+                AIQueryRouting::LiveRemoteVm {
+                    is_executor: false,
+                    ambient_agent_task_id: Some(task_id),
+                },
                 "a pinned debug turn must keep the entry point open past the published deadline"
             );
         });
@@ -880,7 +886,10 @@ fn retained_setup_failure_owned_by_current_team_is_debug_routable_for_non_creato
             let model = ambient_pane_model(task_id, SharedSessionStatus::NotShared);
             assert_eq!(
                 resolve_ai_query_routing(terminal_view_id, None, &model, ctx),
-                AIQueryRouting::RetainedSetupFailureDebug { task_id },
+                AIQueryRouting::LiveRemoteVm {
+                    is_executor: false,
+                    ambient_agent_task_id: Some(task_id),
+                },
                 "a fellow team member must be able to debug the run even though they are not its literal creator"
             );
         });
@@ -924,7 +933,10 @@ fn retained_setup_failure_owned_by_a_different_team_is_not_debug_routable() {
             let model = ambient_pane_model(task_id, SharedSessionStatus::NotShared);
             assert_ne!(
                 resolve_ai_query_routing(terminal_view_id, None, &model, ctx),
-                AIQueryRouting::RetainedSetupFailureDebug { task_id },
+                AIQueryRouting::LiveRemoteVm {
+                    is_executor: false,
+                    ambient_agent_task_id: Some(task_id),
+                },
                 "a viewer on an unrelated team must not be able to debug the run"
             );
         });
@@ -1449,10 +1461,6 @@ fn cloud_routing_indicator_matches_footer_chip_policy() {
     assert_eq!(
         AIQueryRouting::NewCloudVm { task_id }.cloud_routing_indicator(),
         Some(CloudRoutingIndicator::NewCloudVm)
-    );
-    assert_eq!(
-        AIQueryRouting::RetainedSetupFailureDebug { task_id }.cloud_routing_indicator(),
-        Some(CloudRoutingIndicator::LiveSession)
     );
     assert_eq!(
         AIQueryRouting::UnconnectedReadOnly.cloud_routing_indicator(),

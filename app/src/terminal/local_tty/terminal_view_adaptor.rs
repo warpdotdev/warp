@@ -155,9 +155,12 @@ fn accept_agent_prompt(
     };
 
     let terminal_view_id = terminal_view.id();
-    if CLIAgentSessionsModel::as_ref(ctx)
-        .session(terminal_view_id)
-        .is_some_and(|session| matches!(session.status, CLIAgentSessionStatus::Cancelled))
+    let cli_harness_task_id = LocalAgentTaskSyncModel::as_ref(ctx)
+        .cli_harness_task_id_for_terminal_view(terminal_view_id);
+    if cli_harness_task_id.is_some()
+        && CLIAgentSessionsModel::as_ref(ctx)
+            .session(terminal_view_id)
+            .is_some_and(|session| matches!(session.status, CLIAgentSessionStatus::Cancelled))
         || terminal_view
             .as_ref(ctx)
             .ai_controller()
@@ -186,9 +189,7 @@ fn accept_agent_prompt(
     // launched (see its call site in `AgentDriver::subscribe_to_cli_agent_session_events`), so
     // this is true independent of whether the CLI-harness session above has actually started a
     // live PTY yet.
-    if let Some(task_id) =
-        LocalAgentTaskSyncModel::as_ref(ctx).cli_harness_task_id_for_terminal_view(terminal_view_id)
-    {
+    if let Some(task_id) = cli_harness_task_id {
         log::info!(
             "event=prompt_routed terminal_id={terminal_view_id:?} participant_id={participant_id} task_id={task_id} destination=pending_cli",
         );

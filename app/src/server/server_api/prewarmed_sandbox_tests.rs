@@ -251,6 +251,25 @@ fn unknown_managed_secret_types_fail_conversion() {
 }
 
 #[test]
+fn runner_configuration_requires_the_supported_preparation_contract() {
+    for (kind, version, supported) in [
+        ("RUNNER", None, false),
+        ("RUNNER", Some(2), false),
+        ("RUNNER", Some(1), true),
+        ("FUTURE", Some(1), false),
+    ] {
+        let mut config = wire_configuration();
+        config.preparation_kind = kind.into();
+        config.runner_preparation_contract_version = version;
+        let result = PrewarmedSandboxConfiguration::try_from(config);
+        assert_eq!(result.is_ok(), supported);
+        if let Ok(config) = result {
+            assert!(config.runner_preparation);
+        }
+    }
+}
+
+#[test]
 fn invalid_mcp_json_errors_do_not_include_configuration_values() {
     for json in ["invalid-secret-json", "\"secret-value\"", "[]", "null"] {
         let mut config = wire_configuration();
@@ -287,6 +306,7 @@ fn configuration_uses_default_graphql_timeout_and_authentication() {
             serde_json::json!({
                 "sandboxId": "11111111-2222-3333-4444-555555555555",
                 "githubCredentialContractVersion": 1,
+                "runnerPreparationContractVersion": 1,
                 "supportsDeferredRepositories": true,
                 "supportsAgentHooks": true
             })
@@ -403,6 +423,7 @@ fn configuration_debug_redacts_credentials_and_raw_preparation_values() {
 #[test]
 fn ready_status_sends_the_fingerprint_as_the_manifest_hash() {
     let ready = PrewarmedSandboxStatusInput {
+        runner_preparation_contract_version: 1,
         fingerprint: "abc123".to_string(),
         state: PrewarmedSandboxState::Ready.as_wire_value(),
         manifest_hash: Some("abc123".to_string()),
@@ -413,17 +434,19 @@ fn ready_status_sends_the_fingerprint_as_the_manifest_hash() {
             "fingerprint": "abc123",
             "state": "ready",
             "manifest_hash": "abc123",
+            "runner_preparation_contract_version": 1,
         })
     );
 
     let failed = PrewarmedSandboxStatusInput {
+        runner_preparation_contract_version: 1,
         fingerprint: "abc123".to_string(),
         state: PrewarmedSandboxState::Failed.as_wire_value(),
         manifest_hash: None,
     };
     assert_eq!(
         serde_json::to_value(&failed).unwrap(),
-        serde_json::json!({ "fingerprint": "abc123", "state": "failed" })
+        serde_json::json!({ "fingerprint": "abc123", "state": "failed", "runner_preparation_contract_version": 1 })
     );
 }
 
@@ -583,6 +606,36 @@ fn an_assignment_without_hook_sources_decodes_with_none() {
     assert_eq!(assignment_hook_sources(fixture), 1);
 }
 
+/// A server that predates Factory experiments on the execution configuration sends no
+/// `experimentalJson`; the assignment still decodes, with no experiment values.
+#[test]
+fn an_assignment_without_experiment_values_decodes_with_none() {
+    let experiment_values = |fixture: serde_json::Value| {
+        let event: PrewarmedSandboxControlEvent = serde_json::from_value(fixture).unwrap();
+        let PrewarmedSandboxControlEvent::Assignment {
+            execution_config, ..
+        } = event
+        else {
+            panic!("expected assignment event");
+        };
+        execution_config.experimental_json
+    };
+    let mut fixture: serde_json::Value =
+        serde_json::from_str(include_str!("testdata/prewarmed_assignment_fresh_run.json")).unwrap();
+    assert_eq!(experiment_values(fixture.clone()), None);
+    fixture["execution_config"]
+        .as_object_mut()
+        .unwrap()
+        .remove("experimentalJson");
+    assert_eq!(experiment_values(fixture.clone()), None);
+    fixture["execution_config"]["experimentalJson"] =
+        serde_json::json!(r#"{"skillsListingDeltas":true}"#);
+    assert_eq!(
+        experiment_values(fixture).as_deref(),
+        Some(r#"{"skillsListingDeltas":true}"#)
+    );
+}
+
 #[test]
 fn assignment_debug_omits_run_credentials_and_embedded_config_values() {
     let mut event: PrewarmedSandboxControlEvent =
@@ -668,6 +721,7 @@ fn all_endpoints_use_cached_credentials_and_expected_payloads() {
         )
         .match_body(Matcher::Json(serde_json::json!({
             "fingerprint": "abc123", "state": "ready", "manifest_hash": "abc123",
+            "runner_preparation_contract_version": 1,
         })))
         .with_status(204)
         .create();

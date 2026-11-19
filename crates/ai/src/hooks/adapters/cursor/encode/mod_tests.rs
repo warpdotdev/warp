@@ -1,26 +1,32 @@
 use std::ops::Range;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use chrono::{Local, TimeZone};
 use serde_json::{Value, json};
 use warp_terminal::event::ObservedExitStatus;
 use warp_terminal::model::BlockId;
+use warp_util::local_or_remote_path::LocalOrRemotePath;
 
 use super::*;
 use crate::agent::FileLocations;
 use crate::agent::action::{
-    AIAgentActionType, FileEdit, ReadFilesRequest, RunAgentsAgentRunConfig, RunAgentsExecutionMode,
-    RunAgentsRequest,
+    AIAgentActionType, FileEdit, ReadFilesRequest, ReadSkillRequest, RunAgentsAgentRunConfig,
+    RunAgentsExecutionMode, RunAgentsRequest,
 };
 use crate::agent::action_result::{
     AIAgentActionResultType, AnyFileContent, CallMCPToolResult, FileContext, ReadFilesFailedFile,
     ReadFilesResult, RequestCommandOutputResult,
 };
+use crate::diff_validation::ParsedDiff;
 use crate::hooks::adapters::cursor::test_support::{
     EVENT_FIXTURES, FIXTURE_CONVERSATION_ID, completed_shell, fixture_envelope, json, mcp_action,
-    shell_action, tool_failure, tool_pre, tool_result,
+    shell_action, subagent_start, tool_failure, tool_pre, tool_result,
 };
-use crate::hooks::model::{HookTurnId, PromptProvenance, TurnStopStatus};
+use crate::hooks::model::{
+    HookTurnId, PromptAttachment, PromptAttachmentKind, PromptProvenance, TurnStopStatus,
+};
+use crate::skills::SkillReference;
 
 /// The payload each `stdin.json` fixture was written for.
 fn fixture_payload(event: CursorEvent) -> HookPayload {
@@ -69,9 +75,19 @@ fn fixture_payload(event: CursorEvent) -> HookPayload {
         ),
         CursorEvent::BeforeSubmitPrompt => HookPayload::PromptSubmit {
             text: "Fix the failing test".to_owned(),
-            attachments_summary: vec!["/work/repo/src/lib.rs".to_owned()],
+            attachments: vec![
+                PromptAttachment {
+                    kind: PromptAttachmentKind::File,
+                    path: PathBuf::from("/work/repo/src/lib.rs"),
+                },
+                PromptAttachment {
+                    kind: PromptAttachmentKind::Rule,
+                    path: PathBuf::from("/work/repo/AGENTS.md"),
+                },
+            ],
             provenance: PromptProvenance::User,
         },
+        CursorEvent::SubagentStart => subagent_start(),
         CursorEvent::Stop => HookPayload::TurnStop {
             status: TurnStopStatus::Completed,
             continuation_count: 0,
@@ -86,7 +102,6 @@ fn fixture_payload(event: CursorEvent) -> HookPayload {
             duration: Some(Duration::from_secs(2)),
         },
         CursorEvent::SessionEnd
-        | CursorEvent::SubagentStart
         | CursorEvent::SubagentStop
         | CursorEvent::BeforeReadFile
         | CursorEvent::AfterFileEdit
@@ -99,6 +114,11 @@ fn fixture_payload(event: CursorEvent) -> HookPayload {
 
 fn encode(event: CursorEvent, payload: HookPayload) -> Value {
     encode_input(event.spec(), &fixture_envelope(payload))
+}
+
+/// Every input for the firing, for actions a Cursor script sees as several.
+fn encode_all(event: CursorEvent, payload: HookPayload) -> Vec<HookInput> {
+    encode_inputs(event.spec(), &fixture_envelope(payload), |_| true)
 }
 
 /// Cursor sends some fields as JSON text inside a string. Their key order is a serializer
@@ -314,7 +334,8 @@ fn tool_input_describes_non_shell_actions() {
     assert_eq!(input["tool_name"], "Read");
     assert_eq!(
         input["tool_input"],
-        json!({ "files": [ { "path": "src/lib.rs", "lines": [[1, 20]] } ] })
+        json!({ "file_path": "src/lib.rs", "lines": [[1, 20]] }),
+        "a read has Cursor's single-file shape"
     );
 
     let edit = tool_pre(AIAgentActionType::RequestFileEdits {
@@ -330,17 +351,40 @@ fn tool_input_describes_non_shell_actions() {
         ],
         title: Some("Replace old.rs".to_owned()),
     });
-    let input = encode(CursorEvent::PreToolUse, edit);
-    assert_eq!(input["tool_name"], "Write");
+    let inputs = encode_all(CursorEvent::PreToolUse, edit);
     assert_eq!(
-        input["tool_input"],
+        inputs.len(),
+        2,
+        "a batch over two files is one event per file"
+    );
+    assert_eq!(inputs[0].label.as_deref(), Some("new.rs"));
+    assert_eq!(inputs[0].payload["tool_name"], "Write");
+    assert_eq!(
+        inputs[0].payload["tool_input"],
         json!({
+            "file_path": "new.rs",
             "title": "Replace old.rs",
             "edits": [
-                { "kind": "create", "file": "new.rs", "content": "fn main() {}", "allow_overwrite": false },
-                { "kind": "delete", "file": "old.rs" }
+                { "kind": "create", "file_path": "new.rs", "content": "fn main() {}", "allow_overwrite": false }
             ]
         })
+    );
+    assert_eq!(inputs[1].label.as_deref(), Some("old.rs"));
+    assert_eq!(
+        inputs[1].payload["tool_name"], "Delete",
+        "the part made only of a delete is a Delete"
+    );
+    assert_eq!(
+        inputs[1].payload["tool_input"],
+        json!({
+            "file_path": "old.rs",
+            "title": "Replace old.rs",
+            "edits": [ { "kind": "delete", "file_path": "old.rs" } ]
+        })
+    );
+    assert_eq!(
+        inputs[0].payload["tool_use_id"], inputs[1].payload["tool_use_id"],
+        "both parts belong to the one tool call"
     );
 
     let mcp = tool_pre(mcp_action("read_file", json!({ "path": "a" })));
@@ -348,11 +392,12 @@ fn tool_input_describes_non_shell_actions() {
     assert_eq!(input["tool_name"], "MCP:read_file");
     assert_eq!(
         input["tool_input"],
-        json!({
-            "server_id": "22222222-2222-2222-2222-222222222222",
-            "name": "read_file",
-            "input": { "path": "a" }
-        })
+        json!({ "path": "a" }),
+        "the input is the tool's own arguments"
+    );
+    assert_eq!(
+        input["mcp_server_id"],
+        "22222222-2222-2222-2222-222222222222"
     );
 
     let agents = tool_pre(AIAgentActionType::RunAgents(Box::new(RunAgentsRequest {
@@ -384,6 +429,163 @@ fn tool_input_describes_non_shell_actions() {
         !input["tool_input"].to_string().contains("secret"),
         "the harness secret name is not part of the input"
     );
+}
+
+#[test]
+fn a_skill_loaded_from_disk_is_a_read_of_its_skill_file() {
+    let on_disk = tool_pre(AIAgentActionType::ReadSkill(ReadSkillRequest {
+        skill: SkillReference::Path(LocalOrRemotePath::Local(PathBuf::from(
+            "/work/repo/.agents/skills/deploy/SKILL.md",
+        ))),
+    }));
+    let input = encode(CursorEvent::PreToolUse, on_disk);
+    assert_eq!(input["tool_name"], "Read");
+    assert_eq!(
+        input["tool_input"],
+        json!({ "file_path": "/work/repo/.agents/skills/deploy/SKILL.md", "skill": true })
+    );
+
+    let bundled = tool_pre(AIAgentActionType::ReadSkill(ReadSkillRequest {
+        skill: SkillReference::BundledSkillId("create-pr".to_owned()),
+    }));
+    let input = encode(CursorEvent::PreToolUse, bundled);
+    assert_eq!(input["tool_name"], "ReadSkill");
+    assert_eq!(
+        input["tool_input"],
+        json!({ "bundled_skill_id": "create-pr" })
+    );
+}
+
+#[test]
+fn edits_to_one_file_name_it_with_cursors_field_names() {
+    let edit = tool_pre(AIAgentActionType::RequestFileEdits {
+        file_edits: vec![
+            FileEdit::Edit(ParsedDiff::StrReplaceEdit {
+                file: Some("src/lib.rs".to_owned()),
+                search: Some("a".to_owned()),
+                replace: Some("b".to_owned()),
+            }),
+            FileEdit::Edit(ParsedDiff::StrReplaceEdit {
+                file: Some("src/lib.rs".to_owned()),
+                search: Some("c".to_owned()),
+                replace: Some("d".to_owned()),
+            }),
+        ],
+        title: None,
+    });
+    let input = encode(CursorEvent::PreToolUse, edit);
+    assert_eq!(input["tool_name"], "Write");
+    assert_eq!(input["tool_input"]["file_path"], "src/lib.rs");
+    assert_eq!(
+        input["tool_input"]["edits"][1],
+        json!({ "kind": "edit", "file_path": "src/lib.rs", "old_string": "c", "new_string": "d" })
+    );
+
+    let delete = tool_pre(AIAgentActionType::RequestFileEdits {
+        file_edits: vec![FileEdit::Delete {
+            file: Some("old.rs".to_owned()),
+        }],
+        title: None,
+    });
+    let input = encode(CursorEvent::PreToolUse, delete);
+    assert_eq!(input["tool_name"], "Delete");
+    assert_eq!(input["tool_input"]["file_path"], "old.rs");
+
+    let nameless = tool_pre(AIAgentActionType::RequestFileEdits {
+        file_edits: vec![FileEdit::Create {
+            file: None,
+            content: None,
+            allow_overwrite: false,
+        }],
+        title: None,
+    });
+    let input = encode(CursorEvent::PreToolUse, nameless);
+    assert!(
+        input["tool_input"].get("file_path").is_none(),
+        "an edit with no file names none"
+    );
+}
+
+#[test]
+fn a_read_of_several_files_is_one_event_per_file_with_that_files_output() {
+    let request = ReadFilesRequest {
+        locations: vec![
+            FileLocations {
+                name: "src/a.rs".to_owned(),
+                lines: Vec::new(),
+            },
+            FileLocations {
+                name: "missing.txt".to_owned(),
+                lines: Vec::new(),
+            },
+        ],
+    };
+    let result = AIAgentActionResultType::ReadFiles(ReadFilesResult::Success {
+        files: vec![FileContext::new(
+            "/work/repo/src/a.rs".to_owned(),
+            AnyFileContent::StringContent("fn a() {}".to_owned()),
+            None,
+            None,
+        )],
+        failed_files: vec![ReadFilesFailedFile {
+            path: "/work/repo/missing.txt".to_owned(),
+            message: "not found".to_owned(),
+        }],
+    });
+
+    let pre = encode_all(
+        CursorEvent::PreToolUse,
+        tool_pre(AIAgentActionType::ReadFiles(request.clone())),
+    );
+    assert_eq!(pre.len(), 2);
+    assert_eq!(pre[0].label.as_deref(), Some("src/a.rs"));
+    assert_eq!(pre[0].payload["tool_name"], "Read");
+    assert_eq!(
+        pre[0].payload["tool_input"],
+        json!({ "file_path": "src/a.rs", "lines": [] })
+    );
+    assert_eq!(pre[1].label.as_deref(), Some("missing.txt"));
+
+    let post = encode_all(
+        CursorEvent::PostToolUse,
+        tool_result(AIAgentActionType::ReadFiles(request), result, None),
+    );
+    assert_eq!(post.len(), 2);
+    let first: Value =
+        serde_json::from_str(post[0].payload["tool_output"].as_str().expect("a string"))
+            .expect("JSON");
+    assert_eq!(first["kind"], "success");
+    assert_eq!(first["files"][0]["content"], "fn a() {}");
+    assert_eq!(first["files"].as_array().map(Vec::len), Some(1));
+    assert_eq!(
+        first["failed_files"].as_array().map(Vec::len),
+        Some(0),
+        "the other file's failure is not in this file's output"
+    );
+    let second: Value =
+        serde_json::from_str(post[1].payload["tool_output"].as_str().expect("a string"))
+            .expect("JSON");
+    assert_eq!(second["files"].as_array().map(Vec::len), Some(0));
+    assert_eq!(second["failed_files"][0]["message"], "not found");
+}
+
+#[test]
+fn a_single_file_read_is_one_unlabeled_event() {
+    let inputs = encode_all(
+        CursorEvent::PreToolUse,
+        tool_pre(AIAgentActionType::ReadFiles(ReadFilesRequest {
+            locations: vec![FileLocations {
+                name: "src/a.rs".to_owned(),
+                lines: Vec::new(),
+            }],
+        })),
+    );
+    assert_eq!(inputs.len(), 1);
+    assert_eq!(
+        inputs[0].label, None,
+        "nothing was split, so nothing is labeled"
+    );
+    assert_eq!(inputs[0].payload["tool_input"]["file_path"], "src/a.rs");
 }
 
 #[test]

@@ -56,12 +56,18 @@ impl AgentDriver {
         mcp_specs: Vec<MCPSpec>,
         global_skills: GlobalSkillResolution,
         setup_events: &SetupClientEventReporter,
+        runner_preparation: bool,
     ) -> Result<PathBuf, AgentDriverError> {
         // Standby resolves global skills before this call to check checkout names before any clone.
         let mut workspace = foreground
             .spawn(|me, _| match me.workspace.take() {
                 Some(WorkspaceState::Pending(workspace)) => Some(workspace),
-                Some(WorkspaceState::Prepared(_)) | None => None,
+                Some(
+                    WorkspaceState::Prepared(_)
+                    | WorkspaceState::RunnerPrepared(_)
+                    | WorkspaceState::PendingRunner(_),
+                )
+                | None => None,
             })
             .await?
             .ok_or(AgentDriverError::InvalidRuntimeState)?;
@@ -101,6 +107,7 @@ impl AgentDriver {
                 prepend_factory_definition_clone_for_values(
                     env_value(FACTORY_REPO_CLONE_URL_ENV_VAR),
                     env_value(FACTORY_REPO_DIR_ENV_VAR),
+                    workspace.factory_definition_sha.as_deref(),
                     shell_type,
                     &mut workspace.setup_commands,
                 );
@@ -126,14 +133,19 @@ impl AgentDriver {
         foreground
             .spawn(move |me, _| {
                 me.harness_working_dir = working_dir;
-                me.workspace = Some(WorkspaceState::Prepared(StandbyWorkspace {
+                let prepared = StandbyWorkspace {
                     harness,
                     configuration: prepared_configuration,
                     repositories,
-                }));
+                };
+                me.workspace = Some(if runner_preparation {
+                    WorkspaceState::RunnerPrepared(prepared)
+                } else {
+                    WorkspaceState::Prepared(prepared)
+                });
             })
             .await?;
-        if harness != Harness::Oz {
+        if runner_preparation || harness != Harness::Oz {
             return Ok(prepared.harness_working_dir);
         }
         let managed_mcp_client = foreground
@@ -360,6 +372,12 @@ pub(crate) async fn load_environment_skills(
         .spawn(|me, ctx| {
             if me.cwd_scoped_cloud_skills_enabled() {
                 SkillManager::handle(ctx).update(ctx, |manager, _| {
+                    // Undo the unscoped listing a warm (standby) sandbox may have enabled before
+                    // its assignment arrived. It ran this same skill load while `experimental` was
+                    // still unset, so it called `set_cloud_environment(true)`. That setting lives on
+                    // the `SkillManager` singleton, so without this reset it would override the cwd
+                    // scoping this run opted into via experiments.
+                    manager.set_cloud_environment(false);
                     manager.set_cloud_working_dir(me.harness_working_dir.clone());
                 });
             }

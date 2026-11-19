@@ -220,12 +220,12 @@ impl OrchestrationChildTracker {
         kind: api::LifecycleEventType,
         ctx: &mut ModelContext<OrchestrationEventStreamer>,
     ) {
+        let status = conversation_status_from_lifecycle_event_type(kind);
         let tracker_known = self.children.contains_key(&task_id);
         if tracker_known {
             if let Some(child) = self.children.get_mut(&task_id) {
                 child.last_lifecycle = Some(kind);
             }
-            let status = conversation_status_from_lifecycle_event_type(kind);
             let child_info = {
                 let history = BlocklistAIHistoryModel::as_ref(ctx);
                 history
@@ -267,7 +267,6 @@ impl OrchestrationChildTracker {
         if let Some(child) = self.children.get_mut(&task_id) {
             child.last_lifecycle = Some(kind);
         }
-        let status = conversation_status_from_lifecycle_event_type(kind);
         ctx.emit(OrchestrationEventStreamerEvent::ChildStatusChanged {
             parent_task_id: self.parent_task_id,
             run_id: run_id.to_string(),

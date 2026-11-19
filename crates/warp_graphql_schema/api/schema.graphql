@@ -982,6 +982,7 @@ type ConversationUsageMetadata {
 
 """Worker type for agent tasks."""
 input CreateAgentTaskInput {
+  localGithubContractVersion: Int
   """
   Optional JSON-serialized agent config snapshot to store on the task.
   
@@ -1006,6 +1007,9 @@ input CreateAgentTaskInput {
 }
 
 type CreateAgentTaskOutput implements Response {
+  githubCredentialMode: GitHubCredentialMode
+  executionId: ID
+  mcpServers: String
   responseContext: ResponseContext!
 
   """The ID of the created task."""
@@ -2935,6 +2939,7 @@ union PopulateMerkleTreeCacheResult = PopulateMerkleTreeCacheOutput | UserFacing
 
 input PrewarmedSandboxConfigInput {
   githubCredentialContractVersion: Int
+  runnerPreparationContractVersion: Int
   sandboxId: ID!
   supportsAgentHooks: Boolean
   supportsDeferredRepositories: Boolean
@@ -2943,6 +2948,8 @@ input PrewarmedSandboxConfigInput {
 union PrewarmedSandboxConfigResult = PrewarmedSandboxConfiguration | UserFacingError
 
 type PrewarmedSandboxConfiguration {
+  preparationKind: String!
+  runnerPreparationContractVersion: Int
   environmentVariables: [PrewarmedSandboxVariable!]!
   expiresAt: Time!
   fingerprint: String!
@@ -4074,6 +4081,7 @@ type TaskGitCredential {
 
 """Input for the taskGitCredentials query."""
 input TaskGitCredentialsInput {
+  localExecutionId: ID
   githubCredentialContractVersion: Int
   """
   Refresh only these providers. Omitted or null refreshes all providers.
@@ -5333,6 +5341,14 @@ type ExecutionSkillSpec {
   spec: String!
 }
 
+type FactoryBranchExecutionConfig {
+  factoryId: ID!
+  branchId: ID!
+  branch: String!
+  sourceSha: String!
+  repositoryUrl: String!
+}
+
 enum ExecutionRepositoryRefType {
   COMMIT_SHA
   BRANCH
@@ -5411,6 +5427,7 @@ type ExecutionConfiguration {
   mcpServersJson: String!
   skills: [ExecutionSkillSpec!]!
   factorySkillDirs: [String!]!
+  factoryBranch: FactoryBranchExecutionConfig
   computerUseEnabled: Boolean!
   computerUseModelId: String
   inferenceProviders: InferenceProviderClientConfigs
@@ -5428,6 +5445,11 @@ type ExecutionConfiguration {
   factory's, each in declared order. Duplicates are not merged.
   """
   agentHookSources: [AgentHookSource!]!
+  """
+  The run's Factory experiment values as a JSON object, or null when it has
+  none.
+  """
+  experimentalJson: String
 }
 
 """

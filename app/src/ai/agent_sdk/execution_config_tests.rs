@@ -1,5 +1,6 @@
 use warp_graphql::queries::execution_config::{
-    ExecutionRepositoryRef, SessionSharingAccessLevel, SessionSharingSubjectType,
+    ExecutionRepositoryRef, FactoryBranchExecutionConfig, SessionSharingAccessLevel,
+    SessionSharingSubjectType,
 };
 
 use super::*;
@@ -154,4 +155,22 @@ fn a_worker_hook_path_is_absolute() {
     for invalid in ["", "etc/hooks", "./hooks", " /etc/hooks"] {
         assert!(hook_worker_path(invalid).is_err(), "{invalid:?}");
     }
+}
+
+#[test]
+fn execution_factory_definition_sha_accepts_only_full_commit_ids() {
+    let branch = |sha: &str| {
+        Some(FactoryBranchExecutionConfig {
+            source_sha: sha.into(),
+        })
+    };
+    let sha = "0123456789abcdef0123456789abcdef01234567";
+    assert_eq!(factory_definition_sha(None).unwrap(), None);
+    assert_eq!(
+        factory_definition_sha(branch(sha)).unwrap().as_deref(),
+        Some(sha)
+    );
+    assert!(factory_definition_sha(branch(&sha[..12])).is_err());
+    assert!(factory_definition_sha(branch(&sha.to_uppercase())).is_err());
+    assert!(factory_definition_sha(branch(&format!("{}; rm", &sha[..36]))).is_err());
 }

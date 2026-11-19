@@ -84,6 +84,8 @@ pub(super) const MAX_BATCHED_FOLLOW_UPS: usize = 32;
 pub(super) trait TurnHost: Send + Sync {
     /// Opens a request stream on the conversation, attributed to `initiator` when given.
     async fn begin_turn(&self, initiator: Option<ParticipantId>) -> Result<ExternalHarnessTurn>;
+    /// Enqueues a progress update for new input without waiting for the server.
+    async fn on_prompt_submitted(&self);
     async fn apply_actions(
         &self,
         stream_id: &ResponseStreamId,
@@ -711,6 +713,7 @@ impl TurnDriver {
         prompt: Vec<ContentBlock>,
     ) -> Result<TurnOutcome> {
         let connection = self.connection.clone();
+        self.host.on_prompt_submitted().await;
         // Flushing orders our cancel after the prompt, but ACP has no registration acknowledgement.
         let prompt_fut = connection
             .send_sequenced_request::<_, PromptResponse>(
@@ -966,12 +969,14 @@ impl TurnDriver {
         log::info!("Steering the current ACP turn with a follow-up");
         let connection = self.connection.clone();
         let attachments = self.attachments.clone();
+        let host = self.host.clone();
         let session_id = self.session_id.clone();
         let text = prompt.text.clone();
         let prompt_attachments = prompt.attachments.clone();
         Box::pin(
             async move {
                 let prompt = attachments.prompt_content(text, prompt_attachments).await;
+                host.on_prompt_submitted().await;
                 let sent = connection
                     .send_sequenced_request::<_, SteeringResponse>(
                         protocol::METHOD_SESSION_STEERING,

@@ -20,6 +20,70 @@ use crate::agent::action_result::{
     TransferShellCommandControlToUserResult, UploadArtifactResult, UseComputerResult,
     WaitForEventsResult, WriteToLongRunningShellCommandResult,
 };
+use crate::hooks::adapters::cursor::parts::{ToolPart, names_requested_file};
+
+/// The result as one part of the action sees it: for one file of a split read or edit batch,
+/// the entries of the result that are about that file; otherwise the whole result. A result that
+/// is not the per-file kind (an error, a cancellation) is the same for every part.
+pub(super) fn part_result_view(part: &ToolPart<'_>, result: &AIAgentActionResultType) -> Value {
+    match (part, result) {
+        (
+            ToolPart::ReadFile(location),
+            AIAgentActionResultType::ReadFiles(ReadFilesResult::Success {
+                files,
+                failed_files,
+            }),
+        ) => {
+            let files = files
+                .iter()
+                .filter(|file| names_requested_file(&file.file_name, &location.name))
+                .map(file_context_view)
+                .collect::<Vec<_>>();
+            let failed_files = failed_files
+                .iter()
+                .filter(|failed| names_requested_file(&failed.path, &location.name))
+                .collect::<Vec<_>>();
+            json!({
+                "kind": "success",
+                "files": files,
+                "failed_files": serialized("failed_files", &failed_files),
+            })
+        }
+        (
+            ToolPart::EditFile {
+                file: Some(file), ..
+            },
+            AIAgentActionResultType::RequestFileEdits(RequestFileEditsResult::Success {
+                updated_files,
+                deleted_files,
+                ..
+            }),
+        ) => {
+            let updated_files = updated_files
+                .iter()
+                .filter(|updated| names_requested_file(&updated.file_context.file_name, file))
+                .map(|updated| {
+                    json!({
+                        "was_edited_by_user": updated.was_edited_by_user,
+                        "file": file_context_view(&updated.file_context),
+                    })
+                })
+                .collect::<Vec<_>>();
+            let deleted_files = deleted_files
+                .iter()
+                .filter(|deleted| names_requested_file(deleted, file))
+                .collect::<Vec<_>>();
+            json!({
+                "kind": "success",
+                "updated_files": updated_files,
+                "deleted_files": deleted_files,
+            })
+        }
+        (ToolPart::Whole(_) | ToolPart::ReadFile(_) | ToolPart::EditFile { .. }, result) => {
+            result_view(result)
+        }
+    }
+}
 
 /// A JSON object describing a result, tagged with the variant it came from. Binary payloads are
 /// summarized by size; everything else is carried as the result holds it.

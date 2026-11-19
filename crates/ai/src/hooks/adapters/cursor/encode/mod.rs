@@ -14,34 +14,100 @@ use serde::Serialize;
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
-use self::tool_input::tool_input;
-use self::tool_output::result_view;
-use super::events::{CursorEvent, CursorEventSpec};
-use super::facets::{McpCallOutcome, finished_shell_command, mcp_tool_call, pending_shell_command};
-use super::tool_names::tool_name;
+use self::tool_input::{mcp_server_id, part_tool_input};
+use self::tool_output::part_result_view;
+use super::events::{CursorEvent, CursorEventSpec, SUBAGENT_TYPE};
+use super::facets::{
+    McpCallOutcome, finished_shell_command, mcp_tool_call, pending_shell_command, subagent_launch,
+};
+use super::parts::{ToolPart, tool_parts};
 use crate::agent::action_result::{
     AIAgentActionResultType, RequestCommandOutputResult, RunAgentsResult,
 };
-use crate::hooks::model::{HookEnvelope, HookPayload, TurnStopStatus};
+use crate::hooks::adapters::HookInput;
+use crate::hooks::model::{
+    HookEnvelope, HookPayload, PromptAttachmentKind, SubagentExecutionMode, TurnStopStatus,
+};
 
+/// The stdin payloads for one firing of `spec`'s event: one per part of a tool action that
+/// `part_matches` accepts (a Cursor script sees a batched read or edit as one event per file), and
+/// one for every other event. Inputs are labeled by their file only when the action was split.
+pub(super) fn encode_inputs(
+    spec: &CursorEventSpec,
+    envelope: &HookEnvelope,
+    part_matches: impl Fn(&ToolPart<'_>) -> bool,
+) -> Vec<HookInput> {
+    let action = match spec.event {
+        CursorEvent::PreToolUse | CursorEvent::PostToolUse | CursorEvent::PostToolUseFailure => {
+            envelope.payload.action()
+        }
+        CursorEvent::SessionStart
+        | CursorEvent::BeforeShellExecution
+        | CursorEvent::AfterShellExecution
+        | CursorEvent::BeforeMcpExecution
+        | CursorEvent::AfterMcpExecution
+        | CursorEvent::BeforeSubmitPrompt
+        | CursorEvent::Stop
+        | CursorEvent::AfterAgentResponse
+        | CursorEvent::AfterAgentThought
+        | CursorEvent::SessionEnd
+        | CursorEvent::SubagentStart
+        | CursorEvent::SubagentStop
+        | CursorEvent::BeforeReadFile
+        | CursorEvent::AfterFileEdit
+        | CursorEvent::PreCompact
+        | CursorEvent::BeforeTabFileRead
+        | CursorEvent::AfterTabFileEdit
+        | CursorEvent::WorkspaceOpen => None,
+    };
+    let Some(action) = action else {
+        return vec![HookInput::whole(encode_part(spec, envelope, None))];
+    };
+    let parts = tool_parts(action);
+    let split = parts.len() > 1;
+    parts
+        .iter()
+        .filter(|part| part_matches(part))
+        .map(|part| HookInput {
+            label: split.then(|| part.file().map(str::to_owned)).flatten(),
+            payload: encode_part(spec, envelope, Some(part)),
+        })
+        .collect()
+}
+
+/// The one stdin payload for a firing that has one part, which is every firing of an event other
+/// than the generic tool events and every tool event whose action is not split.
+#[cfg(test)]
 pub(super) fn encode_input(spec: &CursorEventSpec, envelope: &HookEnvelope) -> Value {
+    let mut inputs = encode_inputs(spec, envelope, |_| true);
+    assert_eq!(inputs.len(), 1, "{} has one part", spec.name);
+    inputs.remove(0).payload
+}
+
+/// The payload for `spec`'s event, about `part` when the event is one of the generic tool
+/// events (and the envelope carries a tool action).
+fn encode_part(
+    spec: &CursorEventSpec,
+    envelope: &HookEnvelope,
+    part: Option<&ToolPart<'_>>,
+) -> Value {
     let mut input = common_fields(spec, envelope);
     match spec.event {
         CursorEvent::SessionStart => encode_session_start(envelope, &mut input),
-        CursorEvent::PreToolUse => encode_pre_tool_use(envelope, &mut input),
-        CursorEvent::PostToolUse => encode_post_tool_use(envelope, &mut input),
-        CursorEvent::PostToolUseFailure => encode_post_tool_use_failure(envelope, &mut input),
+        CursorEvent::PreToolUse => encode_pre_tool_use(envelope, part, &mut input),
+        CursorEvent::PostToolUse => encode_post_tool_use(envelope, part, &mut input),
+        CursorEvent::PostToolUseFailure => encode_post_tool_use_failure(envelope, part, &mut input),
         CursorEvent::BeforeShellExecution => encode_before_shell_execution(envelope, &mut input),
         CursorEvent::AfterShellExecution => encode_after_shell_execution(envelope, &mut input),
         CursorEvent::BeforeMcpExecution => encode_before_mcp_execution(envelope, &mut input),
         CursorEvent::AfterMcpExecution => encode_after_mcp_execution(envelope, &mut input),
         CursorEvent::BeforeSubmitPrompt => encode_before_submit_prompt(envelope, &mut input),
+        CursorEvent::SubagentStart => encode_subagent_start(envelope, &mut input),
         CursorEvent::Stop => encode_stop(envelope, &mut input),
         CursorEvent::AfterAgentResponse => encode_after_agent_response(envelope, &mut input),
         CursorEvent::AfterAgentThought => encode_after_agent_thought(envelope, &mut input),
         // Warp does not fire these yet, so there is no payload to encode.
         CursorEvent::SessionEnd
-        | CursorEvent::SubagentStart
         | CursorEvent::SubagentStop
         | CursorEvent::BeforeReadFile
         | CursorEvent::AfterFileEdit
@@ -118,6 +184,23 @@ fn insert_duration_ms(key: &str, duration: Option<Duration>, input: &mut Map<Str
     }
 }
 
+/// The generic tool events' fields for one part of the action: Cursor's `tool_name` and
+/// `tool_input`, plus the MCP server for an MCP action, named beside the input as the MCP events
+/// name it.
+fn insert_tool_fields(
+    part: &ToolPart<'_>,
+    envelope: &HookEnvelope,
+    input: &mut Map<String, Value>,
+) {
+    input.insert("tool_name".to_owned(), json!(part.tool_name()));
+    input.insert("tool_input".to_owned(), part_tool_input(part, envelope));
+    if let ToolPart::Whole(action) = part
+        && let Some(server_id) = mcp_server_id(action)
+    {
+        input.insert("mcp_server_id".to_owned(), json!(server_id.to_string()));
+    }
+}
+
 fn encode_session_start(envelope: &HookEnvelope, input: &mut Map<String, Value>) {
     let HookPayload::SessionStart {
         is_background_agent,
@@ -135,48 +218,61 @@ fn encode_session_start(envelope: &HookEnvelope, input: &mut Map<String, Value>)
     input.insert("composer_mode".to_owned(), json!("agent"));
 }
 
-fn encode_pre_tool_use(envelope: &HookEnvelope, input: &mut Map<String, Value>) {
-    let HookPayload::ToolPre { action } = &envelope.payload else {
+fn encode_pre_tool_use(
+    envelope: &HookEnvelope,
+    part: Option<&ToolPart<'_>>,
+    input: &mut Map<String, Value>,
+) {
+    let (HookPayload::ToolPre { .. }, Some(part)) = (&envelope.payload, part) else {
         return;
     };
-    input.insert("tool_name".to_owned(), json!(tool_name(action)));
-    input.insert("tool_input".to_owned(), tool_input(action, envelope));
+    insert_tool_fields(part, envelope, input);
     insert_tool_use_id(envelope, input);
     insert_cwd(envelope, input);
 }
 
-fn encode_post_tool_use(envelope: &HookEnvelope, input: &mut Map<String, Value>) {
-    let HookPayload::ToolResult {
-        action,
-        result,
-        duration,
-    } = &envelope.payload
+fn encode_post_tool_use(
+    envelope: &HookEnvelope,
+    part: Option<&ToolPart<'_>>,
+    input: &mut Map<String, Value>,
+) {
+    let (
+        HookPayload::ToolResult {
+            result, duration, ..
+        },
+        Some(part),
+    ) = (&envelope.payload, part)
     else {
         return;
     };
-    input.insert("tool_name".to_owned(), json!(tool_name(action)));
-    input.insert("tool_input".to_owned(), tool_input(action, envelope));
+    insert_tool_fields(part, envelope, input);
     input.insert(
         "tool_output".to_owned(),
-        json!(result_view(result).to_string()),
+        json!(part_result_view(part, result).to_string()),
     );
     insert_tool_use_id(envelope, input);
     insert_cwd(envelope, input);
     insert_duration_ms("duration", *duration, input);
 }
 
-fn encode_post_tool_use_failure(envelope: &HookEnvelope, input: &mut Map<String, Value>) {
-    let HookPayload::ToolFailure {
-        action,
-        result,
-        cancellation_reason,
-        duration,
-    } = &envelope.payload
+fn encode_post_tool_use_failure(
+    envelope: &HookEnvelope,
+    part: Option<&ToolPart<'_>>,
+    input: &mut Map<String, Value>,
+) {
+    let (
+        HookPayload::ToolFailure {
+            result,
+            cancellation_reason,
+            duration,
+            ..
+        },
+        Some(part),
+    ) = (&envelope.payload, part)
     else {
         return;
     };
-    input.insert("tool_name".to_owned(), json!(tool_name(action)));
-    input.insert("tool_input".to_owned(), tool_input(action, envelope));
+    insert_tool_fields(part, envelope, input);
     insert_tool_use_id(envelope, input);
     insert_cwd(envelope, input);
     input.insert("error_message".to_owned(), json!(result.to_string()));
@@ -273,18 +369,58 @@ fn insert_mcp_call_fields(
 fn encode_before_submit_prompt(envelope: &HookEnvelope, input: &mut Map<String, Value>) {
     let HookPayload::PromptSubmit {
         text,
-        attachments_summary,
+        attachments,
         provenance: _,
     } = &envelope.payload
     else {
         return;
     };
     input.insert("prompt".to_owned(), json!(text));
-    let attachments = attachments_summary
+    let attachments = attachments
         .iter()
-        .map(|path| json!({ "type": "file", "file_path": path }))
+        .map(|attachment| {
+            let kind = match attachment.kind {
+                PromptAttachmentKind::File => "file",
+                PromptAttachmentKind::Rule => "rule",
+            };
+            json!({ "type": kind, "file_path": attachment.path.to_string_lossy() })
+        })
         .collect::<Vec<_>>();
     input.insert("attachments".to_owned(), Value::Array(attachments));
+}
+
+/// Cursor's fields for a subagent about to start, plus Warp's own: the child's name, its harness,
+/// and whether it runs here or as a cloud run. `git_branch` is left out because Warp makes no
+/// branch for a child at launch.
+fn encode_subagent_start(envelope: &HookEnvelope, input: &mut Map<String, Value>) {
+    let Some(launch) = subagent_launch(&envelope.payload) else {
+        return;
+    };
+    input.insert(
+        "subagent_id".to_owned(),
+        json!(launch.subagent_id.to_string()),
+    );
+    input.insert("subagent_type".to_owned(), json!(SUBAGENT_TYPE));
+    input.insert("task".to_owned(), json!(launch.task));
+    input.insert(
+        "parent_conversation_id".to_owned(),
+        json!(envelope.conversation_id.to_string()),
+    );
+    if let Some(action_id) = &envelope.action_id {
+        input.insert("tool_call_id".to_owned(), json!(action_id.to_string()));
+    }
+    insert_some(input, "subagent_model", launch.model_id.as_deref());
+    input.insert(
+        "is_parallel_worker".to_owned(),
+        json!(launch.is_parallel_worker),
+    );
+    input.insert("subagent_name".to_owned(), json!(launch.name));
+    input.insert("harness".to_owned(), json!(launch.harness));
+    let execution_mode = match launch.execution_mode {
+        SubagentExecutionMode::Local => "local",
+        SubagentExecutionMode::Remote => "remote",
+    };
+    input.insert("execution_mode".to_owned(), json!(execution_mode));
 }
 
 fn encode_stop(envelope: &HookEnvelope, input: &mut Map<String, Value>) {
@@ -327,6 +463,7 @@ fn payload_duration(payload: &HookPayload) -> Option<Duration> {
         HookPayload::ToolPre { .. }
         | HookPayload::SessionStart { .. }
         | HookPayload::PromptSubmit { .. }
+        | HookPayload::SubagentStart { .. }
         | HookPayload::TurnStop { .. }
         | HookPayload::ResponseComplete { .. }
         | HookPayload::ReasoningComplete { .. } => None,
