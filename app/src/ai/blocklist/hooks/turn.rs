@@ -57,6 +57,10 @@ use crate::terminal::model::session::active_session::ActiveSession;
 
 /// How much longer than its hooks' timeout a run exit waits for an ended turn's stop, which
 /// covers the time between the status change and the dispatch's start.
+#[cfg_attr(
+    target_family = "wasm",
+    allow(dead_code, reason = "run exit waiting is unavailable in WASM builds")
+)]
 const ENDED_TURN_STOP_EXIT_GRACE: Duration = Duration::from_secs(5);
 
 /// A turn whose success is waiting on its stop hooks.
@@ -81,10 +85,18 @@ struct EndedTurnStop {
     /// Present until the dispatch starts.
     pending: Option<PendingTurnStop>,
     /// The dispatch's bound, kept for [`ended_turn_stops_settled`] once `pending` is taken.
+    #[cfg_attr(
+        target_family = "wasm",
+        allow(dead_code, reason = "run exit waiting is unavailable in WASM builds")
+    )]
     timeout: Duration,
     /// Settles [`Self::done`] when dropped, which happens once the dispatch is over or the stop
     /// is forgotten before it started.
     finished: Option<oneshot::Sender<()>>,
+    #[cfg_attr(
+        target_family = "wasm",
+        allow(dead_code, reason = "run exit waiting is unavailable in WASM builds")
+    )]
     done: Shared<BoxFuture<'static, ()>>,
 }
 
@@ -474,6 +486,10 @@ pub(crate) fn finish_ended_turn_stop(
 /// to start or running has finished, or `None` when there is none. The wait is bounded by the
 /// stops' timeouts plus [`ENDED_TURN_STOP_EXIT_GRACE`], so a run exit that waits on it cannot
 /// hang on a stop that never starts.
+#[cfg_attr(
+    target_family = "wasm",
+    allow(dead_code, reason = "Oz runs are unavailable in WASM builds")
+)]
 pub(crate) fn ended_turn_stops_settled(
     conversation_id: AIConversationId,
     ctx: &AppContext,
