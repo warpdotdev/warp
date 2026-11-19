@@ -579,7 +579,7 @@ pub struct RunAgentArgs {
     /// Keep the session open for inspection if environment setup fails before an agent turn starts.
     /// Runtime conversation and harness failures exit immediately.
     ///
-    /// Viewer input refreshes the inspection window; starting an agent turn ends it.
+    /// Viewer input refreshes the inspection window. Debug turns hold it open until they settle.
     ///
     /// Deliberately separate from `--idle-on-complete`, which covers the success/blocked/cancelled
     /// lifecycle. Neither flag is a fallback for the other.
