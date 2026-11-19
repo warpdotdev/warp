@@ -982,6 +982,7 @@ type ConversationUsageMetadata {
 
 """Worker type for agent tasks."""
 input CreateAgentTaskInput {
+  localGithubContractVersion: Int
   """
   Optional JSON-serialized agent config snapshot to store on the task.
   
@@ -1006,6 +1007,9 @@ input CreateAgentTaskInput {
 }
 
 type CreateAgentTaskOutput implements Response {
+  githubCredentialMode: GitHubCredentialMode
+  executionId: ID
+  mcpServers: String
   responseContext: ResponseContext!
 
   """The ID of the created task."""
@@ -2935,12 +2939,17 @@ union PopulateMerkleTreeCacheResult = PopulateMerkleTreeCacheOutput | UserFacing
 
 input PrewarmedSandboxConfigInput {
   githubCredentialContractVersion: Int
+  runnerPreparationContractVersion: Int
   sandboxId: ID!
+  supportsAgentHooks: Boolean
+  supportsDeferredRepositories: Boolean
 }
 
 union PrewarmedSandboxConfigResult = PrewarmedSandboxConfiguration | UserFacingError
 
 type PrewarmedSandboxConfiguration {
+  preparationKind: String!
+  runnerPreparationContractVersion: Int
   environmentVariables: [PrewarmedSandboxVariable!]!
   expiresAt: Time!
   fingerprint: String!
@@ -4023,7 +4032,7 @@ type Task {
   """
   Configuration for the active cloud execution. Requires the execution's workload token.
   """
-  executionConfig(executionId: ID!, supportsDeferredRepositories: Boolean = false): ExecutionConfiguration!
+  executionConfig(executionId: ID!, supportsDeferredRepositories: Boolean = false, supportsAgentHooks: Boolean = false): ExecutionConfiguration!
 
   """The ID of the task."""
   taskId: ID!
@@ -4072,6 +4081,7 @@ type TaskGitCredential {
 
 """Input for the taskGitCredentials query."""
 input TaskGitCredentialsInput {
+  localExecutionId: ID
   githubCredentialContractVersion: Int
   """
   Refresh only these providers. Omitted or null refreshes all providers.
@@ -5331,6 +5341,14 @@ type ExecutionSkillSpec {
   spec: String!
 }
 
+type FactoryBranchExecutionConfig {
+  factoryId: ID!
+  branchId: ID!
+  branch: String!
+  sourceSha: String!
+  repositoryUrl: String!
+}
+
 enum ExecutionRepositoryRefType {
   COMMIT_SHA
   BRANCH
@@ -5409,6 +5427,7 @@ type ExecutionConfiguration {
   mcpServersJson: String!
   skills: [ExecutionSkillSpec!]!
   factorySkillDirs: [String!]!
+  factoryBranch: FactoryBranchExecutionConfig
   computerUseEnabled: Boolean!
   computerUseModelId: String
   inferenceProviders: InferenceProviderClientConfigs
@@ -5421,6 +5440,62 @@ type ExecutionConfiguration {
   idleOnCompleteSeconds: Int
   idleOnFailSeconds: Int
   snapshotDisabled: Boolean!
+  """
+  Hook directories the run loads: the agent's entries first, then the
+  factory's, each in declared order. Duplicates are not merged.
+  """
+  agentHookSources: [AgentHookSource!]!
+  """
+  The run's Factory experiment values as a JSON object, or null when it has
+  none.
+  """
+  experimentalJson: String
+}
+
+"""
+The file format of an agent hook directory. It selects how the client reads the
+directory.
+"""
+enum AgentHookFormat {
+  CURSOR
+}
+
+"""The part of the factory configuration that declared an agent hook source."""
+enum AgentHookLevel {
+  FACTORY
+  AGENT
+}
+
+"""
+What a run with no human does after a hook from this source asks for approval.
+The tool call is denied either way.
+"""
+enum AgentHookOnAsk {
+  DENY
+  FAIL_RUN
+}
+
+type AgentHookRepository {
+  forge: CodeForge!
+  owner: String!
+  name: String!
+}
+
+type AgentHookSource {
+  format: AgentHookFormat!
+  """
+  The repository that contains the hook directory, or null when path is an
+  absolute directory on the worker.
+  """
+  repository: AgentHookRepository
+  """
+  A directory relative to the repository root when repository is set;
+  otherwise an absolute directory on the worker.
+  """
+  path: String!
+  level: AgentHookLevel!
+  strict: Boolean!
+  onAsk: AgentHookOnAsk!
 }
 
 enum CodeForge {

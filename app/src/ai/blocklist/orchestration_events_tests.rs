@@ -70,6 +70,22 @@ fn lifecycle_pending_event(
     }
 }
 
+#[test]
+fn waited_on_survives_status_coalescing_and_queue_cap() {
+    let mut queue = vec![lifecycle_pending_event(
+        "wait",
+        "waiter",
+        api::LifecycleEventType::Waiting,
+        0,
+    )];
+    let next = lifecycle_pending_event("working", "waiter", api::LifecycleEventType::InProgress, 0);
+    assert!(coalesce_lifecycle_events(&mut queue, &next).is_empty());
+    queue.push(next);
+    assert_eq!(enforce_lifecycle_queue_cap(&mut queue, 0), vec!["working"]);
+    assert_eq!(queue.len(), 1);
+    assert_eq!(queue[0].event_id, "wait");
+}
+
 fn message_pending_event(event_id: &str) -> PendingEvent {
     PendingEvent {
         event_id: event_id.to_string(),

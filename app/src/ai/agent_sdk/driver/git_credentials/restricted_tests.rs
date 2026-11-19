@@ -569,9 +569,9 @@ fn inherited_github_token_is_cleared_from_child_environment() -> Result<()> {
 }
 
 #[test]
-fn restricted_store_does_not_write_gh_credentials() -> Result<()> {
+fn restricted_store_installs_and_refreshes_bot_gh_credentials() -> Result<()> {
     with_home(
-        "restricted_store_does_not_write_gh_credentials",
+        "restricted_store_installs_and_refreshes_bot_gh_credentials",
         &[],
         |home| {
             let directory = prepare("task")?;
@@ -584,6 +584,11 @@ fn restricted_store_does_not_write_gh_credentials() -> Result<()> {
             );
             assert!(!home.join(".git-credentials").exists());
             assert!(!gh_config_dir(home).join("hosts.yml").exists());
+            let hosts = directory.join("gh/hosts.yml");
+            assert_eq!(
+                fs::read_to_string(&hosts)?,
+                "github.com:\n    oauth_token: installation-test-token\n    git_protocol: https\n    user: test-bot[bot]\n"
+            );
             #[cfg(unix)]
             {
                 assert_eq!(
@@ -593,7 +598,15 @@ fn restricted_store_does_not_write_gh_credentials() -> Result<()> {
                         & 0o777,
                     0o600
                 );
+                assert_eq!(fs::metadata(&hosts)?.permissions().mode() & 0o777, 0o600);
             }
+            let mut refreshed = response();
+            refreshed.credentials[0].token = "refreshed-bot-token".into();
+            apply_refresh(
+                "task",
+                Ok(validate_response(refreshed, now(), Instant::now())?),
+            )?;
+            assert!(fs::read_to_string(hosts)?.contains("oauth_token: refreshed-bot-token"));
             Ok(())
         },
     )
@@ -611,6 +624,7 @@ fn unstructured_failed_refresh_clears_managed_github_store() -> Result<()> {
             let error = TaskGitCredentialsError::Request(anyhow::anyhow!("transient test failure"));
             assert!(apply_refresh("task", Err(error)).is_err());
             assert_eq!(fs::read_to_string(directory.join("credentials"))?, "");
+            assert!(!directory.join("gh/hosts.yml").exists());
             let delay = refresh_delay("task", Instant::now());
             assert!(delay <= Duration::from_secs(60) && delay > Duration::ZERO);
             Ok(())
@@ -632,6 +646,7 @@ fn missing_github_credential_clears_managed_store() -> Result<()> {
             response.credentials.clear();
             apply_refresh("task", Ok(validate_response(response, now(), received_at)?))?;
             assert_eq!(fs::read_to_string(directory.join("credentials"))?, "");
+            assert!(!directory.join("gh/hosts.yml").exists());
             assert_eq!(refresh_delay("task", received_at), Duration::from_secs(60));
             Ok(())
         },
@@ -647,6 +662,7 @@ fn completed_run_cannot_restore_credentials() -> Result<()> {
 
         assert!(apply_refresh("task", Ok(validated_response()?)).is_err());
         assert_eq!(fs::read_to_string(directory.join("credentials"))?, "");
+        assert!(!directory.join("gh/hosts.yml").exists());
         assert_eq!(
             refresh_delay("task", Instant::now()),
             Duration::from_secs(60)

@@ -14,7 +14,7 @@ use crate::LLMId;
 use crate::agent::action::AIAgentActionType;
 use crate::agent::action_result::{AIAgentActionResultType, RequestCommandOutputResult};
 use crate::hooks::adapters::DeclaredBinding;
-use crate::hooks::model::{HookEnvelope, HookPayload};
+use crate::hooks::model::{HookEnvelope, HookPayload, SubagentExecutionMode, SubagentLaunch};
 use crate::hooks::runner::{HookProcessOutcome, ProcessExit};
 use crate::hooks::test_util::{test_envelope, test_source_id};
 
@@ -46,11 +46,12 @@ macro_rules! event_fixture {
 }
 
 /// One fixture per event Warp fires in Phase 1.
-pub(super) static EVENT_FIXTURES: [EventFixture; 12] = [
+pub(super) static EVENT_FIXTURES: [EventFixture; 13] = [
     event_fixture!(SessionStart, "sessionStart"),
     event_fixture!(PreToolUse, "preToolUse"),
     event_fixture!(PostToolUse, "postToolUse"),
     event_fixture!(PostToolUseFailure, "postToolUseFailure"),
+    event_fixture!(SubagentStart, "subagentStart"),
     event_fixture!(BeforeShellExecution, "beforeShellExecution"),
     event_fixture!(AfterShellExecution, "afterShellExecution"),
     event_fixture!(BeforeMcpExecution, "beforeMCPExecution"),
@@ -70,6 +71,7 @@ pub(super) fn event_fixture(event: CursorEvent) -> &'static EventFixture {
 
 pub(super) const FIXTURE_CONVERSATION_ID: &str = "11111111-1111-1111-1111-111111111111";
 pub(super) const FIXTURE_MCP_SERVER_ID: &str = "22222222-2222-2222-2222-222222222222";
+pub(super) const FIXTURE_SUBAGENT_ID: &str = "33333333-3333-3333-3333-333333333333";
 
 pub(super) fn fixture_conversation_id() -> AIConversationId {
     AIConversationId::try_from(FIXTURE_CONVERSATION_ID.to_owned()).expect("a uuid")
@@ -109,6 +111,21 @@ pub(super) fn mcp_action(name: &str, input: serde_json::Value) -> AIAgentActionT
 
 pub(super) fn tool_pre(action: AIAgentActionType) -> HookPayload {
     HookPayload::ToolPre { action }
+}
+
+/// The child the `subagentStart` fixture was written for: a remote Oz child of a two-child batch.
+pub(super) fn subagent_start() -> HookPayload {
+    HookPayload::SubagentStart {
+        launch: SubagentLaunch {
+            subagent_id: Uuid::parse_str(FIXTURE_SUBAGENT_ID).expect("a uuid"),
+            name: "parser-fix".to_owned(),
+            task: "Shared instructions.\n\nFix the failing test in crates/parser.".to_owned(),
+            model_id: Some("claude-opus".to_owned()),
+            harness: "oz".to_owned(),
+            execution_mode: SubagentExecutionMode::Remote,
+            is_parallel_worker: true,
+        },
+    }
 }
 
 pub(super) fn tool_result(
@@ -180,6 +197,7 @@ pub(super) fn outcome(exit: ProcessExit, stdout: &str) -> HookProcessOutcome {
         stdout_truncated: false,
         stderr_tail: String::new(),
         duration: Duration::from_millis(1),
+        queued: Duration::ZERO,
     }
 }
 

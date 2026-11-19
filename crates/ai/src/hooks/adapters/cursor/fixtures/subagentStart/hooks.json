@@ -1,0 +1,1 @@
+{ "version": 1, "hooks": { "subagentStart": [ { "command": "./hooks/subagent-start.sh", "matcher": "generalPurpose", "failClosed": true } ] } }

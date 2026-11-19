@@ -1,0 +1,23 @@
+{
+  "conversation_id": "11111111-1111-1111-1111-111111111111",
+  "generation_id": "11111111-1111-1111-1111-111111111111",
+  "model": "claude-sonnet",
+  "model_id": "claude-sonnet",
+  "model_params": [],
+  "cursor_version": "v0.2026.01.01",
+  "warp_version": "v0.2026.01.01",
+  "workspace_roots": ["/work/repo"],
+  "user_email": "dev@example.com",
+  "transcript_path": null,
+  "hook_event_name": "subagentStart",
+  "subagent_id": "33333333-3333-3333-3333-333333333333",
+  "subagent_type": "generalPurpose",
+  "task": "Shared instructions.\n\nFix the failing test in crates/parser.",
+  "parent_conversation_id": "11111111-1111-1111-1111-111111111111",
+  "tool_call_id": "call_1",
+  "subagent_model": "claude-opus",
+  "is_parallel_worker": true,
+  "subagent_name": "parser-fix",
+  "harness": "oz",
+  "execution_mode": "remote"
+}

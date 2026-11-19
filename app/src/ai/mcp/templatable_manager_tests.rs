@@ -1,5 +1,8 @@
+use std::collections::HashMap;
+
 use futures_util::stream::AbortHandle;
 use mcp::oauth::CallbackResult;
+use mcp::refreshable_headers::RefreshableHeaders;
 use url::Url;
 use uuid::Uuid;
 use warpui::App;
@@ -240,6 +243,14 @@ fn shutdown_ends_ephemeral_reconnect_lifecycle() {
             manager
                 .reconnectable_ephemeral_installations
                 .insert(installation_uuid, installation);
+            manager.refreshable_headers.insert(
+                installation_uuid,
+                RefreshableHeaders::new(
+                    HashMap::from([("Authorization".to_string(), "Bearer token".to_string())]),
+                    None,
+                )
+                .expect("valid headers"),
+            );
             manager.register_reconnect_waiter(installation_uuid, result_tx);
             manager
         });
@@ -259,6 +270,7 @@ fn shutdown_ends_ephemeral_reconnect_lifecycle() {
                     .pending_reconnections
                     .contains_key(&installation_uuid)
             );
+            assert!(!manager.refreshable_headers.contains_key(&installation_uuid));
         });
         let error = result_rx
             .await

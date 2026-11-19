@@ -9,6 +9,7 @@ mod encode;
 mod events;
 mod facets;
 mod matcher;
+mod parts;
 mod sources;
 #[cfg(test)]
 mod test_support;
@@ -18,12 +19,33 @@ use self::config::{ParsedDefinition, parse_cursor_document, parse_cursor_file};
 use self::events::CursorEvent;
 use self::sources::SourceCache;
 use crate::hooks::adapters::{
-    DeclaredBinding, DecodePolicy, HookConfigError, HookFormatAdapter, ParsedHookConfig,
+    DeclaredBinding, DecodePolicy, HookConfigError, HookDirectory, HookFormatAdapter, HookInput,
+    HookSourceLayout, ParsedHookConfig,
 };
 use crate::hooks::model::{
     DiagnosticSeverity, HookDiagnostic, HookEffects, HookEnvelope, HookFormat, HookSourceId,
 };
 use crate::hooks::runner::HookProcessOutcome;
+
+const HOOKS_FILE_NAME: &str = "hooks.json";
+
+/// Cursor runs project hooks from the project root, so a repository's unchanged `.cursor`
+/// directory, whose commands look like `.cursor/hooks/check.sh`, works as written. Hooks outside a
+/// project run from their own directory.
+pub(crate) fn source_layout(directory: &HookDirectory) -> HookSourceLayout {
+    match directory {
+        HookDirectory::Repository { root, directory } => HookSourceLayout {
+            config_file: directory.join(HOOKS_FILE_NAME),
+            working_directory: root.clone(),
+            project_dir: Some(root.clone()),
+        },
+        HookDirectory::Worker { directory } => HookSourceLayout {
+            config_file: directory.join(HOOKS_FILE_NAME),
+            working_directory: directory.clone(),
+            project_dir: None,
+        },
+    }
+}
 
 #[derive(Default)]
 pub struct CursorAdapter {
@@ -116,14 +138,14 @@ impl HookFormatAdapter for CursorAdapter {
         })
     }
 
-    fn encode_input(
-        &self,
-        binding: &DeclaredBinding,
-        envelope: &HookEnvelope,
-    ) -> serde_json::Value {
+    fn encode_inputs(&self, binding: &DeclaredBinding, envelope: &HookEnvelope) -> Vec<HookInput> {
         match event_of(binding) {
-            Some(event) => encode::encode_input(event.spec(), envelope),
-            None => serde_json::Value::Object(serde_json::Map::new()),
+            Some(event) => encode::encode_inputs(event.spec(), envelope, |part| {
+                matcher::part_matches(&self.sources, binding, part)
+            }),
+            None => vec![HookInput::whole(serde_json::Value::Object(
+                serde_json::Map::new(),
+            ))],
         }
     }
 

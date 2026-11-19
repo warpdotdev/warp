@@ -389,6 +389,13 @@ enum FamilyEvent {
 /// become [`FamilyEvent::ParentSelf`]; everything else is
 /// [`FamilyEvent::Opaque`].
 fn classify_family_event(event: &AgentRunEvent, self_run_id: &str) -> FamilyEvent {
+    if event.kind == AgentRunEventKind::WaitedOn {
+        return if event.waited_on_by(self_run_id).is_some() {
+            FamilyEvent::ParentSelf(event.clone())
+        } else {
+            FamilyEvent::Opaque
+        };
+    }
     let is_self = event.run_id == self_run_id;
     match (is_self, &event.kind) {
         (true, AgentRunEventKind::ChildAgentStarted) => match event.ref_id.as_deref() {
@@ -2642,10 +2649,11 @@ impl OrchestrationEventStreamer {
             let Some(lifecycle_type) = event.kind.lifecycle_type() else {
                 continue;
             };
+            let status = conversation_status_from_lifecycle_event_type(lifecycle_type);
             ctx.emit(OrchestrationEventStreamerEvent::WatchedRunStatusChanged {
                 owner_conversation_id: conversation_id,
                 run_id: event.run_id.clone(),
-                status: conversation_status_from_lifecycle_event_type(lifecycle_type),
+                status,
             });
         }
 
@@ -2800,7 +2808,8 @@ pub(super) fn conversation_status_from_lifecycle_event_type(
         // → `InProgress` rule.
         api::LifecycleEventType::InProgress
         | api::LifecycleEventType::Started
-        | api::LifecycleEventType::Restarted => ConversationStatus::InProgress,
+        | api::LifecycleEventType::Restarted
+        | api::LifecycleEventType::Waiting => ConversationStatus::InProgress,
         // Terminals.
         api::LifecycleEventType::Succeeded | api::LifecycleEventType::Idle => {
             ConversationStatus::Success
@@ -2817,17 +2826,22 @@ pub(super) fn conversation_status_from_lifecycle_event_type(
         // Forward-compat catch-all: matches the viewer's
         // `AmbientAgentTaskState::Unknown` → `Error` behaviour.
         api::LifecycleEventType::Unspecified => ConversationStatus::Error,
-        // TODO(seemeroland): Replace this temporary placeholder with a proper
-        // implementation.
-        warp_multi_agent_api::LifecycleEventType::Waiting => ConversationStatus::InProgress,
     }
 }
 
 fn convert_lifecycle_events(events: &[AgentRunEvent], self_run_id: &str) -> Vec<api::AgentEvent> {
     events
         .iter()
-        .filter(|e| e.run_id != self_run_id)
         .filter_map(|event| {
+            // Protocol senders identify the actor, whereas run events belong to the notified run.
+            let sender_run_id = if event.kind == AgentRunEventKind::WaitedOn {
+                event.waited_on_by(self_run_id)?
+            } else {
+                if event.run_id == self_run_id {
+                    return None;
+                }
+                &event.run_id
+            };
             let lifecycle_type = event.kind.lifecycle_type()?;
             let timestamp = parse_occurred_at(&event.occurred_at);
             let detail = match &event.kind {
@@ -2859,12 +2873,12 @@ fn convert_lifecycle_events(events: &[AgentRunEvent], self_run_id: &str) -> Vec<
                 | AgentRunEventKind::NewMessage
                 | AgentRunEventKind::ChildAgentStarted
                 | AgentRunEventKind::RunSessionLinked
+                | AgentRunEventKind::WaitedOn
                 | AgentRunEventKind::Unknown => LifecycleEventDetailPayload::default(),
             };
-            let event_id = Uuid::new_v4().to_string();
             Some(build_lifecycle_event(
-                event_id,
-                event.run_id.clone(),
+                Uuid::new_v4().to_string(),
+                sender_run_id.to_string(),
                 lifecycle_type,
                 timestamp,
                 &detail,

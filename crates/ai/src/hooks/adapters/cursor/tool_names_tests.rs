@@ -1,10 +1,14 @@
+use std::path::PathBuf;
+
 use serde_json::json;
 use warp_terminal::model::BlockId;
+use warp_util::local_or_remote_path::LocalOrRemotePath;
 
 use super::*;
 use crate::agent::action::{
     AIAgentPtyWriteMode, AskUserQuestionItem, AskUserQuestionType, ReadFilesRequest,
-    RunAgentsExecutionMode, RunAgentsRequest, SearchCodebaseRequest, UploadArtifactRequest,
+    ReadSkillRequest, RunAgentsExecutionMode, RunAgentsRequest, SearchCodebaseRequest,
+    UploadArtifactRequest,
 };
 use crate::hooks::adapters::cursor::test_support::shell_action;
 
@@ -198,6 +202,20 @@ fn tool_names_follow_cursors_vocabulary() {
                 idle_timeout_seconds: 0,
             },
             "WaitForEvents",
+        ),
+        (
+            AIAgentActionType::ReadSkill(ReadSkillRequest {
+                skill: SkillReference::Path(LocalOrRemotePath::Local(PathBuf::from(
+                    "/work/.agents/skills/deploy/SKILL.md",
+                ))),
+            }),
+            "Read",
+        ),
+        (
+            AIAgentActionType::ReadSkill(ReadSkillRequest {
+                skill: SkillReference::BundledSkillId("create-pr".to_owned()),
+            }),
+            "ReadSkill",
         ),
     ];
     for (action, expected) in cases {

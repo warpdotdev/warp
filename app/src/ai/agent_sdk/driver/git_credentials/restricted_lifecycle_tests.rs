@@ -36,10 +36,33 @@ fn expiry_clears_credentials_while_the_original_operation_remains_pending() -> R
                     fs::read_to_string(directory.join("credentials")).unwrap(),
                     ""
                 );
+                assert!(!directory.join("gh/hosts.yml").exists());
                 7
             }))?;
             assert_eq!(result, 7);
             assert_eq!(starts.load(Ordering::SeqCst), 1);
+            Ok(())
+        },
+    )
+}
+
+#[test]
+fn gh_write_failure_clears_git_and_reports_failed_gh_cleanup() -> Result<()> {
+    with_home(
+        "lifecycle_tests::gh_write_failure_clears_git_and_reports_failed_gh_cleanup",
+        &[],
+        |_| {
+            let directory = prepare("task")?;
+            apply_refresh("task", Ok(validated_response()?))?;
+            let hosts = directory.join("gh/hosts.yml");
+            fs::remove_file(&hosts)?;
+            fs::create_dir(&hosts)?;
+
+            let error = apply_refresh("task", Ok(validated_response()?)).unwrap_err();
+
+            assert!(is_fatal_cleanup_error(&error));
+            assert_eq!(fs::read_to_string(directory.join("credentials"))?, "");
+            assert!(!directory.join("gh/hosts.yml.tmp").exists());
             Ok(())
         },
     )
@@ -85,7 +108,7 @@ fn bootstrap_retries_only_raw_fetch_with_one_prepared_store() -> Result<()> {
             let client: Arc<dyn AIClient> = Arc::new(client);
             block_on(bootstrap_restricted_credentials("task", &client, true))?;
             assert!(!fs::read_to_string(directory.join("credentials"))?.is_empty());
-            assert!(!directory.join("gh/hosts.yml").exists());
+            assert!(directory.join("gh/hosts.yml").is_file());
             close_restricted_credentials("task")?;
             Ok(())
         },
@@ -142,6 +165,7 @@ fn failed_clearing_is_fatal_and_does_not_discard_expiry() -> Result<()> {
                 error
             )));
             assert_eq!(with_store(&owner, |store| Ok(store.expires_at))?, expiry);
+            assert!(!directory.join("gh/hosts.yml").exists());
             let failed = apply_refresh(&owner, Ok(validated_response()?)).unwrap_err();
             assert!(is_fatal_cleanup_error(&failed));
             assert_eq!(with_store(&owner, |store| Ok(store.expires_at))?, expiry);
@@ -203,8 +227,13 @@ impl Drop for RecordCancellation {
 
 #[async_trait]
 impl PrewarmedSandboxClient for RenewalClient {
-    async fn fetch_configuration(&self, sandbox_id: &str) -> Result<PrewarmedSandboxConfiguration> {
+    async fn fetch_configuration(
+        &self,
+        sandbox_id: &str,
+        supports_deferred_repositories: bool,
+    ) -> Result<PrewarmedSandboxConfiguration> {
         assert_eq!(sandbox_id, "sandbox");
+        assert!(supports_deferred_repositories);
         self.requests.fetch_add(1, Ordering::SeqCst);
         self.started.0.send(()).await?;
         if self.pending {
@@ -216,6 +245,7 @@ impl PrewarmedSandboxClient for RenewalClient {
             credentials[0].token = "renewed-standby-token".into();
             credentials[0].expires_at = Some((Utc::now() + TimeDelta::hours(2)).into());
             return Ok(PrewarmedSandboxConfiguration {
+                runner_preparation: false,
                 sandbox_id: "sandbox".into(),
                 generation: "renewed".into(),
                 github_credential_mode: GitHubCredentialMode::RestrictedInstallation,
@@ -301,6 +331,7 @@ fn actual_standby_renewal_clears_gone_and_cancels_inflight_fetch_before_task_own
                         &client,
                         &owner,
                         Utc::now() + TimeDelta::hours(2),
+                        true,
                         &clock,
                     )
                     .boxed();

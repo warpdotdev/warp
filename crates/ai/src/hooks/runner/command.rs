@@ -2,7 +2,10 @@
 //! comes back on stdout. The runner enforces the invocation's deadline and cancel flag, ends the
 //! hook's whole process tree when the hook is done with a stop request first and a kill after a
 //! grace period, keeps a bounded amount of output, runs at most [`HOOK_MAX_CONCURRENT`] hooks at
-//! once, and writes one log line per invocation.
+//! once, and writes one log line per invocation. An invocation's timeout is a budget for its own
+//! run: the clock starts once it holds a slot, so a large batch of invocations does not split
+//! one budget among all of them, and a wait for a slot ends only when a slot frees or the firing
+//! is cancelled.
 
 use std::ffi::OsString;
 use std::future::Future;
@@ -37,8 +40,8 @@ pub const HOOK_STDOUT_LIMIT: usize = 1024 * 1024;
 /// Most stderr bytes kept from one hook, counted from the end.
 pub const HOOK_STDERR_TAIL: usize = 4096;
 
-/// How many hook processes may run at the same time. Invocations beyond this wait their turn,
-/// and the wait counts against their deadline.
+/// How many hook processes may run at the same time. Invocations beyond this wait their turn;
+/// the wait is not counted against their timeout.
 pub const HOOK_MAX_CONCURRENT: usize = 4;
 
 /// Longest stderr excerpt written to the invocation log line.
@@ -151,8 +154,9 @@ impl HookRunner for CommandHookRunner {
         let permits = self.permits.clone();
         async move {
             let binding = invocation.binding.clone();
+            let label = invocation.label.clone();
             let outcome = run_once(&shell, runner_env, &permits, invocation).await;
-            log_invocation(&binding, &outcome);
+            log_invocation(&binding, label.as_deref(), &outcome);
             outcome
         }
         .boxed()
@@ -161,14 +165,17 @@ impl HookRunner for CommandHookRunner {
 
 /// The one record of an invocation that is always written: how the hook ended and the end of
 /// what it said on stderr, never its input or its stdout.
-fn log_invocation(binding: &HookBindingId, outcome: &HookProcessOutcome) {
+fn log_invocation(binding: &HookBindingId, label: Option<&str>, outcome: &HookProcessOutcome) {
     log::info!(
-        "hook invocation: event={} source={} binding={} exit={:?} duration_ms={} stderr_tail={:?}",
+        "hook invocation: event={} source={} binding={} part={} exit={:?} duration_ms={} \
+         queued_ms={} stderr_tail={:?}",
         binding.event,
         binding.source,
         binding.index,
+        label.unwrap_or("-"),
         outcome.exit,
         outcome.duration.as_millis(),
+        outcome.queued.as_millis(),
         truncate_to_char_boundary(&outcome.stderr_tail, STDERR_TAIL_LOG_LIMIT)
     );
 }
@@ -179,6 +186,37 @@ async fn run_once(
     permits: &Semaphore,
     invocation: HookInvocation,
 ) -> HookProcessOutcome {
+    let queued_at = Instant::now();
+    let not_started = |exit: ProcessExit| HookProcessOutcome {
+        exit,
+        stdout: Vec::new(),
+        stdout_truncated: false,
+        stderr_tail: String::new(),
+        duration: Duration::ZERO,
+        queued: queued_at.elapsed(),
+    };
+
+    if invocation.cancel.load(Ordering::Acquire) {
+        return not_started(ProcessExit::Cancelled);
+    }
+    let mut permit = Box::pin(permits.acquire().fuse());
+    let mut permit_cancelled = Box::pin(cancelled(invocation.cancel.clone()).fuse());
+    let _permit = futures::select_biased! {
+        permit = permit => permit,
+        _ = permit_cancelled => {
+            log::info!(
+                "hook {} did not start: it was cancelled while waiting for one of the \
+                 {HOOK_MAX_CONCURRENT} hook slots",
+                invocation.binding
+            );
+            return not_started(ProcessExit::Cancelled);
+        }
+    };
+    if invocation.cancel.load(Ordering::Acquire) {
+        return not_started(ProcessExit::Cancelled);
+    }
+
+    let queued = queued_at.elapsed();
     let started = Instant::now();
     let deadline = started + invocation.timeout;
     let finish = |exit: ProcessExit, captured: Captured| HookProcessOutcome {
@@ -187,37 +225,8 @@ async fn run_once(
         stdout_truncated: captured.stdout_truncated,
         stderr_tail: escape_control(&captured.stderr_tail),
         duration: started.elapsed(),
+        queued,
     };
-
-    if invocation.cancel.load(Ordering::Acquire) {
-        return finish(ProcessExit::Cancelled, Captured::default());
-    }
-    let mut permit = Box::pin(permits.acquire().fuse());
-    let mut permit_deadline = Timer::at(deadline).fuse();
-    let mut permit_cancelled = Box::pin(cancelled(invocation.cancel.clone()).fuse());
-    let permit = futures::select_biased! {
-        permit = permit => Ok(permit),
-        _ = permit_cancelled => Err(Interruption::Cancelled),
-        _ = permit_deadline => Err(Interruption::TimedOut),
-    };
-    let _permit = match permit {
-        Ok(permit) => permit,
-        Err(interrupted) => {
-            let why = match interrupted {
-                Interruption::TimedOut => "its deadline passed",
-                Interruption::Cancelled => "it was cancelled",
-            };
-            log::warn!(
-                "hook {} did not start: {why} while waiting for one of the \
-                 {HOOK_MAX_CONCURRENT} hook slots",
-                invocation.binding
-            );
-            return finish(interrupted.into_exit(), Captured::default());
-        }
-    };
-    if invocation.cancel.load(Ordering::Acquire) {
-        return finish(ProcessExit::Cancelled, Captured::default());
-    }
 
     let mut command = shell.invoke(&invocation.command);
     command

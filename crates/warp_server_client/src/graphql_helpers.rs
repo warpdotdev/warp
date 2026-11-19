@@ -18,6 +18,22 @@ use crate::base_client::{
 /// that classify failures match on it, since no [`GraphQLError`] is left in the chain.
 pub const AUTH_REJECTED_MESSAGE: &str = "server rejected authentication credentials";
 
+/// Whether `error` is the server rejecting the credentials a request was sent with: the plain
+/// [`AUTH_REJECTED_MESSAGE`] error, or the 401 or 403 itself when the client may refresh them.
+pub fn is_auth_rejection(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause.to_string() == AUTH_REJECTED_MESSAGE
+            || matches!(
+                cause.downcast_ref::<GraphQLError>(),
+                Some(GraphQLError::HttpError { status, .. }) if is_auth_rejection_status(*status)
+            )
+    })
+}
+
+fn is_auth_rejection_status(status: StatusCode) -> bool {
+    matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN)
+}
+
 /// Sends a GraphQL operation through a base client supplied by the application.
 ///
 /// This function is deliberately generic so concrete endpoint operation
@@ -106,16 +122,14 @@ where
             anyhow::bail!(GraphQLError::IapChallengeBlocked);
         }
         Err(err) => {
-            let is_auth_rejection = match &err {
-                GraphQLError::HttpError { status, .. } => {
-                    *status == StatusCode::UNAUTHORIZED || *status == StatusCode::FORBIDDEN
-                }
+            let auth_rejected = match &err {
+                GraphQLError::HttpError { status, .. } => is_auth_rejection_status(*status),
                 GraphQLError::RequestError(_)
                 | GraphQLError::StagingAccessBlocked
                 | GraphQLError::IapChallengeBlocked
                 | GraphQLError::ResponseError(_) => false,
             };
-            if !base_client.is_auth_refresh_allowed() && is_auth_rejection {
+            if !base_client.is_auth_refresh_allowed() && auth_rejected {
                 anyhow::bail!(AUTH_REJECTED_MESSAGE);
             }
             anyhow::bail!(err);

@@ -29,12 +29,12 @@ use std::any::Any;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 
-use ai::agent::action_result::{InsertReviewCommentsResult, RequestCommandOutputResult};
-use ai::hooks::{
-    HookNotice, HookNoticeKind, HookPermissionPolicy, PermissionDecision, PermissionFloors,
-    WarpPermissionResult,
+use ai::agent::action_result::{
+    InsertReviewCommentsResult, RequestCommandOutputResult, RunAgentsResult,
 };
+use ai::hooks::{PermissionDecision, PermissionFloors, WarpPermissionResult};
 pub use ask_user_question::AskUserQuestionExecutor;
 use call_mcp_tool::CallMCPToolExecutor;
 pub(crate) use call_mcp_tool::coerce_integer_args;
@@ -47,6 +47,7 @@ use futures::AsyncReadExt;
 use futures::FutureExt;
 use futures::future::BoxFuture;
 use grep::GrepExecutor;
+use instant::Instant;
 #[cfg(feature = "local_fs")]
 use mime_guess::from_path;
 use parking_lot::FairMutex;
@@ -99,7 +100,7 @@ use crate::ai::agent::{
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::action_model::recording_controller::RecordingController;
 use crate::ai::blocklist::hooks::pre_tool::{self, PendingDispatch, PreToolLookup};
-use crate::ai::blocklist::hooks::{HookRuntime, tool_result};
+use crate::ai::blocklist::hooks::tool_result;
 use crate::ai::blocklist::telemetry::send_run_agents_completed_telemetry;
 use crate::ai::get_relevant_files::controller::GetRelevantFilesController;
 #[cfg(feature = "local_fs")]
@@ -242,6 +243,9 @@ struct AsyncExecutingAction {
     /// The conversation this action belongs to so cancellation and follow-up scheduling remain
     /// scoped even when several conversations have async actions in flight.
     conversation_id: AIConversationId,
+    /// When the executor started the action, after every check and confirmation, so hooks can
+    /// be told how long the tool itself ran.
+    started: Instant,
 }
 
 impl AsyncExecutingAction {
@@ -291,6 +295,7 @@ pub struct BlocklistAIActionExecutor {
     team_context_resolver: TeamContextResolver,
     /// The session actions run in, used to describe their working directory to hooks.
     active_session: ModelHandle<ActiveSession>,
+    terminal_view_id: EntityId,
 }
 
 impl BlocklistAIActionExecutor {
@@ -354,6 +359,7 @@ impl BlocklistAIActionExecutor {
         let run_agents_executor = ctx.add_model(|_| {
             RunAgentsExecutor::new(
                 start_agent_executor.clone(),
+                active_session.clone(),
                 terminal_view_id,
                 team_context_resolver_for_run_agents,
             )
@@ -386,6 +392,7 @@ impl BlocklistAIActionExecutor {
             terminal_model,
             team_context_resolver,
             active_session,
+            terminal_view_id,
             read_skill_executor,
             fetch_conversation_executor,
             start_agent_executor,
@@ -650,30 +657,47 @@ impl BlocklistAIActionExecutor {
         let is_autonomous_shell_exception =
             is_agent_autonomous && action.action.is_request_command_output();
 
-        // A hook denial ends the action here. The policy's other outcomes are exactly the checks
-        // below, so they fall through to them.
-        if let Some(merged) = hook_effects
-            && let PermissionDecision::Deny { reason, .. } = HookPermissionPolicy::compose(
+        // A hook denial ends the action here and a hook's request for confirmation holds it;
+        // execution falls through to the checks below, which are what the policy started from.
+        if let Some(merged) = hook_effects {
+            let floors = self.permission_floors(input, can_auto_execute, ctx);
+            let decision = pre_tool::decide(
                 &merged,
                 WarpPermissionResult {
                     can_auto_execute,
                     is_user_initiated,
                     is_autonomous_shell_exception,
                 },
-                &PermissionFloors::default(),
-            )
-        {
-            let result = AIAgentActionResultType::DeniedByHook {
-                reason: reason.text.clone(),
-            };
-            HookRuntime::as_ref(ctx).messenger().notify(HookNotice {
+                floors,
+                &action,
                 conversation_id,
-                action_id: Some(action.id.clone()),
-                kind: HookNoticeKind::Denied,
-                text: reason.text,
-            });
-            self.finish_sync(action, result, conversation_id, ctx);
-            return TryExecuteResult::ExecutedSync;
+                ctx,
+            );
+            match decision {
+                PermissionDecision::Deny { reason, .. } => {
+                    // Run-agents telemetry counts a hook denial as a declined launch.
+                    send_run_agents_completed_telemetry(
+                        conversation_id,
+                        &action.action,
+                        &AIAgentActionResultType::RunAgents(RunAgentsResult::Denied {
+                            reason: reason.text.clone(),
+                        }),
+                        ctx,
+                    );
+                    let result = AIAgentActionResultType::DeniedByHook {
+                        reason: reason.text,
+                    };
+                    self.finish_sync(action, result, conversation_id, ctx);
+                    return TryExecuteResult::ExecutedSync;
+                }
+                PermissionDecision::RequireConfirmation { .. } => {
+                    return TryExecuteResult::NotExecuted {
+                        action: Box::new(action),
+                        reason: NotExecutedReason::NeedsConfirmation,
+                    };
+                }
+                PermissionDecision::Execute => {}
+            }
         }
 
         // The agent cannot auto execute and either:
@@ -856,6 +880,7 @@ impl BlocklistAIActionExecutor {
                     AsyncExecutingAction {
                         action: action_clone,
                         conversation_id,
+                        started: Instant::now(),
                     },
                 );
                 ctx.emit(BlocklistAIActionExecutorEvent::ExecutingAction {
@@ -870,6 +895,7 @@ impl BlocklistAIActionExecutor {
                         &running.action,
                         &result,
                         None,
+                        Some(running.started.elapsed()),
                         running.conversation_id,
                         &me.active_session,
                         ctx,
@@ -905,6 +931,7 @@ impl BlocklistAIActionExecutor {
             &action,
             &result,
             None,
+            Some(Duration::ZERO),
             conversation_id,
             &self.active_session,
             ctx,
@@ -1008,6 +1035,7 @@ impl BlocklistAIActionExecutor {
                 &running.action,
                 &result,
                 reason,
+                Some(running.started.elapsed()),
                 running.conversation_id,
                 &self.active_session,
                 ctx,
@@ -1062,6 +1090,25 @@ impl BlocklistAIActionExecutor {
         for action_id in action_ids {
             self.cancel_running_async_action(&action_id, reason, ctx);
         }
+    }
+
+    /// The facts behind Warp's own permission answer for `input` that no hook may loosen.
+    fn permission_floors(
+        &self,
+        input: ExecuteActionInput,
+        can_auto_execute: bool,
+        ctx: &ModelContext<Self>,
+    ) -> PermissionFloors {
+        let scope = (self.team_context_resolver)(ctx);
+        pre_tool::permission_floors(
+            &input.action.action,
+            &input.conversation_id,
+            can_auto_execute,
+            &self.active_session,
+            self.terminal_view_id,
+            &scope,
+            ctx,
+        )
     }
 
     fn should_autoexecute(&self, input: ExecuteActionInput, ctx: &mut ModelContext<Self>) -> bool {

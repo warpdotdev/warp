@@ -3,14 +3,14 @@ pub mod command;
 pub mod env;
 
 use std::ffi::OsString;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use futures::future::BoxFuture;
 
-use crate::hooks::model::{HookBindingId, HookSourceId, HookSourceKind, HookSourceLocation};
+use crate::hooks::model::HookBindingId;
 
 /// Returns the login shell's PATH so hook processes can find user-installed tools, or `None` when
 /// the PATH has not been captured yet and the runner should fall back to its own process PATH.
@@ -20,6 +20,9 @@ pub type PathCapture = Arc<dyn Fn() -> Option<OsString> + Send + Sync>;
 #[derive(Debug, Clone)]
 pub struct HookInvocation {
     pub binding: HookBindingId,
+    /// The part of the operation this run is for, when the firing was split into several runs
+    /// of the binding.
+    pub label: Option<String>,
     pub command: String,
     pub cwd: PathBuf,
     pub env: Vec<(OsString, OsString)>,
@@ -51,34 +54,11 @@ pub struct HookProcessOutcome {
     pub stdout_truncated: bool,
     /// The end of stderr, bounded so it can be logged safely.
     pub stderr_tail: String,
+    /// How long the hook ran, from the moment it was started. Time spent waiting for one of the
+    /// runner's slots is not included; see `queued`.
     pub duration: Duration,
-}
-
-/// The directory a hook from `source` runs in, and therefore the one a relative command resolves
-/// against: the project root for a project file, the directory that holds the file for a
-/// run-delivered or factory source. `None` when neither is known; such a binding must not
-/// activate, because the runner never falls back to its own working directory.
-pub fn working_directory_for(
-    source: &HookSourceId,
-    project_root: Option<&Path>,
-) -> Option<PathBuf> {
-    let declaring_dir = match &source.location {
-        HookSourceLocation::CanonicalPath(path) => path.parent().map(Path::to_path_buf),
-        HookSourceLocation::Named(_) => None,
-    };
-    match source.kind {
-        HookSourceKind::ProjectCursorFile => project_root.map(Path::to_path_buf).or_else(|| {
-            // A project file lives at `<root>/.cursor/hooks.json`, so the root is the parent of
-            // the directory that holds it.
-            declaring_dir
-                .as_deref()
-                .and_then(Path::parent)
-                .map(Path::to_path_buf)
-        }),
-        HookSourceKind::RunDelivered
-        | HookSourceKind::FactoryAgent
-        | HookSourceKind::FactoryWide => declaring_dir,
-    }
+    /// How long the invocation waited for a slot before it was started.
+    pub queued: Duration,
 }
 
 /// Runs hook processes. Implementations own spawning, deadlines, output limits, and cleanup.
@@ -102,10 +82,7 @@ impl HookRunner for UnavailableRunner {
             stdout_truncated: false,
             stderr_tail: String::new(),
             duration: Duration::ZERO,
+            queued: Duration::ZERO,
         }))
     }
 }
-
-#[cfg(test)]
-#[path = "mod_tests.rs"]
-mod tests;

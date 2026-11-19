@@ -10,16 +10,22 @@ use crate::hooks::model::{HOOK_PROTOCOL_VERSION, HookFormat};
 
 /// Variables Warp's own process may carry that a hook must not inherit: every Warp-owned
 /// credential Warp reads from its own environment (the CLI API key, the workload token a cloud
-/// run uses to fetch its secrets and git-host credentials, and the tracing token), and the session
-/// identity and shell-bootstrap switches an enclosing Warp terminal exports to the shells it
-/// starts (present when Warp itself was launched from inside a Warp tab). A Warp-owned credential
-/// Warp learns to read from its environment belongs here; third-party keys a worker injected
+/// run uses to fetch its secrets and git-host credentials, and the tracing token); the credentials
+/// the server puts in a cloud agent's launch environment (a staging access token, the factory
+/// definition repository's clone URL, which can embed a token, and the GitHub token issued for the
+/// agent), because a factory's hooks get none of the run's credentials; and the session identity
+/// and shell-bootstrap switches an enclosing Warp terminal exports to the shells it starts
+/// (present when Warp itself was launched from inside a Warp tab). A Warp-owned credential Warp
+/// learns to read from its environment belongs here; third-party keys a worker injected
 /// (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`) pass through, as they do to the agent's own shell.
 pub const HOST_SCRUB_LIST: &[&str] = &[
     "WARP_API_KEY",
     "WARP_WORKLOAD_TOKEN",
     "WARP_CLOUD_AGENT_OTLP_TOKEN",
     "WARP_CLOUD_AGENT_OTLP_TOKEN_EXPIRES_AT",
+    "WARP_STAGING_IAP_BOOTSTRAP_JWT",
+    "WARP_FACTORY_REPO_CLONE_URL",
+    "GITHUB_PERSONAL_ACCESS_TOKEN",
     "WARP_IS_LOCAL_SHELL_SESSION",
     "WARP_HONOR_PS1",
     "WARP_USE_SSH_WRAPPER",

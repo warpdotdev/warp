@@ -134,6 +134,13 @@ fn the_host_environment_is_kept_except_for_the_scrub_list_and_prefixes() {
             "WARP_CLOUD_AGENT_OTLP_TOKEN_EXPIRES_AT",
             "2026-10-21T00:00:00Z",
         ),
+        var("WARP_STAGING_IAP_BOOTSTRAP_JWT", "secret"),
+        var(
+            "WARP_FACTORY_REPO_CLONE_URL",
+            "https://x-access-token:secret@github.com/acme/factory.git",
+        ),
+        var("GITHUB_PERSONAL_ACCESS_TOKEN", "secret"),
+        var("ANTHROPIC_API_KEY", "third-party"),
         var("WARP_IS_LOCAL_SHELL_SESSION", "1"),
         var("WARP_HONOR_PS1", "0"),
         var("WARP_TERMINAL_SESSION_UUID", "abc"),
@@ -154,6 +161,9 @@ fn the_host_environment_is_kept_except_for_the_scrub_list_and_prefixes() {
         "WARP_WORKLOAD_TOKEN",
         "WARP_CLOUD_AGENT_OTLP_TOKEN",
         "WARP_CLOUD_AGENT_OTLP_TOKEN_EXPIRES_AT",
+        "WARP_STAGING_IAP_BOOTSTRAP_JWT",
+        "WARP_FACTORY_REPO_CLONE_URL",
+        "GITHUB_PERSONAL_ACCESS_TOKEN",
     ] {
         assert!(
             HOST_SCRUB_LIST.contains(&credential),
@@ -169,6 +179,10 @@ fn the_host_environment_is_kept_except_for_the_scrub_list_and_prefixes() {
     assert_eq!(
         value_of(&variables, "WARP_SERVER_ROOT_URL"),
         Some("https://example.test")
+    );
+    assert_eq!(
+        value_of(&variables, "ANTHROPIC_API_KEY"),
+        Some("third-party")
     );
 }
 
@@ -347,6 +361,7 @@ mod subprocess {
         let session_env = session(&[("FROM_SESSION", "yes"), ("WARP_PROJECT_DIR", "/hijacked")]);
         let outcome = block_on(runner.run(HookInvocation {
             binding: test_binding_id(test_source_id("hooks.json"), "sessionStart", 0),
+            label: None,
             command: "./env.sh".to_owned(),
             cwd: dir.path().to_path_buf(),
             env: invocation_environment(&cursor_hook(), &session_env),

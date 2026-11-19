@@ -1,9 +1,11 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use futures::executor::block_on;
 
 use super::*;
+use crate::agent::action::{AIAgentActionType, FileEdit};
 use crate::hooks::adapters::adapter_for;
 use crate::hooks::adapters::cursor::events::CursorEvent;
 use crate::hooks::adapters::cursor::test_support::{
@@ -12,7 +14,7 @@ use crate::hooks::adapters::cursor::test_support::{
 };
 use crate::hooks::dispatch::HookDispatcher;
 use crate::hooks::model::{HookBoundary, HookVerdict, validate_capabilities};
-use crate::hooks::registry::{BindingScope, RegistrySnapshot};
+use crate::hooks::registry::RegistrySnapshot;
 use crate::hooks::runner::ProcessExit;
 use crate::hooks::test_util::{
     RecordingMessenger, ScriptedRunner, active_binding, test_binding, test_source_id,
@@ -31,11 +33,42 @@ fn the_cursor_adapter_is_registered() {
 }
 
 #[test]
+fn a_repository_hook_directory_runs_from_the_repository_root() {
+    let layout = source_layout(&HookDirectory::Repository {
+        root: PathBuf::from("/work/api"),
+        directory: PathBuf::from("/work/api/.cursor"),
+    });
+    assert_eq!(
+        layout,
+        HookSourceLayout {
+            config_file: PathBuf::from("/work/api/.cursor/hooks.json"),
+            working_directory: PathBuf::from("/work/api"),
+            project_dir: Some(PathBuf::from("/work/api")),
+        }
+    );
+}
+
+#[test]
+fn a_worker_hook_directory_runs_from_itself_with_no_fixed_project() {
+    let layout = source_layout(&HookDirectory::Worker {
+        directory: PathBuf::from("/etc/acme/warp-hooks"),
+    });
+    assert_eq!(
+        layout,
+        HookSourceLayout {
+            config_file: PathBuf::from("/etc/acme/warp-hooks/hooks.json"),
+            working_directory: PathBuf::from("/etc/acme/warp-hooks"),
+            project_dir: None,
+        }
+    );
+}
+
+#[test]
 fn parse_turns_file_warnings_into_diagnostics_on_the_source() {
     let config = parsed(FULL_CONFIG);
     assert_eq!(config.format, HookFormat::Cursor);
     assert_eq!(config.source, test_source_id("hooks.json"));
-    assert_eq!(config.warnings.len(), 11);
+    assert_eq!(config.warnings.len(), 10);
     for warning in &config.warnings {
         assert_eq!(warning.source, config.source);
         assert_eq!(warning.severity, DiagnosticSeverity::Warning);
@@ -100,8 +133,8 @@ fn the_trait_methods_work_end_to_end_for_a_shell_hook() {
     assert!(adapter.matches(binding, &envelope));
     assert!(!adapter.matches(binding, &fixture_envelope(tool_pre(shell_action("ls")))));
     assert_eq!(
-        adapter.encode_input(binding, &envelope),
-        json(fixture.stdin)
+        adapter.encode_inputs(binding, &envelope),
+        vec![HookInput::whole(json(fixture.stdin))]
     );
 
     let effects = adapter.decode_output(
@@ -127,7 +160,10 @@ fn a_binding_declared_under_an_unknown_event_never_fires() {
     binding.vendor_event = "notACursorEvent".to_owned();
     let envelope = fixture_envelope(tool_pre(shell_action("ls")));
     assert!(!adapter.matches(&binding, &envelope));
-    assert_eq!(adapter.encode_input(&binding, &envelope), json("{}"));
+    assert_eq!(
+        adapter.encode_inputs(&binding, &envelope),
+        vec![HookInput::whole(json("{}"))]
+    );
     assert_eq!(
         adapter.decode_output(
             &binding,
@@ -136,6 +172,56 @@ fn a_binding_declared_under_an_unknown_event_never_fires() {
         ),
         HookEffects::default()
     );
+}
+
+#[test]
+fn a_delete_matcher_selects_only_the_delete_part_of_a_mixed_batch() {
+    let adapter = Arc::new(CursorAdapter::new());
+    let config = parsed(
+        r#"{ "version": 1, "hooks": { "preToolUse": [
+            { "command": "./no-deletes.sh", "matcher": "^Delete$" }
+        ] } }"#,
+    );
+    let binding = adapter.bindings(&config).remove(0);
+    let runner = Arc::new(ScriptedRunner::new());
+    runner.script(
+        binding.id.clone(),
+        ScriptedRunner::exit_with(0, r#"{"permission":"deny","agent_message":"no deletes"}"#),
+    );
+    let dispatcher = HookDispatcher::new(runner.clone(), Arc::new(RecordingMessenger::new()));
+    let snapshot = Arc::new(RegistrySnapshot {
+        revision: 1,
+        bindings: vec![active_binding(binding.clone(), adapter.clone())],
+        diagnostics: Vec::new(),
+    });
+    let envelope = fixture_envelope(tool_pre(AIAgentActionType::RequestFileEdits {
+        file_edits: vec![
+            FileEdit::Create {
+                file: Some("new.rs".to_owned()),
+                content: Some(String::new()),
+                allow_overwrite: false,
+            },
+            FileEdit::Delete {
+                file: Some("old.rs".to_owned()),
+            },
+        ],
+        title: None,
+    }));
+    assert!(
+        adapter.matches(&binding, &envelope),
+        "the batch as a whole is a Write, but one of its parts is a Delete"
+    );
+
+    let outcome =
+        block_on(dispatcher.dispatch(envelope, snapshot, false, Arc::new(AtomicBool::new(false))));
+    assert_eq!(outcome.effects.verdict, HookVerdict::Deny);
+    assert_eq!(outcome.effects.reasons[0].text, "old.rs: no deletes");
+    assert_eq!(outcome.invocations.len(), 1, "only the delete part ran");
+    assert_eq!(outcome.invocations[0].label.as_deref(), Some("old.rs"));
+    let stdin: serde_json::Value =
+        serde_json::from_slice(&runner.invocations()[0].stdin).expect("stdin is JSON");
+    assert_eq!(stdin["tool_name"], "Delete");
+    assert_eq!(stdin["tool_input"]["file_path"], "old.rs");
 }
 
 #[test]
@@ -153,11 +239,7 @@ fn an_undocumented_control_field_reaches_the_messenger_as_a_diagnostic() {
     let dispatcher = HookDispatcher::new(runner, messenger.clone());
     let snapshot = Arc::new(RegistrySnapshot {
         revision: 1,
-        bindings: vec![active_binding(
-            binding.clone(),
-            adapter.clone(),
-            BindingScope::Everywhere,
-        )],
+        bindings: vec![active_binding(binding.clone(), adapter.clone())],
         diagnostics: Vec::new(),
     });
     let envelope = fixture_envelope(tool_result(
@@ -167,7 +249,7 @@ fn an_undocumented_control_field_reaches_the_messenger_as_a_diagnostic() {
     ));
 
     let outcome =
-        block_on(dispatcher.dispatch(envelope, snapshot, Arc::new(AtomicBool::new(false))));
+        block_on(dispatcher.dispatch(envelope, snapshot, false, Arc::new(AtomicBool::new(false))));
     assert_eq!(outcome.effects.verdict, HookVerdict::NoOpinion);
     assert_eq!(outcome.effects.unsupported.len(), 1);
 
