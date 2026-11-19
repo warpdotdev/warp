@@ -124,6 +124,7 @@ pub mod update_environment_form;
 mod warp_agent_page;
 mod warp_drive_page;
 mod warpify_page;
+mod worktrees_page;
 
 pub(crate) use admin_actions::AdminActions;
 #[cfg(feature = "tui")]
@@ -324,6 +325,7 @@ pub enum SettingsSection {
     Teams,
     WarpDrive,
     Warpify,
+    Worktrees,
     // ── Agents umbrella subpages ──
     WarpAgent,
     AgentProfiles,
@@ -393,6 +395,7 @@ impl SettingsSection {
             Self::Teams => "Teams",
             Self::WarpDrive => "Warp Drive",
             Self::Warpify => "Warpify",
+            Self::Worktrees => "Worktrees",
             Self::WarpAgent => "Warp Agent",
             Self::AgentProfiles => "Profiles",
             Self::AgentMCPServers => "MCP servers",
@@ -429,6 +432,7 @@ impl SettingsSection {
             "Teams" => Self::Teams,
             "Warp Drive" | "WarpDrive" => Self::WarpDrive,
             "Warpify" => Self::Warpify,
+            "Worktrees" => Self::Worktrees,
             // "Oz" and "AI" are older names for what is now the Warp Agent page.
             "Warp Agent" | "Oz" | "AI" => Self::WarpAgent,
             "Profiles" | "AgentProfiles" => Self::AgentProfiles,
@@ -668,6 +672,9 @@ pub mod flags {
         "AutoOpenRichInputOnCLIAgentStart";
     pub const AUTO_DISMISS_RICH_INPUT_AFTER_SUBMIT_FLAG: &str = "AutoDismissRichInputAfterSubmit";
     pub const ENABLE_WARP_DRIVE: &str = "EnableWarpDrive";
+    pub const WORKTREE_PANEL_VISIBLE: &str = "WorktreePanelVisible";
+    pub const DELETE_WORKTREE_ON_PR_MERGE: &str = "DeleteWorktreeOnPrMerge";
+    pub const FETCH_BEFORE_CREATING_WORKTREE: &str = "FetchBeforeCreatingWorktree";
     // Tools panel settings
     pub const SHOW_CONVERSATION_HISTORY: &str = "ShowConversationHistory";
     pub const SHOW_PROJECT_EXPLORER: &str = "ShowProjectExplorer";
@@ -692,6 +699,7 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
     code_indexing_page::init_actions_from_parent_view(app, context, builder);
     code_editor_review_page::init_actions_from_parent_view(app, context, builder);
     warp_drive_page::init_actions_from_parent_view(app, context, builder);
+    worktrees_page::init_actions_from_parent_view(app, context, builder);
 
     if ChannelState::enable_debug_features() || cfg!(windows) {
         ToggleSettingActionPair::add_toggle_setting_action_pairs_as_bindings(
@@ -1000,6 +1008,7 @@ pub enum SettingsAction {
     CodeIndexing(CodeIndexingPageAction),
     EditorAndCodeReview(EditorAndCodeReviewPageAction),
     WarpDrive(warp_drive_page::WarpDriveSettingsPageAction),
+    Worktrees(worktrees_page::WorktreesPageAction),
     WarpifyPageToggle(WarpifyPageAction),
     Tab,
     Split(Direction),
@@ -1153,6 +1162,7 @@ macro_rules! update_page {
             SettingsPageViewHandle::Privacy(handle) => $ctx.update_view(handle, $update),
             SettingsPageViewHandle::Referrals(handle) => $ctx.update_view(handle, $update),
             SettingsPageViewHandle::Scripting(handle) => $ctx.update_view(handle, $update),
+            SettingsPageViewHandle::Worktrees(handle) => $ctx.update_view(handle, $update),
             SettingsPageViewHandle::WarpAgent(handle) => $ctx.update_view(handle, $update),
             SettingsPageViewHandle::AgentProfiles(handle) => $ctx.update_view(handle, $update),
             SettingsPageViewHandle::Knowledge(handle) => $ctx.update_view(handle, $update),
@@ -1320,6 +1330,11 @@ impl SettingsView {
         ctx.subscribe_to_view(&referrals_page_handle, |me, _, event, ctx| {
             me.handle_referrals_page_event(event, ctx);
         });
+        let worktrees_page_handle = if FeatureFlag::WorktreePanel.is_enabled() {
+            Some(ctx.add_typed_action_view(worktrees_page::WorktreesSettingsPageView::new))
+        } else {
+            None
+        };
         let scripting_page_handle = if FeatureFlag::WarpControlCli.is_enabled() {
             Some(ctx.add_typed_action_view(ScriptingSettingsPageView::new))
         } else {
@@ -1395,6 +1410,9 @@ impl SettingsView {
         if let Some(scripting_page_handle) = scripting_page_handle {
             settings_pages.push(SettingsPage::new(scripting_page_handle));
         }
+        if let Some(worktrees_page_handle) = worktrees_page_handle {
+            settings_pages.push(SettingsPage::new(worktrees_page_handle));
+        }
 
         settings_pages.extend(vec![
             SettingsPage::new(mcp_servers_page_handle),
@@ -1444,6 +1462,19 @@ impl SettingsView {
             SettingsNavItem::Page(SettingsSection::About),
         ];
 
+        if FeatureFlag::WorktreePanel.is_enabled() {
+            let keybindings_index = nav_items
+                .iter()
+                .position(|item| {
+                    matches!(item, SettingsNavItem::Page(SettingsSection::Keybindings))
+                })
+                .map_or(nav_items.len(), |index| index + 1);
+            nav_items.insert(
+                keybindings_index,
+                SettingsNavItem::Page(SettingsSection::Worktrees),
+            );
+        }
+
         if FeatureFlag::WarpControlCli.is_enabled() {
             let shared_blocks_index = nav_items
                 .iter()
@@ -1459,6 +1490,9 @@ impl SettingsView {
 
         let initial_page = match page {
             Some(SettingsSection::Scripting) if !FeatureFlag::WarpControlCli.is_enabled() => {
+                SettingsSection::Account
+            }
+            Some(SettingsSection::Worktrees) if !FeatureFlag::WorktreePanel.is_enabled() => {
                 SettingsSection::Account
             }
             other => other.unwrap_or_default(),
@@ -2126,6 +2160,7 @@ impl SettingsView {
             SettingsPageViewHandle::Warpify(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::Referrals(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::Scripting(v) => v.as_ref(app).should_render(app),
+            SettingsPageViewHandle::Worktrees(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::WarpAgent(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::AgentProfiles(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::Knowledge(v) => v.as_ref(app).should_render(app),
@@ -2821,6 +2856,15 @@ impl TypedActionView for SettingsView {
                 {
                     view.update(ctx, |view, ctx| {
                         view.handle_action(action, ctx);
+                    })
+                }
+            }
+            SettingsAction::Worktrees(worktrees_action) => {
+                if let Some(page) = self.settings_page(SettingsSection::Worktrees)
+                    && let SettingsPageViewHandle::Worktrees(view) = &page.view_handle
+                {
+                    view.update(ctx, |view, ctx| {
+                        view.handle_action(worktrees_action, ctx);
                     })
                 }
             }

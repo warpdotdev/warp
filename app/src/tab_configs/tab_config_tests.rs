@@ -792,8 +792,14 @@ fn test_worktree_custom_commands_with_template() {
 
 #[test]
 fn test_build_worktree_toml_autogenerate_round_trips() {
-    let toml_str =
-        build_worktree_config_toml("Worktree: my-project", "/Users/me/repo", "main", None);
+    let toml_str = build_worktree_config_toml(
+        "Worktree: my-project",
+        "/Users/me/repo",
+        "main",
+        None,
+        &generated_worktree_repo_dir(Path::new("/Users/me/repo")),
+        false,
+    );
     let config: TabConfig = toml::from_str(&toml_str).expect("Generated TOML should parse");
 
     assert_eq!(config.name, "Worktree: my-project");
@@ -836,6 +842,8 @@ fn test_build_worktree_toml_manual_round_trips() {
         "/Users/me/repo",
         "main",
         Some("my-feature"),
+        &generated_worktree_repo_dir(Path::new("/Users/me/repo")),
+        false,
     );
     let config: TabConfig = toml::from_str(&toml_str).expect("Generated TOML should parse");
 
@@ -902,4 +910,49 @@ directory = "~/a"
     } else {
         panic!("Expected fallback PaneTemplate");
     }
+}
+
+#[test]
+fn test_build_worktree_toml_fetch_latest_starts_from_remote_base() {
+    let toml_str = build_worktree_config_toml(
+        "Worktree: my-project",
+        "/Users/me/repo",
+        "main",
+        Some("feature/login"),
+        &generated_worktree_repo_dir(Path::new("/Users/me/repo")),
+        true,
+    );
+    let config: TabConfig = toml::from_str(&toml_str).expect("Generated TOML should parse");
+    let mut params = HashMap::new();
+    params.insert(
+        "worktree_branch_name".to_string(),
+        "feature/login".to_string(),
+    );
+    let (_, template) = render_tab_config(&config, &params, None);
+    let PaneTemplateType::PaneTemplate { commands, .. } = template else {
+        panic!("Expected PaneTemplate");
+    };
+    let worktree_path = generated_worktree_path_string("/Users/me/repo", "feature/login");
+    let commands: Vec<&str> = commands.iter().map(|c| c.exec.as_str()).collect();
+    assert_eq!(
+        commands,
+        vec![
+            "git fetch origin main".to_string(),
+            format!("git worktree add --no-track -b feature/login \"{worktree_path}\" origin/main"),
+            format!("cd \"{worktree_path}\""),
+        ]
+    );
+}
+
+#[test]
+fn test_build_worktree_toml_fetch_latest_without_base_skips_fetch() {
+    let toml_str = build_worktree_config_toml(
+        "Worktree: my-project",
+        "/Users/me/repo",
+        "",
+        None,
+        &generated_worktree_repo_dir(Path::new("/Users/me/repo")),
+        true,
+    );
+    assert!(!toml_str.contains("git fetch"));
 }

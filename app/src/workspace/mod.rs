@@ -72,6 +72,7 @@ use crate::workspace::view::{
     TOGGLE_NOTIFICATION_MAILBOX_BINDING_NAME, TOGGLE_PROJECT_EXPLORER_BINDING_NAME,
     TOGGLE_RIGHT_PANEL_BINDING_NAME, TOGGLE_TAB_CONFIGS_MENU_BINDING_NAME,
     TOGGLE_VERTICAL_TABS_PANEL_BINDING_NAME, TOGGLE_WARP_DRIVE_BINDING_NAME,
+    TOGGLE_WORKTREE_PANEL_BINDING_NAME,
 };
 
 pub fn init(app: &mut AppContext) {
@@ -788,6 +789,15 @@ pub fn init(app: &mut AppContext) {
         .with_group(bindings::BindingGroup::Navigation.as_str())
         .with_enabled(|| FeatureFlag::VerticalTabs.is_enabled())
         .with_key_binding(cmd_or_ctrl_shift("b")),
+        EditableBinding::new(
+            TOGGLE_WORKTREE_PANEL_BINDING_NAME,
+            BindingDescription::new("Toggle worktree panel")
+                .with_custom_description(bindings::MAC_MENUS_CONTEXT, "Toggle Worktree Panel"),
+            WorkspaceAction::ToggleWorktreePanel,
+        )
+        .with_context_predicate(id!("Workspace"))
+        .with_group(bindings::BindingGroup::Navigation.as_str())
+        .with_enabled(|| FeatureFlag::WorktreePanel.is_enabled() && cfg!(feature = "local_fs")),
         EditableBinding::new(
             LEFT_PANEL_PROJECT_EXPLORER_BINDING_NAME,
             BindingDescription::new("Left Panel: Project explorer"),

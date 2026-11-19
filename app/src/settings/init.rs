@@ -21,7 +21,7 @@ use super::{
     InputSettings, LocalControlSettings, PaneSettings, SameLinePromptBlockSettings, ScrollSettings,
     SelectionSettings, SharedObjectLimitBannerSettings, SshSettings, ThemeSettings,
     TuiAutoupdateSettings, TuiThemeSettings, TuiVoiceSettings, TuiZeroStateSettings,
-    VimBannerSettings, WarpDrivePrivacySettings,
+    VimBannerSettings, WarpDrivePrivacySettings, WorktreeSettings,
 };
 use crate::ai::cloud_agent_settings::CloudAgentSettings;
 use crate::appearance;
@@ -70,6 +70,7 @@ pub fn register_all_settings(ctx: &mut AppContext) {
     PaneSettings::register(ctx);
     CommandSearchSettings::register(ctx);
     AliasExpansionSettings::register(ctx);
+    WorktreeSettings::register(ctx);
     CodeSettings::register(ctx);
     LigatureSettings::register(ctx);
     GPUSettings::register(ctx);

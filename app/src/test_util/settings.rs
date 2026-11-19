@@ -54,7 +54,7 @@ pub fn initialize_settings_for_tests_with_mode_and_headlessness(
         InputSettings, LocalControlSettings, NativePreferenceSettings, PaneSettings,
         SameLinePromptBlockSettings, ScrollSettings, SelectionSettings,
         SharedObjectLimitBannerSettings, SshSettings, ThemeSettings, TuiVoiceSettings,
-        VimBannerSettings, init_and_register_user_preferences,
+        VimBannerSettings, WorktreeSettings, init_and_register_user_preferences,
     };
     use crate::terminal::BlockListSettings;
     use crate::terminal::general_settings::GeneralSettings;
@@ -84,6 +84,7 @@ pub fn initialize_settings_for_tests_with_mode_and_headlessness(
     AccessibilitySettings::register(app);
     app.update(AISettings::register_and_subscribe_to_events);
     AliasExpansionSettings::register(app);
+    WorktreeSettings::register(app);
     CloudAgentSettings::register(app);
     AppEditorSettings::register(app);
     BlockVisibilitySettings::register(app);

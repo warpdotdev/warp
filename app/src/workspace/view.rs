@@ -24,6 +24,7 @@ pub(crate) mod tests;
 mod vertical_tabs;
 #[cfg(target_family = "wasm")]
 mod wasm_view;
+pub(crate) mod worktree_panel;
 
 use std::cell::RefCell;
 use std::cmp::Ordering;
@@ -352,8 +353,8 @@ use crate::settings::{
     AppEditorSettings, BlockVisibilitySettings, ChangelogSettings, CodeSettings,
     CodeSettingsChangedEvent, CtrlTabBehavior, CursorBlink, DebugSettings, DefaultSessionMode,
     FontSettings, GPUSettings, InputModeSettings, InputSettings, MonospaceFontSize, PaneSettings,
-    PrivacySettings, SelectionSettings, Settings, SshSettings, ThemeSettings, active_theme_kind,
-    respect_system_theme,
+    PrivacySettings, SelectionSettings, Settings, SshSettings, ThemeSettings, WorktreeSettings,
+    active_theme_kind, respect_system_theme,
 };
 use crate::settings_view::environments_page::EnvironmentsPage;
 use crate::settings_view::handoff_environment_creation_modal::{
@@ -544,6 +545,9 @@ use crate::workspace::view::orchestration_launch_modal::{
     OrchestrationLaunchModal, OrchestrationLaunchModalEvent,
 };
 use crate::workspace::view::right_panel::{RightPanelEvent, RightPanelView};
+use crate::workspace::view::worktree_panel::{
+    TerminalActivity, WorktreePanelEvent, WorktreePanelView, agent_activity_for_terminal,
+};
 use crate::workspace::{ForkFromExchange, ForkedConversationDestination};
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::{ResolvedTeamScope, UserWorkspaces};
@@ -688,6 +692,7 @@ pub(crate) const TOGGLE_WARP_DRIVE_BINDING_NAME: &str = "workspace:toggle_warp_d
 pub(crate) const TOGGLE_RIGHT_PANEL_BINDING_NAME: &str = "workspace:toggle_right_panel";
 pub(crate) const TOGGLE_VERTICAL_TABS_PANEL_BINDING_NAME: &str =
     "workspace:toggle_vertical_tabs_panel";
+pub(crate) const TOGGLE_WORKTREE_PANEL_BINDING_NAME: &str = "workspace:toggle_worktree_panel";
 pub(crate) const OPEN_GLOBAL_SEARCH_BINDING_NAME: &str = "workspace:open_global_search";
 pub(crate) const TOGGLE_CONVERSATION_LIST_VIEW_BINDING_NAME: &str =
     "workspace:toggle_conversation_list_view";
@@ -1199,6 +1204,7 @@ pub struct Workspace {
     vertical_tabs_panel: VerticalTabsPanelState,
     left_panel_view: ViewHandle<LeftPanelView>,
     left_panel_views: Vec<ToolPanelView>,
+    worktree_panel: ViewHandle<WorktreePanelView>,
     right_panel_view: ViewHandle<RightPanelView>,
     working_directories_model: ModelHandle<pane_group::WorkingDirectoriesModel>,
     agent_management_view: ViewHandle<AgentManagementView>,
@@ -2317,6 +2323,7 @@ impl Workspace {
                         &selection.directory,
                         selection.enable_worktree,
                         selection.autogenerate_worktree_branch_name,
+                        &WorktreeSettings::as_ref(ctx).worktree_repo_dir(&selection.directory),
                     );
                     !config.params.is_empty()
                 };
@@ -2387,6 +2394,7 @@ impl Workspace {
             &selection.directory,
             selection.enable_worktree,
             selection.autogenerate_worktree_branch_name,
+            &WorktreeSettings::as_ref(ctx).worktree_repo_dir(&selection.directory),
         );
 
         let old_pane_group_id = self.active_tab_pane_group().id();
@@ -3125,9 +3133,19 @@ impl Workspace {
 
         let left_panel_views = Self::compute_left_panel_views(ctx);
 
+        let worktree_panel = ctx.add_typed_action_view(WorktreePanelView::new);
+        ctx.subscribe_to_view(&worktree_panel, |me, _, event, ctx| {
+            me.handle_worktree_panel_event(event, ctx);
+        });
+        ctx.subscribe_to_model(&WorktreeSettings::handle(ctx), |me, _, _, ctx| {
+            me.update_left_panel_available_views(ctx);
+            ctx.notify();
+        });
+
         let left_panel_view = ctx.add_typed_action_view(|ctx| {
             LeftPanelView::new(
                 working_directories_model.clone(),
+                worktree_panel.clone(),
                 left_panel_views.clone(),
                 ctx,
             )
@@ -3546,6 +3564,7 @@ impl Workspace {
             vertical_tabs_panel: Default::default(),
             left_panel_view,
             left_panel_views,
+            worktree_panel,
             right_panel_view,
             working_directories_model,
             shown_staging_banner_count: 0,
@@ -4393,6 +4412,7 @@ impl Workspace {
                 },
                 LeftPanelDisplayedTab::WarpDrive => ToolPanelView::WarpDrive,
                 LeftPanelDisplayedTab::ConversationListView => ToolPanelView::ConversationListView,
+                LeftPanelDisplayedTab::Worktrees => ToolPanelView::Worktrees,
             };
             lp.restore_active_view_from_snapshot(active_view, ctx);
             lp.set_active_pane_group(pane_group.clone(), &self.working_directories_model, ctx);
@@ -5521,6 +5541,7 @@ impl Workspace {
             self.set_active_tab_index(index, ctx);
             self.focus_active_tab(ctx);
             self.update_window_title(ctx);
+            self.update_worktree_panel_activity(ctx);
         }
     }
 
@@ -11172,8 +11193,15 @@ impl Workspace {
                 repo,
                 branch,
                 worktree_branch_name,
+                fetch_latest,
             } => {
-                self.handle_new_worktree_submit(repo, branch, worktree_branch_name.as_deref(), ctx);
+                self.handle_new_worktree_submit(
+                    repo,
+                    branch,
+                    worktree_branch_name.as_deref(),
+                    *fetch_latest,
+                    ctx,
+                );
                 self.close_new_worktree_modal(ctx);
             }
             NewWorktreeModalEvent::PickNewRepo => {
@@ -11233,6 +11261,7 @@ impl Workspace {
         repo: &str,
         base_branch: &str,
         worktree_branch_name: Option<&str>,
+        fetch_latest: bool,
         ctx: &mut ViewContext<Self>,
     ) {
         let repo_display_name = Path::new(repo)
@@ -11262,6 +11291,8 @@ impl Workspace {
             repo,
             base_branch,
             worktree_branch_name,
+            &WorktreeSettings::as_ref(ctx).worktree_repo_dir(Path::new(repo)),
+            fetch_latest,
         );
 
         let dir = tab_configs_dir();
@@ -11270,7 +11301,7 @@ impl Workspace {
             return;
         }
 
-        let path = find_unused_worktree_config_path(&dir, &filename_hint);
+        let path = find_unused_worktree_config_path(&dir, &filename_hint.replace('/', "-"));
         if let Err(e) = std::fs::write(&path, &toml_content) {
             log::warn!("Failed to write worktree tab config: {e:?}");
             return;
@@ -11318,8 +11349,31 @@ impl Workspace {
         _repo: &str,
         _base_branch: &str,
         _worktree_branch_name: Option<&str>,
+        _fetch_latest: bool,
         _ctx: &mut ViewContext<Self>,
     ) {
+    }
+
+    /// Opens the new-worktree modal for `repository`, defaulting to the active session's
+    /// directory.
+    fn open_new_worktree_modal(
+        &mut self,
+        repository: Option<PathBuf>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let directory = repository.or_else(|| {
+            self.active_session_view(ctx)
+                .and_then(|view| view.as_ref(ctx).pwd())
+                .map(PathBuf::from)
+        });
+        self.new_worktree_modal.view.update(ctx, |modal, ctx| {
+            modal.body().update(ctx, |body, ctx| {
+                body.on_open(directory, ctx);
+            });
+        });
+        self.new_worktree_modal.open();
+        self.current_workspace_state.is_new_worktree_modal_open = true;
+        ctx.notify();
     }
 
     fn open_repo_picker_for_new_worktree_modal(&mut self, ctx: &mut ViewContext<Self>) {
@@ -11379,11 +11433,14 @@ impl Workspace {
             "Materializing default worktree config: repo_path={repo_path:?}, branch_name={branch_name:?}, pane_type={pane_type}"
         );
 
+        let worktree_repo_dir =
+            WorktreeSettings::as_ref(ctx).worktree_repo_dir(Path::new(&repo_path));
         let (toml_content, tab_config) = match materialize_default_worktree_config(
             &template_toml,
             &config_name,
             &repo_path,
             pane_type,
+            &worktree_repo_dir,
         ) {
             Ok(materialized) => materialized,
             Err(e) => {
@@ -20821,6 +20878,7 @@ impl Workspace {
                         ToolPanelView::GlobalSearch { .. } => "Global search",
                         ToolPanelView::WarpDrive => "Warp Drive",
                         ToolPanelView::ConversationListView => "Agent conversations",
+                        ToolPanelView::Worktrees => "Worktrees",
                     }
                 } else {
                     "Tools panel"
@@ -20875,6 +20933,7 @@ impl Workspace {
                 ToolPanelView::GlobalSearch { .. } => "Global search",
                 ToolPanelView::WarpDrive => "Warp Drive",
                 ToolPanelView::ConversationListView => "Agent conversations",
+                ToolPanelView::Worktrees => "Worktrees",
             }
         } else {
             "Tools panel"
@@ -22955,6 +23014,119 @@ impl Workspace {
         }
     }
 
+    fn is_worktree_view_enabled(app: &AppContext) -> bool {
+        FeatureFlag::WorktreePanel.is_enabled()
+            && cfg!(feature = "local_fs")
+            && *WorktreeSettings::as_ref(app).worktree_panel_visible
+    }
+
+    /// Shows the Worktrees tab of the tools panel, or closes the panel if it is already showing.
+    fn toggle_worktree_panel(&mut self, ctx: &mut ViewContext<Self>) {
+        if !FeatureFlag::WorktreePanel.is_enabled() {
+            return;
+        }
+        if !*WorktreeSettings::as_ref(ctx).worktree_panel_visible {
+            WorktreeSettings::handle(ctx).update(ctx, |settings, ctx| {
+                report_if_error!(settings.worktree_panel_visible.set_value(true, ctx));
+            });
+            self.update_left_panel_available_views(ctx);
+        }
+        let is_showing = self.left_panel_view.as_ref(ctx).active_view() == ToolPanelView::Worktrees;
+        self.toggle_left_panel_view(&LeftPanelAction::Worktrees, is_showing, ctx);
+    }
+
+    /// Reports every local terminal's working directory and agent activity to the worktree panel.
+    fn update_worktree_panel_activity(&mut self, ctx: &mut ViewContext<Self>) {
+        if !Self::is_worktree_view_enabled(ctx) {
+            return;
+        }
+        let terminals = self.worktree_terminal_activity(ctx);
+        let active_tab_index = self.active_tab_index;
+        self.worktree_panel.update(ctx, |panel, ctx| {
+            panel.set_terminal_activity(terminals, active_tab_index, ctx);
+        });
+    }
+
+    fn worktree_terminal_activity(&self, app: &AppContext) -> Vec<TerminalActivity> {
+        let mut terminals = Vec::new();
+        for (tab_index, tab) in self.tabs.iter().enumerate() {
+            for terminal_view in tab.pane_group.as_ref(app).terminal_views(app) {
+                let terminal_view = terminal_view.as_ref(app);
+                let Some(cwd) = terminal_view.canonical_session_pwd_if_local(app) else {
+                    continue;
+                };
+                terminals.push(TerminalActivity {
+                    tab_index,
+                    cwd: cwd.as_path_buf().clone(),
+                    agent: agent_activity_for_terminal(terminal_view, app),
+                });
+            }
+        }
+        terminals
+    }
+
+    fn handle_worktree_panel_event(
+        &mut self,
+        event: &WorktreePanelEvent,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        match event {
+            WorktreePanelEvent::RequestTerminalActivity => {
+                self.update_worktree_panel_activity(ctx);
+            }
+            WorktreePanelEvent::OpenWorktree(path) => self.open_worktree(path.clone(), ctx),
+            WorktreePanelEvent::NewWorktree { repository } => {
+                self.open_new_worktree_modal(Some(repository.clone()), ctx);
+            }
+            WorktreePanelEvent::AddRepository => self.add_repository_to_worktree_panel(ctx),
+        }
+    }
+
+    /// Switches to a tab with a terminal in `worktree`, preferring the active tab, or opens a new
+    /// tab there when none exists. Then shows the project explorer, which follows the active
+    /// tab's directory, so the worktree's files are listed.
+    fn open_worktree(&mut self, worktree: PathBuf, ctx: &mut ViewContext<Self>) {
+        let terminals = self.worktree_terminal_activity(ctx);
+        let panel = self.worktree_panel.as_ref(ctx);
+        let tab_indices: Vec<usize> = terminals
+            .iter()
+            .filter(|terminal| panel.worktree_containing(&terminal.cwd) == Some(worktree.as_path()))
+            .map(|terminal| terminal.tab_index)
+            .collect();
+        if tab_indices.contains(&self.active_tab_index) {
+            self.focus_active_tab(ctx);
+        } else if let Some(&tab_index) = tab_indices.first() {
+            self.activate_tab(tab_index, ctx);
+        } else {
+            self.open_directory_in_new_tab(worktree, ctx);
+        }
+        self.update_worktree_panel_activity(ctx);
+        if self
+            .left_panel_views
+            .contains(&ToolPanelView::ProjectExplorer)
+        {
+            self.open_left_panel_view(&LeftPanelAction::ProjectExplorer, ctx);
+        }
+    }
+
+    fn add_repository_to_worktree_panel(&mut self, ctx: &mut ViewContext<Self>) {
+        let worktree_panel = self.worktree_panel.clone();
+        ctx.open_file_picker(
+            move |result, ctx| {
+                let Ok(paths) = result else { return };
+                let Some(path) = paths.into_iter().next() else {
+                    return;
+                };
+                let path_buf: PathBuf = path.into();
+                PersistedWorkspace::handle(ctx).update(ctx, |persisted, ctx| {
+                    persisted.user_added_workspace(path_buf, ctx);
+                });
+                worktree_panel.update(ctx, |panel, ctx| panel.refresh_repositories(ctx));
+            },
+            warpui::platform::FilePickerConfiguration::new().folders_only(),
+        );
+    }
+
     fn render_panels(
         &self,
         app: &AppContext,
@@ -24073,6 +24245,9 @@ impl Workspace {
         if cfg!(feature = "local_fs") && *CodeSettings::as_ref(ctx).show_project_explorer.value() {
             views.push(ToolPanelView::ProjectExplorer);
         }
+        if Self::is_worktree_view_enabled(ctx) {
+            views.push(ToolPanelView::Worktrees);
+        }
         if FeatureFlag::AgentViewConversationListView.is_enabled()
             && *AISettings::as_ref(ctx).show_conversation_history
         {
@@ -24428,20 +24603,7 @@ impl TypedActionView for Workspace {
             SelectTabConfig(tab_config) => {
                 self.open_tab_config(tab_config.clone(), ctx);
             }
-            OpenNewWorktreeModal => {
-                let cwd = self
-                    .active_session_view(ctx)
-                    .and_then(|view| view.as_ref(ctx).pwd())
-                    .map(PathBuf::from);
-                self.new_worktree_modal.view.update(ctx, |modal, ctx| {
-                    modal.body().update(ctx, |body, ctx| {
-                        body.on_open(cwd, ctx);
-                    });
-                });
-                self.new_worktree_modal.open();
-                self.current_workspace_state.is_new_worktree_modal_open = true;
-                ctx.notify();
-            }
+            OpenNewWorktreeModal => self.open_new_worktree_modal(None, ctx),
             OpenNewWorktreeRepoPicker => {
                 self.open_repo_picker_for_new_worktree_modal(ctx);
             }
@@ -25038,6 +25200,7 @@ impl TypedActionView for Workspace {
             ToggleVerticalTabsPanel => {
                 self.toggle_vertical_tabs_panel(ctx);
             }
+            ToggleWorktreePanel => self.toggle_worktree_panel(ctx),
             OpenVerticalTabsPanel => {
                 if !self.vertical_tabs_panel_open {
                     self.toggle_vertical_tabs_panel(ctx);
@@ -26821,6 +26984,17 @@ impl View for Workspace {
 
         if WarpDriveSettings::is_warp_drive_enabled(app) {
             context.set.insert(flags::ENABLE_WARP_DRIVE);
+        }
+
+        let worktree_settings = WorktreeSettings::as_ref(app);
+        if *worktree_settings.worktree_panel_visible {
+            context.set.insert(flags::WORKTREE_PANEL_VISIBLE);
+        }
+        if *worktree_settings.delete_worktree_on_pr_merge {
+            context.set.insert(flags::DELETE_WORKTREE_ON_PR_MERGE);
+        }
+        if *worktree_settings.fetch_before_creating_worktree {
+            context.set.insert(flags::FETCH_BEFORE_CREATING_WORKTREE);
         }
 
         if AISettings::as_ref(app).is_conversation_history_enabled(app) {

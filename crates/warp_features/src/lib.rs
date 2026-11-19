@@ -857,6 +857,10 @@ pub enum FeatureFlag {
     /// instead of individual pane rows.
     VerticalTabsSummaryMode,
 
+    /// Enables the worktree panel on the far left of the workspace, listing repositories and
+    /// their git worktrees along with coding agent activity.
+    WorktreePanel,
+
     CloudModeInputV2,
 
     /// Enables continuing cloud mode conversations in the cloud after an execution ends.
