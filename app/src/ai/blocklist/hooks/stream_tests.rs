@@ -5,6 +5,7 @@ use ai::hooks::{HookBoundary, HookPayload};
 use warp_multi_agent_api::client_action::{
     AddMessagesToTask, AppendToMessageContent, UpdateTaskMessage,
 };
+use warp_multi_agent_api::message::tool_call::{Server, Tool};
 use warp_multi_agent_api::message::{AgentOutput, AgentReasoning, ToolCall};
 use warp_multi_agent_api::response_event;
 use warpui::App;
@@ -381,6 +382,87 @@ fn an_update_to_an_earlier_tool_call_does_not_end_the_streaming_text() {
         assert!(completed.is_empty());
         let completed = state.finish(&stream, false);
         assert_eq!(completed_ids(&completed), vec![("t1", "Hello")]);
+    });
+}
+
+/// An Oz run's final answer is the summary of a server tool call, which the server sends as a
+/// text message that keeps growing after the call is added, so the call must not end the text.
+#[test]
+fn a_server_tool_call_does_not_end_the_text_streaming_beside_it() {
+    App::test((), |mut app| async move {
+        let harness = hook_test_app(&mut app);
+        app.update(|ctx| {
+            harness.hooks.install_bindings(
+                vec![test_binding(
+                    test_source_id("s"),
+                    HookBoundary::ResponseComplete,
+                    0,
+                    None,
+                )],
+                ctx,
+            )
+        });
+        let actions = vec![
+            api::ClientAction {
+                action: Some(Action::AddMessagesToTask(AddMessagesToTask {
+                    task_id: "task".to_owned(),
+                    messages: vec![message(
+                        "t1",
+                        Message::AgentOutput(AgentOutput {
+                            text: "The".to_owned(),
+                        }),
+                    )],
+                })),
+            },
+            api::ClientAction {
+                action: Some(Action::AddMessagesToTask(AddMessagesToTask {
+                    task_id: "task".to_owned(),
+                    messages: vec![message(
+                        "finish",
+                        Message::ToolCall(ToolCall {
+                            tool_call_id: "finish".to_owned(),
+                            tool: Some(Tool::Server(Server {
+                                payload: "{}".to_owned(),
+                            })),
+                        }),
+                    )],
+                })),
+            },
+            api::ClientAction {
+                action: Some(Action::AppendToMessageContent(AppendToMessageContent {
+                    task_id: "task".to_owned(),
+                    message: Some(message(
+                        "t1",
+                        Message::AgentOutput(AgentOutput {
+                            text: " answer".to_owned(),
+                        }),
+                    )),
+                    mask: None,
+                })),
+            },
+        ];
+        let observations =
+            app.read(|ctx| collect_observations(&actions, harness.conversation_id, ctx));
+        assert_eq!(
+            observations,
+            vec![
+                text("t1", TextUpdate::Set("The".to_owned())),
+                text("t1", TextUpdate::Append(" answer".to_owned())),
+            ],
+            "the server tool call is not observed"
+        );
+
+        let mut state = StreamObserverState::default();
+        let stream = stream_id();
+        let completed = state.apply_batch(
+            &stream,
+            harness.conversation_id,
+            Some(harness.conversation_id),
+            observations,
+        );
+        assert!(completed.is_empty());
+        let completed = state.finish(&stream, false);
+        assert_eq!(completed_ids(&completed), vec![("t1", "The answer")]);
     });
 }
 

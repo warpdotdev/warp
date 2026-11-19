@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use ai::hooks::test_util::{ScriptedRunner, test_binding, test_source_id};
+use ai::hooks::test_util::{LatencyRunner, ScriptedRunner, test_binding, test_source_id};
 use ai::hooks::{HookBoundary, HookRegistry};
 use ai::skills::{SkillReference, SkillScope};
 use chrono::Local;
@@ -66,8 +66,8 @@ use crate::ai::blocklist::orchestration_events::{
     OrchestrationEventService, PendingEvent, PendingEventDetail,
 };
 use crate::ai::blocklist::{
-    BlocklistAIHistoryModel, QueuedQuery, QueuedQueryModel, QueuedQueryOrigin, RequestInput,
-    ResponseStream, ResponseStreamId,
+    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, QueuedQuery, QueuedQueryModel,
+    QueuedQueryOrigin, RequestInput, ResponseStream, ResponseStreamId,
 };
 use crate::ai::cloud_environments::{GithubRepo, SourceRepo};
 use crate::ai::llms::LLMId;
@@ -2450,6 +2450,99 @@ fn the_run_waits_for_a_failed_turns_stop_hooks_before_it_ends() {
     });
 }
 
+/// Starts a run from inside a history model event. A subscription made while an entity delivers
+/// an event is placed ahead of the ones it already had, so the driver's subscription to the
+/// history model lands ahead of the controller's.
+struct RunStartedDuringEvent {
+    driver: warpui::ModelHandle<AgentDriver>,
+    run_exit: Option<oneshot::Receiver<SDKConversationOutputStatus>>,
+}
+
+impl warpui::Entity for RunStartedDuringEvent {
+    type Event = ();
+}
+
+/// Which of the driver and the controller sees a status change first is not fixed. When the
+/// driver sees it first, the controller has not recorded the turn's stop yet; the run still
+/// waits for the stop hooks.
+#[test]
+fn the_run_waits_for_a_failed_turns_stop_hooks_when_it_sees_the_status_change_first() {
+    App::test((), |mut app| async move {
+        let harness = test_utils::controller_harness(&mut app);
+        let stop = test_binding(test_source_id("stop"), HookBoundary::TurnStop, 0, None);
+        app.update(|ctx| harness.hooks.install_bindings(vec![stop], ctx));
+        let hold = harness.hooks.runner.hold();
+        let temp = TempDir::new().unwrap();
+        let driver = app.add_model(|ctx| {
+            let terminal_driver = super::terminal::TerminalDriver::create_from_existing_view(
+                harness.terminal.clone(),
+                ctx,
+            );
+            let mut driver =
+                AgentDriver::new_for_test(temp.path().to_path_buf(), terminal_driver, ctx);
+            driver.skip_initial_turn = true;
+            driver.idle_on_complete = None;
+            driver.idle_on_fail = None;
+            driver
+        });
+        let starter = app.add_model(|ctx: &mut warpui::ModelContext<RunStartedDuringEvent>| {
+            ctx.subscribe_to_model(
+                &BlocklistAIHistoryModel::handle(ctx),
+                |me, _, event, ctx| {
+                    if me.run_exit.is_none()
+                        && matches!(
+                            event,
+                            BlocklistAIHistoryEvent::StartedNewConversation { .. }
+                        )
+                    {
+                        me.run_exit = Some(me.driver.update(ctx, |driver, ctx| {
+                            driver.execute_run(AgentRunPrompt::Local(String::new()), ctx)
+                        }));
+                    }
+                },
+            );
+            RunStartedDuringEvent {
+                driver,
+                run_exit: None,
+            }
+        });
+        let (conversation_id, stream) = harness.mock_stream(&mut app);
+        let mut run_exit_rx = starter
+            .update(&mut app, |starter, _| starter.run_exit.take())
+            .expect("the run started when the conversation did");
+
+        stream.update(&mut app, |stream, ctx| {
+            stream.emit_response_event_for_test(test_utils::stream_init_event(), ctx);
+            stream.exhaust_recovery_budget_for_test(ctx);
+            stream.emit_error_event_for_test(
+                Arc::new(crate::server::server_api::AIApiError::UnexpectedEof),
+                ctx,
+            );
+            stream.emit_after_stream_finished_for_test(ctx);
+        });
+        assert_eq!(
+            test_utils::conversation_status(&app, conversation_id),
+            Some(ConversationStatus::Error)
+        );
+        test_utils::settle(&mut app, |_| harness.hooks.runner.invocation_count() == 1).await;
+        test_utils::let_background_work_settle(&mut app).await;
+        assert!(
+            run_exit_rx.try_recv().unwrap().is_none(),
+            "the run must not end while the stop hooks run"
+        );
+
+        hold.release();
+        let SDKConversationOutputStatus::Error { .. } = run_exit_rx.await.unwrap() else {
+            panic!("the run ends as a failure once the hooks are done");
+        };
+        assert_eq!(
+            harness.hooks.adapter.encoded_count(),
+            1,
+            "the turn fires one stop, not one per subscriber"
+        );
+    });
+}
+
 /// The whole path from a hook's `ask` to the end of the run: the model asks for a shell command,
 /// the pre-tool hook answers `ask` through the runner, nobody can answer it, and the hook's source
 /// is set to fail the run in that case.
@@ -2556,6 +2649,102 @@ fn a_scripted_ask_from_a_fail_run_source_ends_the_run_with_the_hook_reason() {
         let message = error.to_string();
         assert!(message.contains("needs a human"), "{message}");
         assert!(message.contains("Approval unavailable"), "{message}");
+    });
+}
+
+/// A run a hook ended (an `ask` nobody can answer, from a `fail_run` source) still waits for the
+/// failed turn's stop hooks before it exits.
+#[test]
+fn a_run_a_hook_ended_waits_for_the_turns_stop_hooks_before_it_exits() {
+    App::test((), |mut app| async move {
+        let harness = test_utils::controller_harness(&mut app);
+        let headless_mode = app.add_model(|ctx| {
+            AppExecutionMode::new_with_headlessness(ExecutionMode::Sdk, false, true, ctx)
+        });
+        AppExecutionMode::handle(&app).update(&mut app, |mode, ctx| {
+            *mode = headless_mode.as_ref(ctx).clone();
+        });
+        let runner = Arc::new(LatencyRunner::new());
+        app.update(|ctx| {
+            HookRuntime::handle(ctx).update(ctx, |runtime, _| runtime.set_runner(runner.clone()))
+        });
+        let policy = test_binding(
+            test_source_id("policy"),
+            HookBoundary::ToolPre,
+            0,
+            Some("Shell"),
+        );
+        let stop = test_binding(test_source_id("stop"), HookBoundary::TurnStop, 0, None);
+        let stop_id = stop.id.clone();
+        runner.script(
+            policy.id.clone(),
+            Duration::ZERO,
+            ScriptedRunner::exit_with(0, r#"{"verdict":"ask","reason":"needs a human"}"#),
+        );
+        runner.script(
+            stop_id.clone(),
+            Duration::from_millis(300),
+            ScriptedRunner::exit_with(0, ""),
+        );
+        app.update(|ctx| {
+            let adapter = harness.hooks.adapter.clone();
+            let mut policy = ai::hooks::test_util::active_binding(policy, adapter.clone());
+            policy.policy.on_ask = ai::hooks::HookOnAsk::FailRun;
+            let stop = ai::hooks::test_util::active_binding(stop, adapter);
+            HookRegistry::handle(ctx).update(ctx, |registry, _| {
+                registry.install_snapshot_for_test(vec![policy, stop], Vec::new());
+            });
+        });
+        let (conversation_id, stream) = harness.mock_stream(&mut app);
+        let temp = TempDir::new().unwrap();
+        let driver = app.add_model(|ctx| {
+            let terminal_driver = super::terminal::TerminalDriver::create_from_existing_view(
+                harness.terminal.clone(),
+                ctx,
+            );
+            let mut driver =
+                AgentDriver::new_for_test(temp.path().to_path_buf(), terminal_driver, ctx);
+            driver.skip_initial_turn = true;
+            driver.idle_on_complete = None;
+            driver.idle_on_fail = None;
+            driver
+        });
+        let run_exit_rx = driver.update(&mut app, |driver, ctx| {
+            driver.execute_run(AgentRunPrompt::Local(String::new()), ctx)
+        });
+
+        let task_id = test_utils::root_task_id(&app, conversation_id);
+        stream.update(&mut app, |stream, ctx| {
+            stream.emit_response_event_for_test(test_utils::stream_init_event(), ctx);
+            stream.emit_response_event_for_test(
+                test_utils::create_task_with_messages(
+                    &task_id,
+                    vec![test_utils::shell_tool_call_message(
+                        &task_id,
+                        "rm -rf build",
+                    )],
+                ),
+                ctx,
+            );
+            stream.emit_response_event_for_test(test_utils::done_event(), ctx);
+            stream.emit_after_stream_finished_for_test(ctx);
+        });
+
+        let SDKConversationOutputStatus::Error { .. } = run_exit_rx.await.unwrap() else {
+            panic!("the run must end as a failure");
+        };
+        assert_eq!(
+            test_utils::conversation_status(&app, conversation_id),
+            Some(ConversationStatus::Error)
+        );
+        assert!(
+            runner
+                .finished()
+                .iter()
+                .any(|(binding, _)| *binding == stop_id),
+            "the run ended before the turn's stop hooks finished: {:?}",
+            runner.finished()
+        );
     });
 }
 

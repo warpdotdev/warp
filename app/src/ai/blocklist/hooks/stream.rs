@@ -240,6 +240,13 @@ fn observe_message(
                 .as_ref()
                 .and_then(proto_duration),
         }),
+        // A server tool call is not shown and can stream beside the text it belongs to: an Oz
+        // run's final answer is the `finish_task` call's summary, which the server also sends
+        // as a text message that grows while the call does, so the call must not end it.
+        Some(Message::ToolCall(api::message::ToolCall {
+            tool: Some(api::message::tool_call::Tool::Server(_)),
+            ..
+        })) => {}
         // Only a message that is new to the stream ends the text before it. An update to an
         // earlier tool call, for example, says nothing about whether the text is finished.
         Some(_) => match delivery {

@@ -343,8 +343,9 @@ fn ended_turn_status(
 
 /// Records the `turn.stop` of a turn that a status change from `prev_status` to `new_status`
 /// ended without completing, when a binding matches, and returns whether one is now waiting to
-/// start. A turn whose stop already started (its completed stop ran, and then it was cancelled
-/// or failed under those hooks) fires no second one.
+/// start. A turn whose stop is already recorded fires no second one, whether its completed stop
+/// ran and it was then cancelled or failed under those hooks, or the same status change is
+/// reported again.
 pub(crate) fn hold_ended_turn(
     conversation_id: AIConversationId,
     prev_status: &ConversationStatus,
@@ -355,18 +356,26 @@ pub(crate) fn hold_ended_turn(
     let Some(status) = ended_turn_status(prev_status, new_status) else {
         return false;
     };
+    if !HookRuntime::is_installed(ctx) {
+        return false;
+    }
+    let exchange_count = exchange_count(conversation_id, ctx);
+    if HookRuntime::as_ref(ctx)
+        .turn_stops
+        .stopped_at
+        .get(&conversation_id)
+        == Some(&exchange_count)
+    {
+        log::debug!(
+            "turn.stop for {conversation_id} ending as {status:?} is not fired: the turn's stop \
+             was already recorded"
+        );
+        return false;
+    }
     let Some(pending) = pending_stop_for(conversation_id, status, active_session, ctx) else {
         return false;
     };
-    let exchange_count = exchange_count(conversation_id, ctx);
     HookRuntime::handle(ctx).update(ctx, |runtime, _| {
-        if runtime.turn_stops.stopped_at.get(&conversation_id) == Some(&exchange_count) {
-            log::info!(
-                "turn.stop for {conversation_id} ending as {status:?} is not fired: the turn's \
-                 stop already ran"
-            );
-            return false;
-        }
         runtime
             .turn_stops
             .stopped_at
