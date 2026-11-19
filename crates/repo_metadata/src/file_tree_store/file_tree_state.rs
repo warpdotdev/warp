@@ -5,7 +5,7 @@ use std::sync::Arc;
 use ignore::gitignore::Gitignore;
 use warp_util::standardized_path::StandardizedPath;
 
-use crate::file_tree_store::{FileTreeDirectoryEntryState, FileTreeEntry, FileTreeEntryState};
+use crate::file_tree_store::{FileTreeDirectoryEntryState, FileTreeEntryState};
 use crate::{BuildTreeError, DirectoryEntry, Entry};
 
 #[derive(Debug, Clone)]
@@ -202,22 +202,71 @@ impl FileTreeMapStore {
     }
 
     pub fn insert_entry_at_path(&mut self, path: Arc<StandardizedPath>, entry: Entry) {
-        let child_entry_map = FileTreeEntry::from(entry);
-        // The child was just constructed, so its `Arc` is unique and
-        // `try_unwrap` avoids a clone; fall back to cloning only if it is
-        // somehow shared.
-        let child_store =
-            Arc::try_unwrap(child_entry_map.state_map).unwrap_or_else(|arc| (*arc).clone());
-        self.state_map.extend(child_store.state_map);
-        self.parent_to_child_map
-            .extend(child_store.parent_to_child_map);
+        // Reserve up front instead of building a throwaway `FileTreeMapStore`
+        // via `FileTreeEntry::from(entry)` and merging it in with `extend()`:
+        // that intermediate store rehashes its own maps from empty as it
+        // fills, and then `extend()` can resize `self`'s maps again on top of
+        // that, doubling the hashbrown resize cost for a large subtree.
+        self.state_map.reserve(entry.count_entries());
 
-        // ATODO test this
-        if let Some(parent) = self.parent_directory(&path) {
+        // `parent_to_child_map` only gains a key per *populated* directory
+        // (see `insert_entry` below) plus, at most, one more for the fix-up
+        // that links `path` into its own parent's children below.
+        let parent = self.parent_directory(&path);
+        let gains_parent_key = parent
+            .as_ref()
+            .is_some_and(|p| !self.parent_to_child_map.contains_key(p));
+        self.parent_to_child_map
+            .reserve(entry.count_populated_directories() + usize::from(gains_parent_key));
+
+        Self::insert_entry(&mut self.state_map, &mut self.parent_to_child_map, entry);
+
+        if let Some(parent) = parent {
             self.parent_to_child_map
                 .entry(parent)
                 .or_default()
                 .insert(path);
+        }
+    }
+
+    /// Inserts `entry` and, recursively, its subtree directly into
+    /// `state_map` and `parent_to_child_map`, returning `entry`'s own path.
+    ///
+    /// Mirrors the overwrite semantics of the previous `extend()`-based
+    /// merge: a directory's children set fully replaces any existing set at
+    /// the same key, while a childless directory leaves an existing children
+    /// set untouched.
+    fn insert_entry(
+        state_map: &mut HashMap<Arc<StandardizedPath>, FileTreeEntryState>,
+        parent_to_child_map: &mut HashMap<Arc<StandardizedPath>, HashSet<Arc<StandardizedPath>>>,
+        entry: Entry,
+    ) -> Arc<StandardizedPath> {
+        match entry {
+            Entry::File(file) => {
+                let state = FileTreeEntryState::File(file.into());
+                let path = state.path_arc();
+                state_map.insert(path.clone(), state);
+                path
+            }
+            Entry::Directory(dir) => {
+                let dir_path: Arc<StandardizedPath> = Arc::new(dir.path);
+                let state = FileTreeEntryState::Directory(FileTreeDirectoryEntryState {
+                    path: dir_path.clone(),
+                    ignored: dir.ignored,
+                    loaded: dir.loaded,
+                });
+                state_map.insert(dir_path.clone(), state);
+
+                if !dir.children.is_empty() {
+                    let mut children = HashSet::with_capacity(dir.children.len());
+                    for child in dir.children {
+                        children.insert(Self::insert_entry(state_map, parent_to_child_map, child));
+                    }
+                    parent_to_child_map.insert(dir_path.clone(), children);
+                }
+
+                dir_path
+            }
         }
     }
 
