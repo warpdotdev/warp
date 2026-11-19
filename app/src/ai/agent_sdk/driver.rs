@@ -4387,6 +4387,15 @@ impl AgentDriver {
                         return;
                     };
 
+                    // Events are delivered once the update that caused them is over, by which
+                    // time the status can have changed again (a denied action sets `InProgress`
+                    // on the way to the failure a hook asked for). The later change has an
+                    // event of its own, and that one decides; acting on this one would read
+                    // the later status before its stop hooks were recorded.
+                    if conversation.status() != new_status {
+                        return;
+                    }
+
                     if conversation.status().is_in_progress() {
                         // Conversation resumed or a new one started; cancel any
                         // pending idle timeout.

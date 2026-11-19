@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use ai::hooks::test_util::{ScriptedRunner, test_binding, test_source_id};
+use ai::hooks::test_util::{LatencyRunner, ScriptedRunner, test_binding, test_source_id};
 use ai::hooks::{HookBoundary, HookRegistry};
 use ai::skills::{SkillReference, SkillScope};
 use chrono::Local;
@@ -2649,6 +2649,102 @@ fn a_scripted_ask_from_a_fail_run_source_ends_the_run_with_the_hook_reason() {
         let message = error.to_string();
         assert!(message.contains("needs a human"), "{message}");
         assert!(message.contains("Approval unavailable"), "{message}");
+    });
+}
+
+/// A run a hook ended (an `ask` nobody can answer, from a `fail_run` source) still waits for the
+/// failed turn's stop hooks before it exits.
+#[test]
+fn a_run_a_hook_ended_waits_for_the_turns_stop_hooks_before_it_exits() {
+    App::test((), |mut app| async move {
+        let harness = test_utils::controller_harness(&mut app);
+        let headless_mode = app.add_model(|ctx| {
+            AppExecutionMode::new_with_headlessness(ExecutionMode::Sdk, false, true, ctx)
+        });
+        AppExecutionMode::handle(&app).update(&mut app, |mode, ctx| {
+            *mode = headless_mode.as_ref(ctx).clone();
+        });
+        let runner = Arc::new(LatencyRunner::new());
+        app.update(|ctx| {
+            HookRuntime::handle(ctx).update(ctx, |runtime, _| runtime.set_runner(runner.clone()))
+        });
+        let policy = test_binding(
+            test_source_id("policy"),
+            HookBoundary::ToolPre,
+            0,
+            Some("Shell"),
+        );
+        let stop = test_binding(test_source_id("stop"), HookBoundary::TurnStop, 0, None);
+        let stop_id = stop.id.clone();
+        runner.script(
+            policy.id.clone(),
+            Duration::ZERO,
+            ScriptedRunner::exit_with(0, r#"{"verdict":"ask","reason":"needs a human"}"#),
+        );
+        runner.script(
+            stop_id.clone(),
+            Duration::from_millis(300),
+            ScriptedRunner::exit_with(0, ""),
+        );
+        app.update(|ctx| {
+            let adapter = harness.hooks.adapter.clone();
+            let mut policy = ai::hooks::test_util::active_binding(policy, adapter.clone());
+            policy.policy.on_ask = ai::hooks::HookOnAsk::FailRun;
+            let stop = ai::hooks::test_util::active_binding(stop, adapter);
+            HookRegistry::handle(ctx).update(ctx, |registry, _| {
+                registry.install_snapshot_for_test(vec![policy, stop], Vec::new());
+            });
+        });
+        let (conversation_id, stream) = harness.mock_stream(&mut app);
+        let temp = TempDir::new().unwrap();
+        let driver = app.add_model(|ctx| {
+            let terminal_driver = super::terminal::TerminalDriver::create_from_existing_view(
+                harness.terminal.clone(),
+                ctx,
+            );
+            let mut driver =
+                AgentDriver::new_for_test(temp.path().to_path_buf(), terminal_driver, ctx);
+            driver.skip_initial_turn = true;
+            driver.idle_on_complete = None;
+            driver.idle_on_fail = None;
+            driver
+        });
+        let run_exit_rx = driver.update(&mut app, |driver, ctx| {
+            driver.execute_run(AgentRunPrompt::Local(String::new()), ctx)
+        });
+
+        let task_id = test_utils::root_task_id(&app, conversation_id);
+        stream.update(&mut app, |stream, ctx| {
+            stream.emit_response_event_for_test(test_utils::stream_init_event(), ctx);
+            stream.emit_response_event_for_test(
+                test_utils::create_task_with_messages(
+                    &task_id,
+                    vec![test_utils::shell_tool_call_message(
+                        &task_id,
+                        "rm -rf build",
+                    )],
+                ),
+                ctx,
+            );
+            stream.emit_response_event_for_test(test_utils::done_event(), ctx);
+            stream.emit_after_stream_finished_for_test(ctx);
+        });
+
+        let SDKConversationOutputStatus::Error { .. } = run_exit_rx.await.unwrap() else {
+            panic!("the run must end as a failure");
+        };
+        assert_eq!(
+            test_utils::conversation_status(&app, conversation_id),
+            Some(ConversationStatus::Error)
+        );
+        assert!(
+            runner
+                .finished()
+                .iter()
+                .any(|(binding, _)| *binding == stop_id),
+            "the run ended before the turn's stop hooks finished: {:?}",
+            runner.finished()
+        );
     });
 }
 
