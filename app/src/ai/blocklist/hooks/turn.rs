@@ -360,6 +360,9 @@ pub(crate) fn hold_ended_turn(
             .stopped_at
             .insert(conversation_id, exchange_count);
         let (finished, done) = oneshot::channel();
+        let done: BoxFuture<'static, ()> = Box::pin(async move {
+            let _ = done.await;
+        });
         let timeout = pending.timeout;
         runtime
             .turn_stops
@@ -371,11 +374,7 @@ pub(crate) fn hold_ended_turn(
                 pending: Some(pending),
                 timeout,
                 finished: Some(finished),
-                done: async move {
-                    let _ = done.await;
-                }
-                .boxed()
-                .shared(),
+                done: done.shared(),
             });
         true
     })
