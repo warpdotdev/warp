@@ -51,6 +51,9 @@ jobs:
       github.event.pull_request.draft == false &&
       (!startsWith(github.event.pull_request.head.ref, 'repo-sync/') || contains(github.event.pull_request.labels.*.name, 'repo-sync:conflict')) &&
       github.repository_owner == 'warpdotdev'
+    permissions:
+      contents: read # actions/checkout clones the repo
+      pull-requests: read # dorny/paths-filter asks the GitHub API for the PR's changed-files list to decide which CI jobs run; reading PR metadata needs this scope
     outputs:
       affects-database-schema: ${{ github.ref == 'master' || steps.filter.outputs.affects-database-schema }}
       affects-rust-sources: ${{ github.ref == 'master' || steps.filter.outputs.affects-rust-sources }}
@@ -239,7 +242,7 @@ jobs:
 
       - name: Install cargo nextest
         if: ${{ matrix.is_self_hosted == false }}
-        uses: taiki-e/install-action@37f7c5781271959fb65b6b35224e28652ff2b63d # v2.87.0
+        uses: taiki-e/install-action@f7e5d7c961414b23f5b25b2da9294395d08513ad # v2.87.26
         with:
           tool: nextest
 
@@ -326,7 +329,7 @@ jobs:
         # Run this step even when the tests fail. Skip if the workflow is cancelled.
         if: ${{ !cancelled() }}
         continue-on-error: true
-        uses: trunk-io/analytics-uploader@14c0f18990953eecd01c9c5afe3cc63a73b6c371 # v2.1.5
+        uses: trunk-io/analytics-uploader@a86313c7029d22e6ea2d5c346060a224d90053dc # v2.1.6
         with:
           junit-paths: target/nextest/ci/junit.xml
           cli-version: 0.12.5
@@ -351,7 +354,7 @@ jobs:
         # Run this step even when the tests fail. Skip if the workflow is cancelled.
         if: ${{ matrix.os != 'windows' && !cancelled() }}
         continue-on-error: true
-        uses: trunk-io/analytics-uploader@14c0f18990953eecd01c9c5afe3cc63a73b6c371 # v2.1.5
+        uses: trunk-io/analytics-uploader@a86313c7029d22e6ea2d5c346060a224d90053dc # v2.1.6
         with:
           junit-paths: target/nextest/ci/junit.xml
           cli-version: 0.12.5
@@ -374,7 +377,7 @@ jobs:
         # Run this step even when the tests fail. Skip if the workflow is cancelled.
         if: ${{ matrix.os != 'windows' && !cancelled() }}
         continue-on-error: true
-        uses: trunk-io/analytics-uploader@14c0f18990953eecd01c9c5afe3cc63a73b6c371 # v2.1.5
+        uses: trunk-io/analytics-uploader@a86313c7029d22e6ea2d5c346060a224d90053dc # v2.1.6
         with:
           junit-paths: target/nextest/ci/junit.xml
           cli-version: 0.12.5
@@ -400,7 +403,7 @@ jobs:
         # Run this step even when the tests fail. Skip if the workflow is cancelled.
         if: ${{ matrix.os != 'windows' && !cancelled() }}
         continue-on-error: true
-        uses: trunk-io/analytics-uploader@14c0f18990953eecd01c9c5afe3cc63a73b6c371 # v2.1.5
+        uses: trunk-io/analytics-uploader@a86313c7029d22e6ea2d5c346060a224d90053dc # v2.1.6
         with:
           junit-paths: target/nextest/ci/junit.xml
           cli-version: 0.12.5
@@ -423,7 +426,7 @@ jobs:
         # Run this step even when the tests fail. Skip if the workflow is cancelled.
         if: ${{ matrix.os != 'windows' && !cancelled() }}
         continue-on-error: true
-        uses: trunk-io/analytics-uploader@14c0f18990953eecd01c9c5afe3cc63a73b6c371 # v2.1.5
+        uses: trunk-io/analytics-uploader@a86313c7029d22e6ea2d5c346060a224d90053dc # v2.1.6
         with:
           junit-paths: target/nextest/ci/junit.xml
           cli-version: 0.12.5
@@ -446,7 +449,7 @@ jobs:
         # Run this step even when the tests fail. Skip if the workflow is cancelled.
         if: ${{ matrix.os != 'windows' && !cancelled() }}
         continue-on-error: true
-        uses: trunk-io/analytics-uploader@14c0f18990953eecd01c9c5afe3cc63a73b6c371 # v2.1.5
+        uses: trunk-io/analytics-uploader@a86313c7029d22e6ea2d5c346060a224d90053dc # v2.1.6
         with:
           junit-paths: target/nextest/ci/junit.xml
           cli-version: 0.12.5
@@ -469,7 +472,7 @@ jobs:
         # Run this step even when the tests fail. Skip if the workflow is cancelled.
         if: ${{ matrix.os != 'windows' && !cancelled() }}
         continue-on-error: true
-        uses: trunk-io/analytics-uploader@14c0f18990953eecd01c9c5afe3cc63a73b6c371 # v2.1.5
+        uses: trunk-io/analytics-uploader@a86313c7029d22e6ea2d5c346060a224d90053dc # v2.1.6
         with:
           junit-paths: target/nextest/ci/junit.xml
           cli-version: 0.12.5
@@ -530,7 +533,7 @@ jobs:
           echo "::notice title=Remote Server Tests - Default Bash Version::$DEFAULT_BASH_VERSION"
 
       - name: Install cargo nextest
-        uses: taiki-e/install-action@37f7c5781271959fb65b6b35224e28652ff2b63d # v2.87.0
+        uses: taiki-e/install-action@f7e5d7c961414b23f5b25b2da9294395d08513ad # v2.87.26
         with:
           tool: nextest
 
@@ -569,7 +572,7 @@ jobs:
       - name: Upload results of remote-server integration tests to trunk.io
         if: ${{ !cancelled() }}
         continue-on-error: true
-        uses: trunk-io/analytics-uploader@14c0f18990953eecd01c9c5afe3cc63a73b6c371 # v2.1.5
+        uses: trunk-io/analytics-uploader@a86313c7029d22e6ea2d5c346060a224d90053dc # v2.1.6
         with:
           junit-paths: target/nextest/ci/junit.xml
           cli-version: 0.12.5

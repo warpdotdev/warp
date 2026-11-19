@@ -1,5 +1,8 @@
+use std::collections::HashMap;
+
 use futures_util::stream::AbortHandle;
 use mcp::oauth::CallbackResult;
+use mcp::refreshable_headers::RefreshableHeaders;
 use url::Url;
 use uuid::Uuid;
 use warpui::App;
@@ -8,6 +11,96 @@ use super::{SpawnedServerInfo, TemplatableMCPServerManager};
 use crate::ai::mcp::builtin;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::{GlobalResourceHandles, GlobalResourceHandlesProvider};
+
+#[test]
+fn prewarmed_mcp_spawn_uses_current_key_without_persisting_it() {
+    use crate::ai::mcp::{MCPServer, MCPServerExt as _, TransportType};
+    let json = r#"{"local":{"command":"test-mcp","env":{"WARP_API_KEY":"standby-key","CUSTOM":"configured"}}}"#;
+    let mut server = MCPServer::from_user_json(json).unwrap().pop().unwrap();
+    let mut manager = TemplatableMCPServerManager::default();
+    for key in ["assigned-key", "next-assigned-key"] {
+        manager
+            .runtime_environment
+            .insert("WARP_API_KEY".into(), key.into());
+        manager
+            .runtime_environment
+            .insert("WARP_RUN_ID".into(), "assigned-run".into());
+        manager
+            .apply_runtime_environment(&mut server.transport_type)
+            .unwrap();
+        let TransportType::CLIServer(server) = &server.transport_type else {
+            panic!("stdio server expected");
+        };
+        let keys: Vec<_> = server
+            .static_env_vars
+            .iter()
+            .filter(|var| var.name == "WARP_API_KEY")
+            .collect();
+        assert_eq!(keys.len(), 1);
+        assert_eq!(keys[0].value, key);
+        assert!(
+            server
+                .static_env_vars
+                .iter()
+                .any(|var| var.name == "CUSTOM" && var.value == "configured")
+        );
+    }
+    let stored = MCPServer::from_user_json(json).unwrap().pop().unwrap();
+    let TransportType::CLIServer(stored) = stored.transport_type else {
+        panic!("stdio server expected");
+    };
+    assert!(
+        stored
+            .static_env_vars
+            .iter()
+            .any(|var| var.name == "WARP_API_KEY" && var.value == "standby-key")
+    );
+}
+
+#[test]
+fn prewarmed_mcp_replacement_cancels_pending_spawns_and_retains_file_servers() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        let resources = GlobalResourceHandles::mock(&mut app);
+        app.add_singleton_model(|_| GlobalResourceHandlesProvider::new(resources));
+        let installation = builtin::factory_mcp_installation("test-token", &[]);
+        let uuid = installation.uuid();
+        let (abort_handle, _) = AbortHandle::new_pair();
+        let abort_observer = abort_handle.clone();
+        let (oauth_result_tx, _) = async_channel::unbounded();
+        let manager = app.add_model(|_| {
+            let mut manager = TemplatableMCPServerManager::default();
+            manager
+                .reconnectable_ephemeral_installations
+                .insert(uuid, installation);
+            manager.spawned_servers.insert(
+                uuid,
+                SpawnedServerInfo {
+                    abort_handle,
+                    oauth_result_tx,
+                },
+            );
+            manager
+        });
+        let (retained, stopped) = manager.update(&mut app, |manager, ctx| {
+            manager.replace_runtime_environment(
+                std::collections::HashMap::from([("WARP_API_KEY".into(), "assigned-key".into())]),
+                ctx,
+            )
+        });
+        assert_eq!(retained.len(), 1);
+        assert_eq!(retained[0].uuid(), uuid);
+        assert!(abort_observer.is_aborted());
+        for stopped in stopped {
+            stopped.await.unwrap();
+        }
+        manager.read(&app, |manager, _| {
+            assert!(manager.spawned_servers.is_empty());
+            assert!(manager.reconnectable_ephemeral_installations.is_empty());
+            assert_eq!(manager.runtime_environment["WARP_API_KEY"], "assigned-key");
+        });
+    });
+}
 
 #[test]
 fn oauth_callback_preserves_decoded_issuer() {
@@ -150,6 +243,14 @@ fn shutdown_ends_ephemeral_reconnect_lifecycle() {
             manager
                 .reconnectable_ephemeral_installations
                 .insert(installation_uuid, installation);
+            manager.refreshable_headers.insert(
+                installation_uuid,
+                RefreshableHeaders::new(
+                    HashMap::from([("Authorization".to_string(), "Bearer token".to_string())]),
+                    None,
+                )
+                .expect("valid headers"),
+            );
             manager.register_reconnect_waiter(installation_uuid, result_tx);
             manager
         });
@@ -169,6 +270,7 @@ fn shutdown_ends_ephemeral_reconnect_lifecycle() {
                     .pending_reconnections
                     .contains_key(&installation_uuid)
             );
+            assert!(!manager.refreshable_headers.contains_key(&installation_uuid));
         });
         let error = result_rx
             .await

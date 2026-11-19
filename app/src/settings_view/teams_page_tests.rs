@@ -1002,3 +1002,38 @@ fn disabled_row_renders_dimmed_and_tooltipped() {
     );
     assert_eq!(disabled_member_tooltip_text(false), None);
 }
+
+#[test]
+fn scale_invite_notice_uses_flat_workspace_pricing_for_admins_and_members() {
+    let mut team = team_with_members(vec![], false);
+    team.billing_metadata.customer_type = CustomerType::Scale;
+    let appearance = Appearance::mock();
+    for has_admin_permissions in [true, false] {
+        let notice = TeamsWidget::default().render_team_member_cost_info(
+            &team,
+            &PricingInfoModel::new(),
+            &appearance,
+            has_admin_permissions,
+        );
+        let text = notice.debug_text_content().unwrap_or_default();
+        assert!(text.contains("flat workspace pricing"));
+        assert!(text.contains("does not add per-seat subscription charges"));
+        assert!(!text.contains("per-user rate"));
+        assert!(!text.contains("charged for a portion"));
+    }
+}
+
+#[test]
+fn build_invite_notice_keeps_per_user_fallback_without_pricing_data() {
+    let mut team = team_with_members(vec![], false);
+    team.billing_metadata.customer_type = CustomerType::Build;
+    let notice = TeamsWidget::default().render_team_member_cost_info(
+        &team,
+        &PricingInfoModel::new(),
+        &Appearance::mock(),
+        true,
+    );
+    let text = notice.debug_text_content().unwrap_or_default();
+    assert!(text.contains("Additional members are billed at your plan's per-user rate"));
+    assert!(!text.contains("flat workspace pricing"));
+}

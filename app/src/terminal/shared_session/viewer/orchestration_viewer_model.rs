@@ -6,7 +6,7 @@
 //! by a one-shot REST snapshot) and broadcasts `ChildSpawned` /
 //! `ChildStatusChanged` events.
 //!
-//! Each viewer pane has its own materialization model; durable child identity
+//! Each viewer pane has its own discovery model; durable child identity
 //! is shared through `BlocklistAIHistoryModel`, and the streamer is a shared
 //! singleton.
 //! Pill clicks navigate via `SwapPaneToConversation`.
@@ -14,7 +14,7 @@ use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use warpui::r#async::{SpawnedFutureHandle, Timer};
-use warpui::{Entity, EntityId, ModelContext, SingletonEntity, WeakViewHandle};
+use warpui::{Entity, EntityId, ModelContext, SingletonEntity};
 
 use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
 use crate::ai::agent_conversations_model::{AgentConversationsModel, AgentConversationsModelEvent};
@@ -25,7 +25,6 @@ use crate::ai::blocklist::orchestration_event_streamer::{
     OrchestrationEventStreamer, OrchestrationEventStreamerEvent,
 };
 use crate::pane_group::{ChildPaneMaterialization, decide_child_pane_materialization};
-use crate::terminal::{Event as TerminalViewEvent, TerminalView};
 
 /// Refetch cadence for children whose claim-time `session_id` is not yet known.
 const PENDING_SESSION_ID_POLL_INTERVAL: Duration = Duration::from_secs(5);
@@ -36,8 +35,7 @@ struct ChildAgentEntry {
     /// Cached to deduplicate status writes: we only push an update when the
     /// state actually changes.
     last_state: AmbientAgentTaskState,
-    /// True once child-pane materialization has been requested.
-    pane_materialization_requested: bool,
+    materialization_metadata_ready: bool,
 }
 
 /// Owns child discovery + status tracking for a shared session viewer of
@@ -45,7 +43,6 @@ struct ChildAgentEntry {
 pub struct OrchestrationViewerModel {
     parent_task_id: AmbientAgentTaskId,
     terminal_view_id: EntityId,
-    terminal_view: WeakViewHandle<TerminalView>,
     /// Placeholder conversations materialized for direct children.
     children: HashMap<AmbientAgentTaskId, ChildAgentEntry>,
     /// Secondary index keyed by stringified `run_id`, used by the streamer
@@ -75,7 +72,6 @@ impl OrchestrationViewerModel {
     pub fn new(
         parent_task_id: AmbientAgentTaskId,
         terminal_view_id: EntityId,
-        terminal_view: WeakViewHandle<TerminalView>,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
         // Subscribe to broadcast events filtered on `parent_task_id`; the
@@ -108,7 +104,6 @@ impl OrchestrationViewerModel {
         let model = Self {
             parent_task_id,
             terminal_view_id,
-            terminal_view,
             children: HashMap::new(),
             children_by_run_id: HashMap::new(),
             pending_task_ids_for_discovery: HashSet::new(),
@@ -237,9 +232,7 @@ impl OrchestrationViewerModel {
         self.spawn_task_metadata_fetch(task_id, ctx);
     }
 
-    /// Writes the new status through `BlocklistAIHistoryModel`. If the entry
-    /// has not reached a live or transcript materialization yet, also refreshes
-    /// its task metadata.
+    /// Writes the new status through `BlocklistAIHistoryModel` and refreshes missing task metadata.
     fn handle_child_status_changed(
         &mut self,
         run_id: &str,
@@ -306,10 +299,7 @@ impl OrchestrationViewerModel {
 
     // ---- Shared child registration (used by both paths) -----------------
 
-    /// Creates the local placeholder conversation for a child task, records
-    /// it in the per-pane map, and requests materialization when current task
-    /// state is attachable or transcript-loadable. Idempotent: a second call
-    /// for the same `task_id` updates status and materialization state only.
+    /// Creates or updates a child's placeholder conversation and status without opening a pane.
     fn register_child(&mut self, task: AmbientAgentTask, ctx: &mut ModelContext<Self>) {
         // The server-side ancestor endpoint includes the parent itself in
         // the response; skip it.
@@ -320,32 +310,23 @@ impl OrchestrationViewerModel {
         let task_id = task.task_id;
         let materialization_ready = Self::materialization_is_ready(&task);
         let new_state = task.state.clone();
-        let conversation_status = conversation_status_from_state(&new_state);
 
         if let Some(entry) = self.children.get_mut(&task_id) {
             // Existing children can be registered again on streamer reconnect.
             if entry.last_state != new_state {
                 let conversation_id = entry.conversation_id;
                 let terminal_view_id = self.terminal_view_id;
-                let status_for_update = conversation_status.clone();
                 BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
-                    history.update_conversation_status(
+                    history.apply_remote_child_task_snapshot(
                         terminal_view_id,
                         conversation_id,
-                        status_for_update,
+                        &task,
                         ctx,
                     );
                 });
                 entry.last_state = new_state;
             }
-            let should_request_materialization =
-                materialization_ready && !entry.pane_materialization_requested;
-            if should_request_materialization {
-                let conversation_id = entry.conversation_id;
-                entry.pane_materialization_requested = true;
-                self.request_child_pane_materialization(conversation_id, task, ctx);
-            }
-            // Re-arm the session_id timer; no-op once all children are materialized.
+            entry.materialization_metadata_ready |= materialization_ready;
             self.maybe_schedule_pending_session_id_poll(ctx);
             return;
         }
@@ -373,7 +354,6 @@ impl OrchestrationViewerModel {
             .and_then(|c| c.harness.as_ref())
             .map(|h| h.harness_type);
         let terminal_view_id = self.terminal_view_id;
-        let status_for_initial = conversation_status.clone();
 
         let conversation_id = BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
             let conversation_id = history.ensure_remote_child_conversation(
@@ -386,22 +366,16 @@ impl OrchestrationViewerModel {
                 harness,
                 ctx,
             );
-            history.update_conversation_status(
-                terminal_view_id,
-                conversation_id,
-                status_for_initial,
-                ctx,
-            );
+            history.apply_remote_child_task_snapshot(terminal_view_id, conversation_id, &task, ctx);
             conversation_id
         });
 
-        let pane_materialization_requested = materialization_ready;
         self.children.insert(
             task_id,
             ChildAgentEntry {
                 conversation_id,
                 last_state: new_state.clone(),
-                pane_materialization_requested,
+                materialization_metadata_ready: materialization_ready,
             },
         );
         self.children_by_run_id.insert(task_id.to_string(), task_id);
@@ -412,17 +386,13 @@ impl OrchestrationViewerModel {
             self.parent_task_id,
         );
 
-        if pane_materialization_requested {
-            self.request_child_pane_materialization(conversation_id, task, ctx);
-        }
-
         // Arm the session_id refetch timer if the child arrived pre-claim.
         self.maybe_schedule_pending_session_id_poll(ctx);
     }
 
     // ---- Pending-session_id polling ----------------------------------
 
-    /// True iff at least one tracked child is still pending materialization.
+    /// True iff at least one tracked child still needs session or transcript metadata.
     fn has_pending_session_id_children(&self) -> bool {
         self.children
             .values()
@@ -532,55 +502,7 @@ impl OrchestrationViewerModel {
     }
 
     fn entry_needs_materialization_metadata(entry: &ChildAgentEntry) -> bool {
-        !entry.pane_materialization_requested
-    }
-
-    /// Tells the parent's `TerminalView` to materialize a hidden viewer pane
-    /// for this child, carrying the task snapshot so the pane group can
-    /// distinguish live, transcript, and pending state.
-    fn request_child_pane_materialization(
-        &self,
-        conversation_id: AIConversationId,
-        task: AmbientAgentTask,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        let Some(view) = self.terminal_view.upgrade(ctx) else {
-            log::warn!(
-                "[orch-viewer] cannot request child pane materialization for conv={conversation_id:?}: \
-                 parent terminal view is gone"
-            );
-            return;
-        };
-        view.update(ctx, |_view, ctx| {
-            ctx.emit(TerminalViewEvent::EnsureUnifiedViewerChildPane {
-                conversation_id,
-                task: Box::new(task),
-            });
-        });
-    }
-}
-
-/// Maps a server-side run state to the [`ConversationStatus`] used by the
-/// pill bar and the conversation list. Working states (queued/pending/claimed/
-/// in-progress) all collapse to [`ConversationStatus::InProgress`] so the
-/// pill badge stays in the loading spinner until the run terminates.
-fn conversation_status_from_state(state: &AmbientAgentTaskState) -> ConversationStatus {
-    match state {
-        AmbientAgentTaskState::Queued
-        | AmbientAgentTaskState::Pending
-        | AmbientAgentTaskState::Claimed
-        | AmbientAgentTaskState::InProgress => ConversationStatus::InProgress,
-        AmbientAgentTaskState::Succeeded => ConversationStatus::Success,
-        AmbientAgentTaskState::Failed | AmbientAgentTaskState::Error => ConversationStatus::Error,
-        AmbientAgentTaskState::Blocked => ConversationStatus::Blocked {
-            blocked_action: String::new(),
-        },
-        AmbientAgentTaskState::Cancelled => ConversationStatus::Cancelled,
-        // The `Unknown` variant is a forward-compat catch-all for server
-        // states the client doesn't recognize yet. The rest of the codebase
-        // (`is_terminal`, `is_failure_like`, `Display`, `status_icon_and_color`)
-        // consistently treats it as a terminal error, so we follow suit.
-        AmbientAgentTaskState::Unknown => ConversationStatus::Error,
+        !entry.materialization_metadata_ready
     }
 }
 

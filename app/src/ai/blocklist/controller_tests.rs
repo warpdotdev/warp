@@ -1078,3 +1078,290 @@ fn passive_suggestions_request_params_scope_member_byo_credentials_by_the_window
         );
     });
 }
+
+mod hooks {
+    use ai::hooks::test_util::{test_binding, test_source_id};
+    use ai::hooks::{FollowUpChainId, HookBoundary, HookPayload, PromptProvenance, TurnStopStatus};
+    use warpui::{App, SingletonEntity};
+
+    use super::{register_mock_response_stream, stream_init_event};
+    use crate::ai::agent::AIAgentInput;
+    use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
+    use crate::ai::blocklist::hooks::HookRuntime;
+    use crate::ai::blocklist::hooks::test_utils::{
+        TestHooks, create_task_with_messages, done_event, exchange_count, install_test_hooks,
+        let_background_work_settle, root_task_id, settle, shell_tool_call_message, text_message,
+    };
+    use crate::ai::blocklist::{
+        BlocklistAIHistoryModel, QueuedQuery, QueuedQueryModel, QueuedQueryOrigin,
+    };
+    use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
+
+    /// Hooks installed for every boundary the controller fires, so a missing call shows up as a
+    /// missing envelope rather than an inactive boundary.
+    fn install_controller_hooks(app: &mut App) -> TestHooks {
+        let hooks = app.update(install_test_hooks);
+        let source = test_source_id("controller");
+        app.update(|ctx| {
+            hooks.install_bindings(
+                vec![
+                    test_binding(source.clone(), HookBoundary::PromptSubmit, 0, None),
+                    test_binding(source.clone(), HookBoundary::ResponseComplete, 0, None),
+                    test_binding(source, HookBoundary::TurnStop, 0, None),
+                ],
+                ctx,
+            )
+        });
+        hooks
+    }
+
+    /// One line per encoded envelope: the boundary plus the payload detail a test cares about.
+    fn fired(hooks: &TestHooks) -> Vec<(AIConversationId, String)> {
+        hooks
+            .adapter
+            .encoded_envelopes()
+            .iter()
+            .map(|envelope| {
+                let detail = match &envelope.payload {
+                    HookPayload::PromptSubmit { text, .. } => format!("prompt.submit:{text}"),
+                    HookPayload::ResponseComplete { text, .. } => {
+                        format!("response.complete:{text}")
+                    }
+                    HookPayload::TurnStop { status, .. } => format!("turn.stop:{status:?}"),
+                    HookPayload::SessionStart { .. }
+                    | HookPayload::ToolPre { .. }
+                    | HookPayload::ToolResult { .. }
+                    | HookPayload::ToolFailure { .. }
+                    | HookPayload::SubagentStart { .. }
+                    | HookPayload::ReasoningComplete { .. } => {
+                        envelope.boundary().canonical_name().to_owned()
+                    }
+                };
+                (envelope.conversation_id, detail)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_typed_prompt_fires_prompt_submit_and_a_custom_input_does_not() {
+        App::test((), |mut app| async move {
+            initialize_app_for_terminal_view(&mut app);
+            let hooks = install_controller_hooks(&mut app);
+            let terminal = add_window_with_terminal(&mut app, None);
+
+            let conversation_id = terminal.update(&mut app, |terminal, ctx| {
+                let conversation_id =
+                    BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                        history.start_new_conversation(terminal.id(), false, false, false, ctx)
+                    });
+                terminal.ai_controller().update(ctx, |controller, ctx| {
+                    controller.send_user_query_in_conversation(
+                        "hello hooks".to_owned(),
+                        conversation_id,
+                        None,
+                        ctx,
+                    );
+                });
+                conversation_id
+            });
+            settle(&mut app, |_| !fired(&hooks).is_empty()).await;
+            assert_eq!(
+                fired(&hooks),
+                vec![(conversation_id, "prompt.submit:hello hooks".to_owned())]
+            );
+
+            // A custom input is not something the user typed, so it is not a prompt.
+            terminal.update(&mut app, |terminal, ctx| {
+                terminal.ai_controller().update(ctx, |controller, ctx| {
+                    controller.send_custom_ai_input_query(
+                        AIAgentInput::ResumeConversation {
+                            context: std::sync::Arc::from(Vec::new()),
+                        },
+                        ctx,
+                    );
+                });
+            });
+            let_background_work_settle(&mut app).await;
+            assert_eq!(fired(&hooks).len(), 1, "{:?}", fired(&hooks));
+        });
+    }
+
+    #[test]
+    fn a_clean_stream_end_with_no_actions_fires_response_complete_and_turn_stop() {
+        App::test((), |mut app| async move {
+            initialize_app_for_terminal_view(&mut app);
+            let hooks = install_controller_hooks(&mut app);
+            let terminal = add_window_with_terminal(&mut app, None);
+            let (conversation_id, stream) = register_mock_response_stream(&terminal, &mut app);
+            let task_id = root_task_id(&app, conversation_id);
+
+            stream.update(&mut app, |stream, ctx| {
+                stream.emit_response_event_for_test(stream_init_event("request"), ctx);
+                stream.emit_response_event_for_test(
+                    create_task_with_messages(&task_id, vec![text_message(&task_id, "All done.")]),
+                    ctx,
+                );
+                stream.emit_response_event_for_test(done_event(), ctx);
+                stream.emit_after_stream_finished_for_test(ctx);
+            });
+
+            settle(&mut app, |_| fired(&hooks).len() == 2).await;
+            let mut lines = fired(&hooks);
+            lines.sort_by(|a, b| a.1.cmp(&b.1));
+            assert_eq!(
+                lines,
+                vec![
+                    (conversation_id, "response.complete:All done.".to_owned()),
+                    (
+                        conversation_id,
+                        format!("turn.stop:{:?}", TurnStopStatus::Completed)
+                    ),
+                ]
+            );
+        });
+    }
+
+    #[test]
+    fn a_stream_that_queues_a_tool_call_does_not_fire_turn_stop() {
+        App::test((), |mut app| async move {
+            initialize_app_for_terminal_view(&mut app);
+            let hooks = install_controller_hooks(&mut app);
+            let terminal = add_window_with_terminal(&mut app, None);
+            let (conversation_id, stream) = register_mock_response_stream(&terminal, &mut app);
+            let task_id = root_task_id(&app, conversation_id);
+
+            stream.update(&mut app, |stream, ctx| {
+                stream.emit_response_event_for_test(stream_init_event("request"), ctx);
+                stream.emit_response_event_for_test(
+                    create_task_with_messages(
+                        &task_id,
+                        vec![
+                            text_message(&task_id, "Let me look."),
+                            shell_tool_call_message(&task_id, "ls"),
+                        ],
+                    ),
+                    ctx,
+                );
+                stream.emit_response_event_for_test(done_event(), ctx);
+                stream.emit_after_stream_finished_for_test(ctx);
+            });
+
+            settle(&mut app, |_| !fired(&hooks).is_empty()).await;
+            let_background_work_settle(&mut app).await;
+            assert_eq!(
+                fired(&hooks),
+                vec![(conversation_id, "response.complete:Let me look.".to_owned())],
+                "the turn is still open while the tool call waits"
+            );
+        });
+    }
+
+    /// An Oz-bound conversation steers the queue's head into its next tool-result request. A
+    /// prompt a stop hook asked for must not take that shortcut: it starts a turn of its own, so
+    /// it runs the prompt hooks and gets a turn id.
+    #[test]
+    fn a_hook_follow_up_at_the_queue_head_is_not_steered_into_a_running_turn() {
+        App::test((), |mut app| async move {
+            initialize_app_for_terminal_view(&mut app);
+            let hooks = install_controller_hooks(&mut app);
+            let terminal = add_window_with_terminal(&mut app, None);
+            let controller = terminal.read(&app, |terminal, _| terminal.ai_controller().clone());
+            let stop = test_binding(test_source_id("stop"), HookBoundary::TurnStop, 0, None);
+            let follow_up = QueuedQuery::new_hook_follow_up(
+                "keep going".to_owned(),
+                PromptProvenance::HookFollowUp {
+                    binding: stop.id.clone(),
+                    chain_id: FollowUpChainId::new(),
+                },
+            );
+
+            let (conversation_id, task_id) = controller.update(&mut app, |controller, ctx| {
+                let conversation_id = controller.bind_native_prompt_conversation(None, ctx);
+                controller.send_user_query_in_conversation(
+                    "initial".to_owned(),
+                    conversation_id,
+                    None,
+                    ctx,
+                );
+                let task_id = BlocklistAIHistoryModel::as_ref(ctx)
+                    .conversation(&conversation_id)
+                    .unwrap()
+                    .get_root_task_id()
+                    .clone();
+                QueuedQueryModel::handle(ctx).update(ctx, |queue, ctx| {
+                    queue.append(
+                        conversation_id,
+                        QueuedQuery::new(
+                            "a person's".to_owned(),
+                            QueuedQueryOrigin::QueueSlashCommand,
+                        ),
+                        ctx,
+                    );
+                    queue.append(conversation_id, follow_up, ctx);
+                });
+                (conversation_id, task_id)
+            });
+            // The initial prompt waits for its hooks; its request going out ends native setup.
+            settle(&mut app, |app| exchange_count(app, conversation_id) == 1).await;
+            assert_eq!(fired(&hooks)[0].1, "prompt.submit:initial");
+
+            controller.update(&mut app, |controller, ctx| {
+                // The person's row steers into the running turn as before.
+                let steered =
+                    controller.steer_head_prompt_for_request(conversation_id, &task_id, true, ctx);
+                assert!(matches!(
+                    steered,
+                    Some(AIAgentInput::UserQuery { query, .. }) if query == "a person's"
+                ));
+                // The hook's row does not: it stays queued for a turn of its own.
+                assert!(
+                    controller
+                        .steer_head_prompt_for_request(conversation_id, &task_id, true, ctx)
+                        .is_none()
+                );
+                let queued = QueuedQueryModel::as_ref(ctx).queue(conversation_id);
+                assert_eq!(queued.len(), 1);
+                assert_eq!(queued[0].origin(), QueuedQueryOrigin::HookFollowUp);
+            });
+            assert_eq!(
+                fired(&hooks).len(),
+                1,
+                "no prompt hook ran for the steered row"
+            );
+
+            // Once the turn is over, the row leaves through the prompt path: it runs the prompt
+            // hooks with its provenance and its own turn id.
+            let first_turn = app.read(|ctx| HookRuntime::as_ref(ctx).turn_id_for(conversation_id));
+            controller.update(&mut app, |controller, ctx| {
+                for stream_id in controller
+                    .in_flight_response_streams
+                    .stream_ids_for_conversation(conversation_id, ctx)
+                {
+                    controller
+                        .in_flight_response_streams
+                        .cleanup_stream(&stream_id);
+                }
+                BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, _| {
+                    history
+                        .conversation_mut(&conversation_id)
+                        .unwrap()
+                        .set_status_for_test(ConversationStatus::Success);
+                });
+                controller.dispatch_queued_warp_agent_prompt(conversation_id, None, ctx);
+            });
+            settle(&mut app, |_| fired(&hooks).len() == 2).await;
+            let envelope = hooks.adapter.encoded_envelopes()[1].clone();
+            assert!(matches!(
+                &envelope.payload,
+                HookPayload::PromptSubmit { text, provenance, .. }
+                    if text == "keep going"
+                        && matches!(provenance, PromptProvenance::HookFollowUp { binding, .. } if *binding == stop.id)
+            ));
+            assert!(envelope.turn_id.is_some());
+            assert_ne!(envelope.turn_id, first_turn);
+            QueuedQueryModel::handle(&app).read(&app, |queue, _| {
+                assert!(!queue.has_queue(conversation_id));
+            });
+        });
+    }
+}

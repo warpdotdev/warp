@@ -6,7 +6,9 @@ use std::time::SystemTime;
 use prost_types::FieldMask;
 use serde_json::Value;
 use uuid::Uuid;
-use warp_multi_agent_api::client_action::{AddMessagesToTask, AppendToMessageContent, CreateTask};
+use warp_multi_agent_api::client_action::{
+    AddMessagesToTask, AppendToMessageContent, CreateTask, UpdateTaskMessage,
+};
 use warp_multi_agent_api::message::tool_call::apply_file_diffs::{FileDiff, NewFile};
 use warp_multi_agent_api::message::tool_call::read_files::File as ReadFilesFile;
 use warp_multi_agent_api::message::tool_call::{
@@ -20,11 +22,12 @@ use warp_multi_agent_api::message::{
 };
 use warp_multi_agent_api::{
     ApplyFileDiffsResult, CallMcpToolResult, ClientAction, CreateTodoList, FileContent,
-    FileContentLineRange, MarkTodosCompleted, Message, ReadFilesResult, RunShellCommandResult,
-    ShellCommandFinished, Task, TodoItem, apply_file_diffs_result, call_mcp_tool_result,
-    client_action, read_files_result, run_shell_command_result,
+    FileContentLineRange, MarkTodosCompleted, McpServerIdentity, Message, ReadFilesResult,
+    RunShellCommandResult, ShellCommandFinished, Task, TodoItem, apply_file_diffs_result,
+    call_mcp_tool_result, client_action, read_files_result, run_shell_command_result,
 };
 
+use super::mcp_projection::{self, KnownMcpServers};
 use super::protocol::{
     PlanEntry, SessionUpdate, ToolCallContent, ToolCallFields, ToolCallStatus, ToolKind,
 };
@@ -33,6 +36,7 @@ use crate::ai::agent::api::serde_json_to_prost;
 
 const AGENT_OUTPUT_TEXT_PATH: &str = "agent_output.text";
 const AGENT_REASONING_TEXT_PATH: &str = "agent_reasoning.reasoning";
+const TOOL_CALL_PATH: &str = "tool_call";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum StreamKind {
@@ -50,6 +54,15 @@ struct OpenMessage {
 /// the call and its result always agree; see [`ToolProjection::for_call`].
 #[derive(Clone, Debug, PartialEq)]
 enum ToolProjection {
+    /// A call to one of the MCP servers the agent was given, presented as the native agent's
+    /// own MCP calls are: the installation id as `server_id` and the server's identity stamped
+    /// on.
+    Mcp {
+        server_id: String,
+        name: String,
+        args: prost_types::Struct,
+        identity: McpServerIdentity,
+    },
     Shell {
         command: String,
     },
@@ -74,12 +87,20 @@ enum ToolProjection {
 }
 
 impl ToolProjection {
-    fn for_call(
-        kind: Option<ToolKind>,
-        title: &str,
-        raw_input: Option<&Value>,
-        content: Option<&[ToolCallContent]>,
-    ) -> Self {
+    fn for_call(call: &ToolCallFields, title: &str, mcp_servers: &KnownMcpServers) -> Self {
+        let kind = call.kind;
+        let raw_input = call.raw_input.as_ref();
+        let content = call.content.as_deref();
+        // Decided before the shell projection: an adapter may report an MCP call as `execute`
+        // with the invocation's name as its title, which would otherwise read as a command.
+        if let Some(mcp) = mcp_servers.recognize(call) {
+            return Self::Mcp {
+                server_id: mcp.server.installation_id.to_string(),
+                name: mcp.tool,
+                args: generic_args(mcp.args.as_ref()),
+                identity: mcp.server.identity(),
+            };
+        }
         if let Some(command) = command_from_raw_input(raw_input, kind, title) {
             return Self::Shell { command };
         }
@@ -108,6 +129,17 @@ impl ToolProjection {
 
     fn tool(&self, title: &str) -> Tool {
         match self {
+            Self::Mcp {
+                server_id,
+                name,
+                args,
+                identity,
+            } => Tool::CallMcpTool(CallMcpTool {
+                name: name.clone(),
+                args: Some(args.clone()),
+                server_id: server_id.clone(),
+                server_identity: Some(identity.clone()),
+            }),
             Self::Shell { command } => Tool::RunShellCommand(RunShellCommand {
                 command: command.clone(),
                 ..Default::default()
@@ -149,8 +181,22 @@ impl ToolProjection {
         }
     }
 
-    fn result(&self, action_id: &str, output: String, failed: bool) -> ToolResult {
+    fn result(
+        &self,
+        action_id: &str,
+        output: String,
+        raw_output: Option<&Value>,
+        failed: bool,
+    ) -> ToolResult {
         match self {
+            // The MCP result itself, when the adapter passed it through, is more faithful than
+            // the content rendered from it.
+            Self::Mcp { .. } => match mcp_projection::outcome(raw_output) {
+                Some(Err(message)) => mcp_error(message),
+                Some(Ok(text)) => mcp_success(text),
+                None if failed => mcp_error(output),
+                None => mcp_success(output),
+            },
             Self::Shell { command } => {
                 let exit_code = i32::from(failed);
                 #[allow(deprecated)]
@@ -221,24 +267,32 @@ impl ToolProjection {
                     result: Some(result),
                 })
             }
-            Self::Generic { .. } if failed => ToolResult::CallMcpTool(CallMcpToolResult {
-                result: Some(call_mcp_tool_result::Result::Error(
-                    call_mcp_tool_result::Error { message: output },
-                )),
-            }),
-            Self::Generic { .. } => ToolResult::CallMcpTool(CallMcpToolResult {
-                result: Some(call_mcp_tool_result::Result::Success(
-                    call_mcp_tool_result::Success {
-                        results: vec![call_mcp_tool_result::success::Result {
-                            result: Some(call_mcp_tool_result::success::result::Result::Text(
-                                call_mcp_tool_result::success::result::Text { text: output },
-                            )),
-                        }],
-                    },
-                )),
-            }),
+            Self::Generic { .. } if failed => mcp_error(output),
+            Self::Generic { .. } => mcp_success(output),
         }
     }
+}
+
+fn mcp_error(message: String) -> ToolResult {
+    ToolResult::CallMcpTool(CallMcpToolResult {
+        result: Some(call_mcp_tool_result::Result::Error(
+            call_mcp_tool_result::Error { message },
+        )),
+    })
+}
+
+fn mcp_success(text: String) -> ToolResult {
+    ToolResult::CallMcpTool(CallMcpToolResult {
+        result: Some(call_mcp_tool_result::Result::Success(
+            call_mcp_tool_result::Success {
+                results: vec![call_mcp_tool_result::success::Result {
+                    result: Some(call_mcp_tool_result::success::result::Result::Text(
+                        call_mcp_tool_result::success::result::Text { text },
+                    )),
+                }],
+            },
+        )),
+    })
 }
 
 struct ToolCallState {
@@ -246,10 +300,14 @@ struct ToolCallState {
     /// the action model indexes results by id across conversations, and agents are free to
     /// reuse their ids across turns.
     action_id: String,
+    /// The id of the conversation message announcing the call.
+    message_id: String,
     kind: Option<ToolKind>,
     title: String,
     projection: ToolProjection,
     output: String,
+    /// The latest `rawOutput` the agent attached to the call.
+    raw_output: Option<Value>,
     has_result: bool,
 }
 
@@ -281,10 +339,12 @@ pub(super) struct AcpTurnMapper {
     /// Whether a tool call was announced in the current request stream, so the next result
     /// must be preceded by a segment boundary.
     tool_call_announced_in_segment: bool,
+    /// The MCP servers the agent was given.
+    mcp_servers: KnownMcpServers,
 }
 
 impl AcpTurnMapper {
-    pub(super) fn new(task_id: String, request_id: String) -> Self {
+    pub(super) fn new(task_id: String, request_id: String, mcp_servers: KnownMcpServers) -> Self {
         Self {
             task_id,
             request_id,
@@ -293,6 +353,7 @@ impl AcpTurnMapper {
             thoughts: HashMap::new(),
             todo_list_created: false,
             tool_call_announced_in_segment: false,
+            mcp_servers,
         }
     }
 
@@ -305,7 +366,11 @@ impl AcpTurnMapper {
 
     /// Actions that open the conversation: create the root task and echo the user's prompt,
     /// mirroring what the MAA server streams first.
-    pub(super) fn initial_actions(&self, prompt: &str) -> Vec<ClientAction> {
+    pub(super) fn initial_actions(
+        &self,
+        prompt: &str,
+        base: Option<&BaseUserQuery>,
+    ) -> Vec<ClientAction> {
         vec![
             action(client_action::Action::CreateTask(CreateTask {
                 task: Some(Task {
@@ -313,7 +378,7 @@ impl AcpTurnMapper {
                     ..Default::default()
                 }),
             })),
-            self.user_query_action(prompt, None),
+            self.user_query_action(prompt, base),
         ]
     }
 
@@ -340,6 +405,17 @@ impl AcpTurnMapper {
             source_message,
             ..Default::default()
         }))])
+    }
+
+    /// Echoes a user prompt that joined the turn in flight. The agent's next chunk is a reply
+    /// to it, so the message open before it must not be extended past it.
+    pub(super) fn steered_user_query_action(
+        &mut self,
+        prompt: &str,
+        base: Option<&BaseUserQuery>,
+    ) -> ClientAction {
+        self.open_message = None;
+        self.user_query_action(prompt, base)
     }
 
     pub(super) fn map_update(&mut self, update: SessionUpdate) -> Vec<TurnEvent> {
@@ -482,31 +558,26 @@ impl AcpTurnMapper {
         }
         self.open_message = None;
         let title = call.title.clone().unwrap_or_else(|| "Tool call".to_owned());
-        let projection = ToolProjection::for_call(
-            call.kind,
-            &title,
-            call.raw_input.as_ref(),
-            call.content.as_deref(),
-        );
+        let projection = ToolProjection::for_call(&call, &title, &self.mcp_servers);
         let action_id = Uuid::new_v4().to_string();
-        let tool = projection.tool(&title);
+        let message = self.new_message(MessageKind::ToolCall(ToolCall {
+            tool_call_id: action_id.clone(),
+            tool: Some(projection.tool(&title)),
+        }));
         let state = ToolCallState {
-            action_id: action_id.clone(),
+            action_id,
+            message_id: message.id.clone(),
             kind: call.kind,
             title,
             projection,
             output: tool_output_text(call.content.as_deref(), call.raw_output.as_ref()),
+            raw_output: call.raw_output.clone(),
             has_result: false,
         };
         self.tool_calls.insert(call.tool_call_id.clone(), state);
         self.tool_call_announced_in_segment = true;
 
-        let mut events = vec![TurnEvent::Actions(vec![self.add_messages(vec![
-            self.new_message(MessageKind::ToolCall(ToolCall {
-                tool_call_id: action_id,
-                tool: Some(tool),
-            })),
-        ])])];
+        let mut events = vec![TurnEvent::Actions(vec![self.add_messages(vec![message])])];
         if let Some(result) = self.result_if_finished(&call.tool_call_id, call.status) {
             events.extend(self.boundary_before_results());
             events.push(TurnEvent::Actions(vec![self.add_messages(vec![result])]));
@@ -534,13 +605,36 @@ impl AcpTurnMapper {
         if call.kind.is_some() {
             state.kind = call.kind;
         }
+        // Agents may announce a call before its input has streamed in, so input that arrives
+        // later is written back onto the announced call.
+        let mut input_changed = false;
         match &mut state.projection {
+            // The server and tool were fixed when the call was announced; only the arguments
+            // follow a later input. An update may carry the input alone, so the announced title
+            // stands in for the label that named the call.
+            ToolProjection::Mcp { args, .. } => {
+                if call.raw_input.is_some() {
+                    let mut refined = call.clone();
+                    if refined.name.is_none() && refined.title.is_none() {
+                        refined.title = Some(state.title.clone());
+                    }
+                    if let Some(mcp) = self.mcp_servers.recognize(&refined) {
+                        let updated = generic_args(mcp.args.as_ref());
+                        if *args != updated {
+                            *args = updated;
+                            input_changed = true;
+                        }
+                    }
+                }
+            }
             ToolProjection::Shell { command } => {
                 if call.raw_input.is_some()
                     && let Some(updated) =
                         command_from_raw_input(call.raw_input.as_ref(), state.kind, "")
+                    && *command != updated
                 {
                     *command = updated;
+                    input_changed = true;
                 }
             }
             // The announced call already carries the diff; a later one (e.g. the applied
@@ -555,20 +649,51 @@ impl AcpTurnMapper {
                     *new_text = updated_new;
                 }
             }
-            ToolProjection::ReadFiles { .. } | ToolProjection::Generic { .. } => {}
+            ToolProjection::Generic { args, .. } => {
+                if call.raw_input.is_some() {
+                    let updated = generic_args(call.raw_input.as_ref());
+                    if *args != updated {
+                        *args = updated;
+                        input_changed = true;
+                    }
+                }
+            }
+            ToolProjection::ReadFiles { .. } => {}
         }
         let output = tool_output_text(call.content.as_deref(), call.raw_output.as_ref());
         if !output.is_empty() {
             state.output = output;
         }
-        match self.result_if_finished(&call.tool_call_id, call.status) {
-            Some(result) => {
-                let mut events = self.boundary_before_results();
-                events.push(TurnEvent::Actions(vec![self.add_messages(vec![result])]));
-                events
-            }
-            None => Vec::new(),
+        if call.raw_output.is_some() {
+            state.raw_output = call.raw_output.clone();
         }
+        let mut events = Vec::new();
+        if input_changed {
+            let message = Message {
+                id: state.message_id.clone(),
+                task_id: self.task_id.clone(),
+                request_id: self.request_id.clone(),
+                message: Some(MessageKind::ToolCall(ToolCall {
+                    tool_call_id: state.action_id.clone(),
+                    tool: Some(state.projection.tool(&state.title)),
+                })),
+                ..Default::default()
+            };
+            events.push(TurnEvent::Actions(vec![action(
+                client_action::Action::UpdateTaskMessage(UpdateTaskMessage {
+                    task_id: self.task_id.clone(),
+                    message: Some(message),
+                    mask: Some(FieldMask {
+                        paths: vec![TOOL_CALL_PATH.to_owned()],
+                    }),
+                }),
+            )]));
+        }
+        if let Some(result) = self.result_if_finished(&call.tool_call_id, call.status) {
+            events.extend(self.boundary_before_results());
+            events.push(TurnEvent::Actions(vec![self.add_messages(vec![result])]));
+        }
+        events
     }
 
     /// Some agents announce an edit before they know what it changes and attach the diff only
@@ -652,7 +777,9 @@ impl AcpTurnMapper {
         } else {
             state.output.clone()
         };
-        let result = state.projection.result(&action_id, output, failed);
+        let result = state
+            .projection
+            .result(&action_id, output, state.raw_output.as_ref(), failed);
         Some(
             self.new_message(MessageKind::ToolCallResult(ToolCallResult {
                 tool_call_id: action_id,

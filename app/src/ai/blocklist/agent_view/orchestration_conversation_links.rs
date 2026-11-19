@@ -36,7 +36,10 @@ pub(crate) fn is_conversation_open_in_other_visible_view(
     else {
         return false;
     };
-    if owner == self_terminal_view_id {
+    if owner == self_terminal_view_id
+        || BlocklistAIHistoryModel::as_ref(app).active_conversation_id(owner)
+            != Some(conversation_id)
+    {
         return false;
     }
     pane_group_id_containing_terminal_view(owner, app).is_some()
@@ -76,6 +79,8 @@ pub(crate) fn dispatch_focus_or_open_child_agent_pane(
     if let Some(owner_view_id) =
         BlocklistAIHistoryModel::as_ref(app).terminal_surface_id_for_conversation(&conversation_id)
         && owner_view_id != self_terminal_view_id
+        && BlocklistAIHistoryModel::as_ref(app).active_conversation_id(owner_view_id)
+            == Some(conversation_id)
         && let Some(owner_pane_group_id) =
             pane_group_id_containing_terminal_view(owner_view_id, app)
     {

@@ -1,19 +1,24 @@
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
+use event_listener::Event;
 use futures::StreamExt as _;
-use futures::channel::mpsc;
+use futures::channel::{mpsc, oneshot};
 use futures::executor::block_on;
 use futures::future::join;
 use futures::io::{AsyncBufReadExt as _, AsyncRead, AsyncWrite, AsyncWriteExt as _, BufReader};
 use serde_json::{Value, json};
+use session_sharing_protocol::common::AgentAttachment;
 use warp_multi_agent_api::client_action::Action;
 use warp_multi_agent_api::message::Message as MessageKind;
 use warp_multi_agent_api::response_event::StreamInit;
+use warp_multi_agent_api::{QueryAuthor, WarpUser, query_author};
 use warpui::r#async::executor::Background;
 
 use super::super::connection::AgentRequestHandler;
+use super::super::mcp_projection::KnownMcpServers;
 use super::*;
+use crate::ai::agent::BaseUserQuery;
 use crate::ai::blocklist::{QueuedQuery, QueuedQueryOrigin};
 use crate::server::server_api::ai::MockAIClient;
 
@@ -23,7 +28,7 @@ const SESSION: &str = "sess_1";
 fn pipe() -> (PipeWriter, PipeReader) {
     let (tx, rx) = mpsc::unbounded();
     (
-        PipeWriter(tx),
+        PipeWriter(tx, Arc::default()),
         PipeReader {
             rx,
             pending: Vec::new(),
@@ -31,7 +36,73 @@ fn pipe() -> (PipeWriter, PipeReader) {
     )
 }
 
-struct PipeWriter(mpsc::UnboundedSender<Vec<u8>>);
+#[derive(Default)]
+struct ManualTimers {
+    timers: Mutex<Vec<ManualTimer>>,
+    fired: Mutex<Vec<Duration>>,
+    changed: Event,
+}
+
+struct ManualTimer {
+    after: Duration,
+    release: Option<oneshot::Sender<()>>,
+}
+impl ManualTimers {
+    fn factory(self: &Arc<Self>) -> Arc<dyn Fn(Duration) -> Deadline + Send + Sync> {
+        let timers = self.clone();
+        Arc::new(move |after| {
+            let (tx, rx) = oneshot::channel();
+            timers.timers.lock().push(ManualTimer {
+                after,
+                release: Some(tx),
+            });
+            timers.changed.notify(usize::MAX);
+            let timers = timers.clone();
+            Box::pin(
+                async move {
+                    let _ = rx.await;
+                    timers.fired.lock().push(after);
+                    timers.changed.notify(usize::MAX);
+                }
+                .fuse(),
+            )
+        })
+    }
+
+    async fn take(&self, after: Duration) -> oneshot::Sender<()> {
+        loop {
+            let changed = self.changed.listen();
+            if let Some(gate) = self.timers.lock().iter_mut().find_map(|timer| {
+                if timer.after == after {
+                    timer.release.take()
+                } else {
+                    None
+                }
+            }) {
+                return gate;
+            }
+            changed.await;
+        }
+    }
+
+    fn requested(&self) -> Vec<Duration> {
+        self.timers.lock().iter().map(|timer| timer.after).collect()
+    }
+
+    async fn wait_fired(&self, after: Duration) {
+        loop {
+            let changed = self.changed.listen();
+            if self.fired.lock().contains(&after) {
+                return;
+            }
+            changed.await;
+        }
+    }
+}
+
+type FlushGate = Arc<Mutex<Option<oneshot::Receiver<()>>>>;
+
+struct PipeWriter(mpsc::UnboundedSender<Vec<u8>>, FlushGate);
 
 impl AsyncWrite for PipeWriter {
     fn poll_write(
@@ -45,7 +116,14 @@ impl AsyncWrite for PipeWriter {
         Poll::Ready(Ok(buf.len()))
     }
 
-    fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        let mut gate = self.1.lock();
+        if let Some(release) = gate.as_mut() {
+            if release.poll_unpin(cx).is_pending() {
+                return Poll::Pending;
+            }
+            *gate = None;
+        }
         Poll::Ready(Ok(()))
     }
 
@@ -89,6 +167,15 @@ struct FakeAgent {
 }
 
 impl FakeAgent {
+    async fn read_barrier(&mut self) {
+        self.send(json!({
+            "jsonrpc": "2.0", "id": "read-barrier", "method": "test/read_barrier", "params": {}
+        }))
+        .await;
+        let answer = self.next_message().await;
+        assert_eq!(answer["id"], "read-barrier", "{answer}");
+        assert_eq!(answer["error"]["code"], -32601);
+    }
     async fn next_message(&mut self) -> Value {
         let mut line = String::new();
         self.from_client.read_line(&mut line).await.unwrap();
@@ -108,6 +195,28 @@ impl FakeAgent {
         assert_eq!(message["method"], "session/cancel", "got {message}");
         assert!(message.get("id").is_none(), "cancel is a notification");
         assert_eq!(message["params"]["sessionId"], SESSION);
+    }
+
+    /// Reads the next `_session/steering` request, failing on anything else.
+    async fn next_steer(&mut self) -> Value {
+        let message = self.next_message().await;
+        assert_eq!(message["method"], "_session/steering", "got {message}");
+        assert!(message.get("id").is_some(), "steering is a request");
+        assert_eq!(message["params"]["sessionId"], SESSION);
+        assert_eq!(
+            message["params"]["_meta"]["steering"]["idleBehavior"], "promptRequired",
+            "the agent is asked not to start a turn of its own"
+        );
+        message
+    }
+
+    async fn answer_steer(&mut self, steer: &Value, outcome: &str) {
+        self.send(json!({
+            "jsonrpc": "2.0",
+            "id": steer["id"],
+            "result": { "outcome": outcome },
+        }))
+        .await;
     }
 
     async fn send(&mut self, message: Value) {
@@ -154,6 +263,7 @@ fn prompt_text(prompt: &Value) -> String {
 
 #[derive(Debug, Clone, PartialEq)]
 enum HostEvent {
+    PromptSubmitted,
     BeginTurn {
         stream: ResponseStreamId,
         initiator: Option<ParticipantId>,
@@ -166,6 +276,11 @@ enum HostEvent {
     Finished {
         stream: ResponseStreamId,
         reason: &'static str,
+        settling: bool,
+    },
+    Cancelled {
+        stream: ResponseStreamId,
+        by: TurnCancellation,
         settling: bool,
     },
     MarkedCancelled {
@@ -184,6 +299,14 @@ struct RecordingHost {
     streams_opened: Mutex<usize>,
     state: Arc<TurnState>,
     queued_rows: Mutex<Vec<(QueuedQueryId, String)>>,
+    changed: Event,
+    begin_gate: Mutex<Option<oneshot::Receiver<()>>>,
+    apply_gate: Mutex<Option<oneshot::Receiver<()>>>,
+    snapshot_gate: Mutex<Option<oneshot::Receiver<()>>>,
+    task_state: Mutex<&'static str>,
+    /// The next `apply_actions` fails, as when the conversation has gone.
+    fail_next_apply: Mutex<bool>,
+    actions: Mutex<Vec<(ResponseStreamId, Vec<ClientAction>)>>,
 }
 
 impl RecordingHost {
@@ -193,6 +316,13 @@ impl RecordingHost {
             streams_opened: Mutex::new(0),
             state,
             queued_rows: Mutex::default(),
+            changed: Event::new(),
+            begin_gate: Mutex::default(),
+            apply_gate: Mutex::default(),
+            snapshot_gate: Mutex::default(),
+            task_state: Mutex::new("in_progress"),
+            fail_next_apply: Mutex::new(false),
+            actions: Mutex::default(),
         }
     }
 
@@ -202,21 +332,50 @@ impl RecordingHost {
 
     fn record(&self, event: HostEvent) {
         self.events.lock().push(event);
+        self.changed.notify(usize::MAX);
     }
 
-    /// Polls until `predicate` holds for the recorded events; the agent script uses this to
-    /// act only after the driver has applied what it sent.
     async fn wait_for(&self, predicate: impl Fn(&[HostEvent]) -> bool) {
-        for _ in 0..400 {
+        loop {
+            let changed = self.changed.listen();
             if predicate(&self.events()) {
                 return;
             }
-            Timer::after(Duration::from_millis(5)).await;
+            changed.await;
         }
-        panic!(
-            "host never recorded the expected event: {:?}",
-            self.events()
-        );
+    }
+
+    fn gate_next_begin(&self) -> oneshot::Sender<()> {
+        let (tx, rx) = oneshot::channel();
+        assert!(self.begin_gate.lock().replace(rx).is_none());
+        tx
+    }
+
+    fn gate_next_apply(&self) -> oneshot::Sender<()> {
+        let (tx, rx) = oneshot::channel();
+        assert!(self.apply_gate.lock().replace(rx).is_none());
+        tx
+    }
+
+    fn fail_next_apply(&self) {
+        *self.fail_next_apply.lock() = true;
+    }
+
+    fn gate_next_snapshot(&self) -> oneshot::Sender<()> {
+        let (tx, rx) = oneshot::channel();
+        assert!(self.snapshot_gate.lock().replace(rx).is_none());
+        tx
+    }
+
+    async fn wait_for_finished(&self, count: usize) {
+        self.wait_for(|events| {
+            events
+                .iter()
+                .filter(|event| matches!(event, HostEvent::Finished { .. }))
+                .count()
+                == count
+        })
+        .await;
     }
 
     fn streams(&self) -> Vec<ResponseStreamId> {
@@ -274,6 +433,11 @@ fn message_texts(actions: &[ClientAction]) -> Vec<String> {
 
 #[async_trait]
 impl TurnHost for RecordingHost {
+    async fn on_prompt_submitted(&self) {
+        *self.task_state.lock() = "in_progress";
+        self.record(HostEvent::PromptSubmitted);
+    }
+
     async fn begin_turn(&self, initiator: Option<ParticipantId>) -> Result<ExternalHarnessTurn> {
         let n = {
             let mut opened = self.streams_opened.lock();
@@ -290,6 +454,10 @@ impl TurnHost for RecordingHost {
             stream: stream_id.clone(),
             initiator,
         });
+        let gate = self.begin_gate.lock().take();
+        if let Some(gate) = gate {
+            gate.await.unwrap();
+        }
         Ok(ExternalHarnessTurn {
             stream_id,
             request_id,
@@ -301,12 +469,22 @@ impl TurnHost for RecordingHost {
         stream_id: &ResponseStreamId,
         actions: Vec<ClientAction>,
     ) -> Result<()> {
+        if std::mem::take(&mut *self.fail_next_apply.lock()) {
+            return Err(anyhow!("the conversation is gone"));
+        }
+        self.actions
+            .lock()
+            .push((stream_id.clone(), actions.clone()));
         let texts = message_texts(&actions);
         if !texts.is_empty() {
             self.record(HostEvent::Texts {
                 stream: stream_id.clone(),
                 texts,
             });
+        }
+        let gate = self.apply_gate.lock().take();
+        if let Some(gate) = gate {
+            gate.await.unwrap();
         }
         Ok(())
     }
@@ -329,6 +507,14 @@ impl TurnHost for RecordingHost {
         Ok(())
     }
 
+    async fn cancel_turn(&self, stream_id: ResponseStreamId, by: TurnCancellation) {
+        self.record(HostEvent::Cancelled {
+            stream: stream_id,
+            by,
+            settling: self.state.is_settling(),
+        });
+    }
+
     async fn mark_conversation_cancelled(&self) {
         self.record(HostEvent::MarkedCancelled {
             settling: self.state.is_settling(),
@@ -336,6 +522,10 @@ impl TurnHost for RecordingHost {
     }
 
     async fn capture_snapshot(&self) -> Result<Option<Vec<u8>>> {
+        let gate = self.snapshot_gate.lock().take();
+        if let Some(gate) = gate {
+            gate.await.unwrap();
+        }
         Ok(None)
     }
 
@@ -360,13 +550,58 @@ impl TurnHost for RecordingHost {
     }
 }
 
+/// One action report the turn driver made.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ReportedAction {
+    event: AcpActionEvent,
+    outcome: &'static str,
+    is_error: bool,
+}
+
+/// Records what the turn driver reports, in order.
+#[derive(Default)]
+struct RecordingTelemetry {
+    actions: Mutex<Vec<ReportedAction>>,
+}
+
+impl RecordingTelemetry {
+    /// The `(outcome, is_error)` of every report of `event`, in order.
+    fn actions(&self, wanted: AcpActionEvent) -> Vec<(&'static str, bool)> {
+        self.actions
+            .lock()
+            .iter()
+            .filter(|action| action.event == wanted)
+            .map(|action| (action.outcome, action.is_error))
+            .collect()
+    }
+}
+
+impl TurnTelemetry for RecordingTelemetry {
+    fn action(
+        &self,
+        event: AcpActionEvent,
+        outcome: &'static str,
+        started: DateTime<Utc>,
+        is_error: bool,
+    ) {
+        assert!(started <= Utc::now(), "{event:?} started in the future");
+        self.actions.lock().push(ReportedAction {
+            event,
+            outcome,
+            is_error,
+        });
+    }
+}
+
 struct Fixture {
     agent: FakeAgent,
     follow_ups: async_channel::Sender<ExternalHarnessPrompt>,
     cancels: async_channel::Sender<ExternalHarnessCancel>,
     host: Arc<RecordingHost>,
+    telemetry: Arc<RecordingTelemetry>,
     state: Arc<TurnState>,
     connection: Arc<AcpConnection>,
+    flush_gate: FlushGate,
 }
 
 impl Fixture {
@@ -393,6 +628,19 @@ impl Fixture {
         let Fixture { host, state, .. } = self;
         (host, state)
     }
+
+    /// Like [`Self::unbind`], keeping the telemetry sink for assertions.
+    fn unbind_with_telemetry(
+        self,
+    ) -> (Arc<RecordingHost>, Arc<TurnState>, Arc<RecordingTelemetry>) {
+        let Fixture {
+            host,
+            state,
+            telemetry,
+            ..
+        } = self;
+        (host, state, telemetry)
+    }
 }
 
 fn rejecting_handler() -> AgentRequestHandler {
@@ -413,6 +661,7 @@ fn start(
     cancel_deadline: Duration,
 ) -> (TurnDriver, AcpTurnMapper, Fixture) {
     let (client_writer, agent_reader) = pipe();
+    let flush_gate = client_writer.1.clone();
     let (agent_writer, client_reader) = pipe();
     let executor = Arc::new(Background::new(1, |_| "acp-turn-driver-test".to_string()));
     let (connection, notifications) =
@@ -420,17 +669,23 @@ fn start(
     let connection = Arc::new(connection);
     let state = Arc::new(TurnState::default());
     let host = Arc::new(RecordingHost::new(state.clone()));
+    let telemetry = Arc::new(RecordingTelemetry::default());
     let (follow_up_tx, follow_up_rx) = async_channel::unbounded();
     let (cancel_tx, cancel_rx) = async_channel::unbounded();
     let (save_tx, _save_rx) = async_channel::unbounded();
     let turn = block_on(host.begin_turn(None)).unwrap();
-    let mapper = AcpTurnMapper::new("task-1".to_owned(), turn.request_id.clone());
+    let mapper = AcpTurnMapper::new(
+        "task-1".to_owned(),
+        turn.request_id.clone(),
+        KnownMcpServers::default(),
+    );
     let driver = TurnDriver {
         connection: connection.clone(),
         notifications,
         follow_ups: Some(follow_up_rx),
         cancels: Some(cancel_rx),
         host: host.clone(),
+        telemetry: telemetry.clone(),
         state: state.clone(),
         turn,
         session_id: SESSION.to_owned(),
@@ -447,6 +702,12 @@ fn start(
         save_requests: save_tx,
         queued: VecDeque::new(),
         cancel_deadline,
+        steer_settle_deadline: STEER_SETTLE_DEADLINE,
+        timer_factory: Arc::new(|_| no_deadline()),
+        steering_supported: false,
+        steering: None,
+        awaiting_steer: VecDeque::new(),
+        late_steers: Mutex::new(FuturesUnordered::new()),
     };
     let fixture = Fixture {
         agent: FakeAgent {
@@ -457,14 +718,492 @@ fn start(
         follow_ups: follow_up_tx,
         cancels: cancel_tx,
         host,
+        telemetry,
         state,
         connection,
+        flush_gate,
     };
     (driver, mapper, fixture)
 }
 
 fn start_default() -> (TurnDriver, AcpTurnMapper, Fixture) {
     start(rejecting_handler(), STEER_CANCEL_DEADLINE)
+}
+
+fn start_manual() -> (TurnDriver, AcpTurnMapper, Fixture, Arc<ManualTimers>) {
+    let (mut driver, mapper, fixture) = start_default();
+    let timers = Arc::new(ManualTimers::default());
+    driver.timer_factory = timers.factory();
+    (driver, mapper, fixture, timers)
+}
+
+/// A driver talking to an agent that advertised `_session/steering`.
+fn start_steering() -> (TurnDriver, AcpTurnMapper, Fixture) {
+    let (mut driver, mapper, fixture) = start_default();
+    driver.steering_supported = true;
+    (driver, mapper, fixture)
+}
+
+/// Turns that have ended, whether their stream finished or they were cancelled.
+fn ended_count(events: &[HostEvent]) -> usize {
+    events
+        .iter()
+        .filter(|event| {
+            matches!(
+                event,
+                HostEvent::Finished { .. } | HostEvent::Cancelled { .. }
+            )
+        })
+        .count()
+}
+
+#[test]
+fn a_follow_up_mid_turn_is_steered_into_the_turn_when_the_agent_supports_it() {
+    let (driver, mut mapper, mut fixture) = start_steering();
+    let script = async {
+        let first = fixture.agent.next_prompt().await;
+        *fixture.host.task_state.lock() = "waiting";
+        fixture.agent.send_chunk("working").await;
+
+        fixture.send_follow_up("steer").await;
+        let steer = fixture.agent.next_steer().await;
+        assert_eq!(
+            prompt_text(&steer),
+            "steer",
+            "no interruption note on a steer"
+        );
+        fixture
+            .host
+            .wait_for(|events| events.contains(&HostEvent::ShowQueued("steer".to_owned())))
+            .await;
+        fixture.agent.answer_steer(&steer, "injected").await;
+        fixture
+            .host
+            .wait_for(|events| {
+                events
+                    .iter()
+                    .any(|event| matches!(event, HostEvent::HideQueued(_)))
+            })
+            .await;
+        fixture.agent.send_chunk("changing course").await;
+        fixture.agent.respond(&first, "end_turn").await;
+        fixture
+            .host
+            .wait_for(|events| matches!(events.last(), Some(HostEvent::Finished { .. })))
+            .await;
+        fixture.unbind_with_telemetry()
+    };
+    let ((host, state, telemetry), ()) = block_on(join(script, driver.run(&mut mapper)));
+
+    let streams = host.streams();
+    assert_eq!(
+        streams.len(),
+        1,
+        "the turn keeps running: {:?}",
+        host.events()
+    );
+    assert_eq!(
+        telemetry.actions(AcpActionEvent::Steer),
+        vec![("injected", false)]
+    );
+    assert_eq!(
+        telemetry.actions(AcpActionEvent::Turn),
+        vec![("stopped_end_turn", false)]
+    );
+    assert!(telemetry.actions(AcpActionEvent::Cancel).is_empty());
+    assert_eq!(
+        host.texts_on(&streams[0]),
+        vec!["working", "steer", "changing course"],
+        "the steered prompt is echoed where it joined the turn"
+    );
+    let events = host.events();
+    assert!(
+        !events.iter().any(|event| matches!(
+            event,
+            HostEvent::MarkedCancelled { .. } | HostEvent::Cancelled { .. }
+        )),
+        "{events:?}"
+    );
+    assert_eq!(
+        &events[events.len() - 2..],
+        &[
+            HostEvent::Finished {
+                stream: streams[0].clone(),
+                reason: "done",
+                settling: false,
+            },
+            HostEvent::Stopped,
+        ]
+    );
+    assert!(host.queued_rows.lock().is_empty());
+    assert!(!state.is_settling());
+}
+
+#[test]
+fn initial_prompts_and_follow_up_turns_report_prompt_submission() {
+    let (driver, mut mapper, mut fixture) = start_default();
+    let script = async {
+        let first = fixture.agent.next_prompt().await;
+        assert!(matches!(
+            fixture.host.events().last(),
+            Some(HostEvent::PromptSubmitted)
+        ));
+        fixture.agent.respond(&first, "end_turn").await;
+        fixture.host.wait_for_finished(1).await;
+        fixture.send_follow_up("follow up").await;
+        let second = fixture.agent.next_prompt().await;
+        assert_eq!(prompt_text(&second), "follow up");
+        assert!(matches!(
+            fixture.host.events().last(),
+            Some(HostEvent::PromptSubmitted)
+        ));
+        fixture.agent.respond(&second, "end_turn").await;
+        fixture.host.wait_for_finished(2).await;
+        fixture.unbind()
+    };
+    let ((host, _), ()) = block_on(join(script, driver.run(&mut mapper)));
+    assert_eq!(
+        host.events()
+            .iter()
+            .filter(|event| matches!(event, HostEvent::PromptSubmitted))
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn steering_reports_new_input_before_delivery() {
+    let (driver, mut mapper, mut fixture) = start_steering();
+    let script = async {
+        let first = fixture.agent.next_prompt().await;
+        fixture.send_follow_up("wake").await;
+        let steer = fixture.agent.next_steer().await;
+        assert_eq!(*fixture.host.task_state.lock(), "in_progress");
+        assert!(matches!(
+            fixture.host.events().last(),
+            Some(HostEvent::PromptSubmitted)
+        ));
+        fixture.agent.answer_steer(&steer, "injected").await;
+        fixture.agent.respond(&first, "end_turn").await;
+        fixture.host.wait_for_finished(1).await;
+        fixture.unbind()
+    };
+    block_on(join(script, driver.run(&mut mapper)));
+}
+
+#[test]
+fn steering_acknowledgment_and_trailing_output_preserve_new_finish_or_wait_state() {
+    for task_state in ["succeeded", "waiting"] {
+        let (driver, mut mapper, mut fixture) = start_steering();
+        let script = async {
+            let first = fixture.agent.next_prompt().await;
+            fixture.send_follow_up("wake").await;
+            let steer = fixture.agent.next_steer().await;
+            assert_eq!(*fixture.host.task_state.lock(), "in_progress");
+            *fixture.host.task_state.lock() = task_state;
+            fixture.agent.answer_steer(&steer, "injected").await;
+            fixture.agent.send_chunk("trailing output").await;
+            fixture.agent.respond(&first, "end_turn").await;
+            fixture.host.wait_for_finished(1).await;
+            fixture.unbind()
+        };
+        let ((host, _), ()) = block_on(join(script, driver.run(&mut mapper)));
+        assert_eq!(*host.task_state.lock(), task_state);
+        assert_eq!(
+            host.events()
+                .iter()
+                .filter(|event| matches!(event, HostEvent::PromptSubmitted))
+                .count(),
+            2
+        );
+    }
+}
+
+#[test]
+fn tool_result_stream_boundaries_do_not_report_new_prompt_submission() {
+    let (driver, mut mapper, mut fixture) = start_default();
+    let script = async {
+        let first = fixture.agent.next_prompt().await;
+        *fixture.host.task_state.lock() = "waiting";
+        for (session_update, status) in [
+            ("tool_call", "in_progress"),
+            ("tool_call_update", "completed"),
+        ] {
+            fixture
+                .agent
+                .send(json!({
+                    "jsonrpc": "2.0",
+                    "method": "session/update",
+                    "params": {
+                        "sessionId": SESSION,
+                        "update": {
+                            "sessionUpdate": session_update,
+                            "toolCallId": "wait",
+                            "title": "wait-for-events",
+                            "kind": "execute",
+                            "status": status,
+                        },
+                    },
+                }))
+                .await;
+        }
+        fixture.agent.send_chunk("trailing output").await;
+        fixture.agent.respond(&first, "end_turn").await;
+        fixture.host.wait_for_finished(2).await;
+        fixture.unbind()
+    };
+    let ((host, _), ()) = block_on(join(script, driver.run(&mut mapper)));
+    assert_eq!(host.streams().len(), 2);
+    assert_eq!(*host.task_state.lock(), "waiting");
+    assert_eq!(
+        host.events()
+            .iter()
+            .filter(|event| matches!(event, HostEvent::PromptSubmitted))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn follow_ups_that_arrive_during_one_steer_are_steered_in_order() {
+    let (driver, mut mapper, mut fixture) = start_steering();
+    let script = async {
+        let first = fixture.agent.next_prompt().await;
+        fixture.send_follow_up("a").await;
+        let steer_a = fixture.agent.next_steer().await;
+        assert_eq!(prompt_text(&steer_a), "a");
+        fixture.send_follow_up("b").await;
+        fixture
+            .host
+            .wait_for(|events| events.contains(&HostEvent::ShowQueued("b".to_owned())))
+            .await;
+        fixture.agent.answer_steer(&steer_a, "injected").await;
+        let steer_b = fixture.agent.next_steer().await;
+        assert_eq!(
+            prompt_text(&steer_b),
+            "b",
+            "the next steer waits for the first's answer"
+        );
+        fixture.agent.answer_steer(&steer_b, "injected").await;
+        fixture
+            .host
+            .wait_for(|events| {
+                events
+                    .iter()
+                    .filter(|event| matches!(event, HostEvent::HideQueued(_)))
+                    .count()
+                    == 2
+            })
+            .await;
+        fixture.agent.respond(&first, "end_turn").await;
+        fixture
+            .host
+            .wait_for(|events| matches!(events.last(), Some(HostEvent::Finished { .. })))
+            .await;
+        fixture.unbind()
+    };
+    let ((host, _), ()) = block_on(join(script, driver.run(&mut mapper)));
+
+    let streams = host.streams();
+    assert_eq!(streams.len(), 1);
+    assert_eq!(host.texts_on(&streams[0]), vec!["a", "b"]);
+    assert!(host.queued_rows.lock().is_empty());
+}
+
+#[test]
+fn a_steer_the_agent_does_not_take_falls_back_to_cancelling_the_turn_in_arrival_order() {
+    let (driver, mut mapper, mut fixture) = start_steering();
+    let script = async {
+        let first = fixture.agent.next_prompt().await;
+        fixture.send_follow_up("a").await;
+        let steer = fixture.agent.next_steer().await;
+        fixture.send_follow_up("b").await;
+        fixture
+            .host
+            .wait_for(|events| events.contains(&HostEvent::ShowQueued("b".to_owned())))
+            .await;
+        fixture.agent.answer_steer(&steer, "failed").await;
+        fixture.agent.expect_cancel().await;
+        // Arrives once the turn is being cancelled, so it is held behind the steers.
+        fixture.send_follow_up("c").await;
+        fixture
+            .host
+            .wait_for(|events| events.contains(&HostEvent::ShowQueued("c".to_owned())))
+            .await;
+        fixture.agent.respond(&first, "cancelled").await;
+
+        let second = fixture.agent.next_prompt().await;
+        assert_eq!(
+            second["params"]["prompt"],
+            json!([
+                {"type": "text", "text": format!("{STEER_INTERRUPTION_NOTE}\n\na")},
+                {"type": "text", "text": "b"},
+                {"type": "text", "text": "c"},
+            ]),
+            "the turn was cut short, so the agent is told, and nothing jumps the queue"
+        );
+        fixture.agent.respond(&second, "end_turn").await;
+        fixture
+            .host
+            .wait_for(|events| ended_count(events) == 2)
+            .await;
+        fixture.unbind()
+    };
+    let ((host, state), ()) = block_on(join(script, driver.run(&mut mapper)));
+
+    let streams = host.streams();
+    assert_eq!(streams.len(), 2);
+    assert_eq!(host.texts_on(&streams[1]), vec!["a", "b", "c"]);
+    assert!(host.queued_rows.lock().is_empty());
+    assert!(!state.is_settling());
+}
+
+#[test]
+fn a_steer_answered_after_the_turn_ended_is_sent_as_a_turn_without_an_interruption_note() {
+    let (driver, mut mapper, mut fixture) = start_steering();
+    let script = async {
+        let first = fixture.agent.next_prompt().await;
+        fixture.send_follow_up("steer").await;
+        let steer = fixture.agent.next_steer().await;
+        // The turn ends on its own before the agent gets to the steer.
+        fixture.agent.respond(&first, "end_turn").await;
+        fixture.agent.answer_steer(&steer, "promptRequired").await;
+
+        // No cancel: there was nothing left to cancel.
+        let second = fixture.agent.next_prompt().await;
+        assert_eq!(prompt_text(&second), "steer");
+        fixture.agent.respond(&second, "end_turn").await;
+        fixture
+            .host
+            .wait_for(|events| ended_count(events) == 2)
+            .await;
+        fixture.unbind()
+    };
+    let ((host, state), ()) = block_on(join(script, driver.run(&mut mapper)));
+
+    let events = host.events();
+    let streams = host.streams();
+    assert_eq!(streams.len(), 2, "{events:?}");
+    assert!(
+        events.contains(&HostEvent::Finished {
+            stream: streams[0].clone(),
+            reason: "done",
+            settling: true,
+        }),
+        "the first turn settles with a follow-up pending, so the idle exit is held off: {events:?}"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, HostEvent::MarkedCancelled { .. })),
+        "{events:?}"
+    );
+    assert!(host.queued_rows.lock().is_empty());
+    assert!(!state.is_settling());
+}
+
+#[test]
+fn a_steer_that_started_a_detached_turn_cancels_it_and_sends_the_prompt_as_a_turn() {
+    let (driver, mut mapper, mut fixture) = start_steering();
+    let script = async {
+        let first = fixture.agent.next_prompt().await;
+        fixture.send_follow_up("steer").await;
+        let steer = fixture.agent.next_steer().await;
+        fixture.agent.answer_steer(&steer, "startedNewTurn").await;
+        // The detached turn is stopped, and the original turn's response arrives as it
+        // would have anyway.
+        fixture.agent.expect_cancel().await;
+        fixture.agent.respond(&first, "end_turn").await;
+
+        let second = fixture.agent.next_prompt().await;
+        assert_eq!(
+            prompt_text(&second),
+            "steer",
+            "the original turn was not cut short, so no interruption note"
+        );
+        fixture.agent.respond(&second, "end_turn").await;
+        fixture
+            .host
+            .wait_for(|events| ended_count(events) == 2)
+            .await;
+        fixture.unbind()
+    };
+    let ((host, state), ()) = block_on(join(script, driver.run(&mut mapper)));
+
+    assert_eq!(host.streams().len(), 2, "{:?}", host.events());
+    assert!(host.queued_rows.lock().is_empty());
+    assert!(!state.is_settling());
+}
+
+#[test]
+fn a_steer_the_agent_never_answers_is_sent_as_a_turn_once_the_turn_ends() {
+    let (mut driver, mut mapper, mut fixture, timers) = start_manual();
+    driver.steering_supported = true;
+    let script = async {
+        let first = fixture.agent.next_prompt().await;
+        fixture.send_follow_up("steer").await;
+        let _steer = fixture.agent.next_steer().await;
+        fixture.agent.respond(&first, "end_turn").await;
+        timers.take(STEER_SETTLE_DEADLINE).await.send(()).unwrap();
+
+        let second = fixture.agent.next_prompt().await;
+        assert_eq!(prompt_text(&second), "steer");
+        fixture.agent.respond(&second, "end_turn").await;
+        fixture
+            .host
+            .wait_for(|events| ended_count(events) == 2)
+            .await;
+        fixture.unbind()
+    };
+    let ((host, _), ()) = block_on(join(script, driver.run(&mut mapper)));
+
+    assert_eq!(host.streams().len(), 2, "{:?}", host.events());
+    assert!(host.queued_rows.lock().is_empty());
+}
+
+#[test]
+fn an_agent_that_rejects_the_steering_method_is_not_steered_again() {
+    let (driver, mut mapper, mut fixture) = start_steering();
+    let script = async {
+        let first = fixture.agent.next_prompt().await;
+        fixture.send_follow_up("a").await;
+        let steer = fixture.agent.next_steer().await;
+        fixture
+            .agent
+            .send(json!({
+                "jsonrpc": "2.0",
+                "id": steer["id"],
+                "error": { "code": -32601, "message": "Method not found" },
+            }))
+            .await;
+        fixture.agent.expect_cancel().await;
+        fixture.agent.respond(&first, "cancelled").await;
+        let second = fixture.agent.next_prompt().await;
+        assert_eq!(
+            prompt_text(&second),
+            format!("{STEER_INTERRUPTION_NOTE}\n\na")
+        );
+
+        // The next mid-turn follow-up cancels straight away.
+        fixture.send_follow_up("b").await;
+        fixture.agent.expect_cancel().await;
+        fixture.agent.respond(&second, "cancelled").await;
+        let third = fixture.agent.next_prompt().await;
+        assert_eq!(
+            prompt_text(&third),
+            format!("{STEER_INTERRUPTION_NOTE}\n\nb")
+        );
+        fixture.agent.respond(&third, "end_turn").await;
+        fixture
+            .host
+            .wait_for(|events| ended_count(events) == 3)
+            .await;
+        fixture.unbind()
+    };
+    let ((host, _), ()) = block_on(join(script, driver.run(&mut mapper)));
+
+    assert_eq!(host.streams().len(), 3, "{:?}", host.events());
+    assert!(host.queued_rows.lock().is_empty());
 }
 
 #[test]
@@ -499,41 +1238,74 @@ fn a_follow_up_mid_turn_cancels_the_turn_then_prompts_with_an_interruption_note(
             .host
             .wait_for(|events| matches!(events.last(), Some(HostEvent::Finished { .. })))
             .await;
-        (participant, fixture.unbind())
+        (participant, fixture.unbind_with_telemetry())
     };
-    let ((participant, (host, state)), ()) = block_on(join(script, driver.run(&mut mapper)));
+    let ((participant, (host, state, telemetry)), ()) =
+        block_on(join(script, driver.run(&mut mapper)));
 
     let streams = host.streams();
     assert_eq!(streams.len(), 2, "{:?}", host.events());
     let (first, second) = (&streams[0], &streams[1]);
     assert_eq!(host.texts_on(first), vec!["working", " late"]);
     assert_eq!(
+        telemetry.actions(AcpActionEvent::Steer),
+        vec![("cancel_fallback", false)],
+        "without steering support the follow-up falls back to a cancel"
+    );
+    assert_eq!(
+        telemetry.actions(AcpActionEvent::Cancel),
+        vec![("acked", false)]
+    );
+    assert_eq!(
+        telemetry.actions(AcpActionEvent::Turn),
+        vec![("cancelled", false), ("stopped_end_turn", false)]
+    );
+    assert!(
+        telemetry
+            .actions(AcpActionEvent::FollowupsDropped)
+            .is_empty()
+    );
+    assert_eq!(
         host.texts_on(second),
         vec!["steer"],
         "the echo shows the user's text only"
     );
     let events = host.events();
-    let first_finished = events
+    let first_cancelled = events
         .iter()
-        .position(|event| matches!(event, HostEvent::Finished { stream, .. } if stream == first))
+        .position(|event| matches!(event, HostEvent::Cancelled { stream, .. } if stream == first))
         .unwrap();
     let second_began = events
         .iter()
         .position(|event| matches!(event, HostEvent::BeginTurn { stream, .. } if stream == second))
         .unwrap();
-    assert!(first_finished < second_began);
+    assert!(first_cancelled < second_began);
     assert_eq!(
-        events[first_finished],
-        HostEvent::Finished {
+        events[first_cancelled],
+        HostEvent::Cancelled {
             stream: first.clone(),
-            reason: "done",
+            by: TurnCancellation::FollowUp,
             settling: true,
         },
         "the cancelled turn settles while the driver's idle exit is held off"
     );
-    assert_eq!(
-        events[first_finished + 1],
-        HostEvent::MarkedCancelled { settling: true }
+    assert!(
+        !events.iter().any(|event| matches!(
+            event,
+            HostEvent::Finished { stream, .. } if stream == first
+        )),
+        "the steered turn ends through the cancellation, not as a completed stream: {events:?}"
+    );
+    assert!(
+        !events.iter().any(|event| matches!(
+            event,
+            HostEvent::MarkedCancelled { .. }
+                | HostEvent::Cancelled {
+                    by: TurnCancellation::Interrupt,
+                    ..
+                }
+        )),
+        "a steer never surfaces a cancelled conversation status: {events:?}"
     );
     assert_eq!(
         events[second_began],
@@ -587,6 +1359,7 @@ fn a_follow_up_between_turns_is_sent_without_a_cancel() {
             "next",
             "no interruption note between turns"
         );
+        fixture.agent.send_chunk("later output").await;
         fixture.agent.respond(&second, "end_turn").await;
         fixture
             .host
@@ -598,19 +1371,30 @@ fn a_follow_up_between_turns_is_sent_without_a_cancel() {
                     == 2
             })
             .await;
-        fixture.unbind()
+        fixture.unbind_with_telemetry()
     };
-    let ((host, _), ()) = block_on(join(script, driver.run(&mut mapper)));
+    let ((host, _, telemetry), ()) = block_on(join(script, driver.run(&mut mapper)));
 
     assert_eq!(
         host.events().last(),
         Some(&HostEvent::Stopped),
         "the host learns the driver stopped so cancellations fall back to the native path"
     );
+    assert_eq!(
+        host.texts_on(&host.streams()[1]),
+        vec!["next", "later output"]
+    );
+    assert_eq!(
+        telemetry.actions(AcpActionEvent::Turn),
+        vec![("stopped_end_turn", false), ("stopped_end_turn", false)]
+    );
+    assert!(telemetry.actions(AcpActionEvent::Steer).is_empty());
     assert!(
         !host.events().iter().any(|event| matches!(
             event,
-            HostEvent::ShowQueued(_) | HostEvent::MarkedCancelled { .. }
+            HostEvent::ShowQueued(_)
+                | HostEvent::Cancelled { .. }
+                | HostEvent::MarkedCancelled { .. }
         )),
         "{:?}",
         host.events()
@@ -644,13 +1428,7 @@ fn follow_ups_that_arrive_during_one_cancel_go_out_together_in_order() {
         fixture.agent.respond(&second, "end_turn").await;
         fixture
             .host
-            .wait_for(|events| {
-                events
-                    .iter()
-                    .filter(|event| matches!(event, HostEvent::Finished { .. }))
-                    .count()
-                    == 2
-            })
+            .wait_for(|events| matches!(events.last(), Some(HostEvent::Finished { .. })))
             .await;
         (author_a, fixture.unbind())
     };
@@ -658,6 +1436,15 @@ fn follow_ups_that_arrive_during_one_cancel_go_out_together_in_order() {
 
     let streams = host.streams();
     assert_eq!(streams.len(), 2);
+    assert!(
+        host.events().contains(&HostEvent::Cancelled {
+            stream: streams[0].clone(),
+            by: TurnCancellation::FollowUp,
+            settling: true,
+        }),
+        "{:?}",
+        host.events()
+    );
     assert_eq!(
         host.texts_on(&streams[1]),
         vec!["a", "b"],
@@ -672,42 +1459,92 @@ fn follow_ups_that_arrive_during_one_cancel_go_out_together_in_order() {
 }
 
 #[test]
-fn an_unanswered_cancel_interrupts_the_terminal_and_fails_the_follow_up() {
-    let (driver, mut mapper, mut fixture) = start(rejecting_handler(), Duration::from_millis(50));
+fn exhausted_soft_cancels_retain_fifo_rows_and_drain_updates_until_a_natural_final() {
+    let (driver, mut mapper, mut fixture, timers) = start_manual();
     let script = async {
-        let _first = fixture.agent.next_prompt().await;
-        fixture.send_follow_up("steer").await;
+        let first = fixture.agent.next_prompt().await;
+        let author = fixture.send_follow_up("B").await;
         fixture.agent.expect_cancel().await;
-        // The agent never answers.
+        let grace = timers.take(STEER_CANCEL_DEADLINE).await;
+        timers.take(Duration::from_secs(1)).await.send(()).unwrap();
+        fixture.agent.expect_cancel().await;
+        fixture.send_follow_up("C").await;
         fixture
             .host
-            .wait_for(|events| matches!(events.last(), Some(HostEvent::Finished { .. })))
+            .wait_for(|events| events.contains(&HostEvent::ShowQueued("C".to_owned())))
             .await;
-        fixture.unbind()
-    };
-    let ((host, state), ()) = block_on(join(script, driver.run(&mut mapper)));
+        timers.take(Duration::from_secs(3)).await.send(()).unwrap();
+        fixture.agent.expect_cancel().await;
+        fixture.agent.send_chunk("A after retries").await;
+        fixture.host.wait_for(|events| events.iter().any(
+            |event| matches!(event, HostEvent::Texts { texts, .. } if texts.contains(&"A after retries".to_owned()))
+        )).await;
+        assert_eq!(timers.requested().len(), MAX_FOLLOW_UP_CANCEL_ATTEMPTS);
+        grace.send(()).unwrap();
+        timers.wait_fired(STEER_CANCEL_DEADLINE).await;
+        fixture.agent.send_chunk("A after grace").await;
+        fixture.host.wait_for(|events| events.iter().any(
+            |event| matches!(event, HostEvent::Texts { texts, .. } if texts.contains(&"A after grace".to_owned()))
+        )).await;
+        assert_eq!(fixture.host.streams().len(), 1);
+        assert!(fixture.state.is_settling());
+        assert!(fixture.state.is_in_turn());
+        assert_eq!(
+            fixture
+                .host
+                .queued_rows
+                .lock()
+                .iter()
+                .map(|(_, text)| text.clone())
+                .collect::<Vec<_>>(),
+            vec!["B", "C"]
+        );
+        assert!(!fixture.host.events().iter().any(|event| matches!(
+            event,
+            HostEvent::InterruptedTerminal
+                | HostEvent::Finished { .. }
+                | HostEvent::Cancelled { .. }
+        )));
+        let mut requested = timers.requested();
+        requested.sort();
+        assert_eq!(
+            requested,
+            vec![
+                Duration::from_secs(1),
+                Duration::from_secs(3),
+                STEER_CANCEL_DEADLINE
+            ]
+        );
 
-    let events = host.events();
-    assert!(
-        events.contains(&HostEvent::InterruptedTerminal),
-        "{events:?}"
+        fixture.agent.respond(&first, "end_turn").await;
+        let second = fixture.agent.next_prompt().await;
+        assert_eq!(
+            second["params"]["prompt"],
+            json!([
+                {"type": "text", "text": "B"}, {"type": "text", "text": "C"}
+            ])
+        );
+        assert!(fixture.host.queued_rows.lock().is_empty());
+        fixture.agent.respond(&second, "end_turn").await;
+        fixture.host.wait_for_finished(2).await;
+        (author, fixture.unbind())
+    };
+    let ((author, (host, state)), ()) = block_on(join(script, driver.run(&mut mapper)));
+    let streams = host.streams();
+    assert_eq!(streams.len(), 2, "{:?}", host.events());
+    assert_eq!(
+        host.texts_on(&streams[0]),
+        vec!["A after retries", "A after grace"]
     );
-    assert!(
-        matches!(
-            events[events.len() - 2],
-            HostEvent::Finished {
-                reason: "internal_error",
-                settling: false,
-                ..
-            }
-        ),
-        "{events:?}"
-    );
-    assert!(
-        host.streams().len() == 1,
-        "the follow-up never opens a turn"
-    );
-    assert!(host.queued_rows.lock().is_empty());
+    assert_eq!(host.texts_on(&streams[1]), vec!["B", "C"]);
+    assert!(host.events().contains(&HostEvent::BeginTurn {
+        stream: streams[1].clone(),
+        initiator: Some(author),
+    }));
+    assert!(!host.events().iter().any(|event| matches!(
+        event,
+        HostEvent::InterruptedTerminal | HostEvent::Cancelled { .. }
+    )));
     assert!(!state.is_settling());
 }
 
@@ -731,12 +1568,7 @@ fn a_pending_permission_request_is_answered_cancelled_when_a_follow_up_steers() 
                 },
             }))
             .await;
-        for _ in 0..400 {
-            if !connection.pending_inbound_requests().is_empty() {
-                break;
-            }
-            Timer::after(Duration::from_millis(5)).await;
-        }
+        fixture.agent.read_barrier().await;
         assert_eq!(connection.pending_inbound_requests().len(), 1);
 
         fixture.send_follow_up("steer").await;
@@ -749,17 +1581,410 @@ fn a_pending_permission_request_is_answered_cancelled_when_a_follow_up_steers() 
         fixture.agent.respond(&second, "end_turn").await;
         fixture
             .host
-            .wait_for(|events| {
-                events
-                    .iter()
-                    .filter(|event| matches!(event, HostEvent::Finished { .. }))
-                    .count()
-                    == 2
-            })
+            .wait_for(|events| matches!(events.last(), Some(HostEvent::Finished { .. })))
             .await;
         fixture.unbind()
     };
-    let ((_, _), ()) = block_on(join(script, driver.run(&mut mapper)));
+    let ((host, _), ()) = block_on(join(script, driver.run(&mut mapper)));
+    assert_eq!(host.streams().len(), 2, "{:?}", host.events());
+}
+
+#[test]
+fn follow_ups_after_expired_grace_do_not_rearm_cancellation_or_start_an_overlapping_prompt() {
+    let (driver, mut mapper, mut fixture, timers) = start_manual();
+    let script = async {
+        let first = fixture.agent.next_prompt().await;
+        fixture.send_follow_up("B").await;
+        fixture.agent.expect_cancel().await;
+        let retry_one = timers.take(Duration::from_secs(1)).await;
+        let retry_three = timers.take(Duration::from_secs(3)).await;
+        timers.take(STEER_CANCEL_DEADLINE).await.send(()).unwrap();
+        timers.wait_fired(STEER_CANCEL_DEADLINE).await;
+        assert!(retry_one.send(()).is_err());
+        assert!(retry_three.send(()).is_err());
+        fixture.send_follow_up("C after grace").await;
+        fixture
+            .host
+            .wait_for(|events| events.contains(&HostEvent::ShowQueued("C after grace".to_owned())))
+            .await;
+        assert_eq!(fixture.host.streams().len(), 1);
+        assert_eq!(fixture.host.queued_rows.lock().len(), 2);
+        assert_eq!(timers.requested().len(), 3);
+        assert!(fixture.state.is_in_turn());
+        assert!(fixture.state.is_settling());
+        fixture.agent.read_barrier().await;
+        fixture.agent.respond(&first, "end_turn").await;
+        let second = fixture.agent.next_prompt().await;
+        assert_eq!(
+            second["params"]["prompt"],
+            json!([
+                {"type": "text", "text": "B"}, {"type": "text", "text": "C after grace"}
+            ])
+        );
+        fixture.agent.respond(&second, "end_turn").await;
+        fixture.host.wait_for_finished(2).await;
+        fixture.unbind()
+    };
+    let ((host, _), ()) = block_on(join(script, driver.run(&mut mapper)));
+    assert_eq!(host.streams().len(), 2, "{:?}", host.events());
+    assert!(host.queued_rows.lock().is_empty());
+}
+
+#[test]
+fn more_than_two_ready_batches_are_submitted_fifo_without_empty_prompts_or_duplicate_echoes() {
+    let (mut driver, mut mapper, mut fixture) = start_default();
+    let expected = (0..MAX_BATCHED_FOLLOW_UPS * 2 + 3)
+        .map(|index| format!("follow-up-{index}"))
+        .collect::<Vec<_>>();
+    let authors = block_on(async {
+        let mut authors = Vec::new();
+        for (index, text) in expected.iter().enumerate() {
+            let author = if index < 5 {
+                let participant_id = ParticipantId::new();
+                driver.queued.push_back(QueuedFollowUp::new(
+                    ExternalHarnessPrompt {
+                        text: text.clone(),
+                        attachments: Vec::new(),
+                        participant_id: participant_id.clone(),
+                        base: None,
+                    },
+                    None,
+                ));
+                participant_id
+            } else {
+                fixture.send_follow_up(text).await
+            };
+            authors.push(author);
+        }
+        authors
+    });
+    let script = async {
+        let mut received = Vec::new();
+        let mut prompts = 0;
+        while received.len() < expected.len() {
+            let prompt = fixture.agent.next_prompt().await;
+            let mut texts = prompt["params"]["prompt"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|block| {
+                    assert_eq!(block["type"], "text", "{block}");
+                    block["text"].as_str().unwrap().to_owned()
+                })
+                .collect::<Vec<_>>();
+            if prompts == 0 {
+                assert_eq!(texts.remove(0), "initial prompt");
+            }
+            let remaining = expected.len() - received.len();
+            assert_eq!(texts.len(), remaining.min(MAX_BATCHED_FOLLOW_UPS));
+            assert!(texts.iter().all(|text| !text.is_empty()));
+            received.extend(texts);
+            fixture.agent.read_barrier().await;
+            fixture.agent.respond(&prompt, "end_turn").await;
+            prompts += 1;
+            fixture.host.wait_for_finished(prompts).await;
+        }
+        assert_eq!(received, expected);
+        fixture.unbind()
+    };
+    let ((host, state), ()) = block_on(join(script, driver.run(&mut mapper)));
+    let streams = host.streams();
+    assert_eq!(
+        streams.len(),
+        expected.len().div_ceil(MAX_BATCHED_FOLLOW_UPS)
+    );
+    let echoes = streams
+        .iter()
+        .flat_map(|stream| host.texts_on(stream))
+        .collect::<Vec<_>>();
+    assert_eq!(echoes, expected);
+    for (index, stream) in streams.iter().enumerate().skip(1) {
+        assert!(host.events().contains(&HostEvent::BeginTurn {
+            stream: stream.clone(),
+            initiator: Some(authors[index * MAX_BATCHED_FOLLOW_UPS].clone()),
+        }));
+    }
+    assert!(host.queued_rows.lock().is_empty());
+    assert!(!state.is_settling());
+}
+
+#[test]
+fn stop_during_unsent_preparation_is_local_and_retains_later_fifo_input() {
+    for opening_turn in [true, false] {
+        let (driver, mut mapper, mut fixture) = start_default();
+        let script = async {
+            let finished_before = if opening_turn {
+                0
+            } else {
+                let opening = fixture.agent.next_prompt().await;
+                fixture.agent.respond(&opening, "end_turn").await;
+                fixture.host.wait_for_finished(1).await;
+                1
+            };
+            let release_apply = fixture.host.gate_next_apply();
+            let release_boundary = fixture.host.gate_next_snapshot();
+            fixture.send_follow_up("B being prepared").await;
+            fixture.send_follow_up("C not yet prepared").await;
+            fixture.host.wait_for(|events| events.iter().any(
+                |event| matches!(event, HostEvent::Texts { texts, .. } if texts.contains(&"B being prepared".to_owned()))
+            )).await;
+            fixture.send_interrupt().await;
+            fixture
+                .host
+                .wait_for(|events| {
+                    events
+                        .iter()
+                        .any(|event| matches!(event, HostEvent::Cancelled { .. }))
+                })
+                .await;
+            assert!(
+                release_apply.send(()).is_err(),
+                "Stop must drop the unsent preparation"
+            );
+            assert!(
+                fixture.agent.next_message().now_or_never().is_none(),
+                "an unsent prompt must not write either session/prompt or session/cancel"
+            );
+            assert!(
+                !fixture
+                    .host
+                    .events()
+                    .contains(&HostEvent::InterruptedTerminal)
+            );
+            release_boundary.send(()).unwrap();
+            let next = fixture.agent.next_prompt().await;
+            assert_eq!(
+                prompt_text(&next),
+                format!("{STEER_INTERRUPTION_NOTE}\n\nC not yet prepared")
+            );
+            fixture.agent.read_barrier().await;
+            fixture.agent.respond(&next, "end_turn").await;
+            fixture.host.wait_for_finished(finished_before + 1).await;
+            fixture.unbind()
+        };
+        let ((host, state), ()) = block_on(join(script, driver.run(&mut mapper)));
+        let streams = host.streams();
+        let unsent = usize::from(!opening_turn);
+        assert_eq!(streams.len(), unsent + 2, "{:?}", host.events());
+        assert_eq!(host.texts_on(&streams[unsent]), vec!["B being prepared"]);
+        assert_eq!(
+            host.texts_on(&streams[unsent + 1]),
+            vec!["C not yet prepared"]
+        );
+        assert!(host.queued_rows.lock().is_empty());
+        assert!(!state.is_settling());
+    }
+}
+
+#[test]
+fn a_follow_up_cannot_begin_cancellation_until_the_prompt_flush_completes() {
+    let (driver, mut mapper, mut fixture) = start_default();
+    let (release, blocked) = oneshot::channel();
+    *fixture.flush_gate.lock() = Some(blocked);
+    let (host, state) = block_on(async {
+        let run = driver.run(&mut mapper);
+        futures::pin_mut!(run);
+        assert!(futures::poll!(run.as_mut()).is_pending());
+        let first = fixture.agent.next_prompt().await;
+        fixture.send_follow_up("B after write, before flush").await;
+        assert!(futures::poll!(run.as_mut()).is_pending());
+        assert!(fixture.host.queued_rows.lock().is_empty());
+        assert!(!fixture.state.is_settling());
+        release.send(()).unwrap();
+
+        let script = async {
+            fixture.agent.expect_cancel().await;
+            fixture.agent.respond(&first, "cancelled").await;
+            let second = fixture.agent.next_prompt().await;
+            assert_eq!(
+                prompt_text(&second),
+                format!("{STEER_INTERRUPTION_NOTE}\n\nB after write, before flush")
+            );
+            fixture.agent.respond(&second, "end_turn").await;
+            fixture.host.wait_for_finished(1).await;
+            fixture.unbind()
+        };
+        let (result, ()) = join(script, run).await;
+        result
+    });
+    assert_eq!(host.streams().len(), 2, "{:?}", host.events());
+    assert!(!state.is_settling());
+}
+
+#[test]
+fn a_cancel_lost_before_registration_is_retried_and_old_timers_cannot_cancel_the_next_prompt() {
+    let (driver, mut mapper, mut fixture, timers) = start_manual();
+    let script = async {
+        let first = fixture.agent.next_prompt().await;
+        fixture.send_follow_up("B").await;
+        // The adapter has received bytes but has not registered this prompt yet.
+        fixture.agent.expect_cancel().await;
+        let retry = timers.take(Duration::from_secs(1)).await;
+        let late_retry = timers.take(Duration::from_secs(3)).await;
+        let late_grace = timers.take(STEER_CANCEL_DEADLINE).await;
+        // Register the prompt before releasing the next cancellation attempt.
+        retry.send(()).unwrap();
+        fixture.agent.expect_cancel().await;
+        fixture.agent.respond(&first, "cancelled").await;
+        let second = fixture.agent.next_prompt().await;
+        assert_eq!(
+            prompt_text(&second),
+            format!("{STEER_INTERRUPTION_NOTE}\n\nB")
+        );
+        assert!(
+            late_retry.send(()).is_err(),
+            "old retry must be dropped with A"
+        );
+        assert!(
+            late_grace.send(()).is_err(),
+            "old grace must be dropped with A"
+        );
+        fixture.agent.read_barrier().await;
+        fixture.agent.respond(&second, "end_turn").await;
+        fixture.host.wait_for_finished(1).await;
+        fixture.unbind_with_telemetry()
+    };
+    let ((host, state, telemetry), ()) = block_on(join(script, driver.run(&mut mapper)));
+    assert_eq!(host.streams().len(), 2, "{:?}", host.events());
+    assert_eq!(host.texts_on(&host.streams()[1]), vec!["B"]);
+    assert_eq!(
+        telemetry.actions(AcpActionEvent::Cancel),
+        vec![("retried", false)],
+        "a cancel answered only after a re-send is one retried cancel"
+    );
+    assert!(!state.is_settling());
+}
+
+#[test]
+fn an_ignored_explicit_stop_uses_the_bounded_terminal_path() {
+    let (driver, mut mapper, mut fixture, timers) = start_manual();
+    let script = async {
+        let _first = fixture.agent.next_prompt().await;
+        fixture.send_interrupt().await;
+        fixture.agent.expect_cancel().await;
+        timers.take(STEER_CANCEL_DEADLINE).await.send(()).unwrap();
+        fixture.host.wait_for_finished(1).await;
+        fixture.unbind_with_telemetry()
+    };
+    let ((host, state, telemetry), ()) = block_on(join(script, driver.run(&mut mapper)));
+    assert!(host.events().contains(&HostEvent::InterruptedTerminal));
+    assert_eq!(
+        telemetry.actions(AcpActionEvent::Cancel),
+        vec![("timed_out", true)]
+    );
+    assert_eq!(
+        telemetry.actions(AcpActionEvent::Turn),
+        vec![("error", true)]
+    );
+    assert!(host.events().iter().any(|event| matches!(
+        event,
+        HostEvent::Finished {
+            reason: "internal_error",
+            settling: false,
+            ..
+        }
+    )));
+    assert_eq!(host.streams().len(), 1);
+    assert_eq!(timers.requested(), vec![STEER_CANCEL_DEADLINE]);
+    assert!(!state.is_settling());
+}
+
+#[test]
+fn explicit_stop_upgrades_soft_cancellation_before_and_after_grace_expiry() {
+    for expire_soft_grace in [false, true] {
+        let (driver, mut mapper, mut fixture, timers) = start_manual();
+        let script = async {
+            let _first = fixture.agent.next_prompt().await;
+            fixture.send_follow_up("B pending").await;
+            fixture.agent.expect_cancel().await;
+            let soft_grace = timers.take(STEER_CANCEL_DEADLINE).await;
+            let retry_one = timers.take(Duration::from_secs(1)).await;
+            let retry_three = timers.take(Duration::from_secs(3)).await;
+            if expire_soft_grace {
+                soft_grace.send(()).unwrap();
+                timers.wait_fired(STEER_CANCEL_DEADLINE).await;
+                assert!(fixture.state.is_settling());
+                assert_eq!(fixture.host.queued_rows.lock().len(), 1);
+            }
+            fixture.send_interrupt().await;
+            fixture.agent.expect_cancel().await;
+            assert!(retry_one.send(()).is_err());
+            assert!(retry_three.send(()).is_err());
+            timers.take(STEER_CANCEL_DEADLINE).await.send(()).unwrap();
+            fixture.host.wait_for_finished(1).await;
+            fixture.unbind_with_telemetry()
+        };
+        let ((host, state, telemetry), ()) = block_on(join(script, driver.run(&mut mapper)));
+        assert!(
+            host.events().contains(&HostEvent::InterruptedTerminal),
+            "{expire_soft_grace}"
+        );
+        // The soft grace expiring reports the follow-up's cancel as timed out; the interrupt
+        // then starts a cancel of its own, which times out too. Without the expiry the
+        // interrupt takes over the pending cancel, so there is a single timeout to report.
+        let expected_cancels = if expire_soft_grace {
+            vec![("timed_out", true), ("timed_out", true)]
+        } else {
+            vec![("timed_out", true)]
+        };
+        assert_eq!(
+            telemetry.actions(AcpActionEvent::Cancel),
+            expected_cancels,
+            "{expire_soft_grace}"
+        );
+        assert_eq!(
+            telemetry.actions(AcpActionEvent::FollowupsDropped),
+            vec![("cancel_timed_out", true)],
+            "{expire_soft_grace}"
+        );
+        assert!(
+            host.events().iter().any(|event| matches!(
+                event,
+                HostEvent::Finished {
+                    reason: "internal_error",
+                    settling: false,
+                    ..
+                }
+            )),
+            "{:?}",
+            host.events()
+        );
+        assert_eq!(host.streams().len(), 1);
+        assert!(host.queued_rows.lock().is_empty());
+        assert!(!state.is_settling());
+    }
+}
+
+#[test]
+fn transport_eof_during_soft_cancellation_remains_an_error_and_cleans_pending_rows() {
+    let (driver, mut mapper, mut fixture, _timers) = start_manual();
+    let script = async {
+        let _first = fixture.agent.next_prompt().await;
+        fixture.send_follow_up("B").await;
+        fixture.agent.expect_cancel().await;
+        fixture.agent.to_client.close().await.unwrap();
+        fixture.host.wait_for_finished(1).await;
+        fixture.unbind()
+    };
+    let ((host, state), ()) = block_on(join(script, driver.run(&mut mapper)));
+    assert!(
+        host.events().iter().any(|event| matches!(
+            event,
+            HostEvent::Finished {
+                reason: "internal_error",
+                ..
+            }
+        )),
+        "{:?}",
+        host.events()
+    );
+    assert!(!host.events().iter().any(|event| matches!(
+        event,
+        HostEvent::Cancelled { .. } | HostEvent::InterruptedTerminal
+    )));
+    assert_eq!(host.streams().len(), 1);
+    assert!(host.queued_rows.lock().is_empty());
+    assert!(!state.is_settling());
 }
 
 #[test]
@@ -772,7 +1997,7 @@ fn an_interrupt_mid_turn_cancels_the_turn_and_marks_the_conversation_cancelled()
         fixture.agent.respond(&first, "cancelled").await;
         fixture
             .host
-            .wait_for(|events| matches!(events.last(), Some(HostEvent::MarkedCancelled { .. })))
+            .wait_for(|events| matches!(events.last(), Some(HostEvent::Cancelled { .. })))
             .await;
         fixture.unbind()
     };
@@ -781,16 +2006,15 @@ fn an_interrupt_mid_turn_cancels_the_turn_and_marks_the_conversation_cancelled()
     let events = host.events();
     let stream = host.streams()[0].clone();
     assert_eq!(
-        &events[events.len() - 3..],
+        &events[events.len() - 2..],
         &[
-            HostEvent::Finished {
-                stream,
-                reason: "done",
-                settling: true,
-            },
             // No follow-up is coming: the `Cancelled` status is the run settling, and the
             // driver's idle exit must act on it.
-            HostEvent::MarkedCancelled { settling: false },
+            HostEvent::Cancelled {
+                stream,
+                by: TurnCancellation::Interrupt,
+                settling: false,
+            },
             HostEvent::Stopped,
         ],
         "{events:?}"
@@ -816,16 +2040,28 @@ fn an_agent_error_while_a_cancel_is_pending_counts_as_the_cancellation() {
             .await;
         fixture
             .host
-            .wait_for(|events| matches!(events.last(), Some(HostEvent::MarkedCancelled { .. })))
+            .wait_for(|events| matches!(events.last(), Some(HostEvent::Cancelled { .. })))
             .await;
         fixture.unbind()
     };
     let ((host, _), ()) = block_on(join(script, driver.run(&mut mapper)));
 
     assert!(
+        host.events().iter().any(|event| matches!(
+            event,
+            HostEvent::Cancelled {
+                by: TurnCancellation::Interrupt,
+                ..
+            }
+        )),
+        "{:?}",
         host.events()
+    );
+    assert!(
+        !host
+            .events()
             .iter()
-            .any(|event| matches!(event, HostEvent::Finished { reason: "done", .. })),
+            .any(|event| matches!(event, HostEvent::Finished { .. })),
         "{:?}",
         host.events()
     );
@@ -862,4 +2098,613 @@ fn turn_state_reports_idle_once_the_prompt_resolves() {
     state.set_in_turn(false);
     block_on(wait);
     assert!(!state.is_in_turn());
+}
+
+#[test]
+fn opening_batch_preserves_attachments_and_authorship_across_preparation() {
+    let (driver, mut mapper, mut fixture) = start_default();
+    let author_b = ParticipantId::new();
+    let base = BaseUserQuery::from_proto(warp_multi_agent_api::request::input::UserQuery {
+        author: Some(QueryAuthor {
+            principal: Some(query_author::Principal::User(WarpUser {
+                uid: "author-B".to_owned(),
+                ..Default::default()
+            })),
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+    let expected_author = base.to_proto().author;
+    fixture
+        .follow_ups
+        .try_send(ExternalHarnessPrompt {
+            text: "B".to_owned(),
+            attachments: vec![AgentAttachment::PlainText {
+                content: "B context".to_owned(),
+            }],
+            participant_id: author_b,
+            base: Some(base),
+        })
+        .unwrap();
+    block_on(fixture.send_follow_up("C"));
+    let release = fixture.host.gate_next_apply();
+    let script = async {
+        fixture.host.wait_for(|events| events.iter().any(
+            |event| matches!(event, HostEvent::Texts { texts, .. } if texts.contains(&"B".to_owned()))
+        )).await;
+        fixture.send_follow_up("D during preparation").await;
+        release.send(()).unwrap();
+        let opening = fixture.agent.next_prompt().await;
+        assert_eq!(
+            opening["params"]["prompt"],
+            json!([
+                {"type": "text", "text": "initial prompt"},
+                {"type": "text", "text": "B"},
+                {"type": "text", "text": "<attached_text>\nB context\n</attached_text>"},
+                {"type": "text", "text": "C"},
+                {"type": "text", "text": "D during preparation"}
+            ])
+        );
+        fixture.agent.read_barrier().await;
+        fixture.agent.respond(&opening, "end_turn").await;
+        fixture.host.wait_for_finished(1).await;
+        fixture.unbind()
+    };
+    let ((host, state), ()) = block_on(join(script, driver.run(&mut mapper)));
+    assert_eq!(host.streams().len(), 1, "{:?}", host.events());
+    assert_eq!(
+        host.texts_on(&host.streams()[0]),
+        vec!["B", "C", "D during preparation"]
+    );
+    let actions = host.actions.lock();
+    let echoes = actions
+        .iter()
+        .flat_map(|(_, actions)| actions)
+        .filter_map(|action| match &action.action {
+            Some(Action::AddMessagesToTask(add)) => Some(&add.messages),
+            _ => None,
+        })
+        .flatten()
+        .filter_map(|message| match &message.message {
+            Some(MessageKind::UserQuery(query)) => Some(query),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(echoes.len(), 3);
+    assert_eq!(echoes[0].author, expected_author);
+    assert!(!state.is_settling());
+}
+
+#[test]
+fn idle_batch_preserves_fifo_and_first_author_across_async_preparation() {
+    let (driver, mut mapper, mut fixture) = start_default();
+    let script = async {
+        let first = fixture.agent.next_prompt().await;
+        fixture.agent.respond(&first, "end_turn").await;
+        fixture.host.wait_for_finished(1).await;
+        let release = fixture.host.gate_next_begin();
+        let author = fixture.send_follow_up("B").await;
+        fixture.send_follow_up("C ready").await;
+        fixture
+            .host
+            .wait_for(|events| {
+                events
+                    .iter()
+                    .filter(|event| matches!(event, HostEvent::BeginTurn { .. }))
+                    .count()
+                    == 2
+            })
+            .await;
+        fixture.send_follow_up("D during preparation").await;
+        release.send(()).unwrap();
+        let second = fixture.agent.next_prompt().await;
+        assert_eq!(
+            second["params"]["prompt"],
+            json!([
+                {"type": "text", "text": "B"},
+                {"type": "text", "text": "C ready"},
+                {"type": "text", "text": "D during preparation"}
+            ])
+        );
+        fixture.agent.read_barrier().await;
+        fixture.agent.respond(&second, "end_turn").await;
+        fixture.host.wait_for_finished(2).await;
+        (author, fixture.unbind())
+    };
+    let ((author, (host, _)), ()) = block_on(join(script, driver.run(&mut mapper)));
+    let streams = host.streams();
+    assert_eq!(streams.len(), 2, "{:?}", host.events());
+    assert_eq!(
+        host.texts_on(&streams[1]),
+        vec!["B", "C ready", "D during preparation"]
+    );
+    assert!(host.events().contains(&HostEvent::BeginTurn {
+        stream: streams[1].clone(),
+        initiator: Some(author),
+    }));
+    assert!(
+        !host
+            .events()
+            .iter()
+            .any(|event| matches!(event, HostEvent::Cancelled { .. }))
+    );
+}
+
+#[test]
+fn a_ready_final_beats_retry_and_grace_and_drains_ready_input_into_the_held_batch() {
+    let (driver, mut mapper, mut fixture, timers) = start_manual();
+    let script = async {
+        let first = fixture.agent.next_prompt().await;
+        fixture.send_follow_up("B held").await;
+        fixture.agent.expect_cancel().await;
+        let retry_one = timers.take(Duration::from_secs(1)).await;
+        let retry_three = timers.take(Duration::from_secs(3)).await;
+        let grace = timers.take(STEER_CANCEL_DEADLINE).await;
+        let release = fixture.host.gate_next_apply();
+        let release_boundary = fixture.host.gate_next_snapshot();
+        fixture.agent.send_chunk("A final chunk").await;
+        fixture.host.wait_for(|events| events.iter().any(
+            |event| matches!(event, HostEvent::Texts { texts, .. } if texts.contains(&"A final chunk".to_owned()))
+        )).await;
+        fixture.send_follow_up("C ready").await;
+        fixture.agent.respond(&first, "end_turn").await;
+        fixture.agent.read_barrier().await;
+        retry_one.send(()).unwrap();
+        retry_three.send(()).unwrap();
+        grace.send(()).unwrap();
+        release.send(()).unwrap();
+        fixture.host.wait_for_finished(1).await;
+        fixture.send_follow_up("D after final").await;
+        release_boundary.send(()).unwrap();
+        let second = fixture.agent.next_prompt().await;
+        assert_eq!(
+            second["params"]["prompt"],
+            json!([
+                {"type": "text", "text": "B held"},
+                {"type": "text", "text": "C ready"},
+                {"type": "text", "text": "D after final"}
+            ])
+        );
+        fixture.agent.respond(&second, "end_turn").await;
+        fixture.host.wait_for_finished(2).await;
+        fixture.unbind()
+    };
+    let ((host, _), ()) = block_on(join(script, driver.run(&mut mapper)));
+    let streams = host.streams();
+    assert_eq!(streams.len(), 2, "{:?}", host.events());
+    assert_eq!(host.texts_on(&streams[0]), vec!["A final chunk"]);
+    assert_eq!(
+        host.texts_on(&streams[1]),
+        vec!["B held", "C ready", "D after final"]
+    );
+    assert!(!host.events().iter().any(|event| matches!(
+        event,
+        HostEvent::InterruptedTerminal | HostEvent::Cancelled { .. }
+    )));
+}
+
+#[test]
+fn follow_ups_held_through_a_failed_turn_go_out_as_the_next_turn() {
+    let (driver, mut mapper, mut fixture) = start_steering();
+    let script = async {
+        let first = fixture.agent.next_prompt().await;
+        fixture.send_follow_up("kept").await;
+        let steer = fixture.agent.next_steer().await;
+        fixture
+            .agent
+            .send(json!({
+                "jsonrpc": "2.0",
+                "id": first["id"],
+                "error": { "code": -32603, "message": "model overloaded" },
+            }))
+            .await;
+        fixture.agent.answer_steer(&steer, "promptRequired").await;
+
+        let second = fixture.agent.next_prompt().await;
+        assert_eq!(prompt_text(&second), "kept");
+        fixture.agent.respond(&second, "end_turn").await;
+        fixture.host.wait_for_finished(2).await;
+        fixture.unbind()
+    };
+    let ((host, state), ()) = block_on(join(script, driver.run(&mut mapper)));
+
+    let streams = host.streams();
+    assert_eq!(streams.len(), 2, "{:?}", host.events());
+    let events = host.events();
+    assert!(
+        events.contains(&HostEvent::Finished {
+            stream: streams[0].clone(),
+            reason: "internal_error",
+            settling: true,
+        }),
+        "the failed turn ends with the follow-up still to send: {events:?}"
+    );
+    assert_eq!(host.texts_on(&streams[1]), vec!["kept"]);
+    assert!(host.queued_rows.lock().is_empty());
+    assert!(!state.is_settling());
+}
+
+#[test]
+fn an_interrupt_while_steers_are_outstanding_holds_the_follow_ups_behind_the_steer() {
+    let (driver, mut mapper, mut fixture) = start_steering();
+    let script = async {
+        let first = fixture.agent.next_prompt().await;
+        fixture.send_follow_up("a").await;
+        let steer_a = fixture.agent.next_steer().await;
+        fixture.send_follow_up("b").await;
+        fixture
+            .host
+            .wait_for(|events| events.contains(&HostEvent::ShowQueued("b".to_owned())))
+            .await;
+        fixture.send_interrupt().await;
+        fixture.agent.expect_cancel().await;
+        // The agent takes "a" into the turn being cancelled; "b" must not follow it there.
+        fixture.agent.answer_steer(&steer_a, "injected").await;
+        fixture.agent.respond(&first, "cancelled").await;
+
+        let second = fixture.agent.next_prompt().await;
+        assert_eq!(
+            prompt_text(&second),
+            format!("{STEER_INTERRUPTION_NOTE}\n\nb"),
+            "no steer for b; it is sent as a turn after the cancel"
+        );
+        fixture.agent.respond(&second, "end_turn").await;
+        fixture
+            .host
+            .wait_for(|events| ended_count(events) == 2)
+            .await;
+        fixture.unbind()
+    };
+    let ((host, state), ()) = block_on(join(script, driver.run(&mut mapper)));
+
+    let streams = host.streams();
+    assert_eq!(streams.len(), 2, "{:?}", host.events());
+    assert_eq!(host.texts_on(&streams[0]), vec!["a"]);
+    assert_eq!(host.texts_on(&streams[1]), vec!["b"]);
+    assert!(host.queued_rows.lock().is_empty());
+    assert!(!state.is_settling());
+}
+
+#[test]
+fn a_steer_answered_injected_after_the_turn_ended_is_sent_as_a_turn() {
+    let (driver, mut mapper, mut fixture) = start_steering();
+    let script = async {
+        let first = fixture.agent.next_prompt().await;
+        fixture.send_follow_up("steer").await;
+        let steer = fixture.agent.next_steer().await;
+        // The turn ends before the agent gets to the steer, which it then claims to have taken.
+        fixture.agent.respond(&first, "end_turn").await;
+        fixture.agent.answer_steer(&steer, "injected").await;
+
+        let second = fixture.agent.next_prompt().await;
+        assert_eq!(
+            prompt_text(&second),
+            "steer",
+            "no cancel and no interruption note"
+        );
+        fixture.agent.respond(&second, "end_turn").await;
+        fixture
+            .host
+            .wait_for(|events| ended_count(events) == 2)
+            .await;
+        fixture.unbind()
+    };
+    let ((host, state), ()) = block_on(join(script, driver.run(&mut mapper)));
+
+    let streams = host.streams();
+    assert_eq!(streams.len(), 2, "{:?}", host.events());
+    assert!(
+        host.texts_on(&streams[0]).is_empty(),
+        "nothing is echoed after the turn's final output: {:?}",
+        host.events()
+    );
+    assert_eq!(host.texts_on(&streams[1]), vec!["steer"]);
+    assert!(!host.events().iter().any(|event| matches!(
+        event,
+        HostEvent::Cancelled { .. } | HostEvent::MarkedCancelled { .. }
+    )));
+    assert!(host.queued_rows.lock().is_empty());
+    assert!(!state.is_settling());
+}
+
+#[test]
+fn prompt_required_mid_turn_waits_for_the_turn_instead_of_cancelling_it() {
+    let (mut driver, mut mapper, mut fixture) =
+        start(parking_permission_handler(), STEER_CANCEL_DEADLINE);
+    driver.steering_supported = true;
+    let connection = fixture.connection.clone();
+    let script = async {
+        let first = fixture.agent.next_prompt().await;
+        // The agent is waiting on the client (e.g. for plan approval) when the steer arrives.
+        fixture
+            .agent
+            .send(json!({
+                "jsonrpc": "2.0",
+                "id": "perm-1",
+                "method": "session/request_permission",
+                "params": {
+                    "sessionId": SESSION,
+                    "toolCall": {"toolCallId": "call-1", "title": "Apply plan"},
+                    "options": [{"optionId": "allow", "name": "Allow", "kind": "allow_once"}],
+                },
+            }))
+            .await;
+        fixture.agent.read_barrier().await;
+        assert_eq!(connection.pending_inbound_requests().len(), 1);
+
+        fixture.send_follow_up("later").await;
+        let steer = fixture.agent.next_steer().await;
+        fixture.agent.answer_steer(&steer, "promptRequired").await;
+        // The steer's answer is read before this chunk, so once it has landed the driver has
+        // decided what to do with the follow-up.
+        fixture.agent.send_chunk("still working").await;
+        fixture
+            .host
+            .wait_for(|events| {
+                events.iter().any(|event| {
+                    matches!(event, HostEvent::Texts { texts, .. } if texts.contains(&"still working".to_owned()))
+                })
+            })
+            .await;
+        assert_eq!(
+            connection.pending_inbound_requests().len(),
+            1,
+            "the permission request is left for the agent's turn to finish"
+        );
+        fixture.agent.respond(&first, "end_turn").await;
+
+        // No cancel and no answer to the permission request were written before the prompt.
+        let second = fixture.agent.next_prompt().await;
+        assert_eq!(prompt_text(&second), "later", "no interruption note");
+        fixture.agent.respond(&second, "end_turn").await;
+        fixture
+            .host
+            .wait_for(|events| ended_count(events) == 2)
+            .await;
+        fixture.unbind()
+    };
+    let ((host, state), ()) = block_on(join(script, driver.run(&mut mapper)));
+
+    let events = host.events();
+    let streams = host.streams();
+    assert_eq!(streams.len(), 2, "{events:?}");
+    assert!(
+        events.contains(&HostEvent::Finished {
+            stream: streams[0].clone(),
+            reason: "done",
+            settling: true,
+        }),
+        "the first turn ends on its own with the follow-up pending: {events:?}"
+    );
+    assert!(!events.iter().any(|event| matches!(
+        event,
+        HostEvent::Cancelled { .. } | HostEvent::MarkedCancelled { .. }
+    )));
+    assert_eq!(host.texts_on(&streams[1]), vec!["later"]);
+    assert!(host.queued_rows.lock().is_empty());
+    assert!(!state.is_settling());
+}
+
+#[test]
+fn a_steer_answered_after_the_settle_deadline_is_not_sent_again() {
+    let (mut driver, mut mapper, mut fixture, timers) = start_manual();
+    driver.steering_supported = true;
+    let script = async {
+        let first = fixture.agent.next_prompt().await;
+        fixture.send_follow_up("steer").await;
+        let steer = fixture.agent.next_steer().await;
+        fixture.agent.respond(&first, "end_turn").await;
+        timers.take(STEER_SETTLE_DEADLINE).await.send(()).unwrap();
+
+        let second = fixture.agent.next_prompt().await;
+        assert_eq!(prompt_text(&second), "steer");
+        // The agent only now gets to the steer, with the re-sent prompt in flight.
+        fixture.agent.answer_steer(&steer, "injected").await;
+        fixture.agent.respond(&second, "end_turn").await;
+        fixture
+            .host
+            .wait_for(|events| ended_count(events) == 2)
+            .await;
+
+        // The late answer changed nothing: the next thing sent is the next follow-up.
+        fixture.send_follow_up("after").await;
+        let third = fixture.agent.next_prompt().await;
+        assert_eq!(prompt_text(&third), "after");
+        fixture.agent.respond(&third, "end_turn").await;
+        fixture
+            .host
+            .wait_for(|events| ended_count(events) == 3)
+            .await;
+        fixture.unbind()
+    };
+    let ((host, state), ()) = block_on(join(script, driver.run(&mut mapper)));
+
+    let streams = host.streams();
+    assert_eq!(streams.len(), 3, "{:?}", host.events());
+    assert!(host.texts_on(&streams[0]).is_empty());
+    assert_eq!(host.texts_on(&streams[1]), vec!["steer"]);
+    assert_eq!(host.texts_on(&streams[2]), vec!["after"]);
+    assert!(host.queued_rows.lock().is_empty());
+    assert!(!state.is_settling());
+}
+
+#[test]
+fn a_host_error_after_an_injected_steer_does_not_send_it_again() {
+    let (driver, mut mapper, mut fixture) = start_steering();
+    let script = async {
+        let _first = fixture.agent.next_prompt().await;
+        fixture.send_follow_up("taken").await;
+        let steer = fixture.agent.next_steer().await;
+        fixture
+            .host
+            .wait_for(|events| events.contains(&HostEvent::ShowQueued("taken".to_owned())))
+            .await;
+        // The agent has the prompt; echoing it fails on our side and the turn ends in error.
+        fixture.host.fail_next_apply();
+        fixture.agent.answer_steer(&steer, "injected").await;
+        fixture
+            .host
+            .wait_for(|events| {
+                events.iter().any(|event| {
+                    matches!(
+                        event,
+                        HostEvent::Finished {
+                            reason: "internal_error",
+                            ..
+                        }
+                    )
+                })
+            })
+            .await;
+
+        // The agent is still connected, so anything held would go out now; nothing is.
+        fixture.send_follow_up("next").await;
+        let second = fixture.agent.next_prompt().await;
+        assert_eq!(
+            prompt_text(&second),
+            "next",
+            "the taken prompt is not sent again"
+        );
+        fixture.agent.respond(&second, "end_turn").await;
+        fixture
+            .host
+            .wait_for(|events| ended_count(events) == 2)
+            .await;
+        fixture.unbind()
+    };
+    let ((host, state), ()) = block_on(join(script, driver.run(&mut mapper)));
+
+    let streams = host.streams();
+    assert_eq!(streams.len(), 2, "{:?}", host.events());
+    assert_eq!(host.texts_on(&streams[1]), vec!["next"]);
+    assert!(
+        host.queued_rows.lock().is_empty(),
+        "the taken prompt's row went when the agent took it"
+    );
+    assert!(!state.is_settling());
+}
+
+#[test]
+fn an_agent_that_rejects_the_steering_request_is_not_steered_again() {
+    let (driver, mut mapper, mut fixture) = start_steering();
+    let script = async {
+        let first = fixture.agent.next_prompt().await;
+        fixture.send_follow_up("a").await;
+        let steer = fixture.agent.next_steer().await;
+        fixture
+            .agent
+            .send(json!({
+                "jsonrpc": "2.0",
+                "id": steer["id"],
+                "error": { "code": -32602, "message": "unsupported steering idleBehavior" },
+            }))
+            .await;
+        fixture.agent.expect_cancel().await;
+        fixture.agent.respond(&first, "cancelled").await;
+        let second = fixture.agent.next_prompt().await;
+        assert_eq!(
+            prompt_text(&second),
+            format!("{STEER_INTERRUPTION_NOTE}\n\na")
+        );
+
+        // The next mid-turn follow-up cancels straight away rather than pay the same rejection.
+        fixture.send_follow_up("b").await;
+        fixture.agent.expect_cancel().await;
+        fixture.agent.respond(&second, "cancelled").await;
+        let third = fixture.agent.next_prompt().await;
+        assert_eq!(
+            prompt_text(&third),
+            format!("{STEER_INTERRUPTION_NOTE}\n\nb")
+        );
+        fixture.agent.respond(&third, "end_turn").await;
+        fixture
+            .host
+            .wait_for(|events| ended_count(events) == 3)
+            .await;
+        fixture.unbind_with_telemetry()
+    };
+    let ((host, _, telemetry), ()) = block_on(join(script, driver.run(&mut mapper)));
+
+    assert_eq!(host.streams().len(), 3, "{:?}", host.events());
+    assert!(host.queued_rows.lock().is_empty());
+    assert_eq!(
+        telemetry.actions(AcpActionEvent::Steer),
+        vec![("rejected", true), ("cancel_fallback", false)],
+        "the rejection is reported once; later follow-ups report the fallback"
+    );
+    assert_eq!(
+        telemetry.actions(AcpActionEvent::Cancel),
+        vec![("acked", false), ("acked", false)]
+    );
+}
+
+#[test]
+fn follow_ups_a_prompt_could_not_carry_are_steered_into_its_turn() {
+    let (mut driver, mut mapper, mut fixture) = start_steering();
+    let expected = (0..MAX_BATCHED_FOLLOW_UPS + 1)
+        .map(|index| format!("follow-up-{index}"))
+        .collect::<Vec<_>>();
+    for text in &expected {
+        driver.queued.push_back(QueuedFollowUp::new(
+            ExternalHarnessPrompt {
+                text: text.clone(),
+                attachments: Vec::new(),
+                participant_id: ParticipantId::new(),
+                base: None,
+            },
+            None,
+        ));
+    }
+    let overflow = expected[MAX_BATCHED_FOLLOW_UPS].clone();
+    let script = async {
+        let first = fixture.agent.next_prompt().await;
+        let carried = first["params"]["prompt"].as_array().unwrap().len();
+        assert_eq!(carried, 1 + MAX_BATCHED_FOLLOW_UPS, "{first}");
+        // The one the prompt could not carry joins the turn instead of waiting for the next.
+        let steer = fixture.agent.next_steer().await;
+        assert_eq!(prompt_text(&steer), overflow);
+        fixture
+            .host
+            .wait_for(|events| events.contains(&HostEvent::ShowQueued(overflow.clone())))
+            .await;
+        // A follow-up arriving meanwhile queues behind it rather than cancelling the turn.
+        fixture.send_follow_up("late").await;
+        fixture
+            .host
+            .wait_for(|events| events.contains(&HostEvent::ShowQueued("late".to_owned())))
+            .await;
+        fixture.agent.answer_steer(&steer, "injected").await;
+        let steer_late = fixture.agent.next_steer().await;
+        assert_eq!(prompt_text(&steer_late), "late");
+        fixture.agent.answer_steer(&steer_late, "injected").await;
+        fixture
+            .host
+            .wait_for(|events| {
+                events
+                    .iter()
+                    .filter(|event| matches!(event, HostEvent::HideQueued(_)))
+                    .count()
+                    == 2
+            })
+            .await;
+        fixture.agent.respond(&first, "end_turn").await;
+        fixture
+            .host
+            .wait_for(|events| matches!(events.last(), Some(HostEvent::Finished { .. })))
+            .await;
+        fixture.unbind()
+    };
+    let ((host, state), ()) = block_on(join(script, driver.run(&mut mapper)));
+
+    let streams = host.streams();
+    assert_eq!(streams.len(), 1, "no cancel: {:?}", host.events());
+    let mut echoes = expected.clone();
+    echoes.push("late".to_owned());
+    assert_eq!(host.texts_on(&streams[0]), echoes);
+    assert!(!host.events().iter().any(|event| matches!(
+        event,
+        HostEvent::Cancelled { .. } | HostEvent::MarkedCancelled { .. }
+    )));
+    assert!(host.queued_rows.lock().is_empty());
+    assert!(!state.is_settling());
 }

@@ -57,6 +57,7 @@ use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::ffi::OsString;
 use std::fmt;
 use std::hash::Hash;
 use std::ops::{Deref as _, Range};
@@ -82,6 +83,7 @@ use command_corrections::rules::generic::history::History as CommandCorrectionsH
 use command_corrections::rules::{Rule, RuleId as CommandCorrectionsRuleId};
 use command_corrections::{Command, Correction, HistoryItem, SessionMetadata, correct_command};
 use enclose::enclose;
+use futures::channel::oneshot;
 pub use init::{
     CANCEL_COMMAND_KEYBINDING, TOGGLE_AUTOEXECUTE_MODE_KEYBINDING,
     TOGGLE_HIDE_CLI_RESPONSES_KEYBINDING, TOGGLE_QUEUE_NEXT_PROMPT_KEYBINDING, init,
@@ -222,8 +224,7 @@ use crate::ai::agent::{
 use crate::ai::agent::{CurrentHead, DiffBase};
 use crate::ai::agent_conversations_model::{AgentConversationsModel, AgentConversationsModelEvent};
 use crate::ai::ambient_agents::{
-    AmbientAgentTask, AmbientAgentTaskId, AmbientConversationStatus,
-    conversation_output_status_from_conversation,
+    AmbientAgentTaskId, AmbientConversationStatus, conversation_output_status_from_conversation,
 };
 use crate::ai::blocklist::agent_view::agent_input_footer::toolbar_item::AgentToolbarItemKind;
 use crate::ai::blocklist::agent_view::orchestration_conversation_links::pane_group_id_containing_terminal_view;
@@ -477,7 +478,9 @@ use crate::terminal::shared_session::{
     SharedSessionActionSource, SharedSessionScrollbackType, SharedSessionSource,
     SharedSessionStatus,
 };
-use crate::terminal::shell_recovery::{CloudShellRecoveryRequest, recovered_command_output};
+use crate::terminal::shell_recovery::{
+    CloudShellRecoveryRequest, ShellReplacementRequest, recovered_command_output,
+};
 use crate::terminal::view::block_onboarding::onboarding_prompt_block::OnboardingPromptBlock;
 use crate::terminal::view::init_environment::mode_selector::{
     EnvironmentSetupMode, EnvironmentSetupModeSelector, EnvironmentSetupModeSelectorEvent,
@@ -658,6 +661,8 @@ const ENV_VAR_BOOTSTRAP_FAILED_DURATION: Duration = Duration::from_secs(60);
 /// dismissal keeps the warning informational without turning it into a
 /// permanent fixture.
 const SLOW_BOOTSTRAP_BANNER_AUTO_DISMISS_DURATION: Duration = Duration::from_secs(30);
+/// Covers the terminal manager's 10-second PTY stop and 60-second replacement bootstrap deadlines.
+const SHELL_REPLACEMENT_TIMEOUT: Duration = Duration::from_secs(75);
 const KNOWN_ISSUES_URL: &str =
     "https://docs.warp.dev/support-and-community/troubleshooting-and-support/known-issues";
 
@@ -1785,6 +1790,7 @@ pub enum Event {
     },
     ExecuteCommand(ExecuteCommandEvent),
     RecoverCloudShell(CloudShellRecoveryRequest),
+    ReplaceShell(ShellReplacementRequest),
     BlockStarted {
         is_for_in_band_command: bool,
     },
@@ -2059,12 +2065,6 @@ pub enum Event {
     /// The pane group swaps visibility instead of cloning the conversation.
     SwapPaneToConversation {
         conversation_id: AIConversationId,
-    },
-    /// Carries the fetched task snapshot so pane construction uses the same
-    /// current-state materialization decision as pill-click restoration.
-    EnsureUnifiedViewerChildPane {
-        conversation_id: AIConversationId,
-        task: Box<AmbientAgentTask>,
     },
     /// A unified-stack child viewer could not join its dedicated live
     /// execution session. The pane group keeps the child passive and
@@ -2979,6 +2979,7 @@ pub struct TerminalView {
     /// (tab close, update relaunch, etc.) are not attributed to agent commands.
     manual_pty_shutdown_requested: bool,
     pending_cloud_shell_recovery: Option<CloudShellRecoveryRequest>,
+    pending_shell_replacement: Option<(Uuid, oneshot::Sender<anyhow::Result<()>>)>,
 
     ephemeral_message_model: ModelHandle<EphemeralMessageModel>,
 
@@ -3164,7 +3165,7 @@ impl TerminalView {
             SyncInputType::RanCommand => {
                 if terminal_input_state == TerminalInputState::InputEditor {
                     self.input.update(ctx, |input, ctx| {
-                        input.run_command_in_synced_terminal_input(ctx);
+                        input.submit_current_input(ctx);
                     });
                 }
             }
@@ -4531,6 +4532,7 @@ impl TerminalView {
             is_pending_aws_login: false,
             manual_pty_shutdown_requested: false,
             pending_cloud_shell_recovery: None,
+            pending_shell_replacement: None,
             first_time_cloud_agent_setup_view,
             cloud_agent_team_required_view,
             environment_setup_mode_selector,
@@ -11931,6 +11933,97 @@ impl TerminalView {
         ctx.notify();
     }
 
+    /// Replaces an idle local shell and completes after the new shell bootstraps.
+    pub fn replace_shell(
+        &mut self,
+        working_directory: PathBuf,
+        env_vars: HashMap<OsString, OsString>,
+        ctx: &mut ViewContext<Self>,
+    ) -> oneshot::Receiver<anyhow::Result<()>> {
+        let (sender, receiver) = oneshot::channel();
+        if let Some(refusal) = self.shell_replacement_refusal() {
+            let _ = sender.send(Err(anyhow::anyhow!("cannot replace the shell: {refusal}")));
+            return receiver;
+        }
+        let id = Uuid::new_v4();
+        self.pending_shell_replacement = Some((id, sender));
+        self.input.update(ctx, |input, ctx| {
+            input.editor().update(ctx, |editor, ctx| {
+                editor.set_interaction_state(crate::editor::InteractionState::Disabled, ctx);
+            });
+        });
+        ctx.emit(Event::ReplaceShell(ShellReplacementRequest {
+            id,
+            working_directory,
+            env_vars,
+        }));
+        ctx.spawn(
+            async {
+                Timer::after(SHELL_REPLACEMENT_TIMEOUT).await;
+            },
+            move |view, _, ctx| {
+                view.complete_shell_replacement(
+                    id,
+                    Err(anyhow::anyhow!(
+                        "shell replacement did not complete before timeout"
+                    )),
+                    ctx,
+                );
+            },
+        );
+        receiver
+    }
+
+    /// Names the condition that stops this shell from being replaced, if any.
+    fn shell_replacement_refusal(&self) -> Option<&'static str> {
+        let model = self.model.lock();
+        if self.pending_shell_replacement.is_some() || self.pending_cloud_shell_recovery.is_some() {
+            Some("another shell replacement is in progress")
+        } else if self.manual_pty_shutdown_requested {
+            Some("the shell is shutting down")
+        } else if !self.is_login_shell_bootstrapped {
+            Some("the shell has not bootstrapped")
+        } else if model.is_read_only() {
+            Some("the terminal is read-only")
+        } else if model.shared_session_status().is_viewer() {
+            Some("the terminal is a shared-session viewer")
+        } else if model.block_list().active_block().is_executing() {
+            Some("a command is running")
+        } else if model.is_alt_screen_active() {
+            Some("a full-screen program is running")
+        } else {
+            None
+        }
+    }
+
+    /// Resolves the pending shell replacement with `request_id`, ignoring stale completions.
+    pub(crate) fn complete_shell_replacement(
+        &mut self,
+        request_id: Uuid,
+        result: anyhow::Result<()>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some((_, sender)) = self
+            .pending_shell_replacement
+            .take_if(|(pending_id, _)| *pending_id == request_id)
+        else {
+            return;
+        };
+        let mut model = self.model.lock();
+        model.finish_shell_replacement(result.is_ok());
+        let is_editable = !model.is_read_only();
+        drop(model);
+        if is_editable {
+            self.input.update(ctx, |input, ctx| {
+                input.editor().update(ctx, |editor, ctx| {
+                    editor.set_interaction_state(crate::editor::InteractionState::Editable, ctx);
+                });
+            });
+        }
+        let _ = sender.send(result);
+        ctx.notify();
+    }
+
     fn cloud_shell_recovery_request(
         &self,
         status: ObservedExitStatus,
@@ -11978,6 +12071,7 @@ impl TerminalView {
         if !FeatureFlag::CloudAgentShellRespawn.is_enabled()
             || self.manual_pty_shutdown_requested
             || self.pending_cloud_shell_recovery.is_some()
+            || self.pending_shell_replacement.is_some()
             || !self.is_login_shell_bootstrapped
             || self
                 .ambient_agent_view_model
@@ -12521,7 +12615,15 @@ impl TerminalView {
                 ctx.request_user_attention();
             }
             ModelEvent::ShellExitObserved { status } => {
-                if self.pending_cloud_shell_recovery.is_some() {
+                if let Some((request_id, _)) = self.pending_shell_replacement.as_ref() {
+                    self.complete_shell_replacement(
+                        *request_id,
+                        Err(anyhow::anyhow!(
+                            "shell exited during planned replacement ({status})"
+                        )),
+                        ctx,
+                    );
+                } else if self.pending_cloud_shell_recovery.is_some() {
                     self.fail_cloud_shell_recovery(
                         CloudAgentShellRecoveryFailureClass::ReplacementShellExit,
                         anyhow::anyhow!("replacement shell exited before bootstrap"),
@@ -24033,6 +24135,7 @@ impl TerminalView {
         };
 
         let request = RunAgentsRequest {
+            delegated_github_coauthor_user_uid: None,
             metadata: Default::default(),
             summary: summary.clone(),
             base_prompt: "Shared instructions for every child agent.".to_owned(),
@@ -27277,6 +27380,15 @@ impl PtyIntentEvent for Event {
 }
 
 impl TerminalSurface for TerminalView {
+    fn on_shell_replaced(
+        &mut self,
+        request_id: Uuid,
+        result: anyhow::Result<()>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.complete_shell_replacement(request_id, result, ctx);
+    }
+
     fn on_cloud_shell_recovered(
         &mut self,
         restored_working_directory: String,
@@ -30186,3 +30298,7 @@ fn agent_view_back_button_label(
 #[cfg(test)]
 #[path = "view_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "view/shell_replacement_tests.rs"]
+mod shell_replacement_tests;

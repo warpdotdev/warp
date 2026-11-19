@@ -16,7 +16,7 @@ pub use convert_from::{
     MessageToAIAgentOutputMessageError, user_inputs_from_messages,
 };
 #[cfg_attr(target_family = "wasm", allow(unused_imports))]
-pub(crate) use convert_to::serde_json_to_prost;
+pub(crate) use convert_to::{mcp_server_identity, serde_json_to_prost};
 use futures_lite::Stream;
 pub use r#impl::generate_multi_agent_output;
 use mcp::TemplatableMCPServerInfo;

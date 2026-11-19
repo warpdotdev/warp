@@ -2,12 +2,14 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use async_compat::CompatExt as _;
+use futures::channel::oneshot;
 use mcp::oauth::{
     self, AuthContext, CallbackResult, FILE_BASED_MCP_CREDENTIALS_KEY,
     FileBasedPersistedCredentialsMap, OAuthCallbackMode, PersistedCredentials,
     PersistedCredentialsMap, TEMPLATABLE_MCP_CREDENTIALS_KEY, load_credentials_from_secure_storage,
     write_to_secure_storage,
 };
+use mcp::refreshable_headers::RefreshableHeaders;
 use mcp::runtime::{error_to_user_message, spawn_server};
 use parking_lot::Mutex;
 use simple_logger::manager::LogManager;
@@ -103,6 +105,36 @@ pub enum McpIntegration {
 }
 
 impl TemplatableMCPServerManager {
+    pub(crate) fn replace_runtime_environment(
+        &mut self,
+        environment: HashMap<String, String>,
+        ctx: &mut ModelContext<Self>,
+    ) -> (
+        Vec<TemplatableMCPServerInstallation>,
+        Vec<oneshot::Receiver<()>>,
+    ) {
+        let uuids: HashSet<_> = self
+            .active_servers
+            .keys()
+            .chain(self.spawned_servers.keys())
+            .copied()
+            .collect();
+        let retained = uuids
+            .iter()
+            .filter(|uuid| {
+                !self.cli_spawned_server_uuids.contains(uuid)
+                    && !self.builtin_server_uuids.contains(uuid)
+            })
+            .filter_map(|uuid| self.reconnectable_installation(*uuid).cloned())
+            .collect();
+        self.runtime_environment = environment;
+        let stopped = uuids
+            .into_iter()
+            .map(|uuid| self.shutdown_server_and_wait(uuid, ctx))
+            .collect();
+        (retained, stopped)
+    }
+
     /// Returns `true` if the given MCP integration is currently running.
     pub fn is_mcp_server_running(&self, integration: McpIntegration) -> bool {
         match integration {
@@ -396,8 +428,10 @@ impl TemplatableMCPServerManager {
             cloud_templatable_mcp_servers: Default::default(),
             server_states: Default::default(),
             active_servers: Default::default(),
+            runtime_environment: Default::default(),
             spawned_servers: Default::default(),
             reconnectable_ephemeral_installations: Default::default(),
+            refreshable_headers: Default::default(),
             server_credentials: Default::default(),
             file_based_server_credentials: Default::default(),
             locally_installed_servers,
@@ -756,13 +790,25 @@ impl TemplatableMCPServerManager {
         );
     }
 
-    /// Spawns an ephemeral MCP server started via the CLI (`oz agent run --mcp`).
+    /// Spawns an ephemeral MCP server started via the CLI (`oz agent run --mcp`). With
+    /// `refreshable_headers`, its connection sends those headers, which their owner can replace
+    /// while the server runs.
     pub fn spawn_cli_ephemeral_server(
         &mut self,
         installation: TemplatableMCPServerInstallation,
+        refreshable_headers: Option<RefreshableHeaders>,
         ctx: &mut ModelContext<Self>,
     ) {
         self.cli_spawned_server_uuids.insert(installation.uuid());
+        match refreshable_headers {
+            Some(refreshable_headers) => {
+                self.refreshable_headers
+                    .insert(installation.uuid(), refreshable_headers);
+            }
+            None => {
+                self.refreshable_headers.remove(&installation.uuid());
+            }
+        }
         self.spawn_ephemeral_server(installation, ctx);
     }
 
@@ -917,6 +963,15 @@ impl TemplatableMCPServerManager {
             }
         };
 
+        if let Err(error) = self.apply_runtime_environment(&mut server.transport_type) {
+            log::error!("Could not apply managed MCP authentication environment: {error:#}");
+            self.change_server_state(installation_uuid, MCPServerState::FailedToStart, ctx);
+            self.notify_reconnect_waiters(
+                installation_uuid,
+                Err("Managed authentication environment is unavailable".into()),
+            );
+            return;
+        }
         // If we're executing a CLI MCP server, ensure that the environment variables includes
         // PATH.
         if let TransportType::CLIServer(cli_server) = &mut server.transport_type {
@@ -1140,6 +1195,7 @@ impl TemplatableMCPServerManager {
                 server.transport_type.clone(),
                 logger.clone(),
                 auth_context,
+                self.refreshable_headers.get(&installation_uuid).cloned(),
             )
             .compat(),
             move |me, server_info: Result<_, rmcp::RmcpError>, ctx| {
@@ -1223,6 +1279,15 @@ impl TemplatableMCPServerManager {
 
     /// Shuts down a running MCP server.
     pub fn shutdown_server(&mut self, installation_uuid: Uuid, ctx: &mut ModelContext<'_, Self>) {
+        drop(self.shutdown_server_and_wait(installation_uuid, ctx));
+    }
+
+    fn shutdown_server_and_wait(
+        &mut self,
+        installation_uuid: Uuid,
+        ctx: &mut ModelContext<Self>,
+    ) -> oneshot::Receiver<()> {
+        let (complete, receiver) = oneshot::channel();
         log::debug!("Trying to shut down a MCP server with installation uuid {installation_uuid}");
 
         Self::persist_is_mcp_running(installation_uuid, false, ctx);
@@ -1236,6 +1301,7 @@ impl TemplatableMCPServerManager {
         }
         self.reconnectable_ephemeral_installations
             .remove(&installation_uuid);
+        self.refreshable_headers.remove(&installation_uuid);
         self.notify_reconnect_waiters(installation_uuid, Err("Server shut down".to_string()));
         // Close the log stream now rather than when async teardown drops the
         // last logger clone, so an immediate respawn of the same server can
@@ -1253,14 +1319,17 @@ impl TemplatableMCPServerManager {
                 ctx.spawn(server_info.shutdown(), move |me, _, ctx| {
                     me.change_server_state(installation_uuid, MCPServerState::NotRunning, ctx);
                     ctx.dispatch_global_action("workspace:save_app", ());
+                    let _ = complete.send(());
                 });
             }
             _ => {
                 self.change_server_state(installation_uuid, MCPServerState::NotRunning, ctx);
+                let _ = complete.send(());
             }
         }
 
         log::debug!("Successfully shut down server with installation uuid {installation_uuid}");
+        receiver
     }
 
     pub fn get_installation_by_template_uuid(

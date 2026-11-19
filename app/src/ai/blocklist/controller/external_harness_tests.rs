@@ -1,9 +1,9 @@
 use std::time::SystemTime;
 
-use session_sharing_protocol::common::AgentAttachment;
+use session_sharing_protocol::common::{AgentAttachment, ProfileData};
 use uuid::Uuid;
-use warp_multi_agent_api::client_action::{AddMessagesToTask, CreateTask};
-use warp_multi_agent_api::message::tool_call::{RunShellCommand, Tool};
+use warp_multi_agent_api::client_action::{AddMessagesToTask, CreateTask, UpdateTaskMessage};
+use warp_multi_agent_api::message::tool_call::{CallMcpTool, RunShellCommand, Tool};
 use warp_multi_agent_api::message::tool_call_result::Result as ToolResult;
 use warp_multi_agent_api::message::{
     AgentOutput, Message as MessageKind, ToolCall, ToolCallResult, UserQuery,
@@ -17,8 +17,9 @@ use warp_multi_agent_api::{
 use warpui::{App, AppContext};
 
 use super::*;
+use crate::ai::agent::api::serde_json_to_prost;
 use crate::ai::agent::conversation::{AIConversation, ConversationDriver, ConversationStatus};
-use crate::ai::agent::{AIAgentActionId, AIAgentInput};
+use crate::ai::agent::{AIAgentActionId, AIAgentInput, CancellationReason};
 use crate::ai::blocklist::controller::ParticipantId;
 use crate::ai::blocklist::{CancellationRoute, QueuedQueryModel};
 use crate::persistence::model::AgentConversationData;
@@ -144,6 +145,49 @@ fn status(ctx: &AppContext, id: AIConversationId) -> ConversationStatus {
         .clone()
 }
 
+/// The cancellation reason of every root-task exchange, `None` for those not cancelled.
+fn exchange_cancel_reasons(
+    ctx: &AppContext,
+    id: AIConversationId,
+) -> Vec<Option<CancellationReason>> {
+    BlocklistAIHistoryModel::as_ref(ctx)
+        .conversation(&id)
+        .unwrap()
+        .root_task_exchanges()
+        .map(|exchange| exchange.output_status.cancel_reason().copied())
+        .collect()
+}
+
+/// Opens a harness turn on `id` and echoes `query` into it, as the harness does before the
+/// agent starts answering. The first turn also creates the root task, as the ACP mapper's
+/// initial actions do.
+fn begin_turn_with_query(
+    controller: &mut BlocklistAIController,
+    id: AIConversationId,
+    query: &str,
+    ctx: &mut ModelContext<BlocklistAIController>,
+) -> ExternalHarnessTurn {
+    let turn = controller
+        .begin_external_harness_turn(id, Some("run-1".into()), ctx)
+        .unwrap();
+    let task_id = root_task_id(ctx, id);
+    let root_is_optimistic = BlocklistAIHistoryModel::as_ref(ctx)
+        .conversation(&id)
+        .unwrap()
+        .get_root_task()
+        .is_none_or(|task| task.source().is_none());
+    let mut actions = Vec::new();
+    if root_is_optimistic {
+        actions.push(create_task(&task_id));
+    }
+    actions.push(add_messages(
+        &task_id,
+        vec![user_query(&task_id, &turn.request_id, query)],
+    ));
+    controller.apply_external_harness_event(&turn.stream_id, client_actions(actions), ctx);
+    turn
+}
+
 #[test]
 fn shared_session_injections_go_to_the_prompt_sink_instead_of_the_queue() {
     App::test((), |mut app| async move {
@@ -165,7 +209,8 @@ fn shared_session_injections_go_to_the_prompt_sink_instead_of_the_queue() {
                     ctx,
                 );
                 let relayed = prompts.try_recv().unwrap();
-                assert_eq!(relayed.text, "follow-up");
+                assert!(relayed.text.ends_with("\n\nfollow-up"));
+                assert!(relayed.text.contains("coauthor_user_uid: \"\""));
                 assert!(
                     matches!(
                         relayed.attachments.as_slice(),
@@ -213,9 +258,20 @@ fn injections_queued_before_the_sink_exists_are_relayed_when_it_is_installed() {
                 };
                 let base = BaseUserQuery::from_proto(api::request::input::UserQuery {
                     author: Some(author.clone()),
+                    origin: Some(api::UserQueryOrigin {
+                        variant: Some(api::user_query_origin::Variant::WarpClient(
+                            Default::default(),
+                        )),
+                    }),
                     ..Default::default()
                 });
+                let second_base = BaseUserQuery::for_viewer(Some(&ProfileData {
+                    firebase_uid: "second-viewer".into(),
+                    ..Default::default()
+                }));
+                let second_author = second_base.to_proto().author;
                 let participant_id = ParticipantId::new();
+                let second_participant_id = ParticipantId::new();
                 controller.execute_warp_agent_prompt_from_shared_session_injection(
                     "first".into(),
                     None,
@@ -232,13 +288,21 @@ fn injections_queued_before_the_sink_exists_are_relayed_when_it_is_installed() {
                     vec![AgentAttachment::PlainText {
                         content: "second context".into(),
                     }],
-                    participant_id.clone(),
-                    Some(base),
+                    second_participant_id.clone(),
+                    Some(second_base),
+                    ctx,
+                );
+                controller.execute_warp_agent_prompt_from_shared_session_injection(
+                    "unknown sender".into(),
+                    None,
+                    vec![],
+                    ParticipantId::new(),
+                    None,
                     ctx,
                 );
                 assert_eq!(
                     QueuedQueryModel::as_ref(ctx).queue(id).len(),
-                    2,
+                    3,
                     "with no sink and setup pending, injections are held in the queue"
                 );
 
@@ -247,7 +311,8 @@ fn injections_queued_before_the_sink_exists_are_relayed_when_it_is_installed() {
                 let first = prompts
                     .try_recv()
                     .expect("first prompt is relayed on install");
-                assert_eq!(first.text, "first");
+                assert_eq!(first.text, base.format_third_party_prompt("first"));
+                assert!(first.text.contains("coauthor_user_uid: \"viewer-uid\""));
                 assert!(
                     matches!(
                         first.attachments.as_slice(),
@@ -265,7 +330,9 @@ fn injections_queued_before_the_sink_exists_are_relayed_when_it_is_installed() {
                 let second = prompts
                     .try_recv()
                     .expect("second prompt is relayed on install, after the first");
-                assert_eq!(second.text, "second");
+                assert!(second.text.ends_with("\n\nsecond"));
+                assert!(second.text.contains("coauthor_user_uid: \"second-viewer\""));
+                assert!(!second.text.contains("viewer-uid"));
                 assert!(
                     matches!(
                         second.attachments.as_slice(),
@@ -274,12 +341,19 @@ fn injections_queued_before_the_sink_exists_are_relayed_when_it_is_installed() {
                     "second prompt's attachments must survive the queue: {:?}",
                     second.attachments
                 );
-                assert_eq!(second.participant_id, participant_id);
+                assert_eq!(second.participant_id, second_participant_id);
                 assert_eq!(
                     second.base.map(|base| base.to_proto().author),
-                    Some(Some(author))
+                    Some(second_author)
                 );
 
+                let unknown = prompts
+                    .try_recv()
+                    .expect("unknown sender follows both humans");
+                assert!(unknown.text.ends_with("\n\nunknown sender"));
+                assert!(unknown.text.contains("coauthor_user_uid: \"\""));
+                assert!(!unknown.text.contains("viewer-uid"));
+                assert!(!unknown.text.contains("second-viewer"));
                 assert!(
                     prompts.is_empty(),
                     "each queued row is relayed exactly once"
@@ -346,6 +420,65 @@ fn cancelling_a_harness_driven_conversation_goes_to_the_cancel_sink() {
 
                 controller.unbind_native_prompt_conversation(ctx);
                 assert!(cancels.is_closed(), "unbinding drops the cancel sink too");
+            });
+        });
+    });
+}
+
+#[test]
+fn a_turn_cut_short_by_a_follow_up_ends_cancelled_with_the_status_still_in_progress() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |terminal, ctx| {
+            terminal.ai_controller().update(ctx, |controller, ctx| {
+                let id = controller.bind_native_prompt_conversation(None, ctx);
+                let turn = begin_turn_with_query(controller, id, "hello", ctx);
+                assert_eq!(status(ctx, id), ConversationStatus::InProgress);
+
+                let reason = CancellationReason::FollowUpSubmitted {
+                    is_for_same_conversation: true,
+                };
+                controller.cancel_external_harness_turn(&turn.stream_id, reason, ctx);
+                assert_eq!(exchange_cancel_reasons(ctx, id), vec![Some(reason)]);
+                assert_eq!(
+                    status(ctx, id),
+                    ConversationStatus::InProgress,
+                    "the follow-up continues the conversation, so no terminal status is \
+                     reported to the run"
+                );
+
+                // The follow-up's turn opens on the same conversation as usual.
+                let next = begin_turn_with_query(controller, id, "steer", ctx);
+                assert_eq!(status(ctx, id), ConversationStatus::InProgress);
+                controller.apply_external_harness_event(&next.stream_id, done(), ctx);
+                assert_eq!(status(ctx, id), ConversationStatus::Success);
+                assert_eq!(exchange_cancel_reasons(ctx, id), vec![Some(reason), None]);
+            });
+        });
+    });
+}
+
+#[test]
+fn a_turn_cut_short_by_an_interrupt_ends_cancelled_and_marks_the_conversation_cancelled() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |terminal, ctx| {
+            terminal.ai_controller().update(ctx, |controller, ctx| {
+                let id = controller.bind_native_prompt_conversation(None, ctx);
+                let turn = begin_turn_with_query(controller, id, "hello", ctx);
+
+                controller.cancel_external_harness_turn(
+                    &turn.stream_id,
+                    CancellationReason::ManuallyCancelled,
+                    ctx,
+                );
+                assert_eq!(
+                    exchange_cancel_reasons(ctx, id),
+                    vec![Some(CancellationReason::ManuallyCancelled)]
+                );
+                assert_eq!(status(ctx, id), ConversationStatus::Cancelled);
             });
         });
     });
@@ -419,6 +552,57 @@ fn queued_harness_prompts_are_shown_as_rows_until_hidden() {
             });
         });
     });
+}
+
+#[test]
+fn displayed_harness_prompt_is_not_wrapped_again_when_relayed() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |terminal, ctx| {
+            terminal.ai_controller().update(ctx, |controller, ctx| {
+                let id = controller.bind_native_prompt_conversation(None, ctx);
+                let prompt = ExternalHarnessPrompt::new(
+                    "waiting".into(),
+                    vec![],
+                    ParticipantId::new(),
+                    Some(BaseUserQuery::for_viewer(Some(&ProfileData {
+                        firebase_uid: "alice".into(),
+                        ..Default::default()
+                    }))),
+                );
+                controller.show_external_harness_prompt_queued(id, &prompt, ctx);
+                let (sink, prompts) = async_channel::unbounded();
+                controller.set_external_harness_prompt_sink(sink, ctx);
+
+                let relayed = prompts.try_recv().unwrap();
+                assert_eq!(relayed.text, prompt.text);
+                assert_eq!(relayed.text.matches("[Query identity]").count(), 1);
+                assert_eq!(relayed.base.unwrap().query(), Some("waiting"));
+                assert!(prompts.is_empty());
+            });
+        });
+    });
+}
+
+#[test]
+fn external_harness_prompt_preserves_controls_and_authoritative_query_text() {
+    for text in ["/clear", "!git status", "&background", "\u{3}"] {
+        let prompt = ExternalHarnessPrompt::new(text.into(), vec![], ParticipantId::new(), None);
+        assert_eq!(prompt.text, text);
+    }
+
+    let prompt = ExternalHarnessPrompt::new(
+        "fallback".into(),
+        vec![],
+        ParticipantId::new(),
+        Some(BaseUserQuery::from_proto(api::request::input::UserQuery {
+            query: "authoritative".into(),
+            ..Default::default()
+        })),
+    );
+    assert!(prompt.text.ends_with("\n\nauthoritative"));
+    assert!(!prompt.text.contains("fallback"));
 }
 
 #[test]
@@ -643,6 +827,79 @@ fn tool_call_results_are_applied_as_finished_and_settle_in_the_next_stream() {
 
                 controller.apply_external_harness_event(&second.stream_id, done(), ctx);
                 assert_eq!(status(ctx, id), ConversationStatus::Success);
+            });
+        });
+    });
+}
+
+#[test]
+fn a_tool_call_rewritten_by_a_message_update_is_stored_with_its_new_input() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |terminal, ctx| {
+            terminal.ai_controller().update(ctx, |controller, ctx| {
+                let id = controller.bind_native_prompt_conversation(None, ctx);
+                let turn = begin_turn_with_query(controller, id, "post in slack", ctx);
+                let task_id = root_task_id(ctx, id);
+                let mcp_call = |args: serde_json::Value| {
+                    MessageKind::ToolCall(ToolCall {
+                        tool_call_id: "call-1".to_owned(),
+                        tool: Some(Tool::CallMcpTool(CallMcpTool {
+                            name: "send_message_to_thread".to_owned(),
+                            args: match serde_json_to_prost(args).unwrap().kind {
+                                Some(prost_types::value::Kind::StructValue(args)) => Some(args),
+                                other => panic!("expected a struct, got {other:?}"),
+                            },
+                            ..Default::default()
+                        })),
+                    })
+                };
+                let announced =
+                    message(&task_id, &turn.request_id, mcp_call(serde_json::json!({})));
+                let message_id = announced.id.clone();
+                controller.apply_external_harness_event(
+                    &turn.stream_id,
+                    client_actions(vec![add_messages(&task_id, vec![announced])]),
+                    ctx,
+                );
+                controller.apply_external_harness_event(
+                    &turn.stream_id,
+                    client_actions(vec![action(client_action::Action::UpdateTaskMessage(
+                        UpdateTaskMessage {
+                            task_id: task_id.clone(),
+                            message: Some(Message {
+                                id: message_id.clone(),
+                                task_id: task_id.clone(),
+                                request_id: turn.request_id.clone(),
+                                message: Some(mcp_call(serde_json::json!({ "message": "Done" }))),
+                                ..Default::default()
+                            }),
+                            mask: Some(prost_types::FieldMask {
+                                paths: vec!["tool_call".to_owned()],
+                            }),
+                        },
+                    ))]),
+                    ctx,
+                );
+
+                let conversation = BlocklistAIHistoryModel::as_ref(ctx)
+                    .conversation(&id)
+                    .unwrap();
+                let stored = conversation
+                    .get_root_task()
+                    .unwrap()
+                    .messages()
+                    .find(|message| message.id == message_id)
+                    .expect("the announced call is stored");
+                let Some(MessageKind::ToolCall(ToolCall {
+                    tool: Some(Tool::CallMcpTool(call)),
+                    ..
+                })) = &stored.message
+                else {
+                    panic!("expected a CallMcpTool, got {:?}", stored.message);
+                };
+                assert!(call.args.as_ref().unwrap().fields.contains_key("message"));
             });
         });
     });

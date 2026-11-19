@@ -9,6 +9,177 @@ fn deltas(diff: &AIRequestedCodeDiff) -> &[DiffDelta] {
     }
 }
 
+#[derive(serde::Deserialize)]
+struct BlankLineFixture {
+    name: String,
+    dual: V4AHunk,
+    initial: String,
+    range: [usize; 2],
+}
+
+#[test]
+fn v4a_blank_line_fixture_ranges() {
+    let fixtures: Vec<BlankLineFixture> =
+        serde_json::from_str(include_str!("testdata/blank_lines.json")).unwrap();
+    for fixture in fixtures {
+        let diff = fuzzy_match_v4a_diffs("fixture.txt", &[fixture.dual], None, fixture.initial);
+        assert_eq!(deltas(&diff).len(), 1, "{}", fixture.name);
+        assert_eq!(
+            deltas(&diff)[0].replacement_line_range,
+            fixture.range[0]..fixture.range[1],
+            "{}",
+            fixture.name
+        );
+        assert_eq!(diff.failures, None, "{}", fixture.name);
+    }
+}
+
+#[test]
+fn v4a_line_data_presence_and_validation() {
+    let mut hunk: V4AHunk = serde_json::from_value(serde_json::json!({
+        "change_context": [], "pre_context": "", "old": "old",
+        "new": "new", "post_context": ""
+    }))
+    .unwrap();
+    let legacy = fuzzy_match_v4a_diffs("file", &[hunk.clone()], None, "old\n");
+    assert_eq!(deltas(&legacy).len(), 1);
+    hunk.line_data = Some(V4ALineData::default());
+    let empty = fuzzy_match_v4a_diffs("file", &[hunk.clone()], None, "old\n");
+    assert!(deltas(&empty).is_empty());
+    assert_eq!(empty.failures.unwrap().noop_deltas, 1);
+    assert!(hunk.original_lines().is_empty());
+    for field in ["pre_context", "old", "new", "post_context"] {
+        let mut data = serde_json::json!({});
+        data[field] = serde_json::json!(["invalid\nline"]);
+        hunk.line_data = Some(serde_json::from_value(data).unwrap());
+        let invalid = fuzzy_match_v4a_diffs("file", &[hunk.clone()], None, "old\n");
+        assert!(deltas(&invalid).is_empty());
+        assert_eq!(invalid.failures.unwrap().fuzzy_match_failures, 1);
+        assert!(hunk.original_lines().is_empty());
+    }
+    hunk.new = "ignored\r".into();
+    hunk.line_data = Some(V4ALineData {
+        old: vec!["old".into()],
+        new: vec!["chosen".into()],
+        ..Default::default()
+    });
+    let selected = fuzzy_match_v4a_diffs("file", &[hunk], None, "old\n");
+    assert_eq!(deltas(&selected)[0].insertion, "chosen");
+}
+
+#[test]
+fn v4a_large_hunk_outcome_counts() {
+    let noop: V4AHunk = serde_json::from_value(serde_json::json!({
+        "change_context": [], "pre_context": "", "old": "same", "new": "same", "post_context": ""
+    }))
+    .unwrap();
+    let mut unmatched = noop.clone();
+    unmatched.old = "\n\n".into();
+    unmatched.new.clear();
+    let hunks = [vec![noop; 300], vec![unmatched; 300]].concat();
+    let diff = fuzzy_match_v4a_diffs("file", &hunks, None, "same\nKEEP\n");
+    assert!(deltas(&diff).is_empty());
+    let failures = diff.failures.unwrap();
+    assert_eq!(failures.noop_deltas, 300);
+    assert_eq!(failures.fuzzy_match_failures, 300);
+}
+
+#[test]
+fn v4a_legacy_cr_insertion_bytes() {
+    let hunk = serde_json::from_value(serde_json::json!({
+        "change_context": [], "pre_context": "", "old": "old",
+        "new": "x\ry\n", "post_context": ""
+    }))
+    .unwrap();
+    let diff = fuzzy_match_v4a_diffs("file", &[hunk], None, "old\n");
+    assert_eq!(diff.failures, None);
+    assert_eq!(deltas(&diff)[0].insertion, "x\ry\n");
+}
+
+#[test]
+fn v4a_trailing_blank_wrong_occurrence() {
+    for (old, content) in [
+        (
+            "console.log('hello');\n\n",
+            "console.log('hello');\nKEEP\nconsole.log('hello');\n\nend\n",
+        ),
+        (
+            "console.log('hello');\n\n",
+            "    console.log('hello');\nKEEP\n    console.log('hello');\n\nend\n",
+        ),
+        (
+            "console.log('helo');\n\n",
+            "console.log('hello');\nKEEP\nconsole.log('hello');\n\nend\n",
+        ),
+    ] {
+        let hunk = V4AHunk {
+            line_data: None,
+            change_context: vec![],
+            pre_context: String::new(),
+            old: old.into(),
+            new: "replacement\n".into(),
+            post_context: String::new(),
+        };
+        let diff = fuzzy_match_v4a_diffs("fixture.txt", &[hunk], None, content);
+        assert_eq!(deltas(&diff).len(), 1);
+        assert_eq!(deltas(&diff)[0].replacement_line_range, 3..5);
+    }
+}
+
+#[test]
+fn v4a_blank_matching_line_counts() {
+    let hunk = V4AHunk {
+        line_data: None,
+        change_context: vec![],
+        pre_context: String::new(),
+        old: "\n\n".into(),
+        new: "replacement\n".into(),
+        post_context: String::new(),
+    };
+    for content in ["KEEP\nKEEP\n", "\n", ""] {
+        let diff = fuzzy_match_v4a_diffs("fixture.txt", std::slice::from_ref(&hunk), None, content);
+        assert_eq!(deltas(&diff).len(), 0);
+        assert_eq!(diff.failures.unwrap().fuzzy_match_failures, 1);
+    }
+}
+
+#[test]
+fn v4a_genuine_noop() {
+    for (old, new, content) in [
+        ("x", "x\n", "x\n"),
+        ("x\r\n", "x\n", "x\r\n"),
+        ("\n", "\n", "\n"),
+        ("\n\n", "\n\n", "\n\n"),
+        (" x\n", "x\n", "x\n"),
+    ] {
+        let hunk = V4AHunk {
+            line_data: None,
+            change_context: vec![],
+            pre_context: String::new(),
+            old: old.into(),
+            new: new.into(),
+            post_context: String::new(),
+        };
+        let diff = fuzzy_match_v4a_diffs("fixture.txt", &[hunk], None, content);
+        assert_eq!(deltas(&diff).len(), 0);
+        assert_eq!(diff.failures.unwrap().noop_deltas, 1);
+    }
+}
+
+#[test]
+fn v4a_old_strings_fixed_client() {
+    let hunk = V4AHunk {
+        line_data: None,
+        change_context: vec![],
+        pre_context: "before\n\n".into(),
+        old: "\n".into(),
+        new: "".into(),
+        post_context: "after".into(),
+    };
+    let diff = fuzzy_match_v4a_diffs("fixture.txt", &[hunk], None, "before\n\n\nafter\n");
+    assert_eq!(deltas(&diff)[0].replacement_line_range, 3..4);
+}
+
 const CONTENT: &str = "I'd just like to interject
                         for a moment. What you're refering to as
                         Linux, is in fact, GNU/Linux, or as I've
@@ -318,6 +489,7 @@ fn test_find_similar_sections_out_of_bounds() {
 #[test]
 fn test_v4a_exact_match() {
     let hunks = vec![V4AHunk {
+        line_data: None,
         change_context: vec![],
         pre_context: "fn main() {".to_string(),
         old: "    println!(\"Hello\");".to_string(),
@@ -342,6 +514,7 @@ fn test_v4a_exact_match() {
 #[test]
 fn test_v4a_with_change_context() {
     let hunks = vec![V4AHunk {
+        line_data: None,
         change_context: vec!["impl MyStruct {".to_string()],
         pre_context: "    fn method1() {\n        // comment".to_string(),
         old: "        let x = 1;".to_string(),
@@ -366,6 +539,7 @@ fn test_v4a_with_change_context() {
 fn test_v4a_indentation_agnostic_match() {
     // Hunk has different indentation than the actual file
     let hunks = vec![V4AHunk {
+        line_data: None,
         change_context: vec![],
         pre_context: "def hello():".to_string(),
         old: "print(\"hello\")".to_string(), // No indentation
@@ -390,6 +564,7 @@ fn test_v4a_indentation_agnostic_match() {
 fn test_v4a_fuzzy_match() {
     // Hunk has slightly different content (typo)
     let hunks = vec![V4AHunk {
+        line_data: None,
         change_context: vec![],
         pre_context: "function greet() {".to_string(),
         old: "    console.log(\"helo\");".to_string(), // Typo: "helo" instead of "hello"
@@ -408,6 +583,7 @@ fn test_v4a_fuzzy_match() {
 #[test]
 fn test_v4a_no_match() {
     let hunks = vec![V4AHunk {
+        line_data: None,
         change_context: vec![],
         pre_context: "fn does_not_exist() {".to_string(),
         old: "    unrelated_code();".to_string(),
@@ -432,6 +608,7 @@ fn test_v4a_no_match() {
 fn test_v4a_failure_preserves_original_block_ordinal() {
     let hunks = vec![
         V4AHunk {
+            line_data: None,
             change_context: vec![],
             pre_context: "fn main() {".to_string(),
             old: "    println!(\"Hello\");".to_string(),
@@ -439,6 +616,7 @@ fn test_v4a_failure_preserves_original_block_ordinal() {
             post_context: "}".to_string(),
         },
         V4AHunk {
+            line_data: None,
             change_context: vec![],
             pre_context: "fn does_not_exist() {".to_string(),
             old: "    unrelated_code();".to_string(),
@@ -462,6 +640,7 @@ fn test_v4a_failure_preserves_original_block_ordinal() {
 #[test]
 fn test_v4a_noop_diff() {
     let hunks = vec![V4AHunk {
+        line_data: None,
         change_context: vec![],
         pre_context: "fn main() {".to_string(),
         old: "    println!(\"Hello\");".to_string(),
@@ -482,6 +661,7 @@ fn test_v4a_noop_diff() {
 fn test_v4a_empty_context() {
     // Test with no pre or post context
     let hunks = vec![V4AHunk {
+        line_data: None,
         change_context: vec![],
         pre_context: String::new(),
         old: "let x = 1;".to_string(),
@@ -505,6 +685,7 @@ fn test_v4a_empty_context() {
 #[test]
 fn test_v4a_multiline_old_content() {
     let hunks = vec![V4AHunk {
+        line_data: None,
         change_context: vec![],
         pre_context: "fn calculate() {".to_string(),
         old: "    let a = 1;\n    let b = 2;\n    let sum = a + b;".to_string(),
@@ -529,6 +710,7 @@ fn test_v4a_multiline_old_content() {
 fn test_v4a_multiple_hunks() {
     let hunks = vec![
         V4AHunk {
+            line_data: None,
             change_context: vec![],
             pre_context: "fn first() {".to_string(),
             old: "    let x = 1;".to_string(),
@@ -536,6 +718,7 @@ fn test_v4a_multiple_hunks() {
             post_context: "}".to_string(),
         },
         V4AHunk {
+            line_data: None,
             change_context: vec![],
             pre_context: "fn second() {".to_string(),
             old: "    let y = 2;".to_string(),
@@ -558,6 +741,7 @@ fn test_v4a_multiple_hunks() {
 fn test_v4a_add_line_with_change_context_no_old() {
     // Test adding a new line using only change_context to locate position, without old content or pre-context
     let hunks = vec![V4AHunk {
+        line_data: None,
         change_context: vec!["class MyClass {".to_string()],
         pre_context: "".to_string(),
         old: "".to_string(),
@@ -581,6 +765,7 @@ fn test_v4a_add_line_with_change_context_no_old() {
 fn test_v4a_add_line_at_start_of_file() {
     // Test adding a line at the very start of a file
     let hunks = vec![V4AHunk {
+        line_data: None,
         change_context: vec![],
         pre_context: "".to_string(), // No pre-context - start of file
         old: "".to_string(),         // No old content
@@ -601,6 +786,7 @@ fn test_v4a_add_line_at_start_of_file() {
 fn test_v4a_add_line_at_end_of_file() {
     // Test adding a line at the very end of a file
     let hunks = vec![V4AHunk {
+        line_data: None,
         change_context: vec![],
         pre_context: "fn main() {\n    println!(\"Hello\");\n}".to_string(),
         old: "".to_string(), // No old content
@@ -832,6 +1018,7 @@ impl ActionButtonTheme for DefaultWeightAgentInputButtonTheme {\n\
     let hunks = vec![
         // Hunk A: delete the entire DefaultWeightAgentInputButtonTheme block.
         V4AHunk {
+            line_data: None,
             change_context: vec![],
             pre_context: "        }\n    }\n}".to_string(),
             old: "\nstruct DefaultWeightAgentInputButtonTheme;\n\nimpl ActionButtonTheme for DefaultWeightAgentInputButtonTheme {\n    fn background(&self, hovered: bool, appearance: &Appearance) -> Option<Fill> {\n        AgentInputButtonTheme.background(hovered, appearance)\n    }\n\n    fn text_color(\n        &self,\n        hovered: bool,\n        background: Option<Fill>,\n        appearance: &Appearance,\n    ) -> ColorU {\n        AgentInputButtonTheme.text_color(hovered, background, appearance)\n    }\n\n    fn border(&self, appearance: &Appearance) -> Option<ColorU> {\n        AgentInputButtonTheme.border(appearance)\n    }\n\n    fn should_opt_out_of_contrast_adjustment(&self) -> bool {\n        true\n    }\n}".to_string(),
@@ -842,6 +1029,7 @@ impl ActionButtonTheme for DefaultWeightAgentInputButtonTheme {\n\
         // Its preContext + old match a line inside hunk A's range, so it
         // produces a delta whose range overlaps with hunk A's.
         V4AHunk {
+            line_data: None,
             change_context: vec![],
             pre_context: "impl ActionButtonTheme for DefaultWeightAgentInputButtonTheme {\n    fn background(&self, hovered: bool, appearance: &Appearance) -> Option<Fill> {".to_string(),
             old: "        AgentInputButtonTheme.background(hovered, appearance)".to_string(),

@@ -7,6 +7,55 @@ use super::{HarnessSupportClient, ServerApi};
 use crate::ai::artifacts::Artifact;
 
 #[test]
+fn wait_for_events_registers_targets_with_workload_credentials() {
+    let request = ChannelState::mock_server()
+        .mock("POST", "/api/v1/harness-support/wait-for-events")
+        .match_header(
+            CLOUD_AGENT_ID_HEADER,
+            "11111111-1111-4111-8111-111111111111",
+        )
+        .match_header(AMBIENT_WORKLOAD_TOKEN_HEADER, "test-workload-token")
+        .match_body(Matcher::Json(
+            serde_json::json!({"run_ids": ["child-one", "child-two"]}),
+        ))
+        .with_status(200)
+        .with_body(r#"{"waiting_on_run_ids":["child-two","child-one"]}"#)
+        .create();
+    let api = ServerApi::new_for_test();
+    api.base_client
+        .set_ambient_workload_token_for_test("test-workload-token".into(), None);
+    api.set_ambient_agent_task_id(Some(
+        "11111111-1111-4111-8111-111111111111".parse().unwrap(),
+    ));
+
+    let response =
+        block_on(api.wait_for_events(&["child-one".into(), "child-two".into()])).unwrap();
+
+    assert_eq!(response.waiting_on_run_ids, ["child-two", "child-one"]);
+    request.assert();
+}
+
+#[test]
+fn wait_for_events_propagates_rejected_registration() {
+    let request = ChannelState::mock_server()
+        .mock("POST", "/api/v1/harness-support/wait-for-events")
+        .with_status(400)
+        .with_body(r#"{"error":"cyclic wait is not allowed"}"#)
+        .create();
+    let api = ServerApi::new_for_test();
+    api.base_client
+        .set_ambient_workload_token_for_test("test-workload-token".into(), None);
+    api.set_ambient_agent_task_id(Some(
+        "11111111-1111-4111-8111-111111111111".parse().unwrap(),
+    ));
+
+    let result = block_on(api.wait_for_events(&["child-one".into()]));
+
+    assert!(result.is_err());
+    request.assert();
+}
+
+#[test]
 fn transcript_download_resolves_url_with_requested_task_scope() {
     let ambient_task = "11111111-1111-4111-8111-111111111111";
     for task_scope in [None, Some("22222222-2222-4222-8222-222222222222")] {
@@ -236,4 +285,32 @@ fn report_shutdown_abnormal_serializes_with_error() {
             }
         })
     );
+}
+
+#[test]
+fn report_transport_input_maps_the_transport_and_optional_reason() {
+    use warp_cli::agent::HarnessTransport;
+    use warp_graphql::mutations::report_harness_transport::{
+        HarnessTransport as GraphQLHarnessTransport, HarnessTransportFallbackReason,
+    };
+
+    use super::report_harness_transport_input;
+
+    let acp = report_harness_transport_input(HarnessTransport::Acp, None).unwrap();
+    assert_eq!(acp.transport, GraphQLHarnessTransport::Acp);
+    assert_eq!(acp.fallback_reason, None);
+
+    for (reason, expected) in [
+        ("no_sidecar", HarnessTransportFallbackReason::NoSidecar),
+        (
+            "sidecar_without_adapter",
+            HarnessTransportFallbackReason::SidecarWithoutAdapter,
+        ),
+    ] {
+        let fallback = report_harness_transport_input(HarnessTransport::Pty, Some(reason)).unwrap();
+        assert_eq!(fallback.transport, GraphQLHarnessTransport::Pty);
+        assert_eq!(fallback.fallback_reason, Some(expected), "{reason}");
+    }
+
+    assert!(report_harness_transport_input(HarnessTransport::Pty, Some("bogus")).is_err());
 }

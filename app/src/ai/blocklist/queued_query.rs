@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 
+use ai::hooks::PromptProvenance;
 use session_sharing_protocol::common::{AgentAttachment, ParticipantId};
 use uuid::Uuid;
+use warp_multi_agent_api::AgentType;
 use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity};
 
 use crate::ai::agent::conversation::AIConversationId;
@@ -25,9 +27,11 @@ impl QueuedQueryId {
 }
 
 /// Where a queued prompt came from.
-/// The origin is informational for telemetry; FIFO ordering and firing semantics are uniform.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QueuedQueryOrigin {
+    /// Filed by the local input in `Steer` mode while the agent was mid-turn. Fires on the next
+    /// request boundary of the current turn rather than waiting for the turn to finish.
+    LocalSteering,
     /// Filed while the initial Cloud Mode prompt waits to be handed off.
     InitialCloudMode,
     /// Received through session sharing while a native run was starting.
@@ -47,6 +51,8 @@ pub enum QueuedQueryOrigin {
     /// Filed as the follow-up prompt of a `/fork-and-compact <prompt>` slash command on the
     /// forked conversation, waiting for the fork's summarize to finish.
     ForkAndCompactSlashCommand,
+    /// Filed by an agent hook that asked for a follow-up when a turn ended.
+    HookFollowUp,
 }
 
 /// Whether a queued row is a local prompt, an attributed shared-session prompt, or a command.
@@ -75,6 +81,9 @@ pub struct QueuedQuery {
     text: String,
     origin: QueuedQueryOrigin,
     kind: QueuedQueryKind,
+    /// Who wrote the prompt. Rows a person filed, here or through a shared session, are the
+    /// person's; a stop hook's follow-up names the hook and the chain it continues.
+    provenance: PromptProvenance,
 }
 
 impl QueuedQuery {
@@ -98,6 +107,21 @@ impl QueuedQuery {
                 prepared_files,
                 base,
             },
+            provenance: PromptProvenance::User,
+        }
+    }
+
+    /// A prompt a stop hook asked for. It carries no attachments and is sent like any other
+    /// queued prompt, behind whatever a person queued before it.
+    pub(crate) fn new_hook_follow_up(text: String, provenance: PromptProvenance) -> Self {
+        Self {
+            id: QueuedQueryId::new(),
+            text,
+            origin: QueuedQueryOrigin::HookFollowUp,
+            kind: QueuedQueryKind::Prompt {
+                attachments: Vec::new(),
+            },
+            provenance,
         }
     }
 
@@ -134,6 +158,7 @@ impl QueuedQuery {
             text,
             origin,
             kind: QueuedQueryKind::Prompt { attachments },
+            provenance: PromptProvenance::User,
         }
     }
 
@@ -144,11 +169,27 @@ impl QueuedQuery {
             text,
             origin,
             kind: QueuedQueryKind::Command,
+            provenance: PromptProvenance::User,
         }
     }
 
     pub fn id(&self) -> QueuedQueryId {
         self.id
+    }
+
+    /// Whether this row fires at the next request boundary of the current turn rather than
+    /// waiting for the turn to finish.
+    pub(crate) fn is_local_steering(&self) -> bool {
+        self.origin == QueuedQueryOrigin::LocalSteering
+    }
+
+    /// Whether this is a shared-session injection addressed to the conversation's primary
+    /// task, as opposed to an agent wake or a prompt intended for the CLI subagent.
+    pub(crate) fn is_primary_injected_followup(&self) -> bool {
+        self.shared_session_prompt().is_some()
+            && !self.base_user_query().is_some_and(|base| {
+                base.is_agent_message_wake() || base.intended_agent() == Some(AgentType::Cli)
+            })
     }
 
     /// Whether all asynchronous preparation for this row has settled.
@@ -225,6 +266,28 @@ pub enum AutofireAction {
         query_id: QueuedQueryId,
         command: String,
     },
+}
+
+/// A queued row that may be sent with the conversation's next request instead of waiting for
+/// the turn to finish, tagged with the reason it qualifies.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum RequestRow<'a> {
+    /// A shared-session injection at the head of the queue. The caller may need to interrupt
+    /// a running agent command before it can be sent.
+    InjectedFollowup(&'a QueuedQuery),
+    /// The head of a queue delivered in [`QueuedPromptDeliveryMode::Steering`].
+    SteeredHead(&'a QueuedQuery),
+    /// A prompt filed in `Steer` mode. It passes plain prompts, which wait for the turn to
+    /// finish, but never a command, locked, or LRC auto-queue row.
+    LocalSteering(&'a QueuedQuery),
+}
+
+impl<'a> RequestRow<'a> {
+    pub(crate) fn row(self) -> &'a QueuedQuery {
+        match self {
+            Self::InjectedFollowup(row) | Self::SteeredHead(row) | Self::LocalSteering(row) => row,
+        }
+    }
 }
 
 /// How queued prompts for a conversation are delivered to the agent. Selected per-conversation;
@@ -361,11 +424,7 @@ impl QueuedQueryModel {
         ctx.emit(QueuedQueryEvent::DispatchStateChanged { conversation_id });
     }
 
-    /// Clears the native setup barrier once the initial prompt has actually been sent. Does
-    /// *not* dispatch any prompt that arrived in the meantime -- the caller
-    /// (`BlocklistAIController::dispatch_queued_warp_agent_prompt`) does that immediately
-    /// afterward, once it's safe to do so (see that method's doc comment for why the two can't
-    /// be combined into one step here).
+    /// Releases startup follow-ups for steering or idle delivery after the initial submission.
     pub(crate) fn finish_native_setup(
         &mut self,
         conversation_id: AIConversationId,
@@ -450,6 +509,37 @@ impl QueuedQueryModel {
             return None;
         }
         self.ready_query(conversation_id, first.id)
+    }
+
+    /// Returns the one row, if any, that may ride along with `conversation_id`'s next request
+    /// rather than waiting for the turn to finish. Queued commands never ride along.
+    pub(crate) fn next_row_for_request(
+        &self,
+        conversation_id: AIConversationId,
+    ) -> Option<RequestRow<'_>> {
+        let head = self
+            .ready_head(conversation_id)
+            .filter(|row| !row.is_command());
+        if let Some(head) = head.filter(|row| row.is_primary_injected_followup()) {
+            return Some(RequestRow::InjectedFollowup(head));
+        }
+        if self.is_steering(conversation_id) {
+            return head.map(RequestRow::SteeredHead);
+        }
+        if self.has_command_in_flight(conversation_id) {
+            return None;
+        }
+        let row = self.queue(conversation_id).iter().find(|row| {
+            row.is_locked()
+                || row.is_command()
+                || row.origin == QueuedQueryOrigin::LrcAutoQueue
+                || row.is_local_steering()
+        })?;
+        if !row.is_local_steering() || self.editing_row(conversation_id) == Some(row.id) {
+            return None;
+        }
+        self.ready_query(conversation_id, row.id)
+            .map(RequestRow::LocalSteering)
     }
 
     /// Settles attachment preparation once; stale completions never recreate removed rows.
@@ -732,10 +822,25 @@ impl QueuedQueryModel {
         &self,
         conversation_id: AIConversationId,
     ) -> bool {
-        self.queues
+        self.effective_prompt_submission_mode(conversation_id) == PromptSubmissionMode::Queue
+    }
+
+    /// The submission mode in effect for `conversation_id` once its auto-queue toggle is
+    /// applied on top of the default. The toggle is binary, so turning it off on a `Queue`
+    /// default falls back to `Interrupt`; on any other default it restores that default.
+    pub(crate) fn effective_prompt_submission_mode(
+        &self,
+        conversation_id: AIConversationId,
+    ) -> PromptSubmissionMode {
+        let queue_override = self
+            .queues
             .get(&conversation_id)
-            .and_then(|state| state.queue_next_prompt_override)
-            .unwrap_or(self.default_mode == PromptSubmissionMode::Queue)
+            .and_then(|state| state.queue_next_prompt_override);
+        match (queue_override, self.default_mode) {
+            (Some(true), _) => PromptSubmissionMode::Queue,
+            (Some(false), PromptSubmissionMode::Queue) => PromptSubmissionMode::Interrupt,
+            (Some(false), default) | (None, default) => default,
+        }
     }
 
     /// Toggles the per-conversation auto-queue state. Computes the effective
@@ -988,6 +1093,19 @@ impl QueuedQueryModel {
         });
     }
 
+    /// Who wrote the queued row `query_id` in `conversation_id`'s queue. A row that is no longer
+    /// queued is a person's.
+    pub(crate) fn provenance_for(
+        &self,
+        conversation_id: AIConversationId,
+        query_id: QueuedQueryId,
+    ) -> PromptProvenance {
+        self.queues
+            .get(&conversation_id)
+            .and_then(|state| state.queue.iter().find(|q| q.id == query_id))
+            .map_or(PromptProvenance::User, |row| row.provenance.clone())
+    }
+
     /// Returns the attachments captured on the queued row `query_id` within `conversation_id`'s
     /// queue, or an empty slice if no such row exists. Used by the send path to attach a fired
     /// queued prompt's images/files without removing the row first.
@@ -1177,12 +1295,17 @@ pub(crate) fn is_lrc_auto_queue_active(
 ) -> bool {
     let ai_settings = AISettings::as_ref(app);
     FeatureFlag::QueueSlashCommand.is_enabled()
-        && ai_settings.default_prompt_submission_mode == PromptSubmissionMode::Interrupt
+        && ai_settings.default_prompt_submission_mode != PromptSubmissionMode::Queue
         && ai_settings.long_running_command_submission_mode
             == LongRunningCommandSubmissionMode::QueueUntilCommandCompletes
         && active_block.is_agent_in_control()
         && active_block.is_agent_requested_command()
         && active_block.ai_conversation_id() == Some(conversation_id)
+}
+
+/// Whether local prompts may be steered into the agent's current turn.
+pub(crate) fn is_prompt_steering_enabled() -> bool {
+    FeatureFlag::AgentPromptSteering.is_enabled() && FeatureFlag::QueueSlashCommand.is_enabled()
 }
 
 #[cfg(test)]

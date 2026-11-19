@@ -11,6 +11,10 @@ pub struct EnvironmentCheckoutArgs {
     pub remove_origins_only: bool,
     #[arg(long, conflicts_with = "remove_origins_only")]
     pub fail_if_target_exists: bool,
+    /// Ignores the session's execution repository preparation, which covers only the run's own
+    /// repositories.
+    #[arg(long)]
+    pub legacy_preparation: bool,
 }
 
 #[cfg(test)]

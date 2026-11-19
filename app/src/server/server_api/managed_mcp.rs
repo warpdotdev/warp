@@ -15,6 +15,11 @@ use warp_graphql::mutations::create_managed_mcp_client_config::{
 use super::ServerApi;
 use crate::server::graphql::{get_request_context, get_user_facing_error_message};
 
+/// The server's refusal to issue a managed MCP client config, which asking again cannot change.
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+pub(crate) struct ManagedMcpClientConfigRejected(pub String);
+
 #[cfg_attr(test, automock)]
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
@@ -48,7 +53,7 @@ impl ManagedMcpClient for ServerApi {
                 Ok(output)
             }
             CreateManagedMcpClientConfigResult::UserFacingError(error) => {
-                Err(anyhow!(get_user_facing_error_message(error)))
+                Err(ManagedMcpClientConfigRejected(get_user_facing_error_message(error)).into())
             }
             CreateManagedMcpClientConfigResult::Unknown => Err(anyhow!(
                 "Unknown error while creating managed MCP client config"

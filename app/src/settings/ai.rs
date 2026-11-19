@@ -936,6 +936,9 @@ pub enum PromptSubmissionMode {
     /// (default).
     #[default]
     Interrupt,
+    /// Hold the new prompt until the agent's next request within the current turn (e.g. after
+    /// a tool result), so it lands mid-task without cancelling in-flight work.
+    Steer,
     /// Hold the new prompt until the in-flight response finishes, then submit.
     Queue,
 }
@@ -957,6 +960,7 @@ impl PromptSubmissionMode {
     pub fn display_name(&self) -> &'static str {
         match self {
             PromptSubmissionMode::Interrupt => "Interrupt response",
+            PromptSubmissionMode::Steer => "Steer at next turn",
             PromptSubmissionMode::Queue => "Queue until response finishes",
         }
     }
@@ -964,9 +968,18 @@ impl PromptSubmissionMode {
     pub fn command_palette_description(&self) -> &'static str {
         match self {
             PromptSubmissionMode::Interrupt => "Set default prompt submission: interrupt response",
+            PromptSubmissionMode::Steer => "Set default prompt submission: steer at next turn",
             PromptSubmissionMode::Queue => {
                 "Set default prompt submission: queue until response finishes"
             }
+        }
+    }
+
+    /// Whether this mode can currently be offered to the user.
+    pub fn is_available(&self) -> bool {
+        match self {
+            PromptSubmissionMode::Interrupt | PromptSubmissionMode::Queue => true,
+            PromptSubmissionMode::Steer => FeatureFlag::AgentPromptSteering.is_enabled(),
         }
     }
 }
@@ -974,9 +987,8 @@ impl PromptSubmissionMode {
 /// What happens when a prompt is submitted while an agent controls an agent-requested
 /// long-running command (LRC).
 ///
-/// Only consulted when [`PromptSubmissionMode`] is `Interrupt`: in `Queue` mode
-/// prompts always queue until the full response finishes, so this setting is
-/// hidden and ignored.
+/// Not consulted when [`PromptSubmissionMode`] is `Queue`: prompts then always queue until
+/// the full response finishes, so this setting is hidden and ignored.
 #[derive(
     Default,
     Debug,
@@ -2070,7 +2082,7 @@ define_settings_group!(AISettings, settings: [
     default_prompt_submission_mode: PromptSubmissionMode,
 
     // What happens when a prompt is submitted while an agent controls an agent-requested
-    // long-running command. Only consulted when `default_prompt_submission_mode` is `Interrupt`;
+    // long-running command. Not consulted when `default_prompt_submission_mode` is `Queue`;
     // per-LRC manual overrides live on `QueuedQueryModel`.
     long_running_command_submission_mode: LongRunningCommandSubmissionMode,
 

@@ -1,7 +1,7 @@
+use std::future::Future as _;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use std::time::Duration;
 
 use futures::channel::{mpsc, oneshot};
 use futures::executor::block_on;
@@ -11,7 +11,7 @@ use parking_lot::Mutex;
 use serde_json::{Value, json};
 use warpui::r#async::executor::Background;
 
-use super::{AcpConnection, AgentRequestHandler, InboundNotification, RpcError};
+use super::{AcpConnection, AgentRequestHandler, MAX_RENDERED_DATA_CHARS, Notifications, RpcError};
 
 /// One direction of an in-memory pipe.
 fn pipe() -> (PipeWriter, PipeReader) {
@@ -24,8 +24,87 @@ fn pipe() -> (PipeWriter, PipeReader) {
         },
     )
 }
+#[test]
+fn send_request_finishes_only_after_flush_and_does_not_wait_for_the_response() {
+    let (client_writer, agent_reader) = pipe();
+    let (agent_writer, client_reader) = pipe();
+    let (started_tx, started_rx) = oneshot::channel();
+    let (release_tx, release_rx) = oneshot::channel();
+    let executor = Arc::new(Background::new(1, |_| "acp-send-request-test".to_owned()));
+    let (connection, _notifications) = AcpConnection::new(
+        client_reader,
+        FlushGatedWriter {
+            writer: client_writer,
+            started: Some(started_tx),
+            release: Some(release_rx),
+        },
+        rejecting_handler(),
+        &executor,
+    );
+    let mut agent = FakeAgent {
+        from_client: BufReader::new(agent_reader),
+        to_client: agent_writer,
+        _executor: executor,
+    };
+
+    block_on(async {
+        let send = connection.send_request::<_, Value>("session/prompt", json!({}));
+        futures::pin_mut!(send);
+        assert!(futures::poll!(send.as_mut()).is_pending());
+        started_rx.await.unwrap();
+        let prompt = agent.next_message().await;
+        assert_eq!(prompt["method"], "session/prompt");
+        assert!(futures::poll!(send.as_mut()).is_pending());
+        release_tx.send(()).unwrap();
+        let response = send.await.unwrap();
+        connection
+            .notify("session/cancel", json!({"sessionId": "sess_1"}))
+            .await
+            .unwrap();
+        let cancel = agent.next_message().await;
+        assert_eq!(cancel["method"], "session/cancel");
+        futures::pin_mut!(response);
+        assert!(futures::poll!(response.as_mut()).is_pending());
+        agent
+            .send(json!({"jsonrpc": "2.0", "id": prompt["id"], "result": {"stopReason": "cancelled"}}))
+            .await;
+        assert_eq!(response.await.unwrap(), json!({"stopReason": "cancelled"}));
+    });
+}
 
 struct PipeWriter(mpsc::UnboundedSender<Vec<u8>>);
+struct FlushGatedWriter {
+    writer: PipeWriter,
+    started: Option<oneshot::Sender<()>>,
+    release: Option<oneshot::Receiver<()>>,
+}
+
+impl AsyncWrite for FlushGatedWriter {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        Pin::new(&mut self.writer).poll_write(cx, buf)
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        if let Some(started) = self.started.take() {
+            started.send(()).unwrap();
+        }
+        if let Some(release) = self.release.as_mut() {
+            if Pin::new(release).poll(cx).is_pending() {
+                return Poll::Pending;
+            }
+            self.release = None;
+        }
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.writer).poll_close(cx)
+    }
+}
 
 impl AsyncWrite for PipeWriter {
     fn poll_write(
@@ -75,7 +154,7 @@ impl AsyncRead for PipeReader {
 }
 
 /// The agent's end of the wire: reads what the client wrote and writes raw lines back.
-struct FakeAgent {
+pub(in super::super) struct FakeAgent {
     from_client: BufReader<PipeReader>,
     to_client: PipeWriter,
     /// Runs the connection's read loop; dropping it would cancel the loop.
@@ -83,26 +162,37 @@ struct FakeAgent {
 }
 
 impl FakeAgent {
-    async fn next_message(&mut self) -> Value {
+    async fn read_barrier(&mut self) {
+        self.send(json!({
+            "jsonrpc": "2.0", "id": "read-barrier", "method": "test/read_barrier", "params": {}
+        }))
+        .await;
+        let answer = self.next_message().await;
+        assert_eq!(answer["id"], "read-barrier", "{answer}");
+        assert_eq!(answer["error"]["code"], -32601);
+    }
+    pub(in super::super) async fn next_message(&mut self) -> Value {
         let mut line = String::new();
         self.from_client.read_line(&mut line).await.unwrap();
         serde_json::from_str(&line).expect("client must write one JSON object per line")
     }
 
-    async fn send(&mut self, message: Value) {
+    /// Closes the agent's end of both pipes, as an agent that exits does, while keeping the
+    /// connection's read loop running so it can observe the EOF.
+    pub(in super::super) fn hang_up(self) -> Arc<Background> {
+        self._executor.clone()
+    }
+
+    pub(in super::super) async fn send(&mut self, message: Value) {
         let mut encoded = serde_json::to_string(&message).unwrap();
         encoded.push('\n');
         self.to_client.write_all(encoded.as_bytes()).await.unwrap();
     }
 }
 
-fn connect(
+pub(in super::super) fn connect(
     handler: AgentRequestHandler,
-) -> (
-    AcpConnection,
-    async_channel::Receiver<InboundNotification>,
-    FakeAgent,
-) {
+) -> (AcpConnection, Notifications, FakeAgent) {
     let (client_writer, agent_reader) = pipe();
     let (agent_writer, client_reader) = pipe();
     let executor = Arc::new(Background::new(1, |_| "acp-connection-test".to_string()));
@@ -119,7 +209,7 @@ fn connect(
     )
 }
 
-fn rejecting_handler() -> AgentRequestHandler {
+pub(in super::super) fn rejecting_handler() -> AgentRequestHandler {
     Arc::new(|method, _| future::ready(Err(RpcError::method_not_found(method))).boxed())
 }
 
@@ -154,21 +244,6 @@ fn permission_request(id: Value, tool_call_id: &str) -> Value {
             "options": [{"optionId": "allow", "name": "Allow", "kind": "allow_once"}],
         },
     })
-}
-
-/// Polls until `connection` reports `count` outstanding requests, since dispatch happens on
-/// the read loop's own thread.
-async fn wait_for_pending(connection: &AcpConnection, count: usize) {
-    for _ in 0..200 {
-        if connection.pending_inbound_requests().len() == count {
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
-    panic!(
-        "expected {count} pending inbound requests, found {:?}",
-        connection.pending_inbound_requests()
-    );
 }
 
 #[test]
@@ -224,6 +299,107 @@ fn notifications_preceding_a_response_are_queued_before_it_resolves() {
     });
 }
 
+fn update(n: u64) -> Value {
+    json!({"jsonrpc": "2.0", "method": "session/update", "params": {"n": n}})
+}
+
+#[test]
+fn a_replaying_request_discards_exactly_the_notifications_before_its_answer() {
+    for answer in [
+        json!({"result": {"loaded": true}}),
+        json!({"error": {"code": -32603, "message": "replay failed"}}),
+    ] {
+        let (connection, notifications, mut agent) = connect(rejecting_handler());
+        block_on(async {
+            // Queued before the request is even sent; it still precedes the answer.
+            agent.send(update(1)).await;
+            agent.read_barrier().await;
+
+            let request =
+                connection.request_discarding_replay::<_, Value>("session/load", json!({}));
+            let succeeds = answer.get("result").is_some();
+            let agent = async {
+                let message = agent.next_message().await;
+                agent.send(update(2)).await;
+                agent.send(update(3)).await;
+                let mut response = json!({"jsonrpc": "2.0", "id": message["id"]});
+                response
+                    .as_object_mut()
+                    .unwrap()
+                    .extend(answer.as_object().unwrap().clone());
+                agent.send(response).await;
+                // On the wire before the client has seen the answer.
+                agent.send(update(4)).await;
+                agent.send(update(5)).await;
+                agent.read_barrier().await;
+            };
+            let (response, ()) = join!(request, agent);
+            if succeeds {
+                assert_eq!(response.unwrap(), json!({"loaded": true}));
+            } else {
+                let error = response.unwrap_err();
+                assert_eq!(error.downcast_ref::<RpcError>().unwrap().code, -32603);
+            }
+
+            assert_eq!(notifications.try_recv().unwrap().params["n"], 4);
+            assert_eq!(notifications.recv().await.unwrap().params["n"], 5);
+            assert!(notifications.try_recv().is_err());
+            assert!(!notifications.is_closed());
+        });
+    }
+}
+
+#[test]
+fn a_replaying_request_the_agent_abandons_discards_the_replay_it_began() {
+    let (connection, notifications, agent) = connect(rejecting_handler());
+    let _keep_read_loop_alive = agent._executor.clone();
+    block_on(async {
+        let request = connection.request_discarding_replay::<_, Value>("session/load", json!({}));
+        let agent = async move {
+            let mut agent = agent;
+            agent.next_message().await;
+            agent.send(update(1)).await;
+            drop(agent);
+        };
+        let (response, ()) = join!(request, agent);
+        let error = response.unwrap_err();
+        assert!(error.downcast_ref::<RpcError>().is_none(), "{error:#}");
+        assert!(notifications.recv().await.is_err());
+        assert!(notifications.is_closed());
+    });
+}
+
+#[test]
+fn an_ordinary_request_after_a_replaying_one_keeps_its_notifications() {
+    let (connection, notifications, mut agent) = connect(rejecting_handler());
+    block_on(async {
+        let load = connection.request_discarding_replay::<_, Value>("session/load", json!({}));
+        let agent_load = async {
+            let message = agent.next_message().await;
+            agent.send(update(1)).await;
+            agent
+                .send(json!({"jsonrpc": "2.0", "id": message["id"], "result": null}))
+                .await;
+        };
+        let (loaded, ()) = join!(load, agent_load);
+        loaded.unwrap();
+
+        let prompt = connection.request::<_, Value>("session/prompt", json!({}));
+        let agent_prompt = async {
+            let message = agent.next_message().await;
+            agent.send(update(2)).await;
+            agent
+                .send(json!({"jsonrpc": "2.0", "id": message["id"], "result": null}))
+                .await;
+        };
+        let (prompted, ()) = join!(prompt, agent_prompt);
+        prompted.unwrap();
+
+        assert_eq!(notifications.try_recv().unwrap().params["n"], 2);
+        assert!(notifications.try_recv().is_err());
+    });
+}
+
 #[test]
 fn authentication_error_code_survives_request_context() {
     let (connection, _notifications, mut agent) = connect(rejecting_handler());
@@ -264,6 +440,55 @@ fn error_responses_surface_as_request_errors() {
         let error = response.unwrap_err().to_string();
         assert!(error.contains("bad request"), "{error}");
     });
+}
+
+#[test]
+fn error_data_survives_into_the_rendered_error() {
+    let (connection, _notifications, mut agent) = connect(rejecting_handler());
+    block_on(async {
+        let request = connection.request::<_, Value>("session/prompt", json!({}));
+        let agent = async {
+            let message = agent.next_message().await;
+            agent
+                .send(json!({
+                    "jsonrpc": "2.0",
+                    "id": message["id"],
+                    "error": {
+                        "code": -32603,
+                        "message": "Internal error",
+                        "data": {"codexErrorInfo": "usageLimitExceeded"},
+                    },
+                }))
+                .await;
+        };
+        let (response, ()) = join!(request, agent);
+        let error = format!(
+            "{:#}",
+            response.unwrap_err().context("session/prompt failed")
+        );
+        assert_eq!(
+            error,
+            r#"session/prompt failed: ACP error -32603: Internal error: {"codexErrorInfo":"usageLimitExceeded"}"#
+        );
+    });
+}
+
+#[test]
+fn error_detail_renders_string_data_bounded_and_without_repeating_the_message() {
+    let error = |data: Value| RpcError {
+        code: -32603,
+        message: "Internal error".to_owned(),
+        data: Some(data),
+    };
+    assert_eq!(
+        error(json!(" You've hit your usage limit.\n")).detail(),
+        "Internal error: You've hit your usage limit."
+    );
+    assert_eq!(error(json!("Internal error")).detail(), "Internal error");
+
+    let long = "é".repeat(MAX_RENDERED_DATA_CHARS + 1);
+    let expected = format!("Internal error: {}…", "é".repeat(MAX_RENDERED_DATA_CHARS));
+    assert_eq!(error(json!(long)).detail(), expected);
 }
 
 #[test]
@@ -311,7 +536,8 @@ fn unanswered_agent_request_does_not_block_notifications_or_responses() {
         let agent_turn = async {
             let prompt_message = agent.next_message().await;
             agent.send(permission_request(json!(1), "call-1")).await;
-            wait_for_pending(&connection, 1).await;
+            agent.read_barrier().await;
+            assert_eq!(connection.pending_inbound_requests().len(), 1);
             agent
                 .send(json!({"jsonrpc": "2.0", "method": "session/update", "params": {"n": 1}}))
                 .await;
@@ -335,7 +561,8 @@ fn unanswered_agent_request_does_not_block_notifications_or_responses() {
         let answer = agent.next_message().await;
         assert_eq!(answer["id"], 1);
         assert_eq!(answer["result"]["outcome"]["optionId"], "allow");
-        wait_for_pending(&connection, 0).await;
+        agent.read_barrier().await;
+        assert!(connection.pending_inbound_requests().is_empty());
     });
 }
 
@@ -358,7 +585,8 @@ fn cancelling_answers_pending_permission_requests_and_discards_the_handlers_answ
                 "params": {"sessionId": "other-session", "toolCall": {"toolCallId": "call-3"}, "options": []},
             }))
             .await;
-        wait_for_pending(&connection, 3).await;
+        agent.read_barrier().await;
+        assert_eq!(connection.pending_inbound_requests().len(), 3);
 
         assert_eq!(connection.cancel_pending_permission_requests("sess_1").await, 2);
 
@@ -384,7 +612,8 @@ fn cancelling_answers_pending_permission_requests_and_discards_the_handlers_answ
         let answer = agent.next_message().await;
         assert_eq!(answer["id"], 3);
         assert_eq!(answer["result"]["outcome"]["optionId"], "allow");
-        wait_for_pending(&connection, 0).await;
+        agent.read_barrier().await;
+        assert!(connection.pending_inbound_requests().is_empty());
         assert_eq!(connection.cancel_pending_permission_requests("sess_1").await, 0);
     });
 }

@@ -43,6 +43,7 @@ fn strict_checkout_preserves_existing_work_and_reports_partial_success() {
                 report_file: directory.path().join("report.json"),
                 remove_origins_only: false,
                 fail_if_target_exists: true,
+                legacy_preparation: false,
             };
             let batch = fixture.batch(vec![
                 fixture.request(
@@ -152,6 +153,7 @@ fn cleanup_only_preserves_refs_and_reports_failures_without_cloning() {
                 report_file: directory.path().join("report.json"),
                 remove_origins_only: true,
                 fail_if_target_exists: false,
+                legacy_preparation: false,
             };
             let batch = fixture.batch(vec![
                 fixture.request(
@@ -281,6 +283,7 @@ fn helper_report_times_every_checkout_and_omits_unresolved_heads() {
                 report_file: directory.path().join("report.json"),
                 remove_origins_only: false,
                 fail_if_target_exists: false,
+                legacy_preparation: false,
             };
             let batch = fixture.batch(vec![
                 fixture.request("empty", None),
@@ -616,24 +619,20 @@ fn cold_and_warm_mirrors_refresh_default_and_remain_independent() {
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
-fn mirror_tracks_all_refs_and_cached_checkout_survives_commit_graphs() {
+fn mirror_tracks_branches_and_tags_and_cached_checkout_survives_commit_graphs() {
     fixture_test(
-        "mirror_tracks_all_refs_and_cached_checkout_survives_commit_graphs",
+        "mirror_tracks_branches_and_tags_and_cached_checkout_survives_commit_graphs",
         |fixture| {
             fixture.prepare(fixture.request("cold", None), true);
             let mirror = fixture.mirror();
             assert_eq!(
-                git(&mirror, &["config", "--local", "remote.origin.fetch"]),
-                "+refs/*:refs/*"
+                git(
+                    &mirror,
+                    &["config", "--local", "--get-all", "remote.origin.fetch"]
+                ),
+                "+refs/heads/*:refs/heads/*\n+refs/tags/*:refs/tags/*"
             );
-            assert_eq!(
-                git(&mirror, &["config", "--local", "remote.origin.mirror"]),
-                "true"
-            );
-            assert_eq!(
-                git(&mirror, &["rev-parse", "refs/pinned/base"]),
-                fixture.pinned()
-            );
+            assert!(git(&mirror, &["for-each-ref", "refs/pinned"]).is_empty());
             git(
                 &mirror,
                 &["commit-graph", "write", "--reachable", "--split"],
@@ -812,6 +811,43 @@ fn partial_mirrors_are_rebuilt_and_full_mirror_config_is_normalized() {
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
+fn partial_mirrors_with_missing_blobs_are_rebuilt() {
+    fixture_test(
+        "partial_mirrors_with_missing_blobs_are_rebuilt",
+        |fixture| {
+            let root = optional_mirror_root().unwrap();
+            git(
+                &root,
+                &[
+                    "clone",
+                    "--bare",
+                    "--filter=blob:none",
+                    CANONICAL_URL,
+                    fixture.mirror().to_str().unwrap(),
+                ],
+            );
+            assert!(
+                git(
+                    &fixture.mirror(),
+                    &["rev-list", "--objects", "--all", "--missing=print"]
+                )
+                .lines()
+                .any(|line| line.starts_with('?'))
+            );
+            fs::write(fixture.mirror().join("KEEP"), "partial mirror").unwrap();
+
+            fixture.prepare(fixture.request("rebuilt", None), true);
+
+            assert!(!fixture.mirror().join("KEEP").exists());
+            let target = fixture.work().join("rebuilt");
+            assert!(!is_partial_clone(&target));
+            fixture.full_objects(&target);
+        },
+    );
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
 fn failed_refresh_rebuilds_the_mirror_instead_of_serving_stale_history() {
     fixture_test(
         "failed_refresh_rebuilds_the_mirror_instead_of_serving_stale_history",
@@ -858,20 +894,42 @@ fn failed_rebuild_keeps_the_existing_mirror() {
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
+fn mirror_sync_returns_cache_state_when_refresh_and_rebuild_fail() {
+    fixture_test(
+        "mirror_sync_returns_cache_state_when_refresh_and_rebuild_fail",
+        |fixture| {
+            fixture.prepare(fixture.request("initial", None), true);
+            fs::rename(fixture.origin(), fixture.root.join("origin-offline.git")).unwrap();
+            let mirror = fixture.mirror();
+
+            let outcome = block_on(Compat::new(super::sync_mirror(
+                &mirror,
+                mirror.parent().unwrap(),
+                CANONICAL_URL,
+                "fixture",
+                &mut Git::default(),
+            )));
+
+            assert!(outcome.result.is_err());
+            assert!(outcome.cache_hit);
+            assert!(!outcome.rebuilt);
+        },
+    );
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
 fn failed_cached_attempt_cleans_only_its_new_checkout() {
     fixture_test(
         "failed_cached_attempt_cleans_only_its_new_checkout",
         |fixture| {
-            git(
-                &fixture.origin(),
-                &["update-ref", "refs/tags/v1", &fixture.pinned()],
-            );
-            // Only the network path resolves a branch head that names a tag, so the cached attempt
-            // fails after it has created and populated its checkout.
+            // Only the network path resolves a branch head that names a ref that is neither a
+            // branch nor a tag, so the cached attempt fails after it has created and populated its
+            // checkout.
             fixture.prepare(
                 fixture.request(
                     "recovered",
-                    Some(RepositoryHeadRef::Branch("v1".to_owned())),
+                    Some(RepositoryHeadRef::Branch("refs/pinned/base".to_owned())),
                 ),
                 true,
             );
@@ -1014,6 +1072,75 @@ fn parallel_substituted_branches_preserve_alias_and_attribute_failure() {
 }
 
 #[test]
+fn branch_heads_check_out_branches_then_tags_on_both_paths() {
+    fixture_test(
+        "branch_heads_check_out_branches_then_tags_on_both_paths",
+        |fixture| {
+            let (base, pinned) = (fixture.base(), fixture.pinned());
+            let origin = fixture.origin();
+            git(&origin, &["update-ref", "refs/heads/feature", &pinned]);
+            git(&origin, &["update-ref", "refs/tags/v1", &pinned]);
+            git(
+                &fixture.seed(),
+                &["tag", "-a", "annotated", "-m", "release", &pinned],
+            );
+            git(&fixture.seed(), &["push", "origin", "annotated"]);
+            git(&origin, &["update-ref", "refs/heads/same", &base]);
+            git(&origin, &["update-ref", "refs/tags/same", &pinned]);
+            let expected = [
+                ("main", &base),
+                ("feature", &pinned),
+                ("v1", &pinned),
+                ("annotated", &pinned),
+                ("same", &base),
+            ];
+            let modes = if cfg!(any(target_os = "linux", target_os = "macos")) {
+                vec![false, true]
+            } else {
+                vec![false]
+            };
+            for cached in modes {
+                let prefix = if cached { "cached" } else { "direct" };
+                let branch = |name: &str| {
+                    fixture.request(
+                        &format!("{prefix}-{name}"),
+                        Some(RepositoryHeadRef::Branch(name.to_owned())),
+                    )
+                };
+                let mut requests = expected.map(|(name, _)| branch(name)).to_vec();
+                requests.push(branch("missing"));
+                let root = cached.then(optional_mirror_root).flatten();
+                let results = checkout_batch(&fixture.batch(requests), root.as_deref()).unwrap();
+                assert_eq!(results[5].failure, Some(CheckoutFailureKind::Checkout));
+                for (outcome, (name, commit)) in results.iter().zip(expected) {
+                    assert_eq!(outcome.failure, None, "{prefix} {name}");
+                    let target = fixture.work().join(format!("{prefix}-{name}"));
+                    assert_eq!(
+                        &git(&target, &["rev-parse", "HEAD"]),
+                        commit,
+                        "{prefix} {name}"
+                    );
+                    // The mirror path resolves tags itself instead of falling back to the network.
+                    #[cfg(any(target_os = "linux", target_os = "macos"))]
+                    assert_eq!(is_partial_clone(&target), !cached, "{prefix} {name}");
+                }
+                // An existing branch resolves on the first attempt, as it did before tag support.
+                for outcome in &results[..2] {
+                    for operation in ["requested head checkout", "requested branch fetch"] {
+                        let failure = format!("Git {operation} failed");
+                        assert!(
+                            !outcome.diagnostics.contains(&failure),
+                            "{}",
+                            outcome.diagnostics
+                        );
+                    }
+                }
+            }
+        },
+    );
+}
+
+#[test]
 fn uncached_sha_fetch_avoids_later_default_history_and_preserves_failures() {
     fixture_test(
         "uncached_sha_fetch_avoids_later_default_history_and_preserves_failures",
@@ -1043,6 +1170,32 @@ fn uncached_sha_fetch_avoids_later_default_history_and_preserves_failures() {
             .unwrap();
             assert_eq!(results[0].failure, Some(CheckoutFailureKind::Checkout));
             assert_eq!(git(&target, &["rev-parse", "HEAD"]), base);
+
+            // On either path, a commit the remote lacks fails the checkout and a remote that can't
+            // be reached fails the clone.
+            let absent = "0123456789abcdef".repeat(3)[..40].to_owned();
+            let modes = if cfg!(any(target_os = "linux", target_os = "macos")) {
+                vec![false, true]
+            } else {
+                vec![false]
+            };
+            let pinned_failure = |name: &str, cached: bool| {
+                let request = fixture.request(
+                    &format!("{name}-{cached}"),
+                    Some(RepositoryHeadRef::CommitSha(absent.clone())),
+                );
+                let root = cached.then(optional_mirror_root).flatten();
+                checkout_batch(&fixture.batch(vec![request]), root.as_deref()).unwrap()[0].failure
+            };
+            for &cached in &modes {
+                let failure = pinned_failure("absent", cached);
+                assert_eq!(failure, Some(CheckoutFailureKind::Checkout), "{cached}");
+            }
+            fs::rename(fixture.origin(), fixture.root.join("origin-offline.git")).unwrap();
+            for &cached in &modes {
+                let failure = pinned_failure("offline", cached);
+                assert_eq!(failure, Some(CheckoutFailureKind::Clone), "{cached}");
+            }
         },
     );
 }
@@ -1077,6 +1230,7 @@ fn helper_writes_typed_failures_and_rejects_invalid_requests_before_work() {
                 report_file: directory.path().join("report.json"),
                 remove_origins_only: false,
                 fail_if_target_exists: false,
+                legacy_preparation: false,
             };
             let batch = fixture.batch(vec![
                 fixture.request("good", None),
@@ -1335,6 +1489,7 @@ fn checkout_traces_report_operation_outcomes_without_request_details() {
                     report_file: directory.path().join("report.json"),
                     remove_origins_only: false,
                     fail_if_target_exists: false,
+                    legacy_preparation: false,
                 };
                 let batch = fixture.batch(vec![
                     fixture.request("direct", None),
@@ -1446,6 +1601,7 @@ fn helper_without_handoff_keeps_checkout_working() {
             report_file: directory.path().join("report.json"),
             remove_origins_only: false,
             fail_if_target_exists: false,
+            legacy_preparation: false,
         };
         fs::write(
             &args.requests_file,
@@ -1472,6 +1628,7 @@ fn helper_with_expired_handoff_keeps_checkout_working() {
                 report_file: directory.path().join("report.json"),
                 remove_origins_only: false,
                 fail_if_target_exists: false,
+                legacy_preparation: false,
             };
             fs::write(
                 &args.requests_file,
@@ -1521,6 +1678,7 @@ fn execution_policy_helper_subprocess() {
         report_file: report_file.clone(),
         remove_origins_only: cleanup,
         fail_if_target_exists: strict,
+        legacy_preparation: std::env::var_os("WARP_TEST_POLICY_LEGACY").is_some(),
     };
     let result = run(&args);
     match std::env::var("WARP_TEST_POLICY_EXPECT").unwrap().as_str() {
@@ -1649,6 +1807,29 @@ fn execution_policy_checkout_enforces_binding_and_preparation() {
             invalid.insert(FILE_ENV.into(), malformed.into_os_string());
             invoke(&batch, &invalid, true, false, "blocked", "malformed");
             invoke(&batch, &env, false, false, "blocked", "strict-flag-dropped");
+            let skill_source = CheckoutBatch {
+                working_dir: root.clone(),
+                repositories: vec![fixture.request("skill-source", None)],
+            };
+            invoke(
+                &skill_source,
+                &env,
+                false,
+                false,
+                "blocked",
+                "no-legacy-flag",
+            );
+            let mut legacy = env.clone();
+            legacy.insert("WARP_TEST_POLICY_LEGACY".into(), "1".into());
+            invoke(
+                &skill_source,
+                &legacy,
+                false,
+                false,
+                "success",
+                "legacy-flag",
+            );
+            assert!(root.join("skill-source").exists());
             batch.repositories[0] = fixture.request("substitute-identity", None);
             invoke(
                 &batch,
@@ -1728,6 +1909,7 @@ fn lazy_pins_verify_sha_origin_policy_and_never_fall_back() {
                 report_file: directory.path().join("report.json"),
                 remove_origins_only: false,
                 fail_if_target_exists: true,
+                legacy_preparation: false,
             };
             fs::write(&args.requests_file, serde_json::to_vec(&batch).unwrap()).unwrap();
             assert!(run(&args).is_err());

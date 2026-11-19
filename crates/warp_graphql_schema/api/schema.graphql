@@ -4,6 +4,18 @@ schema {
   subscription: RootSubscription
 }
 
+enum GitHubCredentialMode {
+  LEGACY
+  RESTRICTED_INSTALLATION
+}
+
+enum TaskGitCredentialProvider {
+  GITHUB
+  GITLAB
+  AZURE_DEVOPS
+  CODE_STORAGE
+}
+
 """
 Directs the executor to defer this fragment when the `if` argument is true or undefined.
 """
@@ -970,6 +982,7 @@ type ConversationUsageMetadata {
 
 """Worker type for agent tasks."""
 input CreateAgentTaskInput {
+  localGithubContractVersion: Int
   """
   Optional JSON-serialized agent config snapshot to store on the task.
   
@@ -994,6 +1007,9 @@ input CreateAgentTaskInput {
 }
 
 type CreateAgentTaskOutput implements Response {
+  githubCredentialMode: GitHubCredentialMode
+  executionId: ID
+  mcpServers: String
   responseContext: ResponseContext!
 
   """The ID of the created task."""
@@ -1065,6 +1081,11 @@ type CreateGenericStringObjectOutput implements Response {
 union CreateGenericStringObjectResult = CreateGenericStringObjectOutput | UserFacingError
 
 input CreateManagedSecretInput {
+  """
+  Optional override of the provider's default API URL. Only valid for
+  LLM_PROVIDER_API_KEY secrets.
+  """
+  baseUrl: String
   description: String
   encryptedValue: String!
   name: String!
@@ -1186,6 +1207,7 @@ enum CustomerType {
   LIGHTSPEED
   PROSUMER
   PRO_TRIAL
+  SCALE
   SELF_SERVE
   TEAM_TRIAL
   TURBO
@@ -1957,6 +1979,8 @@ type HarnessInfo {
   displayName: String!
   enabled: Boolean!
   harness: AgentHarness!
+  piVersion: String
+  piProviders: [PiProviderInfo!]
 }
 
 input HarnessInput {
@@ -1993,6 +2017,29 @@ input HarnessSettingsEntryInput {
 input HarnessSettingsInput {
   harnessConfigs: [HarnessSettingsEntryInput!]
   optOutOfNewHarnesses: Boolean
+}
+
+"""
+The transport the agent process drives a run's third-party harness over.
+"""
+enum HarnessTransport {
+  """The harness is driven over the Agent Client Protocol."""
+  ACP
+
+  """The harness is driven through a terminal."""
+  PTY
+}
+
+"""
+Why the harness is driven over a PTY although the run was dispatched over ACP, when no ACP
+adapter was found on PATH either.
+"""
+enum HarnessTransportFallbackReason {
+  """No coding CLI sidecar was mounted."""
+  NO_SIDECAR
+
+  """A sidecar was mounted but carries no ACP adapter."""
+  SIDECAR_WITHOUT_ADAPTER
 }
 
 enum HostEnablementSetting {
@@ -2373,6 +2420,12 @@ type LlmSpec {
   speed: Float!
 }
 
+"""How an LLM provider API key's endpoint is reached."""
+enum LlmEndpointKind {
+  """The provider's own API, at its default URL or a baseUrl override of it."""
+  NATIVE
+}
+
 type LlmUsageMetadata {
   creditMultiplier: Float
   requestMultiplier: Int! @deprecated(reason: "Use creditMultiplier instead")
@@ -2401,7 +2454,19 @@ type MCPTemplateVariable {
   key: String!
 }
 
+type PiProviderInfo {
+  id: String!
+  name: String!
+  apiKeySupported: Boolean!
+  unsupportedReason: String
+}
+
 type ManagedSecret {
+  """
+  For LLM_PROVIDER_API_KEY secrets, an optional override of the provider's default API
+  URL (for example, a proxy or regional endpoint). Not secret.
+  """
+  baseUrl: String
   createdAt: Time!
 
   """
@@ -2409,11 +2474,19 @@ type ManagedSecret {
   """
   description: String
 
+  """For LLM_PROVIDER_API_KEY secrets, how the key's endpoint is reached."""
+  endpointKind: LlmEndpointKind
+
   """The name of this secret. Secret names are unique for a given owner."""
   name: String!
 
   """The user or team who owns this secret."""
   owner: Space!
+
+  """
+  For LLM_PROVIDER_API_KEY secrets, the model provider the key authenticates against.
+  """
+  providerId: String
 
   """The kind of secret value."""
   type: ManagedSecretType!
@@ -2489,6 +2562,17 @@ type ManagedSecretOpenAiApiKeyValue {
   baseUrl: String
 }
 
+"""
+A managed secret value representing an API key for a model provider. The encrypted
+value carries only providerId and apiKey; baseUrl is read from the secret's metadata
+when the value is delivered to a run.
+"""
+type ManagedSecretLlmProviderApiKeyValue {
+  providerId: String!
+  apiKey: String!
+  baseUrl: String
+}
+
 """A raw, unencrypted managed secret value."""
 type ManagedSecretRawValue {
   value: String!
@@ -2508,10 +2592,11 @@ enum ManagedSecretType {
   DOCKER_REGISTRY
   DOTENVX
   OPENAI_API_KEY
+  LLM_PROVIDER_API_KEY
   RAW_VALUE
 }
 
-union ManagedSecretValue = ManagedSecretAnthropicApiKeyValue | ManagedSecretAnthropicBedrockAccessKeyValue | ManagedSecretAnthropicBedrockApiKeyValue | ManagedSecretAwsEcrCredentialValue | ManagedSecretDockerRegistryValue | ManagedSecretOpenAiApiKeyValue | ManagedSecretRawValue
+union ManagedSecretValue = ManagedSecretAnthropicApiKeyValue | ManagedSecretAnthropicBedrockAccessKeyValue | ManagedSecretAnthropicBedrockApiKeyValue | ManagedSecretAwsEcrCredentialValue | ManagedSecretDockerRegistryValue | ManagedSecretOpenAiApiKeyValue | ManagedSecretLlmProviderApiKeyValue | ManagedSecretRawValue
 
 input ManagedSecretsInput {
   """Pagination cursor, currently unused."""
@@ -2823,6 +2908,9 @@ enum PlatformErrorCode {
   """Principal lacks permission for the requested operation."""
   NOT_AUTHORIZED
 
+  """The operation is not supported for the current resource state."""
+  OPERATION_NOT_SUPPORTED
+
   """Referenced resource does not exist."""
   RESOURCE_NOT_FOUND
 
@@ -2850,28 +2938,35 @@ type PopulateMerkleTreeCacheOutput implements Response {
 union PopulateMerkleTreeCacheResult = PopulateMerkleTreeCacheOutput | UserFacingError
 
 input PrewarmedSandboxConfigInput {
+  githubCredentialContractVersion: Int
+  runnerPreparationContractVersion: Int
   sandboxId: ID!
-  workloadToken: String!
+  supportsAgentHooks: Boolean
+  supportsDeferredRepositories: Boolean
 }
 
 union PrewarmedSandboxConfigResult = PrewarmedSandboxConfiguration | UserFacingError
 
 type PrewarmedSandboxConfiguration {
+  preparationKind: String!
+  runnerPreparationContractVersion: Int
   environmentVariables: [PrewarmedSandboxVariable!]!
   expiresAt: Time!
-  generation: String!
+  fingerprint: String!
   gitCredentials: [TaskGitCredential!]!
+  githubCredentialMode: GitHubCredentialMode!
   managedSecrets: [TaskSecretEntry!]!
-  preparation: PrewarmedSandboxPreparation!
   sandboxId: ID!
+  spec: PrewarmedSandboxSpec!
 }
 
-type PrewarmedSandboxPreparation {
+type PrewarmedSandboxSpec {
   computerUseEnabled: Boolean!
   deferredRepositories: [SourceRepo!]!
   factorySkillDirs: [String!]!
   harness: String!
   mcpServersJson: String!
+  providers: CloudProviderClientConfigs
   repositories: [ExecutionRepository!]!
   setupCommands: [String!]!
   skills: [String!]!
@@ -3065,6 +3160,20 @@ type RepoResult {
   repo: String!
   status: UserRepoAuthStatus!
 }
+
+input ReportHarnessTransportInput {
+  """Why the harness fell back to a PTY. Omitted when no fallback happened."""
+  fallbackReason: HarnessTransportFallbackReason
+
+  """The transport the harness is driven over."""
+  transport: HarnessTransport!
+}
+
+type ReportHarnessTransportOutput implements Response {
+  responseContext: ResponseContext!
+}
+
+union ReportHarnessTransportResult = ReportHarnessTransportOutput | UserFacingError
 
 input RequestContext {
   clientContext: ClientContext!
@@ -3385,6 +3494,18 @@ type RootMutation {
   removeUserFromTeam(input: RemoveUserFromTeamInput!, requestContext: RequestContext!): RemoveUserFromTeamResult!
   removeUserFromWorkspace(input: RemoveUserFromWorkspaceInput!, requestContext: RequestContext!): RemoveUserFromWorkspaceResult!
   renameTeam(input: RenameTeamInput!, requestContext: RequestContext!): RenameTeamResult!
+
+  """
+  Reports the transport the agent process drives the run's third-party harness over.
+  The agent sends it at harness start, after deciding whether it can honour the ACP
+  transport the run was dispatched with or must fall back to a terminal, so the platform
+  delivers follow-ups the way the harness can receive them. It retries transient failures;
+  a report that matches the recorded transport is a no-op.
+  
+  This may only be called from within a cloud agent execution environment, with the
+  current execution's credentials.
+  """
+  reportHarnessTransport(input: ReportHarnessTransportInput!, requestContext: RequestContext!): ReportHarnessTransportResult!
   resetInviteLinks(input: ResetInviteLinksInput!, requestContext: RequestContext!): ResetInviteLinksResult!
   sendOnboardingSurveyResponses(input: SendOnboardingSurveyResponsesInput!, requestContext: RequestContext!): SendOnboardingSurveyResponsesResult!
   sendReferralInviteEmails(input: SendReferralInviteEmailsInput!, requestContext: RequestContext!): SendReferralInviteEmailsResult!
@@ -3911,7 +4032,7 @@ type Task {
   """
   Configuration for the active cloud execution. Requires the execution's workload token.
   """
-  executionConfig(executionId: ID!, supportsDeferredRepositories: Boolean = false): ExecutionConfiguration!
+  executionConfig(executionId: ID!, supportsDeferredRepositories: Boolean = false, supportsAgentHooks: Boolean = false): ExecutionConfiguration!
 
   """The ID of the task."""
   taskId: ID!
@@ -3937,6 +4058,8 @@ type TaskAttachment {
 
 """A set of git credentials for a single hosting provider."""
 type TaskGitCredential {
+  expiresAt: Time
+  repositoryScope: String
   """
   The email address associated with the token, if available.
   Null for service-account (installation) tokens.
@@ -3958,6 +4081,13 @@ type TaskGitCredential {
 
 """Input for the taskGitCredentials query."""
 input TaskGitCredentialsInput {
+  localExecutionId: ID
+  githubCredentialContractVersion: Int
+  """
+  Refresh only these providers. Omitted or null refreshes all providers.
+  Requires acceptsPartialRefresh and a nonempty list.
+  """
+  providers: [TaskGitCredentialProvider!]
   """
   Whether the caller can handle a response in which one forge's credential is
   fresh and another's failed. A caller that opts in must merge the fresh
@@ -3978,18 +4108,20 @@ input TaskGitCredentialsInput {
 }
 
 type TaskGitCredentialsOutput implements Response {
+  githubCredentialMode: GitHubCredentialMode!
   """The credentials that were freshly issued this cycle, one per host."""
   credentials: [TaskGitCredential!]!
 
   """
   Hosts whose credential could not be issued this cycle because of a
   transient failure. A host listed here is distinct from one that is simply
-  absent from `credentials`: absent means the run has no repository on that
-  forge and needs no credential there, while listed here means the caller
-  should keep whatever it already has for that host and retry.
+  absent from `credentials`: for a requested provider, absence means no
+  credential is available, while listed here means issuance failed.
+  Providers not requested must be left unchanged.
 
   Only populated when the request set `acceptsPartialRefresh`; otherwise a
-  failure on any forge fails the whole request.
+  failure on any forge fails the whole request. An explicit providers list
+  preserves these failures even when no selected provider succeeds.
   """
   failedHosts: [String!]!
   responseContext: ResponseContext!
@@ -4526,6 +4658,11 @@ type UpdateGenericStringObjectOutput implements Response {
 union UpdateGenericStringObjectResult = UpdateGenericStringObjectOutput | UserFacingError
 
 input UpdateManagedSecretInput {
+  """
+  New base URL for an LLM_PROVIDER_API_KEY secret. If omitted, the base URL is not
+  changed. If set to null, the provider's default API URL is used.
+  """
+  baseUrl: String
   description: String
   encryptedValue: String
   name: String!
@@ -5107,6 +5244,7 @@ type Workspace {
   hasBillingHistory is the equivalent of the v1 hasBillingHistory field in the Team type.
   """
   hasBillingHistory: Boolean!
+  includedUsageInfo: WorkspaceIncludedUsageInfo
   inviteLinkDomainRestrictions: [InviteLinkDomainRestriction!]!
   isEligibleForDiscovery: Boolean!
   memberSpendLimits: [MemberSpendLimit!]
@@ -5124,6 +5262,17 @@ type Workspace {
   teams: [Team!]!
   totalRequestsUsedSinceLastRefresh: Int!
   uid: ID!
+}
+
+"""
+A plan's shared workspace allowance for the current monthly AI cycle.
+"""
+type WorkspaceIncludedUsageInfo {
+  includedUsageCredits: Float!
+  usageCreditsUsedSinceLastRefresh: Float!
+  includedUsageCents: Float!
+  usageCentsUsedSinceLastRefresh: Float!
+  nextRefreshTime: Time!
 }
 
 type WorkspaceMember {
@@ -5190,6 +5339,14 @@ enum WriteToPtyAutonomyValue {
 
 type ExecutionSkillSpec {
   spec: String!
+}
+
+type FactoryBranchExecutionConfig {
+  factoryId: ID!
+  branchId: ID!
+  branch: String!
+  sourceSha: String!
+  repositoryUrl: String!
 }
 
 enum ExecutionRepositoryRefType {
@@ -5270,6 +5427,7 @@ type ExecutionConfiguration {
   mcpServersJson: String!
   skills: [ExecutionSkillSpec!]!
   factorySkillDirs: [String!]!
+  factoryBranch: FactoryBranchExecutionConfig
   computerUseEnabled: Boolean!
   computerUseModelId: String
   inferenceProviders: InferenceProviderClientConfigs
@@ -5282,6 +5440,62 @@ type ExecutionConfiguration {
   idleOnCompleteSeconds: Int
   idleOnFailSeconds: Int
   snapshotDisabled: Boolean!
+  """
+  Hook directories the run loads: the agent's entries first, then the
+  factory's, each in declared order. Duplicates are not merged.
+  """
+  agentHookSources: [AgentHookSource!]!
+  """
+  The run's Factory experiment values as a JSON object, or null when it has
+  none.
+  """
+  experimentalJson: String
+}
+
+"""
+The file format of an agent hook directory. It selects how the client reads the
+directory.
+"""
+enum AgentHookFormat {
+  CURSOR
+}
+
+"""The part of the factory configuration that declared an agent hook source."""
+enum AgentHookLevel {
+  FACTORY
+  AGENT
+}
+
+"""
+What a run with no human does after a hook from this source asks for approval.
+The tool call is denied either way.
+"""
+enum AgentHookOnAsk {
+  DENY
+  FAIL_RUN
+}
+
+type AgentHookRepository {
+  forge: CodeForge!
+  owner: String!
+  name: String!
+}
+
+type AgentHookSource {
+  format: AgentHookFormat!
+  """
+  The repository that contains the hook directory, or null when path is an
+  absolute directory on the worker.
+  """
+  repository: AgentHookRepository
+  """
+  A directory relative to the repository root when repository is set;
+  otherwise an absolute directory on the worker.
+  """
+  path: String!
+  level: AgentHookLevel!
+  strict: Boolean!
+  onAsk: AgentHookOnAsk!
 }
 
 enum CodeForge {

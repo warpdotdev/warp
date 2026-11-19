@@ -39,6 +39,7 @@ fn hidden_command_parses_paths_and_traces_without_payload() {
         "--report-file",
         "a path/report.json",
         "--remove-origins-only",
+        "--legacy-preparation",
     ])
     .unwrap();
     let Some(Command::CommandLine(command)) = args.command() else {
@@ -51,6 +52,7 @@ fn hidden_command_parses_paths_and_traces_without_payload() {
     assert_eq!(args.requests_file, PathBuf::from("a path/request.json"));
     assert_eq!(args.report_file, PathBuf::from("a path/report.json"));
     assert!(args.remove_origins_only);
+    assert!(args.legacy_preparation);
     assert!(
         !Args::clap_command()
             .render_long_help()

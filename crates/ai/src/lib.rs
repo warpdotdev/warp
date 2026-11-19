@@ -12,6 +12,7 @@ pub use llm_provider::LLMProvider;
 pub mod diff_validation;
 pub mod document;
 pub mod gfm_table;
+pub mod hooks;
 pub mod index;
 pub mod paths;
 pub mod project_context;

@@ -34,6 +34,9 @@ jobs:
   create_release_candidate:
     name: Create Release Candidate
     uses: ./.github/workflows/create_release.yml
+    permissions:
+      contents: write # create_release.yml pushes the release branch/tag and creates and uploads the GitHub release; a reusable-workflow caller must grant everything its callee declares
+      id-token: write # create_release.yml federates its OIDC token to GCP and Octo STS
     needs: compute_channel
     with:
       channel: ${{ needs.compute_channel.outputs.channel }}
@@ -44,11 +47,19 @@ jobs:
     needs:
       - create_release_candidate
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write # octo-sts/action exchanges the job's OIDC token for a scoped GitHub token
     steps:
+      - name: Mint channel-versions token
+        id: app_token
+        uses: octo-sts/action@f603d3be9d8dd9871a265776e625a27b00effe05 # v1.1.1
+        with:
+          scope: warpdotdev/channel-versions
+          identity: warp-internal-dispatch
       - name: Invoke update workflow in channel-versions repository
         uses: peter-evans/repository-dispatch@28959ce8df70de7be546dd1250a005dd32156697 # v4.0.1
         with:
           repository: warpdotdev/channel-versions
-          token: ${{ secrets.CHANNEL_VERSIONS_REPOSITORY_DISPATCH_TOKEN }}
+          token: ${{ steps.app_token.outputs.token }}
           event-type: update-channel-versions
     

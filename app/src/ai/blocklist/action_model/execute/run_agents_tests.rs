@@ -13,6 +13,7 @@ use warpui::{App, Entity, EntityId, ModelHandle};
 use super::*;
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
 use crate::ai::agent::task::TaskId;
+use crate::ai::blocklist::hooks::test_utils::mock_active_session;
 use crate::ai::blocklist::{
     BlocklistAIHistoryModel, BlocklistAIPermissions, StartAgentExecutorEvent, StartAgentRequest,
 };
@@ -264,9 +265,11 @@ fn initialize_run_agents_test(app: &mut App, mode: ExecutionMode) -> RunAgentsTe
         history_model.start_new_conversation(terminal_view_id, false, false, false, ctx)
     });
     let start_agent_executor = app.add_model(StartAgentExecutor::new);
+    let active_session = mock_active_session(app);
     let executor = app.add_model(|_| {
         RunAgentsExecutor::new(
             start_agent_executor.clone(),
+            active_session,
             terminal_view_id,
             UserWorkspaces::teamless_context_resolver_for_test(),
         )
@@ -312,6 +315,7 @@ fn dispatch_merges_batch_metadata_with_independent_child_overrides() {
         let AIAgentActionType::RunAgents(request) = &mut action.action else {
             panic!("expected run_agents action");
         };
+        request.delegated_github_coauthor_user_uid = Some("delegated-human".to_string());
         request.metadata = [
             ("ticket_id".to_string(), "ENG-42".to_string()),
             ("stage".to_string(), "batch".to_string()),
@@ -340,6 +344,9 @@ fn dispatch_merges_batch_metadata_with_independent_child_overrides() {
         });
         captured.read(&app, |captured, _| {
             assert_eq!(captured.0.len(), 2);
+            assert!(captured.0.iter().all(|request| {
+                request.delegated_github_coauthor_user_uid.as_deref() == Some("delegated-human")
+            }));
             assert_eq!(
                 captured.0[0].metadata,
                 [
@@ -361,12 +368,255 @@ fn dispatch_merges_batch_metadata_with_independent_child_overrides() {
     });
 }
 
+mod subagent_start {
+    use ai::hooks::test_util::{ScriptedRunner, test_binding, test_source_id};
+    use ai::hooks::{HookBoundary, HookNoticeKind, HookPayload, SubagentExecutionMode};
+
+    use super::*;
+    use crate::ai::blocklist::hooks::test_utils::{install_test_hooks, settle};
+
+    /// A two-child remote batch on a parent that has a run id, so both children could launch.
+    fn two_child_request(
+        app: &mut App,
+        state: &RunAgentsTestState,
+    ) -> (AIAgentAction, RunAgentsRequest) {
+        BlocklistAIHistoryModel::handle(app).update(app, |history, ctx| {
+            history.assign_run_id_for_conversation(
+                state.conversation_id,
+                "00000000-0000-0000-0000-000000000001".to_string(),
+                None,
+                EntityId::new(),
+                ctx,
+            );
+        });
+        let mut action = remote_run_agents_action("oz");
+        let AIAgentActionType::RunAgents(request) = &mut action.action else {
+            panic!("expected run_agents action");
+        };
+        let mut sibling = request.agent_run_configs[0].clone();
+        sibling.name = "sibling".to_string();
+        sibling.prompt = "Review the tests".to_string();
+        sibling.model_id = "claude-opus".to_string();
+        request.agent_run_configs.push(sibling);
+        let request = request.as_ref().clone();
+        (action, request)
+    }
+
+    fn launches(
+        hooks: &crate::ai::blocklist::hooks::test_utils::TestHooks,
+    ) -> Vec<ai::hooks::SubagentLaunch> {
+        hooks
+            .adapter
+            .encoded_envelopes()
+            .into_iter()
+            .filter_map(|envelope| match envelope.payload {
+                HookPayload::SubagentStart { launch } => Some(launch),
+                HookPayload::SessionStart { .. }
+                | HookPayload::PromptSubmit { .. }
+                | HookPayload::ToolPre { .. }
+                | HookPayload::ToolResult { .. }
+                | HookPayload::ToolFailure { .. }
+                | HookPayload::TurnStop { .. }
+                | HookPayload::ResponseComplete { .. }
+                | HookPayload::ReasoningComplete { .. } => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_denied_child_is_kept_back_and_its_siblings_launch() {
+        App::test((), |mut app| async move {
+            let state = initialize_run_agents_test(&mut app, ExecutionMode::Sdk);
+            let hooks = app.update(install_test_hooks);
+            let source = test_source_id("s");
+            let no_siblings = test_binding(
+                source.clone(),
+                HookBoundary::SubagentStart,
+                0,
+                Some("sibling"),
+            );
+            hooks.runner.script(
+                no_siblings.id.clone(),
+                ScriptedRunner::deny_with("no siblings"),
+            );
+            let sees_everything = test_binding(source, HookBoundary::SubagentStart, 1, None);
+            app.update(|ctx| hooks.install_bindings(vec![no_siblings, sees_everything], ctx));
+            let captured = subscribe_to_start_agent_requests(&mut app, &state.start_agent_executor);
+            let (action, request) = two_child_request(&mut app, &state);
+            let (sender, _receiver) = async_channel::bounded(1);
+
+            state.executor.update(&mut app, |executor, ctx| {
+                executor.dispatch_children_for_prepared_request(
+                    action.id.clone(),
+                    request,
+                    state.conversation_id,
+                    RequestTeamScope::from_scope(&TeamlessScopeForTest),
+                    sender,
+                    ctx,
+                );
+            });
+            settle(&mut app, |app| {
+                captured.read(app, |captured, _| !captured.0.is_empty())
+            })
+            .await;
+
+            captured.read(&app, |captured, _| {
+                assert_eq!(captured.0.len(), 1, "only the allowed child was launched");
+                assert_eq!(captured.0[0].name, "child");
+            });
+            let notices = hooks.messenger.notices();
+            assert_eq!(notices.len(), 1);
+            assert_eq!(notices[0].kind, HookNoticeKind::Denied);
+            assert_eq!(notices[0].text, "no siblings");
+            assert_eq!(notices[0].action_id, Some(action.id.clone()));
+
+            let seen = launches(&hooks);
+            let sibling = seen
+                .iter()
+                .find(|launch| launch.name == "sibling")
+                .expect("the hooks saw the sibling");
+            assert_eq!(sibling.task, "Help\n\nReview the tests");
+            assert_eq!(sibling.model_id.as_deref(), Some("claude-opus"));
+            assert_eq!(sibling.harness, "oz");
+            assert_eq!(sibling.execution_mode, SubagentExecutionMode::Remote);
+            assert!(sibling.is_parallel_worker);
+            let child = seen
+                .iter()
+                .find(|launch| launch.name == "child")
+                .expect("the hooks saw the child");
+            assert_eq!(
+                child.model_id, None,
+                "neither the child nor the batch named a model"
+            );
+            assert_ne!(child.subagent_id, sibling.subagent_id);
+            assert!(
+                hooks
+                    .adapter
+                    .encoded_envelopes()
+                    .iter()
+                    .all(|envelope| envelope.action_id.as_ref() == Some(&action.id)
+                        && envelope.conversation_id == state.conversation_id),
+                "every child's event belongs to the call and its parent"
+            );
+        });
+    }
+
+    #[test]
+    fn a_call_whose_children_are_all_denied_reports_each_as_failed() {
+        App::test((), |mut app| async move {
+            let state = initialize_run_agents_test(&mut app, ExecutionMode::Sdk);
+            let hooks = app.update(install_test_hooks);
+            let binding = test_binding(test_source_id("s"), HookBoundary::SubagentStart, 0, None);
+            hooks.runner.script(
+                binding.id.clone(),
+                ScriptedRunner::deny_with("no children here"),
+            );
+            app.update(|ctx| hooks.install_bindings(vec![binding], ctx));
+            let captured = subscribe_to_start_agent_requests(&mut app, &state.start_agent_executor);
+            let (action, request) = two_child_request(&mut app, &state);
+            let (sender, receiver) = async_channel::bounded(1);
+
+            state.executor.update(&mut app, |executor, ctx| {
+                executor.dispatch_children_for_prepared_request(
+                    action.id.clone(),
+                    request,
+                    state.conversation_id,
+                    RequestTeamScope::from_scope(&TeamlessScopeForTest),
+                    sender,
+                    ctx,
+                );
+            });
+            let result = receiver.recv().await.expect("the call completes");
+
+            let RunAgentsResult::Launched { agents, .. } = result else {
+                panic!("expected a launched result, got {result:?}");
+            };
+            let outcomes = agents
+                .iter()
+                .map(|agent| (agent.name.as_str(), agent.kind.clone()))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                outcomes,
+                vec![
+                    (
+                        "child",
+                        RunAgentsAgentOutcomeKind::Failed {
+                            error: "no children here".to_string()
+                        }
+                    ),
+                    (
+                        "sibling",
+                        RunAgentsAgentOutcomeKind::Failed {
+                            error: "no children here".to_string()
+                        }
+                    ),
+                ]
+            );
+            captured.read(&app, |captured, _| assert!(captured.0.is_empty()));
+            assert!(
+                !state
+                    .executor
+                    .read(&app, |executor, _| executor.is_pending(&action.id))
+            );
+            assert_eq!(hooks.messenger.notices().len(), 2);
+        });
+    }
+
+    #[test]
+    fn cancelling_while_the_hooks_run_launches_nothing() {
+        App::test((), |mut app| async move {
+            let state = initialize_run_agents_test(&mut app, ExecutionMode::Sdk);
+            let hooks = app.update(install_test_hooks);
+            let binding = test_binding(test_source_id("s"), HookBoundary::SubagentStart, 0, None);
+            app.update(|ctx| hooks.install_bindings(vec![binding], ctx));
+            let hold = hooks.runner.hold();
+            let captured = subscribe_to_start_agent_requests(&mut app, &state.start_agent_executor);
+            let (action, request) = two_child_request(&mut app, &state);
+            let (sender, receiver) = async_channel::bounded(1);
+
+            state.executor.update(&mut app, |executor, ctx| {
+                executor.dispatch_children_for_prepared_request(
+                    action.id.clone(),
+                    request,
+                    state.conversation_id,
+                    RequestTeamScope::from_scope(&TeamlessScopeForTest),
+                    sender,
+                    ctx,
+                );
+            });
+            settle(&mut app, |_| hooks.runner.invocation_count() == 2).await;
+            assert!(
+                state
+                    .executor
+                    .read(&app, |executor, _| executor.is_pending(&action.id))
+            );
+            state.executor.update(&mut app, |executor, ctx| {
+                executor.cancel_execution(&action.id, ctx);
+            });
+            assert!(
+                !state
+                    .executor
+                    .read(&app, |executor, _| executor.is_pending(&action.id))
+            );
+
+            hold.release();
+            crate::ai::blocklist::hooks::test_utils::let_background_work_settle(&mut app).await;
+            captured.read(&app, |captured, _| assert!(captured.0.is_empty()));
+            assert!(
+                receiver.try_recv().is_err(),
+                "a cancelled call reports no result here"
+            );
+        });
+    }
+}
+
 fn remote_run_agents_action(harness_type: &str) -> AIAgentAction {
     AIAgentAction {
         id: AIAgentActionId::from("run-agents-action".to_string()),
         task_id: TaskId::new("run-agents-task".to_string()),
         requires_result: true,
         action: AIAgentActionType::RunAgents(Box::new(RunAgentsRequest {
+            delegated_github_coauthor_user_uid: None,
             metadata: Default::default(),
             summary: "Run child agent".to_string(),
             base_prompt: "Help".to_string(),

@@ -39,6 +39,7 @@ use crate::ai::agent::{
     AIAgentTodoId, CancellationReason, FinishedAIAgentOutput, MessageId, RenderableAIError,
     RequestCost, Suggestions,
 };
+use crate::ai::ambient_agents::AmbientAgentTask;
 use crate::ai::artifacts::Artifact;
 use crate::ai::document::ai_document_model::AIDocumentModel;
 use crate::input_suggestions::HistoryOrder;
@@ -620,7 +621,11 @@ impl BlocklistAIHistoryModel {
                 .conversations_by_id
                 .get(&conversation_id)
                 .and_then(|c| c.parent_conversation_id());
-            if current_parent != Some(parent_conversation_id) {
+            if current_parent != Some(parent_conversation_id)
+                && self
+                    .conversation(&conversation_id)
+                    .is_some_and(AIConversation::is_remote_child)
+            {
                 self.set_parent_for_conversation(conversation_id, parent_conversation_id);
             }
             return conversation_id;
@@ -647,6 +652,31 @@ impl BlocklistAIHistoryModel {
             ctx,
         );
         conversation_id
+    }
+
+    /// Applies a remote child's server task snapshot to its placeholder conversation: the run's
+    /// update time (pill ordering) and its state (pill status badge).
+    pub fn apply_remote_child_task_snapshot(
+        &mut self,
+        terminal_surface_id: EntityId,
+        conversation_id: AIConversationId,
+        task: &AmbientAgentTask,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some(conversation) = self
+            .conversations_by_id
+            .get_mut(&conversation_id)
+            .filter(|conversation| conversation.is_remote_child())
+        else {
+            return;
+        };
+        conversation.set_remote_run_updated_at(task.updated_at.with_timezone(&Local));
+        self.update_conversation_status(
+            terminal_surface_id,
+            conversation_id,
+            task.state.conversation_status(),
+            ctx,
+        );
     }
 
     /// Sets the parent conversation ID on a child conversation and updates
@@ -2112,19 +2142,26 @@ impl BlocklistAIHistoryModel {
         }
     }
 
+    /// Marks the stream's exchanges as finished without updating the conversation status.
+    /// Returns `true` when the stream's output queued no actions, so the turn ended with it.
     pub fn mark_response_stream_completed_successfully(
         &mut self,
         stream_id: &ResponseStreamId,
         conversation_id: AIConversationId,
         terminal_surface_id: EntityId,
         ctx: &mut ModelContext<Self>,
-    ) {
+    ) -> bool {
         let Some(conversation) = self.conversations_by_id.get_mut(&conversation_id) else {
-            return;
+            return false;
         };
-        if let Err(e) = conversation.mark_request_completed(stream_id, terminal_surface_id, ctx) {
-            log::warn!("Failed to mark exchange as completed: {e}");
-        }
+        let turn_ended =
+            match conversation.mark_request_completed(stream_id, terminal_surface_id, ctx) {
+                Ok(turn_ended) => turn_ended,
+                Err(e) => {
+                    log::warn!("Failed to mark exchange as completed: {e}");
+                    false
+                }
+            };
 
         // If this conversation doesn't have server metadata yet, and it has a server conversation token,
         // fetch the metadata from the server.
@@ -2142,7 +2179,7 @@ impl BlocklistAIHistoryModel {
                 .in_flight_server_metadata_fetches
                 .insert(conversation_id)
             {
-                return;
+                return turn_ended;
             }
 
             let server_api = ServerApiProvider::as_ref(ctx).get_ai_client();
@@ -2178,6 +2215,7 @@ impl BlocklistAIHistoryModel {
                 },
             );
         }
+        turn_ended
     }
 
     pub fn set_exchange_time_to_first_token(
@@ -2983,6 +3021,9 @@ impl BlocklistAIHistoryModel {
             Some(merged_conversation_data),
         )?;
         merged.reassign_exchange_ids();
+        if let Some(updated_at) = placeholder.remote_run_updated_at() {
+            merged.set_remote_run_updated_at(updated_at);
+        }
 
         if let Some(metadata) = cloud_conversation.server_metadata() {
             merged.set_server_metadata(metadata.clone());

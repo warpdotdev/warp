@@ -17,14 +17,14 @@ use super::environment_checkout_protocol::CheckoutRequest;
 pub(super) const MODE_ENV: &str = "OZ_REPOSITORY_PREPARATION_MODE";
 pub(super) const FILE_ENV: &str = "OZ_REPOSITORY_PREPARATION_FILE";
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct PreparationRepository {
     pub source: RepositoryIdentity,
     pub request: CheckoutRequest,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct PreparationPolicy {
     pub task_id: String,

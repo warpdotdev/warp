@@ -15,6 +15,96 @@ const CONFIGURATION_JSON: &str = include_str!(
     "../../../../crates/graphql/src/api/mutations/fixtures/prewarmed_sandbox_config.json"
 );
 
+#[test]
+#[cfg(not(target_family = "wasm"))]
+fn control_unavailable_recognizes_native_handshake_410() {
+    for status in [410, 403, 503] {
+        let response = websocket::tungstenite::http::Response::builder()
+            .status(status)
+            .body(None)
+            .unwrap();
+        let error = anyhow::Error::new(websocket::tungstenite::Error::Http(response))
+            .context("control handshake failed");
+        assert_eq!(is_prewarmed_sandbox_unavailable(&error), status == 410);
+    }
+}
+
+#[test]
+fn control_unavailable_recognizes_an_http_410() {
+    for status in [410, 403, 503] {
+        let error = anyhow::Error::new(HttpStatusError::new(status, String::new()))
+            .context("workload token request failed");
+        assert_eq!(is_prewarmed_sandbox_unavailable(&error), status == 410);
+    }
+}
+
+#[test]
+fn control_socket_url_uses_websocket_schemes_and_binds_the_generation() {
+    for (http_url, expected) in [
+        (
+            "https://app.warp.dev/internal/prewarmed-sandboxes/sb/ws",
+            "wss://app.warp.dev/internal/prewarmed-sandboxes/sb/ws?generation=abc123",
+        ),
+        (
+            "http://localhost:8080/internal/prewarmed-sandboxes/sb/ws",
+            "ws://localhost:8080/internal/prewarmed-sandboxes/sb/ws?generation=abc123",
+        ),
+    ] {
+        assert_eq!(control_socket_url(http_url, "abc123").unwrap(), expected);
+    }
+    assert!(control_socket_url("ftp://app.warp.dev/ws", "abc123").is_err());
+}
+
+#[test]
+#[serial_test::serial]
+fn control_origin_override_leaves_status_on_the_server_root() {
+    let server_root = ChannelState::server_root_url();
+    assert_eq!(
+        control_socket_url(&ServerApi::prewarmed_sandbox_url("sb", "ws"), "abc123").unwrap(),
+        control_socket_url(
+            &format!("{server_root}/internal/prewarmed-sandboxes/sb/ws"),
+            "abc123"
+        )
+        .unwrap()
+    );
+    for (origin, expected) in [
+        (
+            "https://platform.warp.dev",
+            "wss://platform.warp.dev/internal/prewarmed-sandboxes/sb/ws?generation=abc123",
+        ),
+        (
+            "http://localhost:8082",
+            "ws://localhost:8082/internal/prewarmed-sandboxes/sb/ws?generation=abc123",
+        ),
+    ] {
+        ChannelState::override_prewarmed_sandbox_control_url(origin).unwrap();
+        assert_eq!(
+            control_socket_url(&ServerApi::prewarmed_sandbox_url("sb", "ws"), "abc123").unwrap(),
+            expected
+        );
+        assert_eq!(
+            ServerApi::prewarmed_sandbox_url("sb", "status"),
+            format!("{server_root}/internal/prewarmed-sandboxes/sb/status")
+        );
+        assert_eq!(ChannelState::server_root_url(), server_root);
+    }
+    ChannelState::set(ChannelState::init());
+}
+
+#[test]
+#[cfg(not(target_family = "wasm"))]
+fn native_control_headers_are_sensitive() {
+    let request =
+        control_request("ws://localhost/control", "access-marker", "workload-marker").unwrap();
+    for name in ["authorization", PREWARMED_SANDBOX_WORKLOAD_TOKEN_HEADER] {
+        assert!(request.headers()[name].is_sensitive());
+    }
+    for debug in [format!("{request:?}"), format!("{request:#?}")] {
+        assert!(!debug.contains("access-marker"));
+        assert!(!debug.contains("workload-marker"));
+    }
+}
+
 fn wire_configuration() -> GraphqlConfiguration {
     let response: cynic::GraphQlResponse<PrewarmedSandboxConfig> =
         serde_json::from_str(CONFIGURATION_JSON).unwrap();
@@ -45,7 +135,7 @@ fn configuration_errors_return_after_one_request() {
             .create();
         drop(server);
 
-        let error = block_on(api.fetch_configuration("sandbox")).unwrap_err();
+        let error = block_on(api.fetch_configuration("sandbox", true)).unwrap_err();
         assert_eq!(
             match error
                 .downcast_ref::<warp_graphql::client::GraphQLError>()
@@ -95,6 +185,12 @@ fn deserializes_a_server_configuration() {
     assert_eq!(config.preparation.skills, ["warpdotdev/warp:review"]);
     assert_eq!(config.preparation.factory_skill_dirs, [".agents/skills"]);
     assert!(config.preparation.computer_use_enabled);
+    let providers = config.preparation.providers.as_ref().unwrap();
+    assert_eq!(providers.gcp.as_ref().unwrap().project_number, "123456789");
+    assert_eq!(
+        providers.aws.as_ref().unwrap().role_arn,
+        "arn:aws:iam::123456789012:role/OzAgent"
+    );
 
     assert_eq!(
         config.environment_variables.get("WARP_FACTORY_REPO_DIR"),
@@ -120,12 +216,12 @@ fn deserializes_a_server_configuration() {
 #[test]
 fn converts_empty_configuration_lists() {
     let mut config = wire_configuration();
-    config.preparation.repositories.clear();
-    config.preparation.deferred_repositories.clear();
-    config.preparation.setup_commands.clear();
-    config.preparation.mcp_servers_json = "{}".into();
-    config.preparation.skills.clear();
-    config.preparation.factory_skill_dirs.clear();
+    config.spec.repositories.clear();
+    config.spec.deferred_repositories.clear();
+    config.spec.setup_commands.clear();
+    config.spec.mcp_servers_json = "{}".into();
+    config.spec.skills.clear();
+    config.spec.factory_skill_dirs.clear();
     config.environment_variables.clear();
     config.git_credentials.clear();
     config.managed_secrets.clear();
@@ -155,10 +251,29 @@ fn unknown_managed_secret_types_fail_conversion() {
 }
 
 #[test]
+fn runner_configuration_requires_the_supported_preparation_contract() {
+    for (kind, version, supported) in [
+        ("RUNNER", None, false),
+        ("RUNNER", Some(2), false),
+        ("RUNNER", Some(1), true),
+        ("FUTURE", Some(1), false),
+    ] {
+        let mut config = wire_configuration();
+        config.preparation_kind = kind.into();
+        config.runner_preparation_contract_version = version;
+        let result = PrewarmedSandboxConfiguration::try_from(config);
+        assert_eq!(result.is_ok(), supported);
+        if let Ok(config) = result {
+            assert!(config.runner_preparation);
+        }
+    }
+}
+
+#[test]
 fn invalid_mcp_json_errors_do_not_include_configuration_values() {
     for json in ["invalid-secret-json", "\"secret-value\"", "[]", "null"] {
         let mut config = wire_configuration();
-        config.preparation.mcp_servers_json = json.into();
+        config.spec.mcp_servers_json = json.into();
         let error = PrewarmedSandboxConfiguration::try_from(config).unwrap_err();
         assert_eq!(
             format!("{error:#}"),
@@ -187,8 +302,14 @@ fn configuration_uses_default_graphql_timeout_and_authentication() {
         let payload: serde_json::Value = serde_json::from_str(payload.as_deref().unwrap()).unwrap();
         assert!(payload["variables"]["requestContext"].is_object());
         assert_eq!(
-            payload["variables"]["input"]["workloadToken"],
-            "test-workload-token"
+            payload["variables"]["input"],
+            serde_json::json!({
+                "sandboxId": "11111111-2222-3333-4444-555555555555",
+                "githubCredentialContractVersion": 1,
+                "runnerPreparationContractVersion": 1,
+                "supportsDeferredRepositories": true,
+                "supportsAgentHooks": true
+            })
         );
     }));
     let api = authenticated_client_with_http(http_client);
@@ -201,7 +322,7 @@ fn configuration_uses_default_graphql_timeout_and_authentication() {
         .create();
     drop(server);
     assert_eq!(
-        block_on(api.fetch_configuration("sandbox"))
+        block_on(api.fetch_configuration("11111111-2222-3333-4444-555555555555", true))
             .unwrap()
             .generation,
         "abc123"
@@ -239,7 +360,7 @@ fn configuration_rejects_user_errors_unknown_results_and_missing_data() {
             .with_body(body.to_string())
             .create();
         drop(server);
-        let error = block_on(api.fetch_configuration("sandbox")).unwrap_err();
+        let error = block_on(api.fetch_configuration("sandbox", true)).unwrap_err();
         assert_eq!(error.to_string(), expected);
         assert!(!format!("{error:#}").contains("private-server-detail"));
         request.assert();
@@ -300,30 +421,92 @@ fn configuration_debug_redacts_credentials_and_raw_preparation_values() {
 }
 
 #[test]
-fn ready_status_sends_the_generation_as_the_manifest_hash() {
+fn ready_status_sends_the_fingerprint_as_the_manifest_hash() {
     let ready = PrewarmedSandboxStatusInput {
-        generation: "abc123".to_string(),
+        runner_preparation_contract_version: 1,
+        fingerprint: "abc123".to_string(),
         state: PrewarmedSandboxState::Ready.as_wire_value(),
         manifest_hash: Some("abc123".to_string()),
     };
     assert_eq!(
         serde_json::to_value(&ready).unwrap(),
         serde_json::json!({
-            "generation": "abc123",
+            "fingerprint": "abc123",
             "state": "ready",
             "manifest_hash": "abc123",
+            "runner_preparation_contract_version": 1,
         })
     );
 
     let failed = PrewarmedSandboxStatusInput {
-        generation: "abc123".to_string(),
+        runner_preparation_contract_version: 1,
+        fingerprint: "abc123".to_string(),
         state: PrewarmedSandboxState::Failed.as_wire_value(),
         manifest_hash: None,
     };
     assert_eq!(
         serde_json::to_value(&failed).unwrap(),
-        serde_json::json!({ "generation": "abc123", "state": "failed" })
+        serde_json::json!({ "fingerprint": "abc123", "state": "failed", "runner_preparation_contract_version": 1 })
     );
+}
+
+#[test]
+fn heartbeat_is_the_only_sandbox_message() {
+    assert_eq!(
+        serde_json::to_value(PrewarmedSandboxControlRequest::Heartbeat {
+            generation: "abc123"
+        })
+        .unwrap(),
+        serde_json::json!({ "type": "heartbeat", "generation": "abc123" })
+    );
+}
+
+#[test]
+fn decodes_retirement_with_and_without_a_reason() {
+    for (message, expected) in [
+        (
+            r#"{"type":"retired","reason":"unavailable"}"#,
+            Some("unavailable"),
+        ),
+        (r#"{"type":"retired"}"#, None),
+    ] {
+        let event: PrewarmedSandboxControlEvent = serde_json::from_str(message).unwrap();
+        let PrewarmedSandboxControlEvent::Retired { reason } = event else {
+            panic!("expected retirement");
+        };
+        assert_eq!(reason.as_deref(), expected);
+    }
+}
+
+/// A server can add message types without breaking a sandbox that is already waiting.
+#[test]
+fn decodes_messages_this_client_does_not_know_as_unknown() {
+    for message in [
+        r#"{"type":"offer"}"#,
+        r#"{"type":"configuration_updated","generation":"def456"}"#,
+    ] {
+        let event: PrewarmedSandboxControlEvent = serde_json::from_str(message).unwrap();
+        assert!(matches!(event, PrewarmedSandboxControlEvent::Unknown));
+    }
+}
+
+/// The server pings an idle socket, and a ping must not end the connection.
+#[test]
+fn control_reader_skips_non_text_frames() {
+    let mut reader = PrewarmedSandboxControlReader {
+        stream: Box::pin(futures::stream::iter([
+            Ok::<_, websocket::Error>(websocket::Message::new_binary(vec![0])),
+            Ok(websocket::Message::new_text(
+                r#"{"type":"retired","reason":"unavailable"}"#.into(),
+            )),
+        ])),
+    };
+    let Some(PrewarmedSandboxControlEvent::Retired { reason }) =
+        futures::executor::block_on(reader.next()).unwrap()
+    else {
+        panic!("expected retirement");
+    };
+    assert_eq!(reason.as_deref(), Some("unavailable"));
 }
 
 #[test]
@@ -349,6 +532,136 @@ fn request_deadline_preserves_completed_results() {
     }))
     .unwrap_err();
     assert_eq!(error.to_string(), "credential failure");
+}
+
+#[test]
+fn fresh_assignment_fixture_decodes_nullable_control_fields() {
+    let fixture = include_str!("testdata/prewarmed_assignment_fresh_run.json");
+    let event: PrewarmedSandboxControlEvent = serde_json::from_str(fixture).unwrap();
+    let PrewarmedSandboxControlEvent::Assignment {
+        generation,
+        execution_config,
+        runtime_env,
+        api_key,
+        expires_at,
+    } = event
+    else {
+        panic!("expected assignment event");
+    };
+    assert_eq!(generation, "generation-abc");
+    assert_eq!(
+        execution_config.task_id.inner(),
+        "550e8400-e29b-41d4-a716-446655440000"
+    );
+    assert_eq!(execution_config.execution_id.inner(), "42");
+    assert_eq!(runtime_env["WARP_SANDBOX_DEADLINE"], "1767225600");
+    assert!(execution_config.conversation_id.is_none());
+    assert!(execution_config.repositories[0].ref_.is_none());
+    assert!(
+        execution_config
+            .inference_providers
+            .as_ref()
+            .unwrap()
+            .aws_bedrock
+            .as_ref()
+            .unwrap()
+            .region
+            .is_none()
+    );
+    assert_eq!(api_key, "wk-placeholder-not-a-real-key");
+    assert_eq!(expires_at.to_rfc3339(), "2026-01-01T00:00:00+00:00");
+}
+
+fn assignment_hook_sources(fixture: serde_json::Value) -> usize {
+    let event: PrewarmedSandboxControlEvent = serde_json::from_value(fixture).unwrap();
+    let PrewarmedSandboxControlEvent::Assignment {
+        execution_config, ..
+    } = event
+    else {
+        panic!("expected assignment event");
+    };
+    execution_config.agent_hook_sources.len()
+}
+
+/// A server that predates agent hooks sends no `agentHookSources`; the assignment still decodes,
+/// with no hook sources.
+#[test]
+fn an_assignment_without_hook_sources_decodes_with_none() {
+    let mut fixture: serde_json::Value =
+        serde_json::from_str(include_str!("testdata/prewarmed_assignment_fresh_run.json")).unwrap();
+    assert_eq!(assignment_hook_sources(fixture.clone()), 0);
+    fixture["execution_config"]
+        .as_object_mut()
+        .unwrap()
+        .remove("agentHookSources");
+    assert_eq!(assignment_hook_sources(fixture.clone()), 0);
+    fixture["execution_config"]["agentHookSources"] = serde_json::json!([{
+        "format": "CURSOR",
+        "repository": null,
+        "path": "/etc/hooks",
+        "level": "FACTORY",
+        "strict": false,
+        "onAsk": "DENY"
+    }]);
+    assert_eq!(assignment_hook_sources(fixture), 1);
+}
+
+/// A server that predates Factory experiments on the execution configuration sends no
+/// `experimentalJson`; the assignment still decodes, with no experiment values.
+#[test]
+fn an_assignment_without_experiment_values_decodes_with_none() {
+    let experiment_values = |fixture: serde_json::Value| {
+        let event: PrewarmedSandboxControlEvent = serde_json::from_value(fixture).unwrap();
+        let PrewarmedSandboxControlEvent::Assignment {
+            execution_config, ..
+        } = event
+        else {
+            panic!("expected assignment event");
+        };
+        execution_config.experimental_json
+    };
+    let mut fixture: serde_json::Value =
+        serde_json::from_str(include_str!("testdata/prewarmed_assignment_fresh_run.json")).unwrap();
+    assert_eq!(experiment_values(fixture.clone()), None);
+    fixture["execution_config"]
+        .as_object_mut()
+        .unwrap()
+        .remove("experimentalJson");
+    assert_eq!(experiment_values(fixture.clone()), None);
+    fixture["execution_config"]["experimentalJson"] =
+        serde_json::json!(r#"{"skillsListingDeltas":true}"#);
+    assert_eq!(
+        experiment_values(fixture).as_deref(),
+        Some(r#"{"skillsListingDeltas":true}"#)
+    );
+}
+
+#[test]
+fn assignment_debug_omits_run_credentials_and_embedded_config_values() {
+    let mut event: PrewarmedSandboxControlEvent =
+        serde_json::from_str(include_str!("testdata/prewarmed_assignment_fresh_run.json")).unwrap();
+    if let PrewarmedSandboxControlEvent::Assignment {
+        api_key,
+        runtime_env,
+        execution_config,
+        ..
+    } = &mut event
+    {
+        *api_key = "assignment-key-marker".into();
+        runtime_env.insert("SECRET".into(), "assignment-env-marker".into());
+        execution_config.mcp_servers_json = "assignment-mcp-marker".into();
+        execution_config.setup_commands = vec!["assignment-setup-marker".into()];
+    }
+    for debug in [format!("{event:?}"), format!("{event:#?}")] {
+        for marker in [
+            "assignment-key-marker",
+            "assignment-env-marker",
+            "assignment-mcp-marker",
+            "assignment-setup-marker",
+        ] {
+            assert!(!debug.contains(marker));
+        }
+    }
 }
 
 #[cfg(not(feature = "skip_login"))]
@@ -390,7 +703,10 @@ fn all_endpoints_use_cached_credentials_and_expected_payloads() {
         .match_header("authorization", "Bearer test-access-token")
         .match_body(Matcher::PartialJson(serde_json::json!({
             "variables": {
-                "input": { "sandboxId": "sandbox", "workloadToken": "test-workload-token" }
+                "input": {
+                    "sandboxId": "11111111-2222-3333-4444-555555555555",
+                    "supportsAgentHooks": true
+                }
             }
         })))
         .with_status(200)
@@ -404,34 +720,26 @@ fn all_endpoints_use_cached_credentials_and_expected_payloads() {
             "test-workload-token",
         )
         .match_body(Matcher::Json(serde_json::json!({
-            "generation": "abc123", "state": "ready", "manifest_hash": "abc123",
+            "fingerprint": "abc123", "state": "ready", "manifest_hash": "abc123",
+            "runner_preparation_contract_version": 1,
         })))
-        .with_status(204)
-        .create();
-    let heartbeat = server
-        .mock("POST", "/internal/prewarmed-sandboxes/sandbox/heartbeat")
-        .match_header("authorization", "Bearer test-access-token")
-        .match_header(
-            PREWARMED_SANDBOX_WORKLOAD_TOKEN_HEADER,
-            "test-workload-token",
-        )
-        .match_body(Matcher::Json(serde_json::json!({"generation": "abc123"})))
         .with_status(204)
         .create();
     drop(server);
     block_on(async {
         assert_eq!(
-            api.fetch_configuration("sandbox").await.unwrap().generation,
+            api.fetch_configuration("11111111-2222-3333-4444-555555555555", true)
+                .await
+                .unwrap()
+                .generation,
             "abc123"
         );
         api.report_status("sandbox", "abc123", PrewarmedSandboxState::Ready)
             .await
             .unwrap();
-        api.heartbeat("sandbox", "abc123").await.unwrap();
     });
     config.assert();
     status.assert();
-    heartbeat.assert();
 }
 
 #[test]
@@ -449,7 +757,7 @@ fn request_debug_redacts_both_credentials() {
     }));
     let mut server = ChannelState::mock_server();
     let request = server
-        .mock("POST", "/internal/prewarmed-sandboxes/sandbox/heartbeat")
+        .mock("POST", "/internal/prewarmed-sandboxes/sandbox/status")
         .match_header("authorization", "Bearer test-access-token")
         .match_header(
             PREWARMED_SANDBOX_WORKLOAD_TOKEN_HEADER,
@@ -459,7 +767,7 @@ fn request_debug_redacts_both_credentials() {
         .expect(1)
         .create();
     drop(server);
-    let url = ServerApi::prewarmed_sandbox_url("sandbox", "heartbeat");
+    let url = ServerApi::prewarmed_sandbox_url("sandbox", "status");
 
     block_on(async {
         let response = api
@@ -480,9 +788,132 @@ fn rejects_requests_without_access_credentials() {
     let api = ServerApi::new_for_test();
     api.base_client
         .set_ambient_workload_token_for_test("test-workload-token".to_string(), None);
-    let error = block_on(api.heartbeat("sandbox", "abc123")).unwrap_err();
+    let error =
+        block_on(api.report_status("sandbox", "abc123", PrewarmedSandboxState::Ready)).unwrap_err();
     assert!(
         error.to_string().contains("requires an access token"),
         "{error:#}"
     );
+}
+
+#[test]
+fn restricted_configuration_preserves_mode_scope_expiry_and_identity() {
+    let mut wire: serde_json::Value = serde_json::from_str(CONFIGURATION_JSON).unwrap();
+    let config = &mut wire["data"]["prewarmedSandboxConfig"];
+    config["githubCredentialMode"] = "RESTRICTED_INSTALLATION".into();
+    config["gitCredentials"][0]["username"] = "warp[bot]".into();
+    config["gitCredentials"][0]["email"] = "warp@users.noreply.github.com".into();
+    config["gitCredentials"][0]["expiresAt"] = "2027-01-01T01:00:00Z".into();
+    config["gitCredentials"][0]["repositoryScope"] = "warpdotdev/warp".into();
+    let response: cynic::GraphQlResponse<PrewarmedSandboxConfig> =
+        serde_json::from_value(wire).unwrap();
+    let PrewarmedSandboxConfigResult::PrewarmedSandboxConfiguration(config) =
+        response.data.unwrap().prewarmed_sandbox_config
+    else {
+        panic!("configuration")
+    };
+    let config = PrewarmedSandboxConfiguration::try_from(*config).unwrap();
+    assert_eq!(
+        config.github_credential_mode,
+        GitHubCredentialMode::RestrictedInstallation
+    );
+    assert_eq!(config.sandbox_id, "11111111-2222-3333-4444-555555555555");
+    assert_eq!(
+        config.git_credentials[0].repository_scope.as_deref(),
+        Some("warpdotdev/warp")
+    );
+    assert_eq!(
+        config.git_credentials[0].username.as_deref(),
+        Some("warp[bot]")
+    );
+    assert_eq!(
+        config.git_credentials[0].email.as_deref(),
+        Some("warp@users.noreply.github.com")
+    );
+    assert_eq!(
+        config.git_credentials[0]
+            .expires_at
+            .unwrap()
+            .utc()
+            .to_rfc3339(),
+        "2027-01-01T01:00:00+00:00"
+    );
+}
+
+#[test]
+fn restricted_configuration_without_tokens_keeps_its_mode() {
+    let mut wire = wire_configuration();
+    wire.github_credential_mode = GitHubCredentialMode::RestrictedInstallation;
+    wire.git_credentials.clear();
+    let config = PrewarmedSandboxConfiguration::try_from(wire).unwrap();
+    assert_eq!(
+        config.github_credential_mode,
+        GitHubCredentialMode::RestrictedInstallation
+    );
+    assert!(config.git_credentials.is_empty());
+}
+
+#[test]
+#[cfg(not(feature = "skip_login"))]
+fn config_gone_requires_the_structured_lifecycle_marker() {
+    let api = authenticated_client();
+    for (code, status, retryable, reason, expected) in [
+        (
+            "OPERATION_NOT_SUPPORTED",
+            410,
+            false,
+            "prewarmed_sandbox_unavailable",
+            true,
+        ),
+        (
+            "NOT_AUTHORIZED",
+            410,
+            false,
+            "prewarmed_sandbox_unavailable",
+            false,
+        ),
+        (
+            "OPERATION_NOT_SUPPORTED",
+            403,
+            false,
+            "prewarmed_sandbox_unavailable",
+            false,
+        ),
+        (
+            "OPERATION_NOT_SUPPORTED",
+            410,
+            true,
+            "prewarmed_sandbox_unavailable",
+            false,
+        ),
+        (
+            "OPERATION_NOT_SUPPORTED",
+            410,
+            false,
+            "another_reason",
+            false,
+        ),
+    ] {
+        let response = serde_json::json!({"data": {
+            "prewarmedSandboxConfig": {
+                "__typename": "UserFacingError", "responseContext": {"serverVersion": null},
+                "error": {"__typename": "PlatformError", "message": "private-server-detail", "detail": "private-server-detail",
+                    "info": {"errorMessage": "unavailable", "code": code, "httpStatus": status,
+                        "userFacingMessages": [], "detail": null, "retryable": retryable,
+                        "isUserError": false, "metadata": [{"key": "reason", "value": reason}],
+                        "debug": null, "metricsCategory": "prewarmed", "traceId": null}
+                }
+            }
+        }});
+        let mut server = ChannelState::mock_server();
+        let request = server
+            .mock("POST", "/graphql/v2?op=PrewarmedSandboxConfig")
+            .with_body(response.to_string())
+            .create();
+        drop(server);
+        let error = block_on(api.fetch_configuration("sandbox", true)).unwrap_err();
+        assert_eq!(is_prewarmed_sandbox_unavailable(&error), expected);
+        assert!(!format!("{error:#}").contains("private-server-detail"));
+        request.assert();
+    }
 }

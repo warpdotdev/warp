@@ -6455,6 +6455,7 @@ pub enum AIBlockAction {
     DisableRuleSuggestions,
     /// Copy the debug ID to clipboard
     CopyDebugId(String),
+    CopyText(String),
     /// Open Warp feedback documentation
     OpenFeedbackDocs,
     /// Toggle the usage summary footer expansion state
@@ -6628,7 +6629,7 @@ impl TypedActionView for AIBlock {
                 // not tied to the point-based model selection used for regular blocks).
                 ctx.emit(AIBlockEvent::SelectionChanged);
             }
-            AIBlockAction::CopyAIBlockCodeSnippet(text) => {
+            AIBlockAction::CopyAIBlockCodeSnippet(text) | AIBlockAction::CopyText(text) => {
                 ctx.clipboard()
                     .write(ClipboardContent::plain_text(text.clone()));
                 let window_id = ctx.window_id();

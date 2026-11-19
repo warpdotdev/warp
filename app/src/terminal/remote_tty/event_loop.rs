@@ -157,7 +157,9 @@ impl EventLoop {
                             };
                         }
                         // TODO(alokedesai): Implement shutdown on the network backed PTY.
-                        EventLoopMessage::Shutdown | EventLoopMessage::ChildExited => {}
+                        EventLoopMessage::Shutdown
+                        | EventLoopMessage::ShutdownForReplacement
+                        | EventLoopMessage::ChildExited => {}
                     }
                 }
             })

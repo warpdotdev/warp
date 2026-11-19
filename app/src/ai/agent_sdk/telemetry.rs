@@ -16,9 +16,14 @@ pub(super) enum CliTelemetryEvent {
         task_id: Option<String>,
         /// Which execution harness was selected (e.g. "oz", "claude").
         harness: String,
+        /// The `--harness-transport` the run asked for (`"acp"` or `"pty"`), when given. The
+        /// transport the run actually got is reported to the server separately.
+        requested_transport: Option<&'static str>,
     },
     /// Executing `warp agent run-ambient`
     AgentRunAmbient,
+    /// Executing `warp agent run-cloud-standby`
+    AgentRunCloudStandby,
     /// Executing `warp agent profile list`
     AgentProfileList,
     /// Executing `warp agent list`
@@ -158,6 +163,8 @@ pub(super) enum CliTelemetryEvent {
     },
     /// Executing `warp harness-support notify-user`
     HarnessSupportNotifyUser,
+    /// Executing `warp harness-support wait-for-events`
+    HarnessSupportWaitForEvents,
     /// Executing `warp harness-support finish-task`
     HarnessSupportFinishTask {
         success: bool,
@@ -187,14 +194,17 @@ impl TelemetryEvent for CliTelemetryEvent {
                 has_environment,
                 task_id,
                 harness,
+                requested_transport,
             } => Some(json!({
                 "gui": gui,
                 "requested_mcp_servers": requested_mcp_servers,
                 "has_environment": has_environment,
                 "task_id": task_id,
                 "harness": harness,
+                "requested_transport": requested_transport,
             })),
             CliTelemetryEvent::AgentRunAmbient => None,
+            CliTelemetryEvent::AgentRunCloudStandby => None,
             CliTelemetryEvent::AgentProfileList => None,
             CliTelemetryEvent::AgentList => None,
             CliTelemetryEvent::AgentGet => None,
@@ -263,6 +273,7 @@ impl TelemetryEvent for CliTelemetryEvent {
                 Some(json!({ "artifact_type": artifact_type }))
             }
             CliTelemetryEvent::HarnessSupportNotifyUser => None,
+            CliTelemetryEvent::HarnessSupportWaitForEvents => None,
             CliTelemetryEvent::HarnessSupportFinishTask { success } => {
                 Some(json!({ "success": success }))
             }
@@ -296,6 +307,9 @@ impl TelemetryEventDesc for CliTelemetryEventDiscriminants {
         match self {
             CliTelemetryEventDiscriminants::AgentRun => "CLI.Execute.Agent.Run",
             CliTelemetryEventDiscriminants::AgentRunAmbient => "CLI.Execute.Agent.RunAmbient",
+            CliTelemetryEventDiscriminants::AgentRunCloudStandby => {
+                "CLI.Execute.Agent.RunCloudStandby"
+            }
             CliTelemetryEventDiscriminants::AgentProfileList => "CLI.Execute.Agent.Profile.List",
             CliTelemetryEventDiscriminants::AgentList => "CLI.Execute.Agent.List",
             CliTelemetryEventDiscriminants::AgentGet => "CLI.Execute.Agent.Get",
@@ -390,6 +404,9 @@ impl TelemetryEventDesc for CliTelemetryEventDiscriminants {
             CliTelemetryEventDiscriminants::HarnessSupportNotifyUser => {
                 "CLI.Execute.HarnessSupport.NotifyUser"
             }
+            CliTelemetryEventDiscriminants::HarnessSupportWaitForEvents => {
+                "CLI.Execute.HarnessSupport.WaitForEvents"
+            }
             CliTelemetryEventDiscriminants::HarnessSupportFinishTask => {
                 "CLI.Execute.HarnessSupport.FinishTask"
             }
@@ -408,6 +425,9 @@ impl TelemetryEventDesc for CliTelemetryEventDiscriminants {
             CliTelemetryEventDiscriminants::AgentRun => "Ran an agent from the Warp CLI",
             CliTelemetryEventDiscriminants::AgentRunAmbient => {
                 "Ran an ambient agent from the Warp CLI"
+            }
+            CliTelemetryEventDiscriminants::AgentRunCloudStandby => {
+                "Prepared a pre-warmed cloud sandbox from the Warp CLI"
             }
             CliTelemetryEventDiscriminants::AgentProfileList => {
                 "Listed agent profiles from the Warp CLI"
@@ -557,6 +577,9 @@ impl TelemetryEventDesc for CliTelemetryEventDiscriminants {
             CliTelemetryEventDiscriminants::HarnessSupportNotifyUser => {
                 "Sent a user notification via harness-support from the Warp CLI"
             }
+            CliTelemetryEventDiscriminants::HarnessSupportWaitForEvents => {
+                "Registered an event wait via harness-support from the Warp CLI"
+            }
             CliTelemetryEventDiscriminants::HarnessSupportFinishTask => {
                 "Reported task completion via harness-support from the Warp CLI"
             }
@@ -578,6 +601,7 @@ impl TelemetryEventDesc for CliTelemetryEventDiscriminants {
             Self::HarnessSupportPing
             | Self::HarnessSupportReportArtifact
             | Self::HarnessSupportNotifyUser
+            | Self::HarnessSupportWaitForEvents
             | Self::HarnessSupportFinishTask => EnablementState::Flag(FeatureFlag::AgentHarness),
             Self::ArtifactUpload | Self::ArtifactGet | Self::ArtifactDownload => {
                 EnablementState::Flag(FeatureFlag::ArtifactCommand)

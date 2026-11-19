@@ -1,0 +1,61 @@
+{
+  "server": "warp-computer-use",
+  "tools": {
+    "click": {
+      "arguments": ["button", "count", "modifiers", "screenshot", "x", "y"],
+      "required": ["x", "y"]
+    },
+    "cursor_position": {
+      "arguments": [],
+      "required": []
+    },
+    "drag": {
+      "arguments": ["button", "from", "modifiers", "screenshot", "to"],
+      "required": ["from", "to"]
+    },
+    "key": {
+      "arguments": ["keys", "repeat", "screenshot"],
+      "required": ["keys"]
+    },
+    "mouse_down": {
+      "arguments": ["button", "screenshot", "x", "y"],
+      "required": []
+    },
+    "mouse_move": {
+      "arguments": ["screenshot", "x", "y"],
+      "required": ["x", "y"]
+    },
+    "mouse_up": {
+      "arguments": ["button", "screenshot"],
+      "required": []
+    },
+    "screenshot": {
+      "arguments": [],
+      "required": []
+    },
+    "scroll": {
+      "arguments": ["amount", "direction", "modifiers", "screenshot", "x", "y"],
+      "required": ["direction", "x", "y"]
+    },
+    "start_recording": {
+      "arguments": ["description", "title"],
+      "required": []
+    },
+    "stop_recording": {
+      "arguments": ["discard", "recording_id"],
+      "required": ["recording_id"]
+    },
+    "type_text": {
+      "arguments": ["screenshot", "text"],
+      "required": ["text"]
+    },
+    "wait": {
+      "arguments": ["screenshot", "seconds"],
+      "required": ["seconds"]
+    },
+    "zoom": {
+      "arguments": ["x1", "x2", "y1", "y2"],
+      "required": ["x1", "x2", "y1", "y2"]
+    }
+  }
+}

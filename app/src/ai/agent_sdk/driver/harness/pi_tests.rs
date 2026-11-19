@@ -1,22 +1,334 @@
 use std::collections::HashMap;
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::path::PathBuf;
 
 use serde_json::{Value, json};
 use warp_cli::agent::{Harness, HarnessTransport};
+use warp_managed_secrets::ManagedSecretValue;
 
 use super::super::harness_env_vars;
 use super::{
-    PI_CODING_AGENT_DIR_ENV, pi_mcp_config, prepare_pi_settings, prepare_pi_system_prompt,
-    publish_skills_for_pi,
+    PI_CODING_AGENT_DIR_ENV, pi_mcp_config, prepare_pi_environment_config, prepare_pi_settings,
+    prepare_pi_system_prompt, publish_skills_for_pi,
 };
+use crate::ai::ambient_agents::task::HarnessModelConfig;
 use crate::ai::mcp::JSONMCPServer;
+
+struct EnvVarGuard {
+    key: &'static str,
+    original: Option<OsString>,
+}
+
+impl EnvVarGuard {
+    fn set(key: &'static str, value: Option<&str>) -> Self {
+        let original = std::env::var_os(key);
+        unsafe {
+            match value {
+                Some(value) => std::env::set_var(key, value),
+                None => std::env::remove_var(key),
+            }
+        }
+        Self { key, original }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        unsafe {
+            match &self.original {
+                Some(original) => std::env::set_var(self.key, original),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
+}
+
+#[test]
+#[serial_test::serial]
+fn worker_env_overrides_legacy_credentials_without_their_endpoint() {
+    let _openai = EnvVarGuard::set("OPENAI_API_KEY", Some("worker-openai"));
+    let _anthropic = EnvVarGuard::set("ANTHROPIC_API_KEY", Some("worker-anthropic"));
+    let (mut env, guard) = harness_env_vars(Harness::Pi, HarnessTransport::Acp, None).unwrap();
+    let dir = guard.unwrap();
+    env.extend([
+        (
+            OsString::from("OPENAI_API_KEY"),
+            OsString::from("managed-openai"),
+        ),
+        (
+            OsString::from("ANTHROPIC_API_KEY"),
+            OsString::from("managed-anthropic"),
+        ),
+    ]);
+    let secrets = HashMap::from([
+        (
+            "OPENAI".to_owned(),
+            ManagedSecretValue::openai_api_key(
+                "managed-openai",
+                Some("https://managed.test/v1".to_owned()),
+            ),
+        ),
+        (
+            "ANTHROPIC".to_owned(),
+            ManagedSecretValue::anthropic_api_key("managed-anthropic"),
+        ),
+    ]);
+
+    prepare_pi_environment_config(dir.path(), None, &env, &HashMap::new(), &secrets, None).unwrap();
+
+    let auth: Value =
+        serde_json::from_slice(&fs::read(dir.path().join("auth.json")).unwrap()).unwrap();
+    assert_eq!(auth, json!({}));
+    assert!(!dir.path().join("models.json").exists());
+}
+
+#[test]
+fn provider_credentials_are_private_literal_values_with_endpoint_overrides() {
+    let (env, guard) = harness_env_vars(Harness::Pi, HarnessTransport::Acp, None).unwrap();
+    let dir = guard.unwrap();
+    let secrets = HashMap::from([
+        (
+            "GOOGLE".to_owned(),
+            ManagedSecretValue::llm_provider_api_key("google", "!literal$TOKEN", None),
+        ),
+        (
+            "OPENAI".to_owned(),
+            ManagedSecretValue::llm_provider_api_key(
+                "openai",
+                "${TOKEN}",
+                Some("https://example.test/v1".to_owned()),
+            ),
+        ),
+    ]);
+    let model = HarnessModelConfig {
+        model_id: "google/gemini-2.5-pro".to_owned(),
+        reasoning_level: None,
+    };
+
+    prepare_pi_environment_config(
+        dir.path(),
+        None,
+        &env,
+        &HashMap::new(),
+        &secrets,
+        Some(&model),
+    )
+    .unwrap();
+
+    let auth: Value =
+        serde_json::from_slice(&fs::read(dir.path().join("auth.json")).unwrap()).unwrap();
+    assert_eq!(
+        auth,
+        json!({
+            "google": {"type": "api_key", "key": "$!literal$$TOKEN"},
+            "openai": {"type": "api_key", "key": "$${TOKEN}"}
+        })
+    );
+    let models: Value =
+        serde_json::from_slice(&fs::read(dir.path().join("models.json")).unwrap()).unwrap();
+    assert_eq!(
+        models,
+        json!({"providers": {"openai": {"baseUrl": "https://example.test/v1"}}})
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        assert_eq!(
+            fs::metadata(dir.path()).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        assert_eq!(
+            fs::metadata(dir.path().join("auth.json"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+        assert_eq!(
+            fs::metadata(dir.path().join("models.json"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+    }
+}
+
+#[test]
+fn default_model_keeps_pi_model_selection_implicit() {
+    let (env, guard) = harness_env_vars(Harness::Pi, HarnessTransport::Acp, None).unwrap();
+    let dir = guard.unwrap();
+    let model = HarnessModelConfig {
+        model_id: "default".to_owned(),
+        reasoning_level: None,
+    };
+
+    prepare_pi_environment_config(
+        dir.path(),
+        None,
+        &env,
+        &HashMap::new(),
+        &HashMap::new(),
+        Some(&model),
+    )
+    .unwrap();
+
+    let settings: Value =
+        serde_json::from_slice(&fs::read(dir.path().join("settings.json")).unwrap()).unwrap();
+    assert!(settings.get("defaultProvider").is_none());
+    assert!(settings.get("defaultModel").is_none());
+}
+
+#[test]
+fn generic_provider_binding_wins_over_legacy_auth_for_the_same_provider() {
+    let (mut env, guard) = harness_env_vars(Harness::Pi, HarnessTransport::Acp, None).unwrap();
+    let dir = guard.unwrap();
+    env.insert(OsString::from("OPENAI_API_KEY"), OsString::from("legacy"));
+    let secrets = HashMap::from([
+        (
+            "LEGACY".to_owned(),
+            ManagedSecretValue::openai_api_key("legacy", Some("https://legacy.test".to_owned())),
+        ),
+        (
+            "BOUND".to_owned(),
+            ManagedSecretValue::llm_provider_api_key("openai", "bound", None),
+        ),
+    ]);
+
+    prepare_pi_environment_config(dir.path(), None, &env, &HashMap::new(), &secrets, None).unwrap();
+
+    let auth: Value =
+        serde_json::from_slice(&fs::read(dir.path().join("auth.json")).unwrap()).unwrap();
+    assert_eq!(auth, json!({"openai": {"type": "api_key", "key": "bound"}}));
+    assert!(!dir.path().join("models.json").exists());
+}
+
+#[test]
+#[serial_test::serial]
+fn legacy_auth_uses_only_the_resolved_key_and_its_endpoint() {
+    let _openai = EnvVarGuard::set("OPENAI_API_KEY", None);
+    let _anthropic = EnvVarGuard::set("ANTHROPIC_API_KEY", None);
+    let (mut env, guard) = harness_env_vars(Harness::Pi, HarnessTransport::Acp, None).unwrap();
+    let dir = guard.unwrap();
+    env.extend([
+        (OsString::from("OPENAI_API_KEY"), OsString::from("active")),
+        (
+            OsString::from("ANTHROPIC_API_KEY"),
+            OsString::from("anthropic"),
+        ),
+    ]);
+    let secrets = HashMap::from([
+        (
+            "ACTIVE".to_owned(),
+            ManagedSecretValue::openai_api_key("active", Some("https://active.test/v1".to_owned())),
+        ),
+        (
+            "OTHER".to_owned(),
+            ManagedSecretValue::openai_api_key(
+                "ignored",
+                Some("https://ignored.test/v1".to_owned()),
+            ),
+        ),
+        (
+            "ANTHROPIC".to_owned(),
+            ManagedSecretValue::anthropic_api_key("anthropic"),
+        ),
+    ]);
+
+    prepare_pi_environment_config(dir.path(), None, &env, &HashMap::new(), &secrets, None).unwrap();
+
+    let auth: Value =
+        serde_json::from_slice(&fs::read(dir.path().join("auth.json")).unwrap()).unwrap();
+    assert_eq!(
+        auth,
+        json!({
+            "openai": {"type": "api_key", "key": "active"},
+            "anthropic": {"type": "api_key", "key": "anthropic"}
+        })
+    );
+    let models: Value =
+        serde_json::from_slice(&fs::read(dir.path().join("models.json")).unwrap()).unwrap();
+    assert_eq!(
+        models,
+        json!({"providers": {"openai": {"baseUrl": "https://active.test/v1"}}})
+    );
+}
+
+#[test]
+fn conflicting_provider_credentials_fail_without_exposing_keys() {
+    let (env, guard) = harness_env_vars(Harness::Pi, HarnessTransport::Acp, None).unwrap();
+    let dir = guard.unwrap();
+    let secrets = HashMap::from([
+        (
+            "FIRST".to_owned(),
+            ManagedSecretValue::llm_provider_api_key("google", "first-key", None),
+        ),
+        (
+            "SECOND".to_owned(),
+            ManagedSecretValue::llm_provider_api_key("google", "second-key", None),
+        ),
+    ]);
+
+    let error =
+        prepare_pi_environment_config(dir.path(), None, &env, &HashMap::new(), &secrets, None)
+            .unwrap_err();
+
+    assert_eq!(
+        error.to_string(),
+        "Conflicting Pi credentials for the same provider"
+    );
+    assert!(!dir.path().join("auth.json").exists());
+}
+
+#[test]
+fn identical_provider_credentials_coalesce() {
+    let (env, guard) = harness_env_vars(Harness::Pi, HarnessTransport::Acp, None).unwrap();
+    let dir = guard.unwrap();
+    let secrets = HashMap::from([
+        (
+            "FIRST".to_owned(),
+            ManagedSecretValue::llm_provider_api_key("google", "same", None),
+        ),
+        (
+            "SECOND".to_owned(),
+            ManagedSecretValue::llm_provider_api_key("google", "same", None),
+        ),
+    ]);
+
+    prepare_pi_environment_config(dir.path(), None, &env, &HashMap::new(), &secrets, None).unwrap();
+
+    let auth: Value =
+        serde_json::from_slice(&fs::read(dir.path().join("auth.json")).unwrap()).unwrap();
+    assert_eq!(auth, json!({"google": {"type": "api_key", "key": "same"}}));
+}
+
+#[test]
+fn invalid_provider_credentials_never_write_auth() {
+    for (provider, key) in [("../openai", "key"), ("__proto__", "key"), ("google", "")] {
+        let (env, guard) = harness_env_vars(Harness::Pi, HarnessTransport::Acp, None).unwrap();
+        let dir = guard.unwrap();
+        let secrets = HashMap::from([(
+            "KEY".to_owned(),
+            ManagedSecretValue::llm_provider_api_key(provider, key, None),
+        )]);
+
+        let error =
+            prepare_pi_environment_config(dir.path(), None, &env, &HashMap::new(), &secrets, None)
+                .unwrap_err();
+
+        assert_eq!(error.to_string(), "Invalid LLM provider API key credential");
+        assert!(!dir.path().join("auth.json").exists());
+    }
+}
 
 #[test]
 fn environment_allocates_isolated_session_directories() {
-    let first = harness_env_vars(Harness::Pi, HarnessTransport::Acp, None).unwrap();
-    let second = harness_env_vars(Harness::Pi, HarnessTransport::Acp, None).unwrap();
+    let (first, first_guard) = harness_env_vars(Harness::Pi, HarnessTransport::Acp, None).unwrap();
+    let (second, second_guard) =
+        harness_env_vars(Harness::Pi, HarnessTransport::Acp, None).unwrap();
     let first_agent_dir = PathBuf::from(&first[OsStr::new(PI_CODING_AGENT_DIR_ENV)]);
     let second_agent_dir = PathBuf::from(&second[OsStr::new(PI_CODING_AGENT_DIR_ENV)]);
     let first_session_dir = PathBuf::from(&first[OsStr::new("PI_CODING_AGENT_SESSION_DIR")]);
@@ -28,8 +340,11 @@ fn environment_allocates_isolated_session_directories() {
     assert!(first_session_dir.is_dir());
     assert!(second_session_dir.is_dir());
 
-    fs::remove_dir_all(first_agent_dir).unwrap();
-    fs::remove_dir_all(second_agent_dir).unwrap();
+    drop(first_guard);
+    assert!(!first_agent_dir.exists());
+    assert!(second_agent_dir.exists());
+    drop(second_guard);
+    assert!(!second_agent_dir.exists());
 }
 
 #[test]

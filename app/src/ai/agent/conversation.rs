@@ -432,14 +432,31 @@ pub struct AIConversation {
     /// orchestration pill bar. Persisted via `AgentConversationData.pinned`.
     pinned: bool,
 
+    /// Server-side last-update time of the remote run a remote-child conversation stands in
+    /// for. Lets a placeholder with no exchanges sort by recency alongside hydrated siblings.
+    remote_run_updated_at: Option<DateTime<Local>>,
+
     /// How this conversation's status synchronizes to the server task row. Not persisted: it
     /// only matters for the live process that bootstrapped the conversation, and a restored
     /// conversation resumes ordinary synchronization.
     task_sync_mode: TaskSyncMode,
+    local_child_restoration_status: Option<LocalChildRestorationStatus>,
+    local_subtree_startup_pending: bool,
 
     /// Whether the user chose Warp-funded inference for this conversation after a ChatGPT
     /// token-sharing failure. Sticky for the rest of the conversation and inherited by forks.
     use_warp_credits_instead_of_chatgpt: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LocalChildRestorationStatus {
+    /// Waits for a message or pane open; history is not fetched in the background.
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    Pending,
+    Restoring,
+    /// History is installed; local-subtree startup may still block execution.
+    Restored,
+    Error,
 }
 
 pub(crate) fn artifact_from_fork_proto(
@@ -502,7 +519,10 @@ impl AIConversation {
             last_event_sequence: None,
             orchestration_configs: HashMap::new(),
             pinned: false,
+            remote_run_updated_at: None,
             task_sync_mode: TaskSyncMode::default(),
+            local_child_restoration_status: None,
+            local_subtree_startup_pending: false,
             use_warp_credits_instead_of_chatgpt: false,
         }
     }
@@ -760,13 +780,54 @@ impl AIConversation {
             last_event_sequence,
             orchestration_configs: HashMap::new(),
             pinned,
+            remote_run_updated_at: None,
             task_sync_mode: TaskSyncMode::default(),
+            local_child_restoration_status: None,
             use_warp_credits_instead_of_chatgpt,
+            local_subtree_startup_pending: false,
         })
     }
 
     pub fn id(&self) -> AIConversationId {
         self.id
+    }
+
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    pub(crate) fn new_local_child_for_restoration(id: AIConversationId) -> Self {
+        let mut conversation = Self::new(false, false);
+        conversation.id = id;
+        conversation.status = ConversationStatus::Success;
+        conversation.autoexecute_override = AIConversationAutoexecuteMode::RunToCompletion;
+        conversation.local_child_restoration_status = Some(LocalChildRestorationStatus::Pending);
+        conversation.local_subtree_startup_pending = true;
+        conversation
+    }
+
+    pub(crate) fn local_child_restoration_status(&self) -> Option<LocalChildRestorationStatus> {
+        self.local_child_restoration_status
+    }
+
+    pub(crate) fn set_local_child_restoration_status(
+        &mut self,
+        state: LocalChildRestorationStatus,
+    ) {
+        self.local_child_restoration_status = Some(state);
+    }
+
+    pub(crate) fn is_local_child_execution_ready(&self) -> bool {
+        !self.local_subtree_startup_pending
+            && self
+                .local_child_restoration_status
+                .is_none_or(|state| state == LocalChildRestorationStatus::Restored)
+    }
+
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    pub(crate) fn release_local_subtree_startup(&mut self) {
+        self.local_subtree_startup_pending = false;
+    }
+
+    pub(crate) fn preserve_local_subtree_startup(&mut self, current: &Self) {
+        self.local_subtree_startup_pending = current.local_subtree_startup_pending;
     }
 
     /// Assigns fresh exchange IDs to all exchanges in this conversation.
@@ -1380,6 +1441,14 @@ impl AIConversation {
         self.driver = ConversationDriver::RemoteChild;
     }
 
+    pub fn remote_run_updated_at(&self) -> Option<DateTime<Local>> {
+        self.remote_run_updated_at
+    }
+
+    pub fn set_remote_run_updated_at(&mut self, updated_at: DateTime<Local>) {
+        self.remote_run_updated_at = Some(updated_at);
+    }
+
     /// Returns how this conversation's status synchronizes to the server task row.
     pub fn task_sync_mode(&self) -> TaskSyncMode {
         self.task_sync_mode
@@ -1821,10 +1890,14 @@ impl AIConversation {
         self.fallback_display_title = Some(title);
     }
 
-    /// Returns the last time this conversation was modified (i.e., when the latest exchange was started).
+    /// Returns the last time this conversation was modified. For a remote child this is the
+    /// run's server-side update time, so the value doesn't change once the transcript is
+    /// loaded; otherwise it is when the latest exchange finished (or started).
     pub fn last_modified_at(&self) -> Option<DateTime<Local>> {
-        self.latest_exchange()
-            .map(|e| e.finish_time.unwrap_or(e.start_time))
+        self.remote_run_updated_at.or_else(|| {
+            self.latest_exchange()
+                .map(|e| e.finish_time.unwrap_or(e.start_time))
+        })
     }
 
     /// Returns artifacts created during this conversation.
@@ -2461,12 +2534,14 @@ impl AIConversation {
         Ok(())
     }
 
+    /// Marks the stream's exchanges as finished without updating the conversation status.
+    /// Returns `true` when the exchanges queued no actions, so the turn ended with them.
     pub fn mark_request_completed(
         &mut self,
         stream_id: &ResponseStreamId,
         terminal_surface_id: EntityId,
         ctx: &mut ModelContext<BlocklistAIHistoryModel>,
-    ) -> Result<(), UpdateConversationError> {
+    ) -> Result<bool, UpdateConversationError> {
         let Some(new_exchanges) = self.added_exchanges_by_response.get(stream_id).cloned() else {
             report_error!("No pending request info for completed request.");
             return Err(UpdateConversationError::NoPendingRequest);
@@ -2507,13 +2582,7 @@ impl AIConversation {
             });
         }
         self.write_updated_conversation_state(ctx);
-
-        if !has_new_actions {
-            // Update conversation-level status to success if the output has no actions.
-            self.update_status(ConversationStatus::Success, terminal_surface_id, ctx);
-        }
-
-        Ok(())
+        Ok(!has_new_actions)
     }
 
     pub fn mark_completed_after_successful_split(

@@ -6,15 +6,18 @@ use serde_json::{Value, json};
 use warp_graphql::ai::PlatformErrorCode;
 use warp_graphql::platform_error::{PlatformErrorInfo, PlatformErrorMessageFormat};
 use warp_graphql::queries::execution_config::CodeForge;
-use warp_server_client::base_client::{CLOUD_AGENT_ID_HEADER, TEAM_UID_HEADER};
+use warp_server_client::base_client::{
+    AMBIENT_WORKLOAD_TOKEN_HEADER, CLOUD_AGENT_ID_HEADER, TEAM_UID_HEADER,
+};
 
 use super::super::ServerApi;
 use super::{
-    AIClient, AgentMessageHeader, AgentRunEvent, AgentSource, AmbientAgentTaskState, Artifact,
-    ArtifactDownloadResponse, ArtifactType, CONNECTED_SELF_HOSTED_WORKERS_PATH,
-    ConnectedSelfHostedWorker, CreateAgentRequest, ExecutionLocation, ForkConversationResponse,
-    ListConnectedSelfHostedWorkersResponse, ListRunsResponse, PrepareAttachmentUploadsResponse,
-    ReadAgentMessageResponse, RunFollowupRequest, RunSortBy, RunSortOrder, SpawnAgentRequest,
+    AIClient, AgentMessageHeader, AgentRunEvent, AgentRunEventKind, AgentSource,
+    AmbientAgentTaskId, AmbientAgentTaskState, Artifact, ArtifactDownloadResponse, ArtifactType,
+    CONNECTED_SELF_HOSTED_WORKERS_PATH, ConnectedSelfHostedWorker, CreateAgentRequest,
+    ExecutionLocation, ForkConversationResponse, ListConnectedSelfHostedWorkersResponse,
+    ListRunsResponse, PrepareAttachmentUploadsResponse, ReadAgentMessageResponse,
+    RunFollowupRequest, RunSortBy, RunSortOrder, SendAgentMessageRequest, SpawnAgentRequest,
     TaskGitCredentialsError, TaskListFilter, TaskStatusUpdate, UploadFieldValue, UserQueryMode,
     agent_task_status_message_input, build_fork_conversation_url, build_list_agent_runs_url,
     build_run_followup_url, is_unknown_git_credential_schema_error,
@@ -27,6 +30,68 @@ use crate::workspaces::user_workspaces::{TeamContextForOperation, TeamlessScopeF
 
 fn request_scope_for_team(team_uid: ServerId) -> RequestTeamScope {
     RequestTeamScope::from_scope(&TeamContextForOperation::new_for_test(team_uid))
+}
+
+#[test]
+fn list_run_previews_uses_ambient_run_auth_and_reads_app_ports() {
+    let task_id: AmbientAgentTaskId = "550e8400-e29b-41d4-a716-446655440000".parse().unwrap();
+    let request = {
+        let mut server = warp_core::channel::ChannelState::mock_server();
+        server
+            .mock("GET", format!("/api/v1/agent/runs/{task_id}/previews").as_str())
+            .match_header(CLOUD_AGENT_ID_HEADER, task_id.to_string().as_str())
+            .match_header(AMBIENT_WORKLOAD_TOKEN_HEADER, "test-workload-token")
+            .with_status(200)
+            .with_body(
+                r#"{"execution_id":42,"previews":[{"id":"550e8400-e29b-41d4-a716-446655440003","url":"https://preview.example.test","port":3000}]}"#,
+            )
+            .expect(1)
+            .create()
+    };
+    let api = execution_bootstrap_server_api();
+    let response = block_on(api.list_run_previews(&task_id)).unwrap();
+    assert_eq!(response.execution_id, Some(42));
+    assert_eq!(response.previews.len(), 1);
+    assert_eq!(response.previews[0].port, 3000);
+    assert_eq!(
+        response.previews[0].id.as_deref(),
+        Some("550e8400-e29b-41d4-a716-446655440003")
+    );
+    assert_eq!(
+        response.previews[0].url.as_deref(),
+        Some("https://preview.example.test")
+    );
+    request.assert();
+}
+#[test]
+fn list_run_previews_no_execution_and_older_server() {
+    let task_id: AmbientAgentTaskId = "550e8400-e29b-41d4-a716-446655440001".parse().unwrap();
+    for (status, body) in [
+        (200, r#"{"previews":[]}"#),
+        (404, r#"{"error":"not found"}"#),
+    ] {
+        let request = {
+            let mut server = warp_core::channel::ChannelState::mock_server();
+            server
+                .mock(
+                    "GET",
+                    format!("/api/v1/agent/runs/{task_id}/previews").as_str(),
+                )
+                .with_status(status)
+                .with_body(body)
+                .expect(1)
+                .create()
+        };
+        let result = block_on(execution_bootstrap_server_api().list_run_previews(&task_id));
+        if status == 200 {
+            let response = result.unwrap();
+            assert_eq!(response.execution_id, None);
+            assert!(response.previews.is_empty());
+        } else {
+            assert!(result.is_err());
+        }
+        request.assert();
+    }
 }
 
 fn execution_bootstrap_response() -> Value {
@@ -48,6 +113,7 @@ fn execution_bootstrap_response() -> Value {
                         "mcpServersJson": "{}",
                         "skills": [],
                         "factorySkillDirs": [],
+                        "factoryBranch": null,
                         "computerUseEnabled": false,
                         "computerUseModelId": null,
                         "inferenceProviders": null,
@@ -63,7 +129,9 @@ fn execution_bootstrap_response() -> Value {
                         "skipInitialTurn": false,
                         "idleOnCompleteSeconds": null,
                         "idleOnFailSeconds": null,
-                        "snapshotDisabled": false
+                        "snapshotDisabled": false,
+                        "agentHookSources": [],
+                        "experimentalJson": null
                     },
                     "attachments": [{
                         "fileId": "file-one",
@@ -616,8 +684,33 @@ fn list_agent_runs_omits_team_header_for_teamless_scope() {
 }
 
 #[test]
+fn send_message_serialization_distinguishes_empty_and_absent_github_attribution() {
+    let mut request = SendAgentMessageRequest {
+        delegated_github_coauthor_user_uid: Some("delegated-human".to_string()),
+        to: vec!["child".to_string()],
+        subject: "Follow-up".to_string(),
+        body: "Continue".to_string(),
+        sender_run_id: "parent-run".to_string(),
+    };
+    let value = serde_json::to_value(&request).unwrap();
+    assert_eq!(
+        value["delegated_github_coauthor_user_uid"],
+        "delegated-human"
+    );
+
+    request.delegated_github_coauthor_user_uid = Some(String::new());
+    let value = serde_json::to_value(&request).unwrap();
+    assert_eq!(value["delegated_github_coauthor_user_uid"], "");
+
+    request.delegated_github_coauthor_user_uid = None;
+    let value = serde_json::to_value(&request).unwrap();
+    assert!(value.get("delegated_github_coauthor_user_uid").is_none());
+}
+
+#[test]
 fn spawn_agent_request_serializes_explicit_personal_ownership() {
     let request = SpawnAgentRequest {
+        delegated_github_coauthor_user_uid: None,
         metadata: Default::default(),
         prompt: Some("hello".to_string()),
         mode: UserQueryMode::Normal,
@@ -646,6 +739,7 @@ fn spawn_agent_request_serializes_explicit_personal_ownership() {
 #[test]
 fn spawn_agent_request_serializes_agent_uid_as_agent_identity_uid() {
     let request = SpawnAgentRequest {
+        delegated_github_coauthor_user_uid: None,
         metadata: Default::default(),
         prompt: Some("hello".to_string()),
         mode: UserQueryMode::Normal,
@@ -746,6 +840,7 @@ fn deserialize_connected_self_hosted_workers_response() {
 #[test]
 fn spawn_agent_request_omits_prompt_when_none() {
     let request = SpawnAgentRequest {
+        delegated_github_coauthor_user_uid: None,
         metadata: Default::default(),
         prompt: None,
         mode: UserQueryMode::Normal,
@@ -1402,6 +1497,31 @@ fn test_deserialize_list_tasks_corrupted_json_in_middle() {
 }
 
 #[test]
+fn test_deserialize_list_runs_null_returns_empty() {
+    let response: ListRunsResponse = serde_json::from_str(
+        r#"{
+            "as_of": "2026-10-20T20:19:11.750Z",
+            "page_info": {"has_next_page": false},
+            "runs": null,
+            "team_uid": null
+        }"#,
+    )
+    .unwrap();
+
+    assert!(response.runs.is_empty());
+}
+
+#[test]
+fn test_deserialize_list_runs_rejects_non_array() {
+    assert!(serde_json::from_str::<ListRunsResponse>(r#"{"runs": {}}"#).is_err());
+}
+
+#[test]
+fn test_deserialize_list_runs_requires_runs_field() {
+    assert!(serde_json::from_str::<ListRunsResponse>(r#"{}"#).is_err());
+}
+
+#[test]
 fn test_deserialize_list_tasks_empty_tasks_array() {
     // Empty tasks array should work fine
     let json = r#"{
@@ -1551,11 +1671,11 @@ fn test_deserialize_agent_run_events_with_optional_fields() {
     let events: Vec<AgentRunEvent> = serde_json::from_str(json).unwrap();
 
     assert_eq!(events.len(), 2);
-    assert_eq!(events[0].event_type, "run_started");
+    assert_eq!(events[0].kind, AgentRunEventKind::LegacyStarted);
     assert_eq!(events[0].execution_id.as_deref(), Some("exec-1"));
     assert_eq!(events[0].ref_id, None);
     assert_eq!(events[0].sequence, 7);
-    assert_eq!(events[1].event_type, "new_message");
+    assert_eq!(events[1].kind, AgentRunEventKind::NewMessage);
     assert_eq!(events[1].ref_id.as_deref(), Some("message-9"));
     assert_eq!(events[1].execution_id, None);
     assert_eq!(events[1].sequence, 8);

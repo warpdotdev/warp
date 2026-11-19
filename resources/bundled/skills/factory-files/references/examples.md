@@ -241,3 +241,66 @@ agents/reviewer/skills/review-style/SKILL.md   the reviewer agent only
 These are agent playbooks, not Factory schema. Moving one between the two
 locations changes who can use it, so do not relocate a skill unless that is
 what was asked for.
+
+## Agent hooks
+A `hooks` list selects directories of Cursor-format hooks (`hooks.json` and
+the scripts it runs) for the factory's agents. It goes at the top level of
+`factory.yaml`, for every declared agent, or in an agent's frontmatter, for
+that agent; not under `agentDefaults`. An agent runs its own entries first,
+then the factory's, and cannot drop the factory's.
+
+An excerpt of `factory.yaml` (the rest of the file is as in the minimal factory
+above):
+
+```yaml
+repositories:
+  - owner: acme
+    name: api
+hooks:
+  - format: cursor
+    path: /opt/acme/warp-hooks   # no repo: an absolute directory on the worker
+    strict: true
+```
+
+`agents/reviewer/agent.md`:
+
+```markdown
+---
+description: Reviews changes to the API.
+hooks:
+  - format: cursor
+    repo:
+      owner: acme
+      name: api
+    path: .cursor                # relative to the repository root
+    onAsk: fail_run
+---
+Review the change you are given.
+```
+
+- With `repo`, the repository must be one the factory lists under
+  `repositories`. `repo` takes `owner`, `name`, and an optional `codeForge`, and
+  ignores `deferred`, so an entry can be copied from `repositories`. A
+  repository a hooks entry names is cloned at the start of the agent's runs
+  even when the factory defers it. `path` is a directory inside it with no `..`
+  (`.` is the repository root). The hooks run from the repository root, so a
+  repository's own `.cursor` directory works unchanged. Without `repo`, `path`
+  is an absolute directory on the machine that runs the agent, starting with
+  `/`, and the hooks run from that directory. Drive letters and backslashes are
+  rejected in both forms.
+- `strict: true` makes the directory required (a missing or invalid one fails
+  the run) and makes a hook that crashes, times out, or prints nothing or
+  invalid output block the action instead of letting it through.
+- `onAsk: fail_run` ends the run when one of the entry's hooks asks for
+  approval, since a cloud run has no one to approve; the default, `deny`,
+  denies the action and lets the run continue. A `preToolUse` hook that answers
+  `ask` from an entry that is not `strict` counts as no answer, as in Cursor, so
+  `fail_run` does not apply to it.
+- Hooks run only on the Oz harness. The server rejects hooks on an agent that
+  uses another harness.
+- Hooks load only in runs the server starts. Starting a run by hand with the
+  CLI's `agent run --task-id` and no execution id loads none.
+- A hook does not get the run's managed secrets or the credentials Warp itself
+  uses; other variables on the worker pass through. In particular, a hook that
+  calls `gh` or the GitHub API cannot rely on `GITHUB_PERSONAL_ACCESS_TOKEN`; it
+  must bring its own credentials.

@@ -2830,6 +2830,8 @@ fn render_crumb(
         //     and the parent conversation only persists in history.
         if let Some(conversation_view_id) = BlocklistAIHistoryModel::as_ref(app)
             .terminal_surface_id_for_conversation(&conversation_id)
+            && BlocklistAIHistoryModel::as_ref(app).active_conversation_id(conversation_view_id)
+                == Some(conversation_id)
         {
             let self_pane_group_id =
                 pane_group_id_containing_terminal_view(self_terminal_view_id, app);

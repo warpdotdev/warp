@@ -1,32 +1,42 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::ffi::OsString;
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use futures::channel::{mpsc, oneshot};
 use futures::executor::block_on;
 use futures::{FutureExt as _, StreamExt as _};
 use http::StatusCode;
 use instant::Instant;
 use uuid::Uuid;
+use warp_cli::agent::Harness;
 use warp_cli::mcp::MCPSpec;
 use warp_core::channel::ChannelState;
+use warp_core::execution_mode::{AppExecutionMode, ExecutionMode};
 use warp_core::features::FeatureFlag;
 use warp_graphql::mutations::create_managed_mcp_client_config::{
     CreateManagedMcpClientConfigOutput, ManagedMcpTransportKind,
 };
+use warp_graphql::queries::task_restricted_git_credentials::GitHubCredentialMode;
 use warp_graphql::response_context::ResponseContext;
 use warp_managed_secrets::ManagedSecretValue;
 use warp_server_client::base_client::{AMBIENT_WORKLOAD_TOKEN_HEADER, CLOUD_AGENT_ID_HEADER};
 use warpui::r#async::{FutureExt as _, Timer};
 use warpui::{App, ModelContext, ModelHandle, SingletonEntity as _};
 
-use super::{AgentDriver, AgentDriverError, MANAGED_MCP_RESOLVE_MAX_ATTEMPTS};
+use super::{
+    AgentDriver, AgentDriverError, MANAGED_MCP_RESOLVE_MAX_ATTEMPTS, McpStartupMode,
+    ResolvedMcpSpecs, attach_builtin_mcp_servers, attach_computer_use_mcp, computer_use_mcp_env,
+    computer_use_mcp_server, start_task_and_profile_mcp_servers,
+};
 use crate::ai::agent_sdk::driver::environment::WorkspaceConfiguration;
-use crate::ai::agent_sdk::driver::harness::HarnessKind;
+use crate::ai::agent_sdk::driver::harness::{HarnessKind, ResolvedMCPServers};
 use crate::ai::agent_sdk::driver::terminal::TerminalDriver;
 use crate::ai::agent_sdk::driver::{AgentRunPrompt, Task};
 use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
@@ -34,6 +44,7 @@ use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::cloud_environments::AmbientAgentEnvironment;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::mcp::builtin::{
+    COMPUTER_USE_MCP_INSTALLATION_UUID, COMPUTER_USE_MCP_SERVER_NAME,
     FACTORY_MCP_INSTALLATION_UUID, FACTORY_MCP_SERVER_NAME, PREVIEW_URLS_MCP_SERVER_NAME,
 };
 use crate::ai::mcp::file_based_manager::{FileBasedMCPManager, FileBasedMCPManagerEvent};
@@ -49,7 +60,7 @@ use crate::auth::AuthStateProvider;
 use crate::auth::credentials::Credentials;
 use crate::server::graphql::GraphQLError;
 use crate::server::server_api::ServerApiProvider;
-use crate::server::server_api::managed_mcp::MockManagedMcpClient;
+use crate::server::server_api::managed_mcp::{ManagedMcpClient, MockManagedMcpClient};
 use crate::terminal::History;
 use crate::terminal::model::block::BlockMetadata;
 use crate::terminal::model::session::SessionInfo;
@@ -169,7 +180,8 @@ fn resolve_mcp_specs_to_json_skips_preview_urls_without_ambient_task() {
             &foreground,
         )
         .await
-        .unwrap();
+        .unwrap()
+        .configs;
 
         let server_root = ChannelState::server_root_url();
         assert_eq!(
@@ -216,7 +228,8 @@ fn resolve_mcp_specs_to_json_attaches_factory_and_preserves_explicit_specs() {
             &foreground,
         )
         .await
-        .unwrap();
+        .unwrap()
+        .configs;
 
         assert_eq!(resolved.len(), 2);
         assert_eq!(
@@ -274,7 +287,8 @@ fn resolve_mcp_specs_to_json_skips_factory_when_flag_disabled() {
             &foreground,
         )
         .await
-        .unwrap();
+        .unwrap()
+        .configs;
 
         assert_eq!(
             resolved,
@@ -309,7 +323,8 @@ fn resolve_mcp_specs_to_json_skips_factory_without_credentials() {
             &foreground,
         )
         .await
-        .unwrap();
+        .unwrap()
+        .configs;
 
         assert_eq!(
             resolved,
@@ -345,13 +360,39 @@ fn resolve_mcp_specs_to_json_preserves_exact_name_collision() {
             &foreground,
         )
         .await
-        .unwrap();
+        .unwrap()
+        .configs;
 
         assert_eq!(resolved.len(), 1);
         assert_eq!(
             resolved[FACTORY_MCP_SERVER_NAME].transport_type,
             explicit_http_server("https://user.example.com/factory").transport_type
         );
+    });
+}
+
+#[test]
+#[serial_test::serial]
+fn restricted_standby_does_not_resolve_task_bound_github_mcp() {
+    let _well_known = FeatureFlag::WellKnownMcpIds.override_enabled(true);
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let driver = setup_agent_driver(&mut app);
+        let foreground = driver.update(&mut app, |driver, ctx| {
+            driver.github_credential_mode = GitHubCredentialMode::RestrictedInstallation;
+            ctx.spawner()
+        });
+        let mut client = MockManagedMcpClient::new();
+        client.expect_create_managed_mcp_client_config().never();
+        start_task_and_profile_mcp_servers(
+            &[MCPSpec::WellKnown("github".into())],
+            Arc::new(client),
+            McpStartupMode::Standby,
+            None,
+            &foreground,
+        )
+        .await
+        .unwrap();
     });
 }
 
@@ -380,7 +421,9 @@ fn render_installations(
     installations: Vec<TemplatableMCPServerInstallation>,
     secrets: HashMap<String, ManagedSecretValue>,
 ) -> HashMap<String, JSONMCPServer> {
-    AgentDriver::mcp_installations_to_json(installations, &secrets).unwrap()
+    AgentDriver::mcp_installations_to_json(installations, &secrets)
+        .unwrap()
+        .configs
 }
 
 #[test]
@@ -424,6 +467,311 @@ fn managed_resolver_non_local_uuid_calls_managed_client() {
 
     assert!(resolved.local_uuids.is_empty());
     assert_eq!(resolved.ephemeral_installations.len(), 1);
+    let rendered = AgentDriver::mcp_installations_to_json(
+        resolved.ephemeral_installations,
+        &HashMap::from([("API_TOKEN".to_string(), raw_secret("token"))]),
+    )
+    .unwrap();
+    assert_eq!(
+        rendered.warp_ids,
+        HashMap::from([("GitHub MCP".to_string(), uuid.to_string())])
+    );
+    assert_eq!(
+        rendered.installation_ids.keys().collect::<Vec<_>>(),
+        vec!["GitHub MCP"]
+    );
+}
+
+const PROXY_CONFIG_JSON: &str = r#"{"mcpServers":{"GitHub MCP":{"url":"https://proxy.example/mcp","headers":{"Authorization":"Bearer proxy-token"}}}}"#;
+
+/// What the server answers for a URL-backed managed server: the proxy config together with the
+/// credential it carries and when that credential expires.
+fn managed_proxy_config_output(
+    authorization_header_value: &str,
+    expires_at: DateTime<Utc>,
+) -> CreateManagedMcpClientConfigOutput {
+    CreateManagedMcpClientConfigOutput {
+        transport_kind: ManagedMcpTransportKind::Url,
+        proxy_url: Some("https://proxy.example/mcp".to_string()),
+        proxy_token: Some("proxy-token".to_string()),
+        authorization_header_name: Some("Authorization".to_string()),
+        authorization_header_value: Some(authorization_header_value.to_string()),
+        expires_at: Some(expires_at.into()),
+        ..managed_client_config_output(PROXY_CONFIG_JSON)
+    }
+}
+
+fn resolve_managed_uuid(
+    uuid: Uuid,
+    output: CreateManagedMcpClientConfigOutput,
+) -> ResolvedMcpSpecs {
+    let mut mock = MockManagedMcpClient::new();
+    mock.expect_create_managed_mcp_client_config()
+        .times(1)
+        .return_once(move |_| Ok(output));
+    block_on(AgentDriver::resolve_mcp_specs_with_local_uuids(
+        &[MCPSpec::Uuid(uuid)],
+        &HashSet::new(),
+        Arc::new(mock),
+        None,
+    ))
+    .unwrap()
+}
+
+#[test]
+fn managed_resolver_leases_the_expiring_credential_of_a_url_server() {
+    let _flag = FeatureFlag::ManagedMcpCredentialRefresh.override_enabled(true);
+    let uuid = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+    let expires_at = DateTime::from_timestamp(1_800_000_000, 0).unwrap();
+
+    let resolved = resolve_managed_uuid(
+        uuid,
+        managed_proxy_config_output("Bearer proxy-token", expires_at),
+    );
+
+    assert_eq!(resolved.ephemeral_installations.len(), 1);
+    let [lease] = resolved.leases.as_slice() else {
+        panic!("expected one lease, got {:?}", resolved.leases);
+    };
+    assert_eq!(
+        lease.installation_id,
+        resolved.ephemeral_installations[0].uuid()
+    );
+    assert_eq!(lease.server_name, "GitHub MCP");
+    assert_eq!(lease.warp_id, uuid.to_string());
+    assert_eq!(lease.header_name, "Authorization");
+    assert_eq!(lease.credential.header_value, "Bearer proxy-token");
+    assert_eq!(lease.credential.expires_at, expires_at);
+}
+
+#[test]
+fn managed_resolver_leases_nothing_while_credential_refresh_is_disabled() {
+    let _flag = FeatureFlag::ManagedMcpCredentialRefresh.override_enabled(false);
+    let uuid = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+    let expires_at = DateTime::from_timestamp(1_800_000_000, 0).unwrap();
+
+    let resolved = resolve_managed_uuid(
+        uuid,
+        managed_proxy_config_output("Bearer proxy-token", expires_at),
+    );
+
+    assert_eq!(resolved.ephemeral_installations.len(), 1);
+    assert!(resolved.leases.is_empty());
+}
+
+#[test]
+fn managed_resolver_leases_nothing_without_an_expiring_credential() {
+    let _flag = FeatureFlag::ManagedMcpCredentialRefresh.override_enabled(true);
+    let uuid = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+
+    let resolved = resolve_managed_uuid(
+        uuid,
+        managed_client_config_output(
+            r#"{"mcpServers":{"GitHub MCP":{"command":"npx","args":["-y","github-mcp"]}}}"#,
+        ),
+    );
+
+    assert_eq!(resolved.ephemeral_installations.len(), 1);
+    assert!(resolved.leases.is_empty());
+}
+
+/// A lease replaces a header on the server's connection, so it only exists when the config
+/// really sends the credential the server says it issued.
+#[test]
+fn managed_resolver_leases_nothing_when_the_config_does_not_send_the_issued_credential() {
+    let _flag = FeatureFlag::ManagedMcpCredentialRefresh.override_enabled(true);
+    let uuid = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+    let expires_at = DateTime::from_timestamp(1_800_000_000, 0).unwrap();
+
+    let resolved = resolve_managed_uuid(
+        uuid,
+        managed_proxy_config_output("Bearer some-other-token", expires_at),
+    );
+
+    assert_eq!(resolved.ephemeral_installations.len(), 1);
+    assert!(resolved.leases.is_empty());
+}
+
+#[test]
+fn managed_resolver_rejects_invalid_json_before_network_calls() {
+    let _flag = FeatureFlag::WellKnownMcpIds.override_enabled(true);
+    let mut mock = MockManagedMcpClient::new();
+    mock.expect_create_managed_mcp_client_config().never();
+    let specs = [
+        MCPSpec::Uuid(Uuid::new_v4()),
+        MCPSpec::WellKnown("linear".to_string()),
+        MCPSpec::Json(r#"{"valid":{"command":"valid"}}"#.to_string()),
+        MCPSpec::Json("invalid JSON".to_string()),
+    ];
+
+    let error = block_on(AgentDriver::resolve_mcp_specs_with_local_uuids(
+        &specs,
+        &HashSet::new(),
+        Arc::new(mock),
+        None,
+    ))
+    .unwrap_err();
+
+    assert!(matches!(error, AgentDriverError::MCPJsonParseError(_)));
+}
+
+#[test]
+fn managed_resolver_preserves_spec_order_when_responses_arrive_out_of_order() {
+    let _flag = FeatureFlag::WellKnownMcpIds.override_enabled(true);
+    let managed_uuid = Uuid::new_v4();
+    let first_local_uuid = Uuid::new_v4();
+    let second_local_uuid = Uuid::new_v4();
+    let (first_tx, first_rx) = oneshot::channel();
+    let (later_tx, later_rx) = oneshot::channel();
+    let client = Arc::new(ControlledManagedMcpClient {
+        responses: Mutex::new(HashMap::from([
+            (managed_uuid.to_string(), first_rx),
+            ("linear".to_string(), later_rx),
+        ])),
+    });
+    let specs = [
+        MCPSpec::Uuid(managed_uuid),
+        MCPSpec::Uuid(first_local_uuid),
+        MCPSpec::Json(r#"{"middle":{"command":"middle"}}"#.to_string()),
+        MCPSpec::WellKnown("linear".to_string()),
+        MCPSpec::Uuid(second_local_uuid),
+        MCPSpec::Json(r#"{"last":{"command":"last"}}"#.to_string()),
+    ];
+    let local_uuids = HashSet::from([first_local_uuid, second_local_uuid]);
+    let mut resolution = Box::pin(AgentDriver::resolve_mcp_specs_with_local_uuids(
+        &specs,
+        &local_uuids,
+        client.clone(),
+        None,
+    ));
+
+    assert!(resolution.as_mut().now_or_never().is_none());
+    later_tx
+        .send(Ok(managed_client_config_output(
+            r#"{"linear":{"command":"linear"}}"#,
+        )))
+        .unwrap();
+    assert!(resolution.as_mut().now_or_never().is_none());
+    first_tx
+        .send(Ok(managed_client_config_output(
+            r#"{"first":{"command":"first"}}"#,
+        )))
+        .unwrap();
+    let resolved = block_on(resolution).unwrap();
+
+    assert_eq!(
+        resolved.local_uuids,
+        vec![first_local_uuid, second_local_uuid]
+    );
+    assert_eq!(
+        resolved
+            .ephemeral_installations
+            .iter()
+            .map(|installation| installation.templatable_mcp_server().name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["first", "middle", "linear", "last"]
+    );
+}
+
+struct ControlledManagedMcpClient {
+    responses: Mutex<
+        HashMap<String, oneshot::Receiver<anyhow::Result<CreateManagedMcpClientConfigOutput>>>,
+    >,
+}
+
+#[cfg_attr(not(target_family = "wasm"), async_trait)]
+#[cfg_attr(target_family = "wasm", async_trait(?Send))]
+impl ManagedMcpClient for ControlledManagedMcpClient {
+    async fn create_managed_mcp_client_config(
+        &self,
+        uid: String,
+    ) -> anyhow::Result<CreateManagedMcpClientConfigOutput> {
+        let response = self.responses.lock().unwrap().remove(&uid).unwrap();
+        response.await.unwrap()
+    }
+}
+
+#[test]
+fn managed_resolver_overlaps_calls_up_to_concurrency_limit() {
+    let (senders, receivers): (Vec<_>, Vec<_>) = (0..9)
+        .map(|_| {
+            let uuid = Uuid::new_v4();
+            let (sender, receiver) = oneshot::channel();
+            ((uuid, sender), (uuid.to_string(), receiver))
+        })
+        .unzip();
+    let client = Arc::new(ControlledManagedMcpClient {
+        responses: Mutex::new(receivers.into_iter().collect()),
+    });
+    let specs = senders
+        .iter()
+        .map(|(uuid, _)| MCPSpec::Uuid(*uuid))
+        .collect::<Vec<_>>();
+    let local_uuids = HashSet::new();
+    let mut resolution = Box::pin(AgentDriver::resolve_mcp_specs_with_local_uuids(
+        &specs,
+        &local_uuids,
+        client.clone(),
+        None,
+    ));
+
+    assert!(resolution.as_mut().now_or_never().is_none());
+    let pending = client.responses.lock().unwrap();
+    assert_eq!(pending.len(), 1);
+    assert!(pending.contains_key(&senders.last().unwrap().0.to_string()));
+    drop(pending);
+
+    let mut senders = senders.into_iter();
+    let (_, first_sender) = senders.next().unwrap();
+    first_sender
+        .send(Ok(managed_client_config_output("{}")))
+        .unwrap();
+    assert!(resolution.as_mut().now_or_never().is_none());
+    assert!(client.responses.lock().unwrap().is_empty());
+    for (_, sender) in senders {
+        sender.send(Ok(managed_client_config_output("{}"))).unwrap();
+    }
+    let resolved = block_on(resolution).unwrap();
+    assert!(resolved.local_uuids.is_empty());
+    assert!(resolved.ephemeral_installations.is_empty());
+}
+
+#[test]
+fn managed_resolver_returns_first_error_in_spec_order() {
+    let first_uuid = Uuid::new_v4();
+    let later_uuid = Uuid::new_v4();
+    let (first_tx, first_rx) = oneshot::channel();
+    let (later_tx, later_rx) = oneshot::channel();
+    let client = Arc::new(ControlledManagedMcpClient {
+        responses: Mutex::new(HashMap::from([
+            (first_uuid.to_string(), first_rx),
+            (later_uuid.to_string(), later_rx),
+        ])),
+    });
+    let specs = [MCPSpec::Uuid(first_uuid), MCPSpec::Uuid(later_uuid)];
+    let local_uuids = HashSet::new();
+    let mut resolution = Box::pin(AgentDriver::resolve_mcp_specs_with_local_uuids(
+        &specs,
+        &local_uuids,
+        client,
+        None,
+    ));
+
+    assert!(resolution.as_mut().now_or_never().is_none());
+    later_tx
+        .send(Err(anyhow::anyhow!("later failure")))
+        .unwrap();
+    assert!(resolution.as_mut().now_or_never().is_none());
+    first_tx
+        .send(Err(anyhow::anyhow!("first failure")))
+        .unwrap();
+    let error = block_on(resolution).unwrap_err();
+
+    assert!(matches!(
+        error,
+        AgentDriverError::ManagedMcpResolutionFailed { uid, message }
+            if uid == first_uuid && message == "first failure"
+    ));
 }
 
 #[test]
@@ -549,11 +897,79 @@ fn managed_config_installations_carry_the_spec_token_as_warp_id() {
 }
 
 #[test]
+fn third_party_export_preserves_managed_github_and_other_servers() {
+    let mut installations = AgentDriver::installations_from_managed_client_config_json(
+        r#"{"managed-github":{"url":"https://proxy.example/mcp","headers":{"Authorization":"Bearer unused"}}}"#,
+        None,
+        "github",
+    ).unwrap();
+    installations.extend(
+        AgentDriver::installations_from_user_mcp_json(
+            r#"{"github":{"command":"custom-github"},"other":{"command":"other"}}"#,
+        )
+        .unwrap(),
+    );
+
+    let resolved = AgentDriver::mcp_installations_to_json(installations, &HashMap::new()).unwrap();
+
+    assert_eq!(resolved.configs.len(), 3);
+    assert!(resolved.configs.contains_key("github"));
+    assert!(resolved.configs.contains_key("other"));
+    assert!(resolved.configs.contains_key("managed-github"));
+    assert_eq!(
+        resolved.warp_ids,
+        HashMap::from([("managed-github".to_owned(), "github".to_owned())])
+    );
+    match &resolved.configs["managed-github"].transport_type {
+        JSONTransportType::SSEServer { url, headers } => {
+            assert_eq!(url, "https://proxy.example/mcp");
+            assert_eq!(headers["Authorization"], "Bearer unused");
+        }
+        other => panic!("expected HTTP server, got {other:?}"),
+    }
+    AgentDriver::require_managed_github_mcp(&resolved).unwrap();
+}
+
+#[test]
+fn restricted_github_requires_managed_identity_not_server_name() {
+    for config in [
+        "{}",
+        r#"{"github":{"command":"custom-github"}}"#,
+        r#"{"github":{"url":"https://proxy.example/mcp"}}"#,
+    ] {
+        let installations = AgentDriver::installations_from_user_mcp_json(config).unwrap();
+        let resolved =
+            AgentDriver::mcp_installations_to_json(installations, &HashMap::new()).unwrap();
+        assert!(matches!(
+            AgentDriver::require_managed_github_mcp(&resolved),
+            Err(AgentDriverError::MCPStartupFailed { .. })
+        ));
+    }
+}
+
+#[test]
+fn custom_server_replacing_managed_github_cannot_satisfy_restricted_mode() {
+    let mut installations = AgentDriver::installations_from_managed_client_config_json(
+        r#"{"github":{"url":"https://proxy.example/mcp"}}"#,
+        None,
+        "github",
+    )
+    .unwrap();
+    installations.extend(
+        AgentDriver::installations_from_user_mcp_json(r#"{"github":{"command":"custom-github"}}"#)
+            .unwrap(),
+    );
+    let resolved = AgentDriver::mcp_installations_to_json(installations, &HashMap::new()).unwrap();
+    assert!(resolved.warp_ids.is_empty());
+    assert!(AgentDriver::require_managed_github_mcp(&resolved).is_err());
+}
+
+#[test]
 fn managed_command_config_env_placeholder_uses_local_secret() {
     let installations = AgentDriver::installations_from_managed_client_config_json(
         r#"{"mcpServers":{"GitHub MCP":{"command":"npx","env":{"API_TOKEN":"{{API_TOKEN}}"}}}}"#,
         None,
-        "github",
+        "db4d553f-8172-4cad-8f48-bc53ba6f736a",
     )
     .unwrap();
     let rendered = render_installations(
@@ -574,7 +990,7 @@ fn managed_command_config_arg_placeholder_uses_local_secret() {
     let installations = AgentDriver::installations_from_managed_client_config_json(
         r#"{"mcpServers":{"GitHub MCP":{"command":"npx","args":["--token={{API_TOKEN}}"]}}}"#,
         None,
-        "github",
+        "db4d553f-8172-4cad-8f48-bc53ba6f736a",
     )
     .unwrap();
     let rendered = render_installations(
@@ -595,7 +1011,7 @@ fn managed_command_config_preserves_literal_env_when_synthesizing_arg_placeholde
     let installations = AgentDriver::installations_from_managed_client_config_json(
         r#"{"mcpServers":{"GitHub MCP":{"command":"npx","args":["--token={{API_TOKEN}}"],"env":{"LOG_LEVEL":"info"}}}}"#,
         None,
-        "github",
+        "db4d553f-8172-4cad-8f48-bc53ba6f736a",
     )
     .unwrap();
     let rendered = render_installations(
@@ -617,7 +1033,7 @@ fn managed_url_config_preserves_proxy_url_and_header() {
     let installations = AgentDriver::installations_from_managed_client_config_json(
         r#"{"mcpServers":{"GitHub MCP":{"url":"https://proxy.example/mcp","headers":{"Authorization":"Bearer proxy-token"}}}}"#,
         None,
-        "github",
+        "db4d553f-8172-4cad-8f48-bc53ba6f736a",
     )
     .unwrap();
     let rendered = render_installations(installations, HashMap::new());
@@ -641,7 +1057,7 @@ fn managed_url_config_preserves_header_despite_colliding_local_secret() {
     let installations = AgentDriver::installations_from_managed_client_config_json(
         r#"{"mcpServers":{"GitHub MCP":{"url":"https://proxy.example/mcp","headers":{"Authorization":"Bearer proxy-token"}}}}"#,
         None,
-        "github",
+        "db4d553f-8172-4cad-8f48-bc53ba6f736a",
     )
     .unwrap();
     let rendered = render_installations(
@@ -668,7 +1084,7 @@ fn managed_command_config_preserves_literal_env_despite_colliding_local_secret()
     let installations = AgentDriver::installations_from_managed_client_config_json(
         r#"{"mcpServers":{"GitHub MCP":{"command":"npx","env":{"LOG_LEVEL":"info"}}}}"#,
         None,
-        "github",
+        "db4d553f-8172-4cad-8f48-bc53ba6f736a",
     )
     .unwrap();
     let rendered = render_installations(
@@ -689,7 +1105,7 @@ fn managed_command_config_missing_secret_is_rejected_before_serialization() {
     let installations = AgentDriver::installations_from_managed_client_config_json(
         r#"{"mcpServers":{"GitHub MCP":{"command":"npx","args":["--token={{API_TOKEN}}"]}}}"#,
         None,
-        "github",
+        "db4d553f-8172-4cad-8f48-bc53ba6f736a",
     )
     .expect("managed MCP config should parse");
     let error = AgentDriver::mcp_installations_to_json(installations, &HashMap::new())
@@ -712,7 +1128,7 @@ fn ephemeral_mcp_missing_secret_is_filtered_before_spawn() {
     let installations = AgentDriver::installations_from_managed_client_config_json(
         r#"{"mcpServers":{"GitHub MCP":{"url":"https://example.com/mcp","headers":{"Authorization":"Bearer {{API_TOKEN}}"}}}}"#,
         None,
-        "github",
+        "db4d553f-8172-4cad-8f48-bc53ba6f736a",
     )
     .expect("managed MCP config should parse");
     let (ready, failures) =
@@ -858,6 +1274,71 @@ fn builtin_factory_mcp_for_oz_uses_stable_installation() {
 
 #[test]
 #[serial_test::serial]
+fn builtin_mcp_servers_are_deferred_only_for_standby() {
+    let _factory_flag = FeatureFlag::FactoryMcp.override_enabled(true);
+    let _preview_flag = FeatureFlag::PreviewUrlsMcp.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        // The driver only hosts built-ins outside an interactive client, where
+        // `TemplatableMCPServerManager::sync_builtin_servers` owns them instead.
+        let sdk_mode = app.add_model(|ctx| AppExecutionMode::new(ExecutionMode::Sdk, true, ctx));
+        AppExecutionMode::handle(&app).update(&mut app, |mode, ctx| {
+            *mode = sdk_mode.as_ref(ctx).clone();
+        });
+        app.update(|ctx| {
+            AuthStateProvider::as_ref(ctx)
+                .get()
+                .set_credentials(Some(api_key_credentials()));
+            // Use a fixed token so the host's workload credentials cannot change the test result.
+            ServerApiProvider::as_ref(ctx)
+                .get()
+                .set_ambient_workload_token_for_test("test-workload-token".to_string(), None);
+        });
+        let driver_handle = setup_agent_driver(&mut app);
+        let foreground = driver_handle.update(&mut app, |_, ctx| ctx.spawner());
+
+        let task_id: AmbientAgentTaskId = "550e8400-e29b-41d4-a716-446655440014".parse().unwrap();
+        for (task_id, expected_names) in [
+            (None, vec![FACTORY_MCP_SERVER_NAME]),
+            (
+                Some(task_id),
+                vec![FACTORY_MCP_SERVER_NAME, PREVIEW_URLS_MCP_SERVER_NAME],
+            ),
+        ] {
+            let mut installations = Vec::new();
+            attach_builtin_mcp_servers(
+                McpStartupMode::Standby,
+                task_id,
+                &[],
+                &mut installations,
+                &foreground,
+            )
+            .await
+            .unwrap();
+            assert!(installations.is_empty());
+            attach_builtin_mcp_servers(
+                McpStartupMode::Run,
+                task_id,
+                &[],
+                &mut installations,
+                &foreground,
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                installations
+                    .iter()
+                    .map(|installation| installation.templatable_mcp_server().name.as_str())
+                    .collect::<Vec<_>>(),
+                expected_names
+            );
+        }
+    });
+}
+
+#[test]
+#[serial_test::serial]
 fn builtin_factory_mcp_for_oz_skips_without_flag_or_credentials() {
     let flag = FeatureFlag::FactoryMcp.override_enabled(false);
     assert!(
@@ -913,8 +1394,9 @@ fn builtin_preview_urls_mcp_for_oz_attaches_when_eligible() {
         installation.templatable_mcp_server().name,
         PREVIEW_URLS_MCP_SERVER_NAME
     );
-    let resolved =
-        AgentDriver::mcp_installations_to_json(vec![installation], &HashMap::new()).unwrap();
+    let resolved = AgentDriver::mcp_installations_to_json(vec![installation], &HashMap::new())
+        .unwrap()
+        .configs;
     let JSONTransportType::SSEServer { headers, .. } =
         &resolved[PREVIEW_URLS_MCP_SERVER_NAME].transport_type
     else {
@@ -1207,7 +1689,7 @@ fn configured_and_profile_mcp_servers_wait_for_environment_setup() {
             let terminal_driver =
                 TerminalDriver::create_from_existing_view(driver_terminal_view, ctx);
             let mut driver = AgentDriver::new_for_test(std::env::temp_dir(), terminal_driver, ctx);
-            driver.workspace = Some(
+            driver.workspace = Some(crate::ai::agent_sdk::driver::WorkspaceState::Pending(
                 WorkspaceConfiguration::from_legacy(
                     Some(&AmbientAgentEnvironment::new(
                         "test".to_string(),
@@ -1221,7 +1703,7 @@ fn configured_and_profile_mcp_servers_wait_for_environment_setup() {
                     false,
                 )
                 .unwrap(),
-            );
+            ));
             driver.mcp_startup_timeout = Duration::from_secs(5);
             driver
         });
@@ -1959,4 +2441,132 @@ fn timed_out_wait_does_not_tear_down_a_later_waits_subscription() {
             )
             .expect("wait B's oneshot sender should not have been dropped");
     });
+}
+
+fn stdio_server(server: &JSONMCPServer) -> (&str, &[String], &HashMap<String, String>) {
+    match &server.transport_type {
+        JSONTransportType::CLIServer {
+            command, args, env, ..
+        } => (command, args, env),
+        JSONTransportType::SSEServer { .. } => panic!("expected a stdio server"),
+    }
+}
+
+fn computer_use_server(harness: Harness) -> Option<JSONMCPServer> {
+    computer_use_mcp_server(harness, "/opt/oz".to_owned(), None, true, HashMap::new())
+}
+
+#[test]
+fn computer_use_mcp_server_matches_the_harness_model_family() {
+    for (harness, model_family) in [(Harness::Claude, "anthropic"), (Harness::Codex, "openai")] {
+        let server = computer_use_server(harness).expect("harness takes MCP servers");
+        let (command, args, _) = stdio_server(&server);
+        assert_eq!(command, "/opt/oz");
+        assert_eq!(args, ["computer-use-mcp", "--model-family", model_family]);
+    }
+    for harness in [
+        Harness::Gemini,
+        Harness::Oz,
+        Harness::OpenCode,
+        Harness::Pi,
+        Harness::Unknown,
+    ] {
+        assert!(computer_use_server(harness).is_none(), "{harness}");
+    }
+}
+
+#[test]
+fn computer_use_mcp_server_attaches_recordings_to_the_run() {
+    let args_for = |run_id: Option<&str>, recording_enabled| {
+        let server = computer_use_mcp_server(
+            Harness::Claude,
+            "/opt/oz".to_owned(),
+            run_id.map(str::to_owned),
+            recording_enabled,
+            HashMap::new(),
+        )
+        .unwrap();
+        stdio_server(&server).1.to_vec()
+    };
+    assert_eq!(
+        args_for(Some("run-1"), true),
+        [
+            "computer-use-mcp",
+            "--model-family",
+            "anthropic",
+            "--run-id",
+            "run-1"
+        ]
+    );
+    assert_eq!(
+        args_for(Some("run-1"), false),
+        [
+            "computer-use-mcp",
+            "--model-family",
+            "anthropic",
+            "--no-recording"
+        ]
+    );
+    assert_eq!(
+        args_for(None, true),
+        ["computer-use-mcp", "--model-family", "anthropic"]
+    );
+}
+
+#[test]
+fn computer_use_mcp_env_prefers_the_run_environment_and_skips_other_variables() {
+    let resolved = HashMap::from([
+        (OsString::from("DISPLAY"), OsString::from(":99")),
+        (OsString::from("API_TOKEN"), OsString::from("secret")),
+    ]);
+    let env = computer_use_mcp_env(&resolved, |name| {
+        matches!(name, "DISPLAY" | "XAUTHORITY" | "API_TOKEN")
+            .then(|| OsString::from(format!("process-{name}")))
+    });
+    assert_eq!(
+        env,
+        HashMap::from([
+            ("DISPLAY".to_owned(), ":99".to_owned()),
+            ("XAUTHORITY".to_owned(), "process-XAUTHORITY".to_owned()),
+        ])
+    );
+}
+
+#[test]
+fn configured_servers_take_precedence_over_the_computer_use_mcp() {
+    let configured = JSONMCPServer {
+        transport_type: JSONTransportType::SSEServer {
+            url: "https://example.com/mcp".to_owned(),
+            headers: HashMap::new(),
+        },
+    };
+    let mut servers = ResolvedMCPServers::default();
+    servers
+        .configs
+        .insert(COMPUTER_USE_MCP_SERVER_NAME.to_owned(), configured.clone());
+    attach_computer_use_mcp(&mut servers, computer_use_server(Harness::Claude).unwrap());
+    assert_eq!(servers.configs[COMPUTER_USE_MCP_SERVER_NAME], configured);
+    assert!(servers.installation_ids.is_empty());
+    assert!(servers.harness_settings.is_empty());
+
+    let mut servers = ResolvedMCPServers::default();
+    let computer_use = computer_use_server(Harness::Claude).unwrap();
+    attach_computer_use_mcp(&mut servers, computer_use.clone());
+    assert_eq!(servers.configs[COMPUTER_USE_MCP_SERVER_NAME], computer_use);
+    assert_eq!(
+        servers.installation_ids[COMPUTER_USE_MCP_SERVER_NAME],
+        COMPUTER_USE_MCP_INSTALLATION_UUID
+    );
+    let settings = &servers.harness_settings[COMPUTER_USE_MCP_SERVER_NAME];
+    assert_eq!(
+        settings.forwarded_env_vars,
+        [
+            "WARP_API_KEY",
+            "WARP_SERVER_ROOT_URL",
+            "WARP_WS_SERVER_URL",
+            "WARP_SESSION_SHARING_SERVER_URL"
+        ]
+    );
+    assert!(settings.run_scoped);
+    assert!(servers.is_run_scoped(COMPUTER_USE_MCP_SERVER_NAME));
 }

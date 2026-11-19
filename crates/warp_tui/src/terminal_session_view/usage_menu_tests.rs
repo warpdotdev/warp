@@ -84,7 +84,11 @@ fn renders_account_usage_summary() {
 
     assert!(rendered[0].starts_with(" ◔ Usage"));
     assert!(rendered[0].ends_with("Plan: Build | Team: Product Eng | Manage billing and usage"));
-    assert!(rendered.iter().any(|line| line.contains("Base credits")));
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("Included personal credits"))
+    );
     assert!(rendered.iter().any(|line| line.contains("Add-on credits")));
     assert!(
         rendered

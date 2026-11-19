@@ -12,13 +12,16 @@ test-util = []
 crash_reporting = ["dep:sentry"]
 
 [dependencies]
+ai_types.workspace = true
 async-channel.workspace = true
+async-lock.workspace = true
 async-trait.workspace = true
 bincode.workspace = true
 bytes.workspace = true
 cfg-if.workspace = true
 computer_use.workspace = true
 dunce.workspace = true
+globset.workspace = true
 prost-types.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -57,6 +60,7 @@ futures.workspace = true
 generic-array = "0.14.7"
 derivative.workspace = true
 hex.workspace = true
+warp_cli.workspace = true
 warp_core.workspace = true
 warp_errors.workspace = true
 warp_terminal.workspace = true
@@ -68,14 +72,17 @@ repo_metadata.workspace = true
 uuid.workspace = true
 unicode-width.workspace = true
 url.workspace = true
+yaml-rust.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 nix.workspace = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 async-fs.workspace = true
+async-process.workspace = true
 arborium.workspace = true
 base64.workspace = true
+command.workspace = true
 http_client.workspace = true
 languages.workspace = true
 rand.workspace = true

@@ -439,6 +439,8 @@ pub enum AgentCommand {
     Run(RunAgentArgs),
     /// Dispatch a cloud agent.
     RunCloud(RunCloudArgs),
+    /// Prepare a pre-warmed sandbox and wait for it to be claimed.
+    RunCloudStandby(RunCloudStandbyArgs),
     /// Manage agent profiles.
     #[command(subcommand)]
     Profile(AgentProfileCommand),
@@ -461,6 +463,7 @@ impl AgentCommand {
         match self {
             AgentCommand::Run(_) => "agent run",
             AgentCommand::RunCloud(_) => "agent run-cloud",
+            AgentCommand::RunCloudStandby(_) => "agent run-cloud-standby",
             AgentCommand::Profile(_) => "agent profile",
             AgentCommand::List(_) => "agent list",
             AgentCommand::Get(_) => "agent get",
@@ -470,6 +473,21 @@ impl AgentCommand {
             AgentCommand::Skills(_) => "agent skills",
         }
     }
+}
+
+/// Identifies the allocated sandbox to prepare without starting an agent task.
+#[derive(Debug, Clone, Args)]
+pub struct RunCloudStandbyArgs {
+    /// UID of the pre-warmed sandbox row this container was allocated for.
+    #[arg(long = "standby-id", value_name = "ID")]
+    pub standby_id: String,
+    /// Override the pre-warmed sandbox control origin.
+    #[arg(
+        long = "prewarmed-sandbox-control-url",
+        hide = true,
+        env = "WARP_PREWARMED_SANDBOX_CONTROL_URL"
+    )]
+    pub prewarmed_sandbox_control_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Args)]

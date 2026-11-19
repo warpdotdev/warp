@@ -283,6 +283,30 @@ impl ChannelState {
         }
     }
 
+    pub fn override_prewarmed_sandbox_control_url(
+        url: impl Into<Cow<'static, str>>,
+    ) -> Result<(), ParseError> {
+        let url = url.into();
+        Url::parse(&url)?;
+        CHANNEL_STATE
+            .lock()
+            .config
+            .server_config
+            .prewarmed_sandbox_control_url = Some(url);
+        Ok(())
+    }
+
+    pub fn prewarmed_sandbox_control_url() -> Cow<'static, str> {
+        let state = CHANNEL_STATE.lock();
+        match &state.config.server_config.prewarmed_sandbox_control_url {
+            Some(url) => url.clone(),
+            None => {
+                drop(state);
+                Self::server_root_url()
+            }
+        }
+    }
+
     pub fn workload_audience_url() -> Cow<'static, str> {
         let state = CHANNEL_STATE.lock();
         match &state.config.oz_config.workload_audience_url {

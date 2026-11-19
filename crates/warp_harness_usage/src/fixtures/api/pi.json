@@ -1,0 +1,34 @@
+{
+  "execution_id": 7,
+  "capture_sequence": 3,
+  "captured_at": "2026-01-01T12:00:00Z",
+  "harness": "PI",
+  "snapshot": {
+    "coverage": {
+      "token_status": "known",
+      "tool_status": "known"
+    },
+    "payload": {
+      "attribution": [
+        {
+          "provider": "openrouter",
+          "model": "vendor/model",
+          "maxInputTokens": 44,
+          "usage": {
+            "input": 10,
+            "output": 2,
+            "cacheRead": 30,
+            "cacheWrite": 4,
+            "totalTokens": 46
+          }
+        }
+      ],
+      "toolCalls": {
+        "total": 1,
+        "byName": {
+          "bash": 1
+        }
+      }
+    }
+  }
+}

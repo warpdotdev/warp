@@ -315,10 +315,13 @@ dependencies = [
 name = "ai"
 version = "0.1.0"
 dependencies = [
+ "ai_types",
  "anyhow",
  "arborium",
  "async-channel",
  "async-fs",
+ "async-lock",
+ "async-process",
  "async-trait",
  "base16ct",
  "base64 0.22.1",
@@ -326,6 +329,7 @@ dependencies = [
  "bytes",
  "cfg-if",
  "chrono",
+ "command",
  "computer_use",
  "derivative",
  "dirs 6.0.0",
@@ -333,6 +337,7 @@ dependencies = [
  "filetime",
  "futures",
  "generic-array",
+ "globset",
  "hex",
  "http_client",
  "ignore",
@@ -378,6 +383,7 @@ dependencies = [
  "url",
  "uuid",
  "virtual-fs",
+ "warp_cli",
  "warp_core",
  "warp_errors",
  "warp_graphql",
@@ -387,6 +393,7 @@ dependencies = [
  "warpui_core",
  "warpui_extras",
  "watcher",
+ "yaml-rust",
 ]
 
 [[package]]
@@ -1860,10 +1867,12 @@ dependencies = [
 
 [[package]]
 name = "aws-smithy-json"
-version = "0.62.5"
+version = "0.62.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9648b0bb82a2eedd844052c6ad2a1a822d1f8e3adee5fbf668366717e428856a"
+checksum = "701a947f4797e52a911e114a898667c746c39feea467bbd1abd7b3721f702ffa"
 dependencies = [
+ "aws-smithy-runtime-api",
+ "aws-smithy-schema",
  "aws-smithy-types",
 ]
 
@@ -1913,9 +1922,9 @@ dependencies = [
 
 [[package]]
 name = "aws-smithy-runtime-api"
-version = "1.12.0"
+version = "1.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b71a13df6ada0aafbf21a73bdfcdf9324cfa9df77d96b8446045be3cde61b42e"
+checksum = "9db177daa6ba8afb9ee1aefcf548c907abcf52065e394ee11a92780057fe0e8c"
 dependencies = [
  "aws-smithy-async",
  "aws-smithy-runtime-api-macros",
@@ -1941,10 +1950,21 @@ dependencies = [
 ]
 
 [[package]]
-name = "aws-smithy-types"
-version = "1.4.7"
+name = "aws-smithy-schema"
+version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9d73dbfbaa8e4bc57b9045137680b958d274823509a360abfd8e1d514d40c95c"
+checksum = "7442cb268338f0eb8278140a107c046756aa01093d8ef5e99628d34ae09c94f5"
+dependencies = [
+ "aws-smithy-runtime-api",
+ "aws-smithy-types",
+ "http 1.4.0",
+]
+
+[[package]]
+name = "aws-smithy-types"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32b42fcf341259d85ca10fac9a2f6448a8ec691c6955a18e45bc3b71a85fab85"
 dependencies = [
  "base64-simd",
  "bytes",
@@ -3297,6 +3317,25 @@ dependencies = [
  "windows 0.62.2",
  "x11rb",
  "zbus",
+]
+
+[[package]]
+name = "computer_use_mcp"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "base64 0.22.1",
+ "command",
+ "computer_use",
+ "libc",
+ "log",
+ "rmcp",
+ "schemars 1.0.4",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]
@@ -8877,6 +8916,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "non_structural_derive"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "65b314d87ab425583e6aa06ab4766a0858d8c6b66ee82a5132bb0027f7ceb797"
+dependencies = [
+ "non_structural_derive_macro",
+]
+
+[[package]]
+name = "non_structural_derive_macro"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0ce21b181c774b29e508df75ef537f6f4a9e5bf866edae6ae9dcc63cc9e6c058"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+ "synstructure",
+]
+
+[[package]]
 name = "noop_proc_macro"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10508,6 +10568,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "preview_proxy"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "http 1.4.0",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "log",
+ "tokio",
+ "tokio-util",
+ "tower",
+ "uuid",
+]
+
+[[package]]
 name = "primal-check"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11989,7 +12066,7 @@ dependencies = [
  "rustls-webpki",
  "security-framework 3.5.1",
  "security-framework-sys",
- "webpki-root-certs 1.0.1",
+ "webpki-root-certs 1.0.10",
  "windows-sys 0.61.2",
 ]
 
@@ -12001,9 +12078,9 @@ checksum = "f87165f0995f63a9fbeea62b64d10b4d9d8e78ec6d7d51fb2125fda7bb36788f"
 
 [[package]]
 name = "rustls-webpki"
-version = "0.103.15"
+version = "0.103.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f3c3cf1d8b1e7d4927e2d154c3fcb02979afb9939629c62cd9048d4f07b60ac2"
+checksum = "4443b1b6d39d7c663139942cc4558262562d2c84123bb6282ef177009ca8b281"
 dependencies = [
  "aws-lc-rs",
  "ring",
@@ -15296,6 +15373,7 @@ dependencies = [
  "command",
  "command-corrections",
  "computer_use",
+ "computer_use_mcp",
  "concat-idents",
  "console_error_panic_hook",
  "content_inspector",
@@ -15335,6 +15413,7 @@ dependencies = [
  "getrandom 0.2.16",
  "getset",
  "git2",
+ "globset",
  "gloo",
  "handlebars",
  "hashbrown 0.17.1",
@@ -15385,6 +15464,7 @@ dependencies = [
  "mockito",
  "natural_language_detection",
  "nix 0.26.4",
+ "non_structural_derive",
  "notify-debouncer-full",
  "num-traits",
  "num_cpus",
@@ -15411,6 +15491,7 @@ dependencies = [
  "pin-project",
  "plist",
  "pprof",
+ "preview_proxy",
  "prost",
  "prost-build",
  "prost-types",
@@ -15936,7 +16017,7 @@ dependencies = [
 [[package]]
 name = "warp_multi_agent_api"
 version = "0.0.0"
-source = "git+https://github.com/warpdotdev/warp-proto-apis.git?rev=30d54b549cf87930f3f071b38ade82bf13305ba2#30d54b549cf87930f3f071b38ade82bf13305ba2"
+source = "git+https://github.com/warpdotdev/warp-proto-apis.git?rev=7e78c26ae5e1b93807c3db81ee009e25a57d9c9b#7e78c26ae5e1b93807c3db81ee009e25a57d9c9b"
 dependencies = [
  "prost",
  "prost-reflect",
@@ -16195,6 +16276,7 @@ dependencies = [
  "fs4",
  "futures",
  "futures-lite 1.13.0",
+ "hex",
  "http_client",
  "inquire",
  "instant",
@@ -16207,6 +16289,7 @@ dependencies = [
  "pathfinder_geometry",
  "rangemap",
  "serde_json",
+ "sha2 0.10.9",
  "shell-words",
  "similar",
  "string-offset",
@@ -16233,6 +16316,7 @@ dependencies = [
  "warp_util",
  "warpui",
  "warpui_core",
+ "warpui_extras",
 ]
 
 [[package]]
@@ -16788,14 +16872,14 @@ version = "0.26.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "75c7f0ef91146ebfb530314f5f1d24528d7f0767efbfd31dce919275413e393e"
 dependencies = [
- "webpki-root-certs 1.0.1",
+ "webpki-root-certs 1.0.10",
 ]
 
 [[package]]
 name = "webpki-root-certs"
-version = "1.0.1"
+version = "1.0.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "86138b15b2b7d561bc4469e77027b8dd005a43dc502e9031d1f5afc8ce1f280e"
+checksum = "58ec80e73fd8baf57bf0d9615554c75348bda990d6d5bbeab964dd068319fecb"
 dependencies = [
  "rustls-pki-types",
 ]
@@ -16806,14 +16890,14 @@ version = "0.26.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "521bc38abb08001b01866da9f51eb7c5d647a19260e00054a8c7fd5f9e57f7a9"
 dependencies = [
- "webpki-roots 1.0.1",
+ "webpki-roots 1.0.10",
 ]
 
 [[package]]
 name = "webpki-roots"
-version = "1.0.1"
+version = "1.0.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8782dd5a41a24eed3a4f40b606249b3e236ca61adf1f25ea4d45c73de122b502"
+checksum = "1c1c8e20c8a38fc7d65abfe74eb7280e4aa667e8eec8bc84996d2874810748d9"
 dependencies = [
  "rustls-pki-types",
 ]

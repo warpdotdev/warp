@@ -8,7 +8,31 @@ use warp_graphql::client::{GraphQLError, Operation, RequestOptions};
 use warpui_core::r#async::BoxFuture;
 
 use crate::auth::AuthEvent;
-use crate::base_client::{BaseClient, TEAM_UID_HEADER};
+use crate::base_client::{
+    AmbientHeaderPolicy, BaseClient, PREWARMED_SANDBOX_ID_HEADER,
+    PREWARMED_SANDBOX_WORKLOAD_TOKEN_HEADER, TEAM_UID_HEADER,
+};
+
+/// The message of the plain error a request fails with when the server rejects the client's
+/// credentials (401, 403, or a disabled account) and the client may not refresh them. Callers
+/// that classify failures match on it, since no [`GraphQLError`] is left in the chain.
+pub const AUTH_REJECTED_MESSAGE: &str = "server rejected authentication credentials";
+
+/// Whether `error` is the server rejecting the credentials a request was sent with: the plain
+/// [`AUTH_REJECTED_MESSAGE`] error, or the 401 or 403 itself when the client may refresh them.
+pub fn is_auth_rejection(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause.to_string() == AUTH_REJECTED_MESSAGE
+            || matches!(
+                cause.downcast_ref::<GraphQLError>(),
+                Some(GraphQLError::HttpError { status, .. }) if is_auth_rejection_status(*status)
+            )
+    })
+}
+
+fn is_auth_rejection_status(status: StatusCode) -> bool {
+    matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN)
+}
 
 /// Sends a GraphQL operation through a base client supplied by the application.
 ///
@@ -46,6 +70,35 @@ where
     })
 }
 
+/// Scopes one authenticated operation to a run without changing the client's ambient identity.
+pub fn send_task_scoped_graphql_request<'a, QF: 'a, O>(
+    base_client: &'a BaseClient,
+    operation: O,
+    timeout: Option<Duration>,
+    task_id: String,
+) -> BoxFuture<'a, Result<QF>>
+where
+    O: Operation<QF> + Send + 'a,
+{
+    Box::pin(async move {
+        anyhow::ensure!(!task_id.trim().is_empty(), "Task ID is required");
+        let mut options = base_client.graphql_request_options(timeout).await?;
+        anyhow::ensure!(
+            !options.headers.contains_key(PREWARMED_SANDBOX_ID_HEADER)
+                && !options
+                    .headers
+                    .contains_key(PREWARMED_SANDBOX_WORKLOAD_TOKEN_HEADER),
+            "A standby request cannot be scoped to a run"
+        );
+        options.headers.extend(
+            base_client
+                .ambient_headers(AmbientHeaderPolicy::for_task(task_id))
+                .await?,
+        );
+        send_graphql_request_with_options(base_client, operation, options).await
+    })
+}
+
 pub(crate) async fn send_graphql_request_with_options<QF, O>(
     base_client: &BaseClient,
     operation: O,
@@ -69,17 +122,15 @@ where
             anyhow::bail!(GraphQLError::IapChallengeBlocked);
         }
         Err(err) => {
-            let is_auth_rejection = match &err {
-                GraphQLError::HttpError { status, .. } => {
-                    *status == StatusCode::UNAUTHORIZED || *status == StatusCode::FORBIDDEN
-                }
+            let auth_rejected = match &err {
+                GraphQLError::HttpError { status, .. } => is_auth_rejection_status(*status),
                 GraphQLError::RequestError(_)
                 | GraphQLError::StagingAccessBlocked
                 | GraphQLError::IapChallengeBlocked
                 | GraphQLError::ResponseError(_) => false,
             };
-            if !base_client.is_auth_refresh_allowed() && is_auth_rejection {
-                anyhow::bail!("server rejected authentication credentials");
+            if !base_client.is_auth_refresh_allowed() && auth_rejected {
+                anyhow::bail!(AUTH_REJECTED_MESSAGE);
             }
             anyhow::bail!(err);
         }
@@ -101,7 +152,7 @@ where
                 report_error!("GraphQL request failed due to unauthenticated user");
                 let _ = base_client.send_auth_event(AuthEvent::UserAccountDisabled);
             } else {
-                anyhow::bail!("server rejected authentication credentials");
+                anyhow::bail!(AUTH_REJECTED_MESSAGE);
             }
         }
     }

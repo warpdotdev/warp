@@ -5,14 +5,14 @@
 use session_sharing_protocol::common::{AgentAttachment, ParticipantId};
 use uuid::Uuid;
 use warp_errors::report_error;
-use warp_multi_agent_api::response_event::StreamInit;
+use warp_multi_agent_api::response_event::{StreamFinished, StreamInit, stream_finished};
 use warp_multi_agent_api::{ResponseEvent, response_event};
 use warpui::{ModelContext, SingletonEntity};
 
 use super::response_stream::ResponseStreamId;
 use super::{BlocklistAIController, RequestInput};
-use crate::ai::agent::BaseUserQuery;
 use crate::ai::agent::conversation::{AIConversationId, ConversationDriver, ConversationStatus};
+use crate::ai::agent::{BaseUserQuery, CancellationReason};
 use crate::ai::blocklist::history_model::{BlocklistAIHistoryModel, UpdateHistoryError};
 use crate::ai::blocklist::{QueuedQuery, QueuedQueryId, QueuedQueryModel};
 use crate::workspaces::user_workspaces::ResolvedTeamScope;
@@ -37,6 +37,30 @@ pub(in crate::ai) struct ExternalHarnessPrompt {
     /// The `Request.Input.UserQuery` warp-server injected with the prompt, when it sent one.
     /// Its attribution is copied onto the user query echoed into the conversation.
     pub base: Option<BaseUserQuery>,
+}
+
+impl ExternalHarnessPrompt {
+    pub(super) fn new(
+        text: String,
+        attachments: Vec<AgentAttachment>,
+        participant_id: ParticipantId,
+        base: Option<BaseUserQuery>,
+    ) -> Self {
+        let mut query = base
+            .unwrap_or_else(|| BaseUserQuery::unattributed("shared_session_author_unavailable"))
+            .to_proto();
+        // The base retains raw text when a displayed queue row is relayed again.
+        if query.query.is_empty() {
+            query.query = text;
+        }
+        let base = BaseUserQuery::from_proto(query);
+        Self {
+            text: base.format_third_party_prompt(""),
+            attachments,
+            participant_id,
+            base: Some(base),
+        }
+    }
 }
 
 /// A request to interrupt the turn an external harness is running, relayed to that harness.
@@ -127,7 +151,42 @@ impl BlocklistAIController {
         true
     }
 
-    /// Marks `conversation_id` cancelled once the harness has settled the turn it cut short.
+    /// Ends the harness-driven turn open on `stream_id` as a cancellation, the way an
+    /// interrupted native request ends: its exchanges finish as cancelled and the conversation
+    /// status follows `reason` (a follow-up that cut the turn short keeps it `InProgress`; an
+    /// interrupt marks it `Cancelled`). Viewers see the stream finish.
+    pub(in crate::ai) fn cancel_external_harness_turn(
+        &mut self,
+        stream_id: &ResponseStreamId,
+        reason: CancellationReason,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some(conversation_id) =
+            BlocklistAIHistoryModel::as_ref(ctx).conversation_for_response_stream(stream_id)
+        else {
+            log::warn!("No conversation for external harness response stream {stream_id:?}");
+            return;
+        };
+        let finished = ResponseEvent {
+            r#type: Some(response_event::Type::Finished(StreamFinished {
+                reason: Some(stream_finished::Reason::Done(stream_finished::Done {})),
+                ..Default::default()
+            })),
+        };
+        self.tee_response_event_to_viewers(&finished, conversation_id, ctx);
+        let terminal_surface_id = self.terminal_surface_id;
+        BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+            history.mark_response_stream_cancelled(
+                stream_id,
+                conversation_id,
+                terminal_surface_id,
+                reason,
+                ctx,
+            );
+        });
+    }
+
+    /// Marks `conversation_id` cancelled when an interrupt arrives with no turn to cut short.
     pub(in crate::ai) fn mark_external_harness_conversation_cancelled(
         &self,
         conversation_id: AIConversationId,
@@ -186,12 +245,12 @@ impl BlocklistAIController {
                 let (participant_id, attachments) = row.shared_session_prompt()?;
                 Some((
                     row.id(),
-                    ExternalHarnessPrompt {
-                        text: row.text().to_owned(),
-                        attachments: attachments.to_vec(),
-                        participant_id: participant_id.clone(),
-                        base: row.base_user_query().cloned(),
-                    },
+                    ExternalHarnessPrompt::new(
+                        row.text().to_owned(),
+                        attachments.to_vec(),
+                        participant_id.clone(),
+                        row.base_user_query().cloned(),
+                    ),
                 ))
             })
             .collect();

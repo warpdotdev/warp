@@ -67,7 +67,7 @@ RUN set -eux; \
 # Install golangci-lint. It refuses to load a config that targets a newer Go
 # release than the one golangci-lint itself was built with, so this pin has to
 # keep up with the Go toolchain above.
-RUN curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh | sh -s -- -b /usr/local/go/bin v2.12.2 \
+RUN curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh | sh -s -- -b /usr/local/go/bin v2.15.0 \
     && golangci-lint --version
 
 # Preinstall the static tokenizers library so Go cgo builds that link

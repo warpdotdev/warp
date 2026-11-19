@@ -315,6 +315,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::MCPGroupedServerContext,
         #[cfg(feature = "well_known_mcp_ids")]
         FeatureFlag::WellKnownMcpIds,
+        #[cfg(feature = "managed_mcp_credential_refresh")]
+        FeatureFlag::ManagedMcpCredentialRefresh,
         #[cfg(feature = "factory_mcp")]
         FeatureFlag::FactoryMcp,
         #[cfg(feature = "preview_urls_mcp")]
@@ -361,6 +363,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::LocalComputerUse,
         #[cfg(feature = "background_computer_use")]
         FeatureFlag::BackgroundComputerUse,
+        #[cfg(feature = "computer_use_mcp")]
+        FeatureFlag::ComputerUseMcp,
         #[cfg(feature = "local_claude_codex_child_harnesses")]
         FeatureFlag::LocalClaudeCodexChildHarnesses,
         #[cfg(feature = "team_api_keys")]
@@ -441,6 +445,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::QueueSlashCommand,
         #[cfg(feature = "queued_prompts_v2")]
         FeatureFlag::QueuedPromptsV2,
+        #[cfg(feature = "agent_prompt_steering")]
+        FeatureFlag::AgentPromptSteering,
         #[cfg(feature = "kitty_keyboard_protocol")]
         FeatureFlag::KittyKeyboardProtocol,
         #[cfg(feature = "inline_menu_headers")]
@@ -467,6 +473,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::AgentHarness,
         #[cfg(feature = "oz_handoff")]
         FeatureFlag::OzHandoff,
+        #[cfg(feature = "restore_local_subtree")]
+        FeatureFlag::RestoreLocalSubtree,
         #[cfg(feature = "handoff_local_cloud")]
         FeatureFlag::HandoffLocalCloud,
         #[cfg(feature = "hoa_notifications")]
@@ -537,6 +545,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::StoredScreenshots,
         #[cfg(feature = "cloud_agent_shell_respawn")]
         FeatureFlag::CloudAgentShellRespawn,
+        #[cfg(feature = "acp_harness")]
+        FeatureFlag::AcpHarness,
     ]);
 
     flags
