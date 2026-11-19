@@ -17,7 +17,13 @@ warp_errors.workspace = true
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 dirs.workspace = true
 log-panics = { version = "2.1.0", features = ["with-backtrace"] }
-zip = "2.1"
+# Log bundles only ever write Deflate entries (see native.rs), so only pull in zip's Deflate
+# codec rather than its full default feature set.
+zip = { version = "2.1", default-features = false, features = ["deflate-flate2", "flate2"] }
+# zip's "deflate-flate2" feature pulls in flate2 but leaves its compression backend unselected;
+# this dependency exists solely to turn on that backend (zip depends on flate2 with
+# default-features = false, so nothing else provides one).
+flate2 = { version = "1.0", default-features = false, features = ["rust_backend"] }
 
 # Optional crash reporting integration.
 sentry = { workspace = true, optional = true }
