@@ -339,7 +339,10 @@ where
 
         for i in 0..archive.len() {
             let mut file = archive.by_index(i).context("Failed to read zip entry")?;
-            let file_name = file.name().to_string();
+            let file_name = file
+                .name()
+                .context("Failed to read zip entry name")?
+                .to_string();
 
             if let Some(ref filter) = file_filter
                 && !filter(&file_name)

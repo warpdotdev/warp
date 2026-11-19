@@ -17,7 +17,7 @@ warp_errors.workspace = true
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 dirs.workspace = true
 log-panics = { version = "2.1.0", features = ["with-backtrace"] }
-zip = "2.1"
+zip = "9.0.5"
 
 # Optional crash reporting integration.
 sentry = { workspace = true, optional = true }
