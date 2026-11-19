@@ -7,6 +7,7 @@ use warpui::App;
 use super::{
     EnvironmentChoice, classify_agent_mode_base_model_id, parse_ambient_task_id,
     validate_agent_mode_base_model_id, validate_agent_mode_base_model_id_for_scope,
+    validate_execution_model_id,
 };
 use crate::LaunchMode;
 use crate::ai::cloud_environments::{
@@ -34,7 +35,7 @@ use crate::test_util::settings::initialize_settings_for_tests;
 use crate::workspaces::team::{Team, TeamVisibility};
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::user_workspaces::{
-    TeamContextForOperation, TeamlessScopeForTest, UserWorkspaces,
+    HeadlessTeamScope, TeamContextForOperation, TeamlessScopeForTest, UserWorkspaces,
 };
 use crate::workspaces::workspace::{Workspace, WorkspaceUid};
 fn environment_with_owner(
@@ -266,57 +267,69 @@ fn models_with_agent_model(id: &str) -> ModelsByFeature {
     }
 }
 
+fn team_with_agent_model(uid: ServerId, agent_model_id: &str) -> Team {
+    Team {
+        uid,
+        name: format!("Team {uid}"),
+        color: None,
+        invite_link: None,
+        members: vec![],
+        pending_email_invites: vec![],
+        invite_link_domain_restrictions: vec![],
+        billing_metadata: Default::default(),
+        stripe_customer_id: None,
+        settings: Default::default(),
+        feature_model_choice: models_with_agent_model(agent_model_id),
+        is_eligible_for_discovery: false,
+        has_billing_history: false,
+        visibility: TeamVisibility::Open,
+    }
+}
+
+/// Registers the singletons model validation depends on, with one workspace whose personal agent
+/// model is `personal-model` and whose teams are `teams`, in order.
+fn add_model_validation_models(app: &mut App, teams: Vec<Team>) {
+    initialize_settings_for_tests(app);
+    app.add_singleton_model(|_| ServerApiProvider::new_for_test());
+    app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+    app.add_singleton_model(AuthManager::new_for_test);
+    app.add_singleton_model(|_| NetworkStatus::new());
+
+    let mut workspace = Workspace::from_local_cache(
+        WorkspaceUid::from(ServerId::from(1)),
+        "Workspace".to_string(),
+        None,
+        None,
+    );
+    workspace.feature_model_choice = models_with_agent_model("personal-model");
+    workspace.teams = teams;
+    app.add_singleton_model(|ctx| {
+        UserWorkspaces::mock(
+            Arc::new(MockTeamClient::new()),
+            Arc::new(MockWorkspaceClient::new()),
+            vec![workspace],
+            ctx,
+        )
+    });
+    app.add_singleton_model(CloudModel::mock);
+    app.add_singleton_model(TeamTesterStatus::mock);
+    app.add_singleton_model(SyncQueue::mock);
+    app.add_singleton_model(UpdateManager::mock);
+    app.add_singleton_model(|_| TemplatableMCPServerManager::default());
+    app.add_singleton_model(|ctx| {
+        AIExecutionProfilesModel::new(&LaunchMode::new_for_unit_test(), ctx)
+    });
+    app.add_singleton_model(LLMPreferences::new);
+}
+
 #[test]
 fn model_validation_reads_the_selected_team_catalog() {
     App::test((), |mut app| async move {
-        initialize_settings_for_tests(&mut app);
-        app.add_singleton_model(|_| ServerApiProvider::new_for_test());
-        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
-        app.add_singleton_model(AuthManager::new_for_test);
-        app.add_singleton_model(|_| NetworkStatus::new());
-
         let team_uid = ServerId::from(7);
-        let team = Team {
-            uid: team_uid,
-            name: "Selected team".to_string(),
-            color: None,
-            invite_link: None,
-            members: vec![],
-            pending_email_invites: vec![],
-            invite_link_domain_restrictions: vec![],
-            billing_metadata: Default::default(),
-            stripe_customer_id: None,
-            settings: Default::default(),
-            feature_model_choice: models_with_agent_model("team-model"),
-            is_eligible_for_discovery: false,
-            has_billing_history: false,
-            visibility: TeamVisibility::Open,
-        };
-        let mut workspace = Workspace::from_local_cache(
-            WorkspaceUid::from(ServerId::from(1)),
-            "Workspace".to_string(),
-            None,
-            None,
+        add_model_validation_models(
+            &mut app,
+            vec![team_with_agent_model(team_uid, "team-model")],
         );
-        workspace.feature_model_choice = models_with_agent_model("personal-model");
-        workspace.teams = vec![team];
-        app.add_singleton_model(|ctx| {
-            UserWorkspaces::mock(
-                Arc::new(MockTeamClient::new()),
-                Arc::new(MockWorkspaceClient::new()),
-                vec![workspace],
-                ctx,
-            )
-        });
-        app.add_singleton_model(CloudModel::mock);
-        app.add_singleton_model(TeamTesterStatus::mock);
-        app.add_singleton_model(SyncQueue::mock);
-        app.add_singleton_model(UpdateManager::mock);
-        app.add_singleton_model(|_| TemplatableMCPServerManager::default());
-        app.add_singleton_model(|ctx| {
-            AIExecutionProfilesModel::new(&LaunchMode::new_for_unit_test(), ctx)
-        });
-        app.add_singleton_model(LLMPreferences::new);
 
         app.read(|ctx| {
             let team_scope = TeamContextForOperation::new_for_test(team_uid);
@@ -343,6 +356,31 @@ fn model_validation_reads_the_selected_team_catalog() {
                 )
                 .is_err()
             );
+        });
+    });
+}
+
+#[test]
+fn execution_model_validation_reads_the_run_team_catalog() {
+    App::test((), |mut app| async move {
+        let default_team_uid = ServerId::from(7);
+        let run_team_uid = ServerId::from(8);
+        add_model_validation_models(
+            &mut app,
+            vec![
+                team_with_agent_model(default_team_uid, "default-team-model"),
+                team_with_agent_model(run_team_uid, "run-team-model"),
+            ],
+        );
+
+        app.read(|ctx| {
+            let run_team = HeadlessTeamScope::Team(run_team_uid);
+            assert!(validate_execution_model_id("run-team-model", &run_team, ctx).is_ok());
+            assert!(validate_execution_model_id("default-team-model", &run_team, ctx).is_err());
+
+            let personal = HeadlessTeamScope::Personal;
+            assert!(validate_execution_model_id("default-team-model", &personal, ctx).is_ok());
+            assert!(validate_execution_model_id("run-team-model", &personal, ctx).is_err());
         });
     });
 }
