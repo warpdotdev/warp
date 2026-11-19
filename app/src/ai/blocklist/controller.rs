@@ -40,7 +40,9 @@ use self::response_stream::{PendingResume, RecoveryBudget, ResponseStream, Respo
 use super::action_model::{BlocklistAIActionEvent, BlocklistAIActionModel};
 use super::context_model::{BlocklistAIContextModel, PendingAttachment, PendingFile};
 use super::conversation_selection::{ConversationSelectionEvent, ConversationSelectionHandle};
-use super::history_model::BlocklistAIHistoryModel;
+use super::history_model::{
+    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, ConversationStatusUpdate,
+};
 use super::orchestration_event_streamer::{
     OrchestrationEventStreamer, OrchestrationEventStreamerEvent,
 };
@@ -620,7 +622,7 @@ impl BlocklistAIController {
                         || treat_as_success
                     {
                         me.hold_or_finalize_turn(*conversation_id, ctx);
-                        me.start_held_turn_stop(*conversation_id, ctx);
+                        me.start_held_turn_stop_hooks(*conversation_id, ctx);
                     } else {
                         // This is an imperfect heuristic that practically speaking should have no effect.
                         //
@@ -764,6 +766,24 @@ impl BlocklistAIController {
             OrchestrationEventStreamerEvent::ChildSpawned { .. }
             | OrchestrationEventStreamerEvent::ChildStatusChanged { .. }
             | OrchestrationEventStreamerEvent::WatchedRunStatusChanged { .. } => {}
+        });
+        // A turn ends as cancelled or failed from many places (a cancelled or errored stream,
+        // actions cancelled with nothing to send back, a shell exit, a hook that ended the run),
+        // all of which set the status; the status change is the one place that sees them all.
+        let history_model = BlocklistAIHistoryModel::handle(ctx);
+        ctx.subscribe_to_model(&history_model, |me, _, event, ctx| {
+            let BlocklistAIHistoryEvent::UpdatedConversationStatus {
+                conversation_id,
+                terminal_surface_id,
+                update: ConversationStatusUpdate::Changed { prev_status },
+                new_status,
+            } = event
+            else {
+                return;
+            };
+            if *terminal_surface_id == me.terminal_surface_id {
+                me.stop_ended_turn(*conversation_id, prev_status, new_status, ctx);
+            }
         });
         Self {
             input_model,
@@ -1088,7 +1108,7 @@ impl BlocklistAIController {
             false
         };
         if !sent && outcome.owes_earlier_turn {
-            self.settle_turn_after_stop(conversation_id, ctx);
+            self.settle_turn_after_stop_hooks(conversation_id, ctx);
         }
     }
 
@@ -1165,7 +1185,7 @@ impl BlocklistAIController {
 
     /// Runs the stop hooks of a turn [`Self::hold_or_finalize_turn`] held, once the turn's own
     /// stream is out of the way so a follow-up can be sent.
-    fn start_held_turn_stop(
+    fn start_held_turn_stop_hooks(
         &mut self,
         conversation_id: AIConversationId,
         ctx: &mut ModelContext<Self>,
@@ -1183,10 +1203,49 @@ impl BlocklistAIController {
                         me.finalize_held_turn(conversation_id, ctx)
                     }
                     hooks::turn::TurnStopResolution::FollowUpQueued => {
-                        me.settle_turn_after_stop(conversation_id, ctx)
+                        me.settle_turn_after_stop_hooks(conversation_id, ctx)
                     }
                 },
             );
+        }
+    }
+
+    /// Runs the stop hooks of a turn that a status change ended as cancelled or failed, once the
+    /// stream that ended it is out of the way. Nothing here waits for their answer; an Oz run
+    /// about to exit on that status does.
+    fn stop_ended_turn(
+        &mut self,
+        conversation_id: AIConversationId,
+        prev_status: &ConversationStatus,
+        new_status: &ConversationStatus,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if hooks::turn::hold_ended_turn(
+            conversation_id,
+            prev_status,
+            new_status,
+            &self.active_session,
+            ctx,
+        ) {
+            self.start_ended_turn_stop_hooks(conversation_id, ctx);
+        }
+    }
+
+    /// Starts the stop hooks of `conversation_id`'s ended turns that are waiting to start, unless
+    /// the stream that ended one of them is still being cleaned up, in which case the stream's end
+    /// starts them.
+    fn start_ended_turn_stop_hooks(
+        &mut self,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if self.has_active_stream_for_conversation(conversation_id, ctx) {
+            return;
+        }
+        for stop in hooks::turn::start_ended_turn_stops(conversation_id, ctx) {
+            ctx.spawn(stop, move |_, outcome, ctx| {
+                hooks::turn::finish_ended_turn_stop(conversation_id, outcome, ctx);
+            });
         }
     }
 
@@ -1194,7 +1253,7 @@ impl BlocklistAIController {
     /// turn successful if nothing took the conversation over. A conversation that is not the one
     /// this surface is working in keeps its queue for the next drain: sending from here would go
     /// through the surface's own prompt path and cancel the conversation the person is in.
-    fn settle_turn_after_stop(
+    fn settle_turn_after_stop_hooks(
         &mut self,
         conversation_id: AIConversationId,
         ctx: &mut ModelContext<Self>,
@@ -4302,8 +4361,11 @@ impl BlocklistAIController {
                     self.handle_pending_events_ready(conversation_id, ctx);
                     // And run the stop hooks of a turn this stream ended, which may send a
                     // follow-up now that nothing is in flight for the conversation.
-                    self.start_held_turn_stop(conversation_id, ctx);
+                    self.start_held_turn_stop_hooks(conversation_id, ctx);
                 }
+                // A turn this stream ended as failed set its status before the stream was
+                // cleaned up, so its stop hooks waited for this point.
+                self.start_ended_turn_stop_hooks(conversation_id, ctx);
 
                 // Before cleaning up the response stream, check if we should attempt to resume.
                 // The resume inherits the failed request's remaining recovery budget, so

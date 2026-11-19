@@ -3,7 +3,7 @@
 //! they may ask for. A follow-up is queued as an ordinary prompt, behind anything a person already
 //! queued, with provenance that says which binding asked for it. Each binding may ask for at most
 //! its `loop_limit` follow-ups in one chain (the user's prompt and everything queued from it),
-//! and a chain never grows past the host cap. Only a turn that completed fires the boundary.
+//! and a chain never grows past the host cap.
 //!
 //! Lifecycle of a completed turn:
 //! 1. [`hold_turn`] (from `controller::hold_or_finalize_turn`, when the stream or the last action
@@ -20,6 +20,16 @@
 //! hooks answer (a prompt still waiting, a request sent since the hold, a stream or actions in
 //! flight), never from a flag set earlier, so a turn that came and went in the meantime leaves
 //! nothing behind.
+//!
+//! A turn that was cancelled or failed also fires the boundary, with the matching status, but
+//! only to be observed: its status is already set, so nothing is held, and a follow-up the hooks
+//! ask for is refused. [`hold_ended_turn`] records the stop when the status changes,
+//! [`start_ended_turn_stops`] starts it once the stream that ended the turn is cleaned up (so
+//! the stream's own `response.complete` goes first), and [`finish_ended_turn_stop`] reports what
+//! the hooks asked for in vain. An Oz run that is about to exit on that status waits for the
+//! stop through [`ended_turn_stops_settled`], so a hook that records the end of every turn sees
+//! the last one. Each turn fires at most one stop: a turn whose completed stop ran, and which was
+//! then cancelled or failed while the hooks were still running, does not fire a second one.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -28,20 +38,30 @@ use std::time::Duration;
 
 use ai::hooks::{
     ContinuationRequest, DiagnosticSeverity, DispatchOutcome, FollowUpChainId, HOOK_FOLLOW_UP_CAP,
-    HookBindingId, HookBoundary, HookDiagnostic, HookEnvelope, HookVerdict, MergedEffects,
-    PromptProvenance, TurnStopStatus,
+    HookBindingId, HookBoundary, HookDiagnostic, HookEnvelope, HookMessenger, HookVerdict,
+    MergedEffects, PromptProvenance, TurnStopStatus,
 };
 use futures::FutureExt;
+use futures::channel::oneshot;
+use futures::future::Shared;
 use warpui::r#async::{BoxFuture, Timer};
 use warpui::{AppContext, ModelHandle, SingletonEntity};
 
 use super::envelope::{EnvelopeSite, envelope_for_turn_stop};
 use super::{HookRuntime, longest_matching_timeout, owns_turn_lifecycle};
-use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
 use crate::ai::blocklist::{
     BlocklistAIHistoryModel, QueuedQuery, QueuedQueryModel, QueuedQueryOrigin,
 };
 use crate::terminal::model::session::active_session::ActiveSession;
+
+/// How much longer than its hooks' timeout a run exit waits for an ended turn's stop, which
+/// covers the time between the status change and the dispatch's start.
+#[cfg_attr(
+    target_family = "wasm",
+    allow(dead_code, reason = "run exit waiting is unavailable in WASM builds")
+)]
+const ENDED_TURN_STOP_EXIT_GRACE: Duration = Duration::from_secs(5);
 
 /// A turn whose success is waiting on its stop hooks.
 struct HeldTurn {
@@ -57,6 +77,27 @@ struct HeldTurn {
 struct PendingTurnStop {
     envelope: HookEnvelope,
     timeout: Duration,
+}
+
+/// The `turn.stop` of a turn that was cancelled or failed. Nothing is decided from its answer.
+struct EndedTurnStop {
+    cancel: Arc<AtomicBool>,
+    /// Present until the dispatch starts.
+    pending: Option<PendingTurnStop>,
+    /// The dispatch's bound, kept for [`ended_turn_stops_settled`] once `pending` is taken.
+    #[cfg_attr(
+        target_family = "wasm",
+        allow(dead_code, reason = "run exit waiting is unavailable in WASM builds")
+    )]
+    timeout: Duration,
+    /// Settles [`Self::done`] when dropped, which happens once the dispatch is over or the stop
+    /// is forgotten before it started.
+    finished: Option<oneshot::Sender<()>>,
+    #[cfg_attr(
+        target_family = "wasm",
+        allow(dead_code, reason = "run exit waiting is unavailable in WASM builds")
+    )]
+    done: Shared<BoxFuture<'static, ()>>,
 }
 
 /// How many follow-ups each stop binding has asked for since the user's last prompt.
@@ -80,6 +121,13 @@ impl FollowUpChain {
 #[derive(Default)]
 pub(crate) struct TurnStops {
     held: HashMap<AIConversationId, HeldTurn>,
+    /// The stops of turns that were cancelled or failed, waiting to start or running. A new turn
+    /// can end while an earlier one's hooks still run, so there can be several.
+    ended: HashMap<AIConversationId, Vec<EndedTurnStop>>,
+    /// How many exchanges each conversation had when its last stop started. A turn is told from
+    /// the next by that count, so a turn whose stop already ran fires no second one when its
+    /// status changes again.
+    stopped_at: HashMap<AIConversationId, usize>,
     chains: HashMap<AIConversationId, FollowUpChain>,
     /// Conversations whose stop hooks finished while a prompt's own hooks were still running.
     /// That prompt owns the status if it goes out; if it does not, the turn is still unfinished.
@@ -93,6 +141,10 @@ pub(crate) struct TurnStops {
 impl TurnStops {
     pub(super) fn forget(&mut self, conversation_id: AIConversationId) {
         self.cancel(conversation_id);
+        for stop in self.ended.remove(&conversation_id).unwrap_or_default() {
+            stop.cancel.store(true, Ordering::Release);
+        }
+        self.stopped_at.remove(&conversation_id);
         self.chains.remove(&conversation_id);
         self.deferred.remove(&conversation_id);
         self.awaiting_follow_up.remove(&conversation_id);
@@ -126,6 +178,12 @@ impl TurnStops {
         self.held.contains_key(&conversation_id)
     }
 
+    /// How many stops of ended turns are waiting to start or running for `conversation_id`.
+    #[cfg(test)]
+    pub(crate) fn ended_stop_count(&self, conversation_id: AIConversationId) -> usize {
+        self.ended.get(&conversation_id).map_or(0, Vec::len)
+    }
+
     #[cfg(test)]
     pub(crate) fn chain_total(&self, conversation_id: AIConversationId) -> u32 {
         self.chains
@@ -135,46 +193,60 @@ impl TurnStops {
 }
 
 /// Records a hold on `conversation_id`'s success when a `turn.stop` binding matches, and returns
-/// whether the turn is now held. Only a turn that completed is a stop event; a cancelled or
-/// failed turn is not.
+/// whether the turn is now held.
 pub(crate) fn hold_turn(
     conversation_id: AIConversationId,
     active_session: &ModelHandle<ActiveSession>,
     ctx: &mut AppContext,
 ) -> bool {
-    if !HookRuntime::is_active(ctx) || !owns_turn_lifecycle(conversation_id, ctx) {
-        return false;
-    }
-    let runtime = HookRuntime::handle(ctx);
-    let snapshot = runtime.as_ref(ctx).snapshot(ctx);
-    if !snapshot.has_bindings_for(HookBoundary::TurnStop) {
-        return false;
-    }
-    let continuation_count = runtime
-        .as_ref(ctx)
-        .turn_stops
-        .chains
-        .get(&conversation_id)
-        .map_or(0, |chain| chain.total);
-    let site = EnvelopeSite::new(conversation_id, active_session);
-    let envelope =
-        envelope_for_turn_stop(TurnStopStatus::Completed, continuation_count, &site, ctx);
-    let Some(timeout) = longest_matching_timeout(&snapshot, &envelope) else {
+    let Some(pending) = pending_stop_for(
+        conversation_id,
+        TurnStopStatus::Completed,
+        active_session,
+        ctx,
+    ) else {
         return false;
     };
     let exchange_count = exchange_count(conversation_id, ctx);
-    runtime.update(ctx, |runtime, _| {
+    HookRuntime::handle(ctx).update(ctx, |runtime, _| {
         runtime.turn_stops.cancel(conversation_id);
         runtime.turn_stops.held.insert(
             conversation_id,
             HeldTurn {
                 cancel: Arc::new(AtomicBool::new(false)),
-                pending: Some(PendingTurnStop { envelope, timeout }),
+                pending: Some(pending),
                 exchange_count,
             },
         );
     });
     true
+}
+
+/// The `turn.stop` envelope for `conversation_id` ending with `status`, and how long its hooks
+/// may take, when a binding would run for it.
+fn pending_stop_for(
+    conversation_id: AIConversationId,
+    status: TurnStopStatus,
+    active_session: &ModelHandle<ActiveSession>,
+    ctx: &AppContext,
+) -> Option<PendingTurnStop> {
+    if !HookRuntime::is_active(ctx) || !owns_turn_lifecycle(conversation_id, ctx) {
+        return None;
+    }
+    let runtime = HookRuntime::as_ref(ctx);
+    let snapshot = runtime.snapshot(ctx);
+    if !snapshot.has_bindings_for(HookBoundary::TurnStop) {
+        return None;
+    }
+    let continuation_count = runtime
+        .turn_stops
+        .chains
+        .get(&conversation_id)
+        .map_or(0, |chain| chain.total);
+    let site = EnvelopeSite::new(conversation_id, active_session);
+    let envelope = envelope_for_turn_stop(status, continuation_count, &site, ctx);
+    let timeout = longest_matching_timeout(&snapshot, &envelope)?;
+    Some(PendingTurnStop { envelope, timeout })
 }
 
 fn exchange_count(conversation_id: AIConversationId, ctx: &AppContext) -> usize {
@@ -200,31 +272,251 @@ pub(crate) fn start_turn_stop(
         return None;
     }
     HookRuntime::handle(ctx).update(ctx, |runtime, ctx| {
-        let snapshot = runtime.snapshot(ctx);
-        let is_headless = runtime.is_headless(ctx);
         let held = runtime.turn_stops.held.get_mut(&conversation_id)?;
-        let PendingTurnStop { envelope, timeout } = held.pending.take()?;
+        let pending = held.pending.take()?;
         let ticket = held.cancel.clone();
-        let dispatch =
-            runtime
-                .dispatcher()
-                .dispatch(envelope, snapshot, is_headless, ticket.clone());
+        let exchange_count = held.exchange_count;
+        runtime
+            .turn_stops
+            .stopped_at
+            .insert(conversation_id, exchange_count);
+        let dispatch = dispatch_within_timeout(runtime, conversation_id, pending, &ticket, ctx);
         let future: BoxFuture<'static, TurnStopOutcome> = Box::pin(async move {
-            let outcome = futures::select_biased! {
-                outcome = dispatch.fuse() => Some(outcome),
-                _ = Timer::after(timeout).fuse() => {
-                    log::warn!(
-                        "turn.stop hooks for {conversation_id} did not finish within \
-                         {timeout:?}; the turn is finished without them"
-                    );
-                    ticket.store(true, Ordering::Release);
-                    None
-                }
-            };
+            let outcome = dispatch.await;
             TurnStopOutcome { ticket, outcome }
         });
         Some(future)
     })
+}
+
+/// Runs `pending`'s hooks, for at most its timeout. On timeout the hooks are told to stop and
+/// the result is `None`.
+fn dispatch_within_timeout(
+    runtime: &HookRuntime,
+    conversation_id: AIConversationId,
+    PendingTurnStop { envelope, timeout }: PendingTurnStop,
+    ticket: &Arc<AtomicBool>,
+    ctx: &AppContext,
+) -> BoxFuture<'static, Option<DispatchOutcome>> {
+    let dispatch = runtime.dispatcher().dispatch(
+        envelope,
+        runtime.snapshot(ctx),
+        runtime.is_headless(ctx),
+        ticket.clone(),
+    );
+    let ticket = ticket.clone();
+    Box::pin(async move {
+        futures::select_biased! {
+            outcome = dispatch.fuse() => Some(outcome),
+            _ = Timer::after(timeout).fuse() => {
+                log::warn!(
+                    "turn.stop hooks for {conversation_id} did not finish within {timeout:?}; \
+                     the turn is finished without them"
+                );
+                ticket.store(true, Ordering::Release);
+                None
+            }
+        }
+    })
+}
+
+/// The `turn.stop` status a conversation status change reports, when the change ends a turn
+/// without completing it: a turn that was under way, in whatever form, and is now cancelled or
+/// failed.
+fn ended_turn_status(
+    prev_status: &ConversationStatus,
+    new_status: &ConversationStatus,
+) -> Option<TurnStopStatus> {
+    if prev_status.is_done() {
+        return None;
+    }
+    match new_status {
+        ConversationStatus::Cancelled => Some(TurnStopStatus::Cancelled),
+        ConversationStatus::Error => Some(TurnStopStatus::Error),
+        ConversationStatus::InProgress
+        | ConversationStatus::Success
+        | ConversationStatus::TransientError
+        | ConversationStatus::Blocked { .. }
+        | ConversationStatus::WaitingForEvents => None,
+    }
+}
+
+/// Records the `turn.stop` of a turn that a status change from `prev_status` to `new_status`
+/// ended without completing, when a binding matches, and returns whether one is now waiting to
+/// start. A turn whose stop already started (its completed stop ran, and then it was cancelled
+/// or failed under those hooks) fires no second one.
+pub(crate) fn hold_ended_turn(
+    conversation_id: AIConversationId,
+    prev_status: &ConversationStatus,
+    new_status: &ConversationStatus,
+    active_session: &ModelHandle<ActiveSession>,
+    ctx: &mut AppContext,
+) -> bool {
+    let Some(status) = ended_turn_status(prev_status, new_status) else {
+        return false;
+    };
+    let Some(pending) = pending_stop_for(conversation_id, status, active_session, ctx) else {
+        return false;
+    };
+    let exchange_count = exchange_count(conversation_id, ctx);
+    HookRuntime::handle(ctx).update(ctx, |runtime, _| {
+        if runtime.turn_stops.stopped_at.get(&conversation_id) == Some(&exchange_count) {
+            log::info!(
+                "turn.stop for {conversation_id} ending as {status:?} is not fired: the turn's \
+                 stop already ran"
+            );
+            return false;
+        }
+        runtime
+            .turn_stops
+            .stopped_at
+            .insert(conversation_id, exchange_count);
+        let (finished, done) = oneshot::channel();
+        let done: BoxFuture<'static, ()> = Box::pin(async move {
+            let _ = done.await;
+        });
+        let timeout = pending.timeout;
+        runtime
+            .turn_stops
+            .ended
+            .entry(conversation_id)
+            .or_default()
+            .push(EndedTurnStop {
+                cancel: Arc::new(AtomicBool::new(false)),
+                pending: Some(pending),
+                timeout,
+                finished: Some(finished),
+                done: done.shared(),
+            });
+        true
+    })
+}
+
+/// What an ended turn's stop hooks produced, tied to the stop they ran for.
+pub(crate) struct EndedTurnStopOutcome {
+    ticket: Arc<AtomicBool>,
+    /// `None` when the hooks did not finish within their timeout.
+    outcome: Option<DispatchOutcome>,
+    /// Settles the stop's `done` when dropped, after [`finish_ended_turn_stop`] has let go of
+    /// the stop.
+    _finished: Option<oneshot::Sender<()>>,
+}
+
+/// Starts the `turn.stop` dispatches of `conversation_id`'s ended turns that are waiting to
+/// start, each bounded by the longest matching binding timeout.
+pub(crate) fn start_ended_turn_stops(
+    conversation_id: AIConversationId,
+    ctx: &mut AppContext,
+) -> Vec<BoxFuture<'static, EndedTurnStopOutcome>> {
+    if !HookRuntime::is_installed(ctx) {
+        return Vec::new();
+    }
+    HookRuntime::handle(ctx).update(ctx, |runtime, ctx| {
+        let Some(stops) = runtime.turn_stops.ended.get_mut(&conversation_id) else {
+            return Vec::new();
+        };
+        let mut started = Vec::new();
+        for stop in stops.iter_mut() {
+            let Some(pending) = stop.pending.take() else {
+                continue;
+            };
+            started.push((pending, stop.cancel.clone(), stop.finished.take()));
+        }
+        started
+            .into_iter()
+            .map(|(pending, ticket, finished)| {
+                let dispatch =
+                    dispatch_within_timeout(runtime, conversation_id, pending, &ticket, ctx);
+                let future: BoxFuture<'static, EndedTurnStopOutcome> = Box::pin(async move {
+                    let outcome = dispatch.await;
+                    EndedTurnStopOutcome {
+                        ticket,
+                        outcome,
+                        _finished: finished,
+                    }
+                });
+                future
+            })
+            .collect()
+    })
+}
+
+/// Lets go of an ended turn's stop once its hooks have finished, reporting what they asked for
+/// that a stop after a turn that did not complete cannot do.
+pub(crate) fn finish_ended_turn_stop(
+    conversation_id: AIConversationId,
+    EndedTurnStopOutcome {
+        ticket, outcome, ..
+    }: EndedTurnStopOutcome,
+    ctx: &mut AppContext,
+) {
+    if !HookRuntime::is_installed(ctx) {
+        return;
+    }
+    HookRuntime::handle(ctx).update(ctx, |runtime, _| {
+        if let Some(stops) = runtime.turn_stops.ended.get_mut(&conversation_id) {
+            stops.retain(|stop| !Arc::ptr_eq(&stop.cancel, &ticket));
+            if stops.is_empty() {
+                runtime.turn_stops.ended.remove(&conversation_id);
+            }
+        }
+    });
+    let Some(outcome) = outcome.filter(|outcome| !outcome.cancelled) else {
+        return;
+    };
+    let messenger = HookRuntime::as_ref(ctx).messenger();
+    report_effects_a_stop_cannot_have(conversation_id, &outcome.effects, &*messenger);
+    if let Some(binding) = &outcome.effects.continuation_binding {
+        log::info!(
+            "turn.stop hook {binding} asked for a follow-up after a turn that did not complete, \
+             which means nothing"
+        );
+        messenger.diagnostic(HookDiagnostic {
+            source: binding.source.clone(),
+            severity: DiagnosticSeverity::Warning,
+            message: format!(
+                "{binding} asked for a follow-up after a turn that was cancelled or failed; a \
+                 follow-up is sent only after a turn that completed, so it was ignored"
+            ),
+        });
+    }
+}
+
+/// A future that settles once every stop of an ended turn of `conversation_id` that is waiting
+/// to start or running has finished, or `None` when there is none. The wait is bounded by the
+/// stops' timeouts plus [`ENDED_TURN_STOP_EXIT_GRACE`], so a run exit that waits on it cannot
+/// hang on a stop that never starts.
+#[cfg_attr(
+    target_family = "wasm",
+    allow(dead_code, reason = "Oz runs are unavailable in WASM builds")
+)]
+pub(crate) fn ended_turn_stops_settled(
+    conversation_id: AIConversationId,
+    ctx: &AppContext,
+) -> Option<BoxFuture<'static, ()>> {
+    if !HookRuntime::is_installed(ctx) {
+        return None;
+    }
+    let stops = HookRuntime::as_ref(ctx)
+        .turn_stops
+        .ended
+        .get(&conversation_id)?;
+    let bound = stops.iter().map(|stop| stop.timeout).max()? + ENDED_TURN_STOP_EXIT_GRACE;
+    let done = stops
+        .iter()
+        .map(|stop| stop.done.clone())
+        .collect::<Vec<_>>();
+    Some(Box::pin(async move {
+        futures::select_biased! {
+            _ = futures::future::join_all(done).fuse() => {}
+            _ = Timer::after(bound).fuse() => {
+                log::warn!(
+                    "the turn.stop hooks of {conversation_id}'s last turn did not finish within \
+                     {bound:?}; the run goes on without waiting for them"
+                );
+            }
+        }
+    }))
 }
 
 /// The next step once a held turn's `turn.stop` hooks have finished.
@@ -347,6 +639,32 @@ pub(crate) fn warn_if_follow_up_still_queued(conversation_id: AIConversationId, 
     }
 }
 
+/// Reports a verdict or a `halt_turn` from a stop hook, which no stop can act on.
+fn report_effects_a_stop_cannot_have(
+    conversation_id: AIConversationId,
+    effects: &MergedEffects,
+    messenger: &dyn HookMessenger,
+) {
+    if !effects.halt_turn && effects.verdict == HookVerdict::NoOpinion {
+        return;
+    }
+    let what = if effects.halt_turn {
+        "asked to stop the turn"
+    } else {
+        "gave a permission verdict"
+    };
+    log::info!("a turn.stop hook for {conversation_id} {what}, which means nothing on stop");
+    if let Some(binding) = &effects.verdict_binding {
+        messenger.diagnostic(HookDiagnostic {
+            source: binding.source.clone(),
+            severity: DiagnosticSeverity::Warning,
+            message: format!(
+                "{binding} {what}; a stop hook can only ask for a follow-up, so it was ignored"
+            ),
+        });
+    }
+}
+
 /// The follow-up prompt the stop hooks asked for, if the chain's limits allow one more. Effects
 /// a stop hook cannot have are reported and ignored.
 fn follow_up_for(
@@ -355,31 +673,12 @@ fn follow_up_for(
     ctx: &mut AppContext,
 ) -> Option<QueuedQuery> {
     let messenger = HookRuntime::as_ref(ctx).messenger();
+    report_effects_a_stop_cannot_have(conversation_id, &effects, &*messenger);
     let MergedEffects {
-        verdict,
-        verdict_binding,
-        halt_turn,
         continuation,
         continuation_binding,
         ..
     } = effects;
-    if halt_turn || verdict != HookVerdict::NoOpinion {
-        let what = if halt_turn {
-            "asked to stop the turn"
-        } else {
-            "gave a permission verdict"
-        };
-        log::info!("a turn.stop hook for {conversation_id} {what}, which means nothing on stop");
-        if let Some(binding) = verdict_binding {
-            messenger.diagnostic(HookDiagnostic {
-                source: binding.source.clone(),
-                severity: DiagnosticSeverity::Warning,
-                message: format!(
-                    "{binding} {what}; a stop hook can only ask for a follow-up, so it was ignored"
-                ),
-            });
-        }
-    }
     let (request, binding) = continuation.zip(continuation_binding)?;
     let allowed = HookRuntime::handle(ctx).update(ctx, |runtime, _| {
         let chain = runtime.turn_stops.chain_mut(conversation_id);
