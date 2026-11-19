@@ -4371,7 +4371,7 @@ impl AgentDriver {
 
                 }
 
-                BlocklistAIHistoryEvent::UpdatedConversationStatus { terminal_surface_id: conversation_terminal_id, conversation_id, .. } => {
+                BlocklistAIHistoryEvent::UpdatedConversationStatus { terminal_surface_id: conversation_terminal_id, conversation_id, update, new_status } => {
                     if *conversation_terminal_id != terminal_id {
                         return;
                     }
@@ -4438,7 +4438,21 @@ impl AgentDriver {
 
                     // A turn that was cancelled or failed fires its stop hooks after its status
                     // is set; the run ends once they are done, so a hook that records every
-                    // turn's end sees the last one.
+                    // turn's end sees the last one. The controller records the stop from this
+                    // same event, but which of the two sees the event first is not fixed, so it
+                    // is recorded here as well before asking whether there is one to wait for.
+                    if let ConversationStatusUpdate::Changed { prev_status } = update {
+                        let controller = me
+                            .terminal_driver
+                            .as_ref(ctx)
+                            .terminal_view()
+                            .as_ref(ctx)
+                            .ai_controller()
+                            .clone();
+                        controller.update(ctx, |controller, ctx| {
+                            controller.stop_ended_turn(*conversation_id, prev_status, new_status, ctx);
+                        });
+                    }
                     if let Some(stops_settled) = ended_turn_stops_settled(*conversation_id, ctx) {
                         log::info!(
                             "Ambient agent idle lifecycle: event=run_exit_deferred task_id={:?} terminal_view_id={terminal_id:?} reason=turn_stop_hooks",

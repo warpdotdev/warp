@@ -1212,8 +1212,10 @@ impl BlocklistAIController {
 
     /// Runs the stop hooks of a turn that a status change ended as cancelled or failed, once the
     /// stream that ended it is out of the way. Nothing here waits for their answer; an Oz run
-    /// about to exit on that status does.
-    fn stop_ended_turn(
+    /// about to exit on that status does, and calls this itself first, since it may see the
+    /// status change before this controller does. A turn fires at most one stop, so the second
+    /// call for the same change does nothing.
+    pub(crate) fn stop_ended_turn(
         &mut self,
         conversation_id: AIConversationId,
         prev_status: &ConversationStatus,

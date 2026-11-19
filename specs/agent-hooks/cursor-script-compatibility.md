@@ -158,7 +158,9 @@ It is not Cursor's result shape. Binary file content is summarized as `is_binary
   cancelled.
 - `afterAgentThought.text` is the model's full reasoning text as the server sends it (some
   providers send a summary). `afterAgentResponse` is decided on the client: a text message counts
-  as finished when the next message starts or the stream ends.
+  as finished when the next message starts or the stream ends. A cloud run's final answer is one
+  such message and arrives whole: the server's own finish call that carries it is not counted
+  as the next message.
 
 ## Environment variables
 
