@@ -1318,22 +1318,17 @@ impl Session {
                         ExecuteCommandOptions::default(),
                     )
                     .await;
-                HashSet::from_iter(
-                    ShellType::PowerShell
-                        .executables_from_shell_command_output(
-                            windows_results,
-                            false, /* is_msys2 */
-                        )
-                        .into_iter(),
-                )
+                HashSet::from_iter(ShellType::PowerShell.executables_from_shell_command_output(
+                    windows_results,
+                    false, /* is_msys2 */
+                ))
             } else {
                 HashSet::new()
             };
             new_commands.extend(
                 shell
                     .shell_type()
-                    .executables_from_shell_command_output(result, is_msys2)
-                    .into_iter(),
+                    .executables_from_shell_command_output(result, is_msys2),
             );
             if self.external_commands.set(new_commands).is_err() {
                 log::warn!("External commands should only be loaded once per session.");

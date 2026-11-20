@@ -310,13 +310,12 @@ impl SuggestionChipView {
             | CloudModelEvent::ObjectDeleted {
                 type_and_id: CloudObjectTypeAndId::GenericStringObject { id, .. },
                 ..
-            } => {
+            }
                 // If the rule or workflow has been deleted, then we should reset it such that
                 // the suggestion can be added again.
-                if self.sync_id == *id {
+                if self.sync_id == *id => {
                     self.reset_suggestion(ctx);
                 }
-            }
             _ => {}
         }
     }

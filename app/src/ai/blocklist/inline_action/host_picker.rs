@@ -327,10 +327,8 @@ impl HostPicker {
         match event {
             EditorEvent::Enter => self.commit_custom(ctx),
             EditorEvent::Escape => self.cancel_custom(ctx),
-            EditorEvent::Blurred => {
-                if self.is_custom_mode {
-                    self.commit_custom(ctx);
-                }
+            EditorEvent::Blurred if self.is_custom_mode => {
+                self.commit_custom(ctx);
             }
             _ => {}
         }

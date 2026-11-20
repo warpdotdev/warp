@@ -371,8 +371,8 @@ impl FileTreeView {
             // workspace via `set_remote_root_directories`.
             let existing_remote_ids: Vec<_> = self
                 .root_directories
-                .iter()
-                .filter_map(|(_, root_dir)| {
+                .values()
+                .filter_map(|root_dir| {
                     let host_id = root_dir.remote_host_id.as_ref()?;
                     Some(repo_metadata::RemoteRepositoryIdentifier::new(
                         host_id.clone(),

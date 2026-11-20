@@ -751,7 +751,7 @@ fn available_indexed_repos(app: &AppContext) -> Vec<RepoEntry> {
             })
             .collect();
 
-        repos.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        repos.sort_by_key(|a| a.name.to_lowercase());
         repos
     }
 

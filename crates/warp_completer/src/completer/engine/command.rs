@@ -56,8 +56,7 @@ pub async fn complete(
             .into_iter()
             .chain(
                 sorted_directories_relative_to(parsed_token, matcher, path_completion_context)
-                    .await
-                    .into_iter(),
+                    .await,
             )
             .collect();
     }

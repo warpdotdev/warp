@@ -783,18 +783,14 @@ impl TuiElement for TuiEditorElement {
                 && self.cursor_col < size.width
                 && self.cursor_row_in_view < size.height
             {
-                let mut col = self.cursor_col.saturating_add(cursor_gap);
-                for char in text.chars() {
-                    if col >= size.width {
-                        break;
-                    }
+                let start_col = self.cursor_col.saturating_add(cursor_gap);
+                for (char, col) in text.chars().zip(start_col..size.width) {
                     let position =
                         origin.offset(i32::from(col), i32::from(self.cursor_row_in_view));
                     if let Some(cell) = surface.cell_mut(position) {
                         cell.set_char(char);
                         cell.set_style(style);
                     }
-                    col += 1;
                 }
             }
         }

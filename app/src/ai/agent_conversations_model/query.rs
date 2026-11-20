@@ -1,3 +1,5 @@
+use std::cmp::Reverse;
+
 use fuzzy_match::match_indices_case_insensitive;
 
 use super::{AgentConversationEntry, AgentConversationQueryResult};
@@ -13,7 +15,7 @@ pub fn query_conversation_entries(
 ) -> Vec<AgentConversationQueryResult> {
     let query = query.trim().to_lowercase();
     if query.is_empty() {
-        entries.sort_by(|a, b| b.display.last_updated.cmp(&a.display.last_updated));
+        entries.sort_by_key(|a| Reverse(a.display.last_updated));
         entries.truncate(DEFAULT_RESULT_COUNT);
         entries.reverse();
         return entries

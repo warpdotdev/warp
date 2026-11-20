@@ -650,10 +650,8 @@ impl CustomEndpointModal {
             EditorEvent::Escape => {
                 self.cancel(ctx);
             }
-            EditorEvent::Edited(_) => {
-                if !self.validate_url_field(ctx) {
-                    ctx.notify();
-                }
+            EditorEvent::Edited(_) if !self.validate_url_field(ctx) => {
+                ctx.notify();
             }
             _ => {}
         }

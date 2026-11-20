@@ -1975,9 +1975,9 @@ impl BlockListElement {
         ctx: &mut EventContext,
         app: &AppContext,
     ) -> bool {
-        if self.is_terminal_selecting && self.bounds.is_some() {
-            let bounds = self.bounds.unwrap();
-
+        if self.is_terminal_selecting
+            && let Some(bounds) = self.bounds
+        {
             let snackbar_height = self
                 .snackbar_header_state()
                 .header_rect()
@@ -4703,21 +4703,17 @@ impl Element for BlockListElement {
                 selected_range,
             } => self.set_marked_text(marked_text, selected_range, ctx),
             Event::ClearMarkedText => self.clear_marked_text(ctx),
-            Event::ModifierKeyChanged { key_code, state } => {
-                if self.is_terminal_focused {
-                    let is_press = matches!(state, KeyState::Pressed);
-                    if let Some(escape_sequence) = maybe_kitty_keyboard_escape_sequence(
-                        self.model.lock().deref(),
-                        key_code,
-                        is_press,
-                    ) {
-                        ctx.dispatch_typed_action(TerminalAction::ControlSequence(escape_sequence));
-                        return true;
-                    }
-                    self.maybe_handle_voice_toggle(key_code, state, ctx)
-                } else {
-                    false
+            Event::ModifierKeyChanged { key_code, state } if self.is_terminal_focused => {
+                let is_press = matches!(state, KeyState::Pressed);
+                if let Some(escape_sequence) = maybe_kitty_keyboard_escape_sequence(
+                    self.model.lock().deref(),
+                    key_code,
+                    is_press,
+                ) {
+                    ctx.dispatch_typed_action(TerminalAction::ControlSequence(escape_sequence));
+                    return true;
                 }
+                self.maybe_handle_voice_toggle(key_code, state, ctx)
             }
             _ => false,
         };

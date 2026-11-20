@@ -2,6 +2,7 @@
 pub mod entry;
 mod query;
 
+use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
@@ -2162,7 +2163,7 @@ impl AgentConversationsModel {
                     .is_some_and(|creator| creator.uid == current_user_uid)
             })
             .collect::<Vec<_>>();
-        personal_tasks.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        personal_tasks.sort_by_key(|a| Reverse(a.updated_at));
         retained_task_ids.extend(
             personal_tasks
                 .into_iter()
@@ -2185,10 +2186,10 @@ impl AgentConversationsModel {
         }
 
         for tasks in team_tasks.values_mut() {
-            tasks.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+            tasks.sort_by_key(|a| Reverse(a.updated_at));
             retained_task_ids.extend(tasks.iter().take(MAX_TEAM_TASKS).map(|task| task.task_id));
         }
-        unscoped_shared_tasks.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        unscoped_shared_tasks.sort_by_key(|a| Reverse(a.updated_at));
         retained_task_ids.extend(
             unscoped_shared_tasks
                 .into_iter()

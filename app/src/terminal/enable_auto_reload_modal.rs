@@ -115,8 +115,8 @@ impl EnableAutoReloadModalBody {
                             ctx.emit(EnableAutoReloadModalBodyEvent::Close);
                         }
                     }
-                    UserWorkspacesEvent::UpdateWorkspaceSettingsRejected(_err) => {
-                        if me.update_workspace_settings_loading {
+                    UserWorkspacesEvent::UpdateWorkspaceSettingsRejected(_err)
+                        if me.update_workspace_settings_loading => {
                             me.update_workspace_settings_loading = false;
                             ctx.emit(EnableAutoReloadModalBodyEvent::ShowToast {
                                 message: "Failed to enable auto-reload. Please try updating your settings in Billing & usage.".to_string(),
@@ -124,7 +124,6 @@ impl EnableAutoReloadModalBody {
                             });
                             ctx.notify();
                         }
-                    }
                     _ => {}
                 }
             },

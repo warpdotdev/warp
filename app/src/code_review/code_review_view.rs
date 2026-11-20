@@ -5693,28 +5693,25 @@ impl CodeReviewView {
                     ctx
                 );
             }
-            CodeEditorEvent::ContentChanged { origin, .. } => {
-                if origin.from_user() {
-                    if let Some((view_handle, content_version)) = self.last_revert.take() {
-                        let same_content_version =
-                            content_version == editor.as_ref(ctx).version(ctx);
+            CodeEditorEvent::ContentChanged { origin, .. } if origin.from_user() => {
+                if let Some((view_handle, content_version)) = self.last_revert.take() {
+                    let same_content_version = content_version == editor.as_ref(ctx).version(ctx);
 
-                        // If the revert was for a different editor or the content version is the same, keep the revert.
-                        if view_handle.id() != editor.id() || same_content_version {
-                            self.last_revert = Some((view_handle, content_version));
-                        } else {
-                            self.last_revert = None;
-                            self.dismiss_revert_toast(ctx);
-                        }
+                    // If the revert was for a different editor or the content version is the same, keep the revert.
+                    if view_handle.id() != editor.id() || same_content_version {
+                        self.last_revert = Some((view_handle, content_version));
+                    } else {
+                        self.last_revert = None;
+                        self.dismiss_revert_toast(ctx);
                     }
+                }
 
-                    if self.find_model.as_ref(ctx).is_find_bar_open()
-                        && FeatureFlag::CodeReviewFind.is_enabled()
-                    {
-                        self.find_model.update(ctx, |model, model_ctx| {
-                            model.run_search(self.editor_handles(), model_ctx);
-                        });
-                    }
+                if self.find_model.as_ref(ctx).is_find_bar_open()
+                    && FeatureFlag::CodeReviewFind.is_enabled()
+                {
+                    self.find_model.update(ctx, |model, model_ctx| {
+                        model.run_search(self.editor_handles(), model_ctx);
+                    });
                 }
             }
             _ => {}

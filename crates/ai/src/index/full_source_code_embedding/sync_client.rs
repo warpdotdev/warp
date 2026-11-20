@@ -273,7 +273,7 @@ impl<'a> CodebaseIndexSyncOperation<'a> {
             }
 
             let fragment_metadata_clone = fragment_metadatas.clone();
-            let res = build_fragments_from_metadata(fragment_metadata_clone.into_iter()).await;
+            let res = build_fragments_from_metadata(fragment_metadata_clone).await;
 
             if !res.fail_to_read.is_empty() {
                 let failed_node_count = res.fail_to_read.len();

@@ -522,9 +522,9 @@ impl BaseClient {
             return stream;
         }
         let event_sender = self.event_sender();
-        let wrapped = stream.map(move |event| {
-            if let Err(reqwest_eventsource::Error::InvalidStatusCode(status, ref response)) = event
-                && http_client::iap::is_iap_challenge(status, response.headers())
+        let wrapped = stream.inspect(move |event| {
+            if let Err(reqwest_eventsource::Error::InvalidStatusCode(status, response)) = event
+                && http_client::iap::is_iap_challenge(*status, response.headers())
             {
                 log::warn!(
                     "Received IAP challenge on eventsource (status {status}); notifying IapManager"
@@ -535,7 +535,6 @@ impl BaseClient {
                     );
                 }
             }
-            event
         });
         cfg_if::cfg_if! {
             if #[cfg(target_family = "wasm")] {

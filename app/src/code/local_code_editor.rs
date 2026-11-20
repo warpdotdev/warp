@@ -2,13 +2,12 @@
 /// and displaying them in a code editor.
 /// It also handles applying an optional diff to the file content that will be applied
 /// when the file is loaded.
-use std::{
-    ops::Range,
-    path::{Path, PathBuf},
-    rc::Rc,
-    sync::Arc,
-    time::Duration,
-};
+use std::cmp::Reverse;
+use std::ops::Range;
+use std::path::{Path, PathBuf};
+use std::rc::Rc;
+use std::sync::Arc;
+use std::time::Duration;
 
 use ai::diff_validation::DiffType;
 use futures::stream::AbortHandle;
@@ -1121,7 +1120,7 @@ impl LocalCodeEditorView {
                         }
 
                         // Sort edits by start position in reverse order to avoid offset shifting issues
-                        edits.sort_by(|a, b| b.1.start.cmp(&a.1.start));
+                        edits.sort_by_key(|a| Reverse(a.1.start));
 
                         if let Ok(edits) = Vec1::try_from_vec(edits) {
                             editor.apply_edits(edits, ctx);

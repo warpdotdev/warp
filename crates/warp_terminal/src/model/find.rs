@@ -94,10 +94,7 @@ impl GridHandler {
         // triggers a match for the last point.
         let mut last_point = None;
 
-        'outer: loop {
-            let Some(cursor_item) = cursor.current_item() else {
-                break;
-            };
+        'outer: while let Some(cursor_item) = cursor.current_item() {
             let c = cursor_item.content_char();
             let current_point = cursor_item.point();
 

@@ -398,17 +398,18 @@ impl DrivePanel {
                                 return;
                             }
                         }
-                        CloudObjectTypeAndId::Workflow(_) => {
-                            if !UserWorkspaces::has_capacity_for_shared_workflows(team_uid, ctx, 1)
-                            {
-                                // If team has reached the limit for workflows, show the modal
-                                // and return early.
-                                ctx.emit(DrivePanelEvent::OpenSharedObjectsCreationDeniedModal(
-                                    DriveObjectType::Workflow,
-                                    team_uid,
-                                ));
-                                return;
-                            }
+                        CloudObjectTypeAndId::Workflow(_)
+                            if !UserWorkspaces::has_capacity_for_shared_workflows(
+                                team_uid, ctx, 1,
+                            ) =>
+                        {
+                            // If team has reached the limit for workflows, show the modal
+                            // and return early.
+                            ctx.emit(DrivePanelEvent::OpenSharedObjectsCreationDeniedModal(
+                                DriveObjectType::Workflow,
+                                team_uid,
+                            ));
+                            return;
                         }
                         _ => (),
                     }
@@ -428,10 +429,8 @@ impl DrivePanel {
                         object_type:
                             GenericStringObjectFormat::Json(JsonObjectType::EnvVarCollection),
                         id: _,
-                    } => {
-                        if has_feature_gated_anonymous_user_reached_env_var_limit(ctx) {
-                            return;
-                        }
+                    } if has_feature_gated_anonymous_user_reached_env_var_limit(ctx) => {
+                        return;
                     }
                     _ => {}
                 },

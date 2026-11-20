@@ -1,3 +1,4 @@
+use std::cmp::Reverse;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -474,7 +475,7 @@ impl ShowBlocksView {
     ) {
         match result {
             Ok(mut blocks) => {
-                blocks.sort_by(|b1, b2| b2.time_started.cmp(&b1.time_started));
+                blocks.sort_by_key(|b1| Reverse(b1.time_started));
 
                 self.get_blocks_for_user_status = GetBlocksForUserRequestState::Done(blocks)
             }

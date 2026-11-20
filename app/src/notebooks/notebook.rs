@@ -767,11 +767,11 @@ impl NotebookView {
                         .update(ctx, |editor, ctx| editor.set_space(space, ctx));
                 }
             }
-            CloudModelEvent::ObjectCreated { type_and_id, .. } => {
-                if self.as_active_notebook_id(type_and_id, ctx).is_some() {
-                    // Re-render to update the status bar.
-                    ctx.notify();
-                }
+            CloudModelEvent::ObjectCreated { type_and_id, .. }
+                if self.as_active_notebook_id(type_and_id, ctx).is_some() =>
+            {
+                // Re-render to update the status bar.
+                ctx.notify();
             }
             _ => (),
         }
