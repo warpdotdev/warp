@@ -564,6 +564,8 @@ inherits = "dev"
 opt-level = "s"
 
 [patch.crates-io]
+# candle-core 0.11.1 calls __cpuid_count from a safe fn (repack_x86.rs); rustc 1.92 rejects it.
+candle-core = { path = "third_party/candle-core" }
 # Pinned to the merge commit of servo/core-foundation-rs#746, which fixes a
 # double-retain bug in `CTFontCollection::get_descriptors` that leaks the
 # CoreText font-descriptor NSArray on every call. The fix is not yet in any
