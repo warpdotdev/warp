@@ -18,6 +18,17 @@ type Handler = Box<dyn FnMut(&mut EventContext, &AppContext, Vector2F) -> Dispat
 type HandlerWithModifiers = Box<
     dyn FnMut(&mut EventContext, &AppContext, Vector2F, &ModifiersState) -> DispatchEventResult,
 >;
+/// Receives the scroll delta, whether it is precise (trackpad) rather than line-based (mouse wheel),
+/// and the modifiers.
+type ScrollWheelHandler = Box<
+    dyn FnMut(
+        &mut EventContext,
+        &AppContext,
+        Vector2F,
+        bool,
+        &ModifiersState,
+    ) -> DispatchEventResult,
+>;
 type KeyHandler = Box<dyn FnMut(&mut EventContext, &AppContext, &Keystroke) -> DispatchEventResult>;
 type ModifierStateChangedHandler =
     Box<dyn FnMut(&mut EventContext, &AppContext, &KeyCode, &KeyState) -> DispatchEventResult>;
@@ -57,7 +68,7 @@ pub struct EventHandler {
     mouse_in_behavior: MouseInBehavior,
     mouse_out: Option<RefCell<Handler>>,
     mouse_dragged: Option<RefCell<Handler>>,
-    scroll_wheel: Option<RefCell<HandlerWithModifiers>>,
+    scroll_wheel: Option<RefCell<ScrollWheelHandler>>,
     keydown: Option<RefCell<KeyHandler>>,
     modifier_state_changed: Option<RefCell<ModifierStateChangedHandler>>,
     origin: Option<Point>,
@@ -192,7 +203,13 @@ impl EventHandler {
     pub fn on_scroll_wheel<F>(mut self, callback: F) -> Self
     where
         F: 'static
-            + FnMut(&mut EventContext, &AppContext, Vector2F, &ModifiersState) -> DispatchEventResult,
+            + FnMut(
+                &mut EventContext,
+                &AppContext,
+                Vector2F,
+                bool,
+                &ModifiersState,
+            ) -> DispatchEventResult,
     {
         self.scroll_wheel = Some(RefCell::new(Box::new(callback)));
         self
@@ -361,17 +378,18 @@ impl Element for EventHandler {
             Some(Event::ScrollWheel {
                 position,
                 delta,
-                precise: _,
+                precise,
                 modifiers,
             }) => {
                 if let Some(callback) = self.scroll_wheel.as_ref()
                     && let Some(rect) = ctx.visible_rect(self.origin.unwrap(), self.size().unwrap())
                     && rect.contains_point(*position)
+                    && matches!(
+                        callback.borrow_mut()(ctx, app, *delta, *precise, modifiers),
+                        DispatchEventResult::StopPropagation
+                    )
                 {
-                    return match callback.borrow_mut()(ctx, app, *delta, modifiers) {
-                        DispatchEventResult::PropagateToParent => false,
-                        DispatchEventResult::StopPropagation => true,
-                    };
+                    return true;
                 }
             }
             _ => {}

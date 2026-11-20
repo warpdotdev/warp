@@ -1739,6 +1739,20 @@ fn render_vertical_tabs_panel(
         panel_content
     };
 
+    // Observes scrolls over the whole panel for space swipes. `with_always_handle` because the tab
+    // list's scrollable consumes them first, and it keeps scrolling the list.
+    let panel_content = if FeatureFlag::Spaces.is_enabled() {
+        EventHandler::new(panel_content)
+            .with_always_handle()
+            .on_scroll_wheel(|ctx, _, delta, precise, _| {
+                ctx.dispatch_typed_action(WorkspaceAction::SwipeSpaces { delta, precise });
+                DispatchEventResult::PropagateToParent
+            })
+            .finish()
+    } else {
+        panel_content
+    };
+
     // The settings popup is rendered at the workspace level (with Dismiss for click-outside-
     // to-close). Rendering it here again shares MouseStateHandle instances across two Hoverable
     // trees; click_count.take() is consumed by this copy first, leaving the workspace copy

@@ -3925,7 +3925,7 @@ pub(crate) fn render_scrollable_collapsible_content(
     let message_id_clone = message_id.clone();
     Some(
         EventHandler::new(clipped_scrollable)
-            .on_scroll_wheel(move |ctx, _app, _, _| {
+            .on_scroll_wheel(move |ctx, _app, _, _, _| {
                 ctx.dispatch_typed_action(AIBlockAction::SetCollapsibleBlockPinnedToBottom {
                     message_id: message_id_clone.clone(),
                     pinned_to_bottom: false,

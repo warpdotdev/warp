@@ -1,4 +1,8 @@
+use std::time::Duration;
+
+use instant::Instant;
 use warp_core::features::FeatureFlag;
+use warpui::geometry::vector::vec2f;
 use warpui::{App, AppContext, EntityId, SingletonEntity as _, TypedActionView as _, ViewContext};
 
 use crate::appearance::Appearance;
@@ -8,6 +12,7 @@ use crate::tab::{SelectedTabColor, TabData};
 use crate::ui_components::color_dot::TAB_COLOR_OPTIONS;
 use crate::workspace::WorkspaceAction;
 use crate::workspace::space::SpaceId;
+use crate::workspace::swipe_detector::IDLE_GAP;
 use crate::workspace::tab_group::{TabGroup, TabGroupId};
 use crate::workspace::util::PaneViewLocator;
 use crate::workspace::view::Workspace;
@@ -1097,6 +1102,132 @@ fn test_tab_dropped_into_another_window_joins_its_active_space() {
         source.update(&mut app, |workspace, ctx| {
             workspace.remove_tab_without_undo(1, ctx);
             assert_eq!(workspace.tab_count(), 1);
+        });
+    });
+}
+
+/// Feeds a horizontal two-finger swipe (`dx` per 16 ms frame) starting at `start`, and returns
+/// the time of its last frame.
+fn swipe_spaces(
+    workspace: &mut Workspace,
+    start: Instant,
+    dx: f32,
+    frames: u32,
+    ctx: &mut ViewContext<Workspace>,
+) -> Instant {
+    let mut now = start;
+    for frame in 0..frames {
+        now = start + Duration::from_millis(16 * u64::from(frame));
+        workspace.handle_space_swipe(vec2f(dx, 0.), true, now, ctx);
+    }
+    now
+}
+
+#[test]
+fn test_swipe_switches_to_adjacent_space_once_per_gesture() {
+    let _spaces_guard = FeatureFlag::Spaces.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.handle_action(&WorkspaceAction::NewSpace, ctx);
+            workspace.handle_action(&WorkspaceAction::NewSpace, ctx);
+            workspace.handle_action(&WorkspaceAction::SwitchToSpace(1), ctx);
+            let spaces = workspace
+                .spaces
+                .iter()
+                .map(|space| space.id)
+                .collect::<Vec<_>>();
+
+            // Fingers moving left: next space. The long gesture, momentum tail included, switches
+            // once, so it stops at the second space, not the third.
+            let end = swipe_spaces(workspace, Instant::now(), -10., 40, ctx);
+            assert_eq!(workspace.active_space, spaces[1]);
+
+            // After a pause, fingers moving right: previous space.
+            let end = swipe_spaces(workspace, end + IDLE_GAP, 10., 12, ctx);
+            assert_eq!(workspace.active_space, spaces[0]);
+
+            // No wrapping at the first space.
+            swipe_spaces(workspace, end + IDLE_GAP, 10., 12, ctx);
+            assert_eq!(workspace.active_space, spaces[0]);
+        });
+    });
+}
+
+#[test]
+fn test_vertical_and_wheel_scrolls_do_not_switch_spaces() {
+    let _spaces_guard = FeatureFlag::Spaces.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            let first_space = workspace.active_space;
+            workspace.handle_action(&WorkspaceAction::NewSpace, ctx);
+            workspace.handle_action(&WorkspaceAction::SwitchToSpace(1), ctx);
+            let start = Instant::now();
+            for frame in 0..20 {
+                let now = start + Duration::from_millis(16 * frame);
+                workspace.handle_space_swipe(vec2f(-2., -20.), true, now, ctx);
+                // Shift+wheel: horizontal, but not precise.
+                workspace.handle_space_swipe(vec2f(-20., 0.), false, now, ctx);
+            }
+            assert_eq!(workspace.active_space, first_space);
+        });
+    });
+}
+
+#[test]
+fn test_swipe_is_ignored_while_dragging_renaming_or_searching() {
+    let _spaces_guard = FeatureFlag::Spaces.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        let (first_space, second_space, end) = workspace.update(&mut app, |workspace, ctx| {
+            let first_space = workspace.active_space;
+            workspace.handle_action(&WorkspaceAction::NewSpace, ctx);
+            let second_space = workspace.active_space;
+            workspace.handle_action(&WorkspaceAction::SwitchToSpace(1), ctx);
+
+            workspace.current_workspace_state.is_tab_being_dragged = true;
+            let end = swipe_spaces(workspace, Instant::now(), -10., 12, ctx);
+            assert_eq!(workspace.active_space, first_space);
+            // A swipe that was ignored stays ignored after the drag ends mid-gesture.
+            workspace.current_workspace_state.is_tab_being_dragged = false;
+            let end = swipe_spaces(workspace, end + Duration::from_millis(16), -10., 12, ctx);
+            assert_eq!(workspace.active_space, first_space);
+
+            workspace
+                .current_workspace_state
+                .set_space_being_renamed(first_space);
+            let end = swipe_spaces(workspace, end + IDLE_GAP, -10., 12, ctx);
+            assert_eq!(workspace.active_space, first_space);
+            workspace
+                .current_workspace_state
+                .clear_space_being_renamed();
+            (first_space, second_space, end)
+        });
+
+        workspace.update(&mut app, |workspace, ctx| {
+            ctx.focus(&workspace.vertical_tabs_search_input);
+        });
+        let end = workspace.update(&mut app, |workspace, ctx| {
+            assert!(workspace.vertical_tabs_search_input.is_focused(ctx));
+            let end = swipe_spaces(workspace, end + IDLE_GAP, -10., 12, ctx);
+            assert_eq!(workspace.active_space, first_space);
+            workspace.focus_active_tab(ctx);
+            end
+        });
+
+        workspace.update(&mut app, |workspace, ctx| {
+            swipe_spaces(workspace, end + IDLE_GAP, -10., 12, ctx);
+            assert_eq!(workspace.active_space, second_space);
         });
     });
 }

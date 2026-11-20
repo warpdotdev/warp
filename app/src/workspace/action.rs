@@ -285,6 +285,11 @@ pub enum WorkspaceAction {
     MoveSelectedTabsToSpace {
         space_id: Option<SpaceId>,
     },
+    /// A scroll event over the vertical tabs panel, fed to the space swipe detector.
+    SwipeSpaces {
+        delta: Vector2F,
+        precise: bool,
+    },
     AddDefaultTab,
     AddTerminalTab {
         hide_homepage: bool,
@@ -1099,6 +1104,7 @@ impl WorkspaceAction {
             | ToggleTabSelectionRightClickMenu { .. }
             | ToggleTabGroupRightClickMenu { .. }
             | ToggleSpaceRightClickMenu { .. }
+            | SwipeSpaces { .. }
             | ToggleVerticalTabsPaneContextMenu { .. }
             | OpenNewSessionMenu { .. }
             | ToggleTabConfigsMenu

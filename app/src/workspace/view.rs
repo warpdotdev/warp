@@ -506,6 +506,7 @@ use crate::workspace::header_toolbar_editor::{HeaderToolbarEditorEvent, HeaderTo
 use crate::workspace::header_toolbar_item::HeaderToolbarItemKind;
 use crate::workspace::one_time_modal_model::OneTimeModalModel;
 use crate::workspace::space::{self, SpaceId, StashedSpace};
+use crate::workspace::swipe_detector::SwipeDetector;
 use crate::workspace::sync_inputs::SyncedInputState;
 use crate::workspace::tab_group::{TabGroup, TabGroupId};
 use crate::workspace::tab_settings::TabCloseButtonPosition;
@@ -1066,6 +1067,8 @@ pub struct Workspace {
     pub(crate) active_space: SpaceId,
     /// Tab state of non-active spaces. A space without an entry has no tabs.
     stashed_spaces: HashMap<SpaceId, StashedSpace>,
+    /// Turns scroll events over the vertical tabs panel into space switches.
+    space_swipe_detector: SwipeDetector,
     /// Per-group hover state for the horizontal tab bar.
     horizontal_tab_group_mouse_states: RefCell<HashMap<TabGroupId, HorizontalTabGroupMouseStates>>,
     tab_rename_editor: ViewHandle<EditorView>,
@@ -3481,6 +3484,7 @@ impl Workspace {
             active_space: initial_space.id,
             spaces: vec![initial_space],
             stashed_spaces: HashMap::new(),
+            space_swipe_detector: SwipeDetector::default(),
             horizontal_tab_group_mouse_states: RefCell::default(),
             tab_rename_editor: Self::tab_rename_editor(ctx),
             pane_rename_editor: Self::pane_rename_editor(ctx),
@@ -24406,6 +24410,9 @@ impl TypedActionView for Workspace {
             MoveSelectedTabsToSpace { space_id } => {
                 self.move_selected_tabs_to_space(*space_id, ctx)
             }
+            SwipeSpaces { delta, precise } => {
+                self.handle_space_swipe(*delta, *precise, Instant::now(), ctx)
+            }
             AddDefaultTab => {
                 let effective_mode = AISettings::as_ref(ctx).default_session_mode(ctx);
                 match effective_mode {
@@ -28300,7 +28307,7 @@ impl View for Workspace {
         #[cfg(any(windows, target_os = "linux"))]
         {
             event_handler =
-                event_handler.on_scroll_wheel(move |ctx, _app, delta, modifiers_state| {
+                event_handler.on_scroll_wheel(move |ctx, _app, delta, _, modifiers_state| {
                     if !modifiers_state.ctrl {
                         return DispatchEventResult::PropagateToParent;
                     }

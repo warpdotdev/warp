@@ -1,11 +1,12 @@
 use std::collections::{HashMap, HashSet};
 use std::mem;
 
+use instant::Instant;
 use itertools::{Either, Itertools};
 use warp_core::features::FeatureFlag;
 use warp_core::ui::theme::AnsiColors;
 use warpui::geometry::vector::Vector2F;
-use warpui::{EntityId, SingletonEntity, ViewContext, ViewHandle};
+use warpui::{AppContext, EntityId, SingletonEntity, ViewContext, ViewHandle};
 
 use super::vertical_tabs::space_display_name;
 use super::{Workspace, group_member_indices};
@@ -20,6 +21,7 @@ use crate::themes::theme::AnsiColorIdentifier;
 use crate::ui_components::color_dot::TAB_COLOR_OPTIONS;
 use crate::workspace::WorkspaceAction;
 use crate::workspace::space::{Space, SpaceId, StashedSpace};
+use crate::workspace::swipe_detector::SwipeDirection;
 use crate::workspace::tab_group::{TabGroup, TabGroupId};
 
 /// What a "Move to space" sidecar item moves.
@@ -251,6 +253,51 @@ impl Workspace {
         {
             self.switch_space(space.id, ctx);
         }
+    }
+
+    /// Feeds a scroll event over the vertical tabs panel to the swipe detector and switches to the
+    /// adjacent space when it completes a horizontal swipe. A swipe is ignored while a tab or group
+    /// is dragged, something is renamed, or the panel's search field has focus; its events are
+    /// still fed, so the rest of that gesture can't switch once the blocking state ends.
+    pub(super) fn handle_space_swipe(
+        &mut self,
+        delta: Vector2F,
+        precise: bool,
+        now: Instant,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if !FeatureFlag::Spaces.is_enabled() {
+            return;
+        }
+        let Some(direction) = self
+            .space_swipe_detector
+            .feed(delta.x(), delta.y(), precise, now)
+        else {
+            return;
+        };
+        if self.blocks_space_swipes(ctx) {
+            return;
+        }
+        let offset = match direction {
+            SwipeDirection::Next => 1,
+            SwipeDirection::Prev => -1,
+        };
+        self.switch_to_adjacent_space(offset, ctx);
+        ctx.dispatch_global_action("workspace:save_app", ());
+    }
+
+    fn blocks_space_swipes(&self, app: &AppContext) -> bool {
+        let state = &self.current_workspace_state;
+        state.is_tab_being_dragged
+            || self
+                .tab_groups
+                .values()
+                .any(|group| group.draggable_state.is_dragging())
+            || state.is_tab_being_renamed()
+            || state.is_any_pane_being_renamed()
+            || state.is_any_tab_group_being_renamed()
+            || state.space_being_renamed().is_some()
+            || self.vertical_tabs_search_input.is_focused(app)
     }
 
     /// Switches to the closest space that has tabs. For when the active space has just lost its
