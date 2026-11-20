@@ -38,12 +38,8 @@ fn disclaimed_spawn_passes_args_and_reports_the_exit_status() {
 
 #[test]
 fn disclaimed_spawn_inherits_the_environment() {
-    let key = "WARP_DISCLAIM_SPAWN_TEST";
-    // SAFETY: no other test reads or writes this variable.
-    unsafe { std::env::set_var(key, "example-value") };
-    let status = run_sh(r#"test "$WARP_DISCLAIM_SPAWN_TEST" = example-value"#, &[]);
-    unsafe { std::env::remove_var(key) };
-    assert!(status.success());
+    let path = std::env::var("PATH").expect("PATH is set");
+    assert!(run_sh(r#"test "$PATH" = "$1""#, &[&path]).success());
 }
 
 #[test]
