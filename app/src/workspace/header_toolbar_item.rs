@@ -102,7 +102,7 @@ impl HeaderToolbarItemKind {
     }
 
     pub fn default_right() -> Vec<Self> {
-        vec![Self::CodeReview, Self::NotificationsMailbox]
+        vec![Self::CodeReview]
     }
 
     /// All toolbar item variants (availability filtering is done at the call site).
