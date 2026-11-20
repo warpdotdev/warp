@@ -6,7 +6,7 @@
     "executionId": "42",
     "conversationId": null,
     "parentRunId": null,
-    "teamId": "7",
+    "teamId": "test_uid00000000000007",
     "harness": "OZ",
     "modelId": "auto",
     "reasoningLevel": null,

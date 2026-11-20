@@ -682,10 +682,11 @@ fn build_execution_task_and_options(
     );
     let selected_harness = execution_config::harness(&config.harness)?;
     let model = if selected_harness == Harness::Oz {
+        let team_scope = execution_config::team_scope(config.team_id.as_ref())?;
         config
             .model_id
             .as_deref()
-            .map(|id| common::validate_agent_mode_base_model_id(id, ctx))
+            .map(|id| common::validate_execution_model_id(id, &team_scope, ctx))
             .transpose()?
     } else {
         None
