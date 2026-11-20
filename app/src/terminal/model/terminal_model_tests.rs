@@ -470,6 +470,45 @@ fn ssh_bootstraps_if_blocklist_empty_and_reconciles_parent_return() {
     );
 }
 
+/// The remote login banner is printed while the warpified SSH session runs its startup scripts, so
+/// it lands in a ScriptExecution block. That block must not be saved as an executed command, or
+/// session restoration adds the banner to up-arrow history.
+#[test]
+fn ssh_login_banner_is_not_restored_into_history() {
+    let mut terminal = TerminalModel::mock(None, None);
+    terminal.init_shell(InitShellValue {
+        shell: "bash".to_owned(),
+        user: "root".to_owned(),
+        hostname: "myserver".to_owned(),
+        session_id: 0.into(),
+        ..Default::default()
+    });
+    command_finished_and_precmd(&mut terminal);
+    assert!(terminal.block_list().is_script_execution());
+
+    let banner_block_id = terminal.active_block_id().clone();
+    for c in "Welcome to Ubuntu 24.04.4 LTS".chars() {
+        terminal.input(c);
+    }
+    terminal.bootstrapped(BootstrappedValue {
+        shell: "bash".to_owned(),
+        ..Default::default()
+    });
+    command_finished_and_precmd(&mut terminal);
+
+    let banner_block = terminal
+        .block_list()
+        .block_with_id(&banner_block_id)
+        .expect("banner block should remain in the block list");
+    assert_eq!(banner_block.state(), BlockState::DoneWithNoExecution);
+    let serialized_banner_block = SerializedBlock::from(banner_block);
+    assert!(!serialized_banner_block.did_execute);
+
+    let restored = TerminalModel::mock(Some(&[serialized_banner_block.into()]), None);
+    assert!(restored.block_list().blocks()[0].is_restored());
+    assert!(restored.restored_block_commands().is_empty());
+}
+
 #[test]
 // An empty block that is restored should have a nonzero height and it should not get deleted.
 pub fn test_restored_empty_command_block() {
