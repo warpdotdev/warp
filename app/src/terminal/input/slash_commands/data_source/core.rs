@@ -52,7 +52,7 @@ const CLI_AGENT_INPUT_ALLOWED_COMMANDS: &[&str] = &["/prompts", "/skills"];
 
 fn split_command_and_argument(buffer: &str) -> (&str, Option<&str>) {
     buffer
-        .split_once(' ')
+        .split_once(char::is_whitespace)
         .map_or((buffer, None), |(command, argument)| {
             (command, Some(argument))
         })
@@ -244,7 +244,7 @@ pub trait SlashCommandDataSource {
     }
 
     /// Matches `buffer` against active slash commands, returning the detected command and
-    /// space-delimited argument, if provided.
+    /// whitespace-delimited argument, if provided.
     fn parse_slash_command(&self, buffer: &str) -> Option<DetectedCommand> {
         let (possible_command, possible_argument) = split_command_and_argument(buffer);
 
@@ -270,7 +270,7 @@ pub trait SlashCommandDataSource {
     }
 
     /// Matches `buffer` against skills available for the active working directory, returning the
-    /// detected skill and space-delimited argument, if provided.
+    /// detected skill and whitespace-delimited argument, if provided.
     fn parse_skill_command(&self, buffer: &str, ctx: &AppContext) -> Option<DetectedSkillCommand> {
         let (possible_command, possible_argument) = split_command_and_argument(buffer);
         let skill_name = possible_command.strip_prefix('/')?;
