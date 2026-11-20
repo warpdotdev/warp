@@ -464,6 +464,7 @@ pub struct AgentMessageHeader {
     pub read_at: Option<String>,
 }
 
+#[cfg(not(target_family = "wasm"))]
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct UndeliveredAgentMessage {
     pub message_id: String,
@@ -2203,6 +2204,7 @@ impl ServerApi {
         Ok(response)
     }
 
+    #[cfg(not(target_family = "wasm"))]
     pub(crate) async fn list_undelivered_agent_messages_for_task(
         &self,
         task_id: &AmbientAgentTaskId,
