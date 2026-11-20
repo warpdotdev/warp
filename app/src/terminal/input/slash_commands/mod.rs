@@ -1321,9 +1321,6 @@ impl Input {
                 }
             }
             SlashCommandKind::OpenRepo => {
-                if !FeatureFlag::InlineRepoMenu.is_enabled() {
-                    return false;
-                }
                 self.open_repos_menu(ctx);
             }
             SlashCommandKind::Compact | SlashCommandKind::Plan | SlashCommandKind::Orchestrate => {

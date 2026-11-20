@@ -290,8 +290,7 @@ impl Input {
                 .suggestions_mode_model
                 .as_ref(app)
                 .is_inline_history_menu();
-        let is_repos_menu = FeatureFlag::InlineRepoMenu.is_enabled()
-            && self.suggestions_mode_model.as_ref(app).is_repos_menu();
+        let is_repos_menu = self.suggestions_mode_model.as_ref(app).is_repos_menu();
 
         match input_mode {
             InputMode::PinnedToBottom => {
