@@ -16,6 +16,13 @@ use super::super::api::DAEMON_PROTOCOL_VERSION;
 /// directory.
 const MAX_SOCKET_PATH_LEN: usize = 100;
 
+/// The longest socket path `bind` and `connect` accept: `sun_path` minus its
+/// terminating NUL.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+pub(crate) const MAX_SUN_PATH_LEN: usize = 107;
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+pub(crate) const MAX_SUN_PATH_LEN: usize = 103;
+
 /// The files used by one daemon protocol version.
 #[derive(Debug, Clone)]
 pub(crate) struct DaemonPaths {
@@ -38,7 +45,7 @@ impl DaemonPaths {
 
     /// The paths used by the app and the daemon it spawns: `<state dir>/ts`,
     /// or a fallback directory if that would make the socket path too long.
-    pub fn default_for_user() -> Self {
+    pub fn default_for_user() -> Result<Self> {
         Self::for_state_dir(
             &warp_core::paths::state_dir(),
             runtime_dir(),
@@ -50,20 +57,28 @@ impl DaemonPaths {
     /// The paths for the daemon of `state_dir`: `<state dir>/ts`, or a
     /// fallback directory unique to `state_dir` if that would make the socket
     /// path too long, so that different channels and homes never share a
-    /// daemon.
+    /// daemon. Fails if even the fallback socket path is too long to bind.
     pub(crate) fn for_state_dir(
         state_dir: &Path,
         runtime_dir: Option<OsString>,
         tmpdir: Option<OsString>,
         uid: u32,
-    ) -> Self {
+    ) -> Result<Self> {
         if !state_dir.as_os_str().is_empty() {
             let paths = Self::in_dir(state_dir.join("ts"));
             if paths.socket.as_os_str().len() <= MAX_SOCKET_PATH_LEN {
-                return paths;
+                return Ok(paths);
             }
         }
-        Self::in_dir(fallback_dir(runtime_dir, tmpdir, uid, state_dir))
+        let paths = Self::in_dir(fallback_dir(runtime_dir, tmpdir, uid, state_dir));
+        let len = paths.socket.as_os_str().len();
+        if len > MAX_SUN_PATH_LEN {
+            bail!(
+                "terminal daemon socket path {} is {len} bytes, over the {MAX_SUN_PATH_LEN}-byte limit; set TMPDIR to a shorter directory",
+                paths.socket.display()
+            );
+        }
+        Ok(paths)
     }
 
     /// Creates the directory with mode 0700 if needed and checks that it is a

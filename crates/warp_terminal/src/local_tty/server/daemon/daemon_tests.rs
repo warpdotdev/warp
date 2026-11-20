@@ -792,7 +792,8 @@ fn short_state_dirs_keep_their_own_socket_directory() {
         None,
         None,
         501,
-    );
+    )
+    .unwrap();
     assert_eq!(
         paths.dir,
         PathBuf::from("/home/alice/.local/state/warp-terminal/ts")
@@ -807,13 +808,34 @@ fn long_state_dirs_fall_back_to_distinct_directories() {
     let second = Path::new(&long_home)
         .join("state")
         .join("warp-terminal-preview");
-    let first_paths = DaemonPaths::for_state_dir(&first, None, None, 501);
-    let second_paths = DaemonPaths::for_state_dir(&second, None, None, 501);
+    let first_paths = DaemonPaths::for_state_dir(&first, None, None, 501).unwrap();
+    let second_paths = DaemonPaths::for_state_dir(&second, None, None, 501).unwrap();
     assert!(first_paths.dir.starts_with("/tmp"));
     assert!(second_paths.dir.starts_with("/tmp"));
     assert_ne!(first_paths.dir, second_paths.dir);
     assert_ne!(first_paths.socket, second_paths.socket);
     assert!(first_paths.socket.as_os_str().len() <= 100);
+}
+
+#[test]
+fn a_fallback_socket_path_too_long_to_bind_is_rejected() {
+    use super::listener::MAX_SUN_PATH_LEN;
+    use std::path::Path;
+    let state_dir = Path::new("/home/alice").join("a".repeat(100));
+    let long_tmpdir = format!("/var/{}", "t".repeat(MAX_SUN_PATH_LEN));
+    let err = DaemonPaths::for_state_dir(&state_dir, None, Some(long_tmpdir.into()), 501)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("socket path"), "{err}");
+    assert!(
+        err.contains(&format!("{MAX_SUN_PATH_LEN}-byte limit")),
+        "{err}"
+    );
+
+    let fitting_tmpdir = format!("/var/{}", "t".repeat(40));
+    let paths =
+        DaemonPaths::for_state_dir(&state_dir, None, Some(fitting_tmpdir.into()), 501).unwrap();
+    assert!(paths.socket.as_os_str().len() <= MAX_SUN_PATH_LEN);
 }
 
 #[test]

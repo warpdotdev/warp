@@ -221,14 +221,14 @@ pub struct DaemonClient {
 impl DaemonClient {
     /// Connects to the daemon, starting it if it isn't running.
     pub fn connect_or_spawn() -> anyhow::Result<Arc<Self>> {
-        let paths = DaemonPaths::default_for_user();
+        let paths = DaemonPaths::default_for_user()?;
         paths.ensure_private_dir()?;
         Self::connect_or_spawn_with(&paths.socket, spawn_daemon_process)
     }
 
     /// Connects to the daemon only if it is already running.
     pub fn connect_existing() -> anyhow::Result<Option<Arc<Self>>> {
-        let paths = DaemonPaths::default_for_user();
+        let paths = DaemonPaths::default_for_user()?;
         if !paths.validate_private_dir()? {
             return Ok(None);
         }
