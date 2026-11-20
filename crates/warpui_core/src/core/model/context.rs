@@ -10,7 +10,8 @@ use warp_errors::report_error;
 
 use crate::accessibility::AccessibilityContent;
 use crate::r#async::{SpawnableOutput, SpawnedFutureHandle, SpawnedLocalStream, Timer, executor};
-use crate::core::spawn::{SpawnCallbacks, downcast_entity, downcast_output, erase_output};
+use crate::core::spawn::{downcast_entity, downcast_output, erase_output};
+use crate::core::subscription::ModelSubscriber;
 use crate::core::{Observation, Subscription, SubscriptionKey, TaskCallback};
 use crate::windowing::WindowManager;
 use crate::{
@@ -65,36 +66,19 @@ impl<'a, T: Entity> ModelContext<'a, T> {
         self.app.add_model(build_model)
     }
 
-    pub fn subscribe_to_model<S: Entity, F>(&mut self, handle: &ModelHandle<S>, mut callback: F)
+    pub fn subscribe_to_model<S: Entity, F>(&mut self, handle: &ModelHandle<S>, callback: F)
     where
         S::Event: 'static,
         F: 'static + FnMut(&mut T, ModelHandle<S>, &S::Event, &mut ModelContext<T>),
     {
-        // Self-subscriptions are disallowed: `emit_event` temporarily removes the subscriber model
-        // from `app.models` before invoking callbacks, so `emitter_handle.upgrade` would return
-        // `None` and silently drop the callback.
-        debug_assert_ne!(
+        self.app.add_model_subscription(
             handle.id(),
             self.model_id,
-            "a model must not subscribe to its own events"
+            Box::new(ModelSubscriber::<T, ModelHandle<S>, F>(
+                callback,
+                PhantomData,
+            )),
         );
-        let emitter_handle = handle.downgrade();
-        self.app
-            .subscriptions
-            .entry(handle.id())
-            .or_default()
-            .push(Subscription::FromModel {
-                model_id: self.model_id,
-                callback: Box::new(move |model, payload, app, model_id| {
-                    if let Some(emitter_handle) = emitter_handle.upgrade(app) {
-                        let model = model.downcast_mut().expect("downcast is type safe");
-                        let payload: &<S as Entity>::Event =
-                            payload.downcast_ref().expect("downcast is type safe");
-                        let mut ctx = ModelContext::new(app, model_id);
-                        callback(model, emitter_handle, payload, &mut ctx);
-                    }
-                }),
-            });
     }
 
     pub fn unsubscribe_from_model<E>(&mut self, handle: &ModelHandle<E>)
@@ -138,28 +122,20 @@ impl<'a, T: Entity> ModelContext<'a, T> {
             })
     }
 
-    pub fn subscribe_to_view<V, F>(&mut self, handle: &ViewHandle<V>, mut callback: F)
+    pub fn subscribe_to_view<V, F>(&mut self, handle: &ViewHandle<V>, callback: F)
     where
         V: View,
         V::Event: 'static,
         F: 'static + FnMut(&mut T, ViewHandle<V>, &V::Event, &mut ModelContext<T>),
     {
-        let emitter_handle = handle.downgrade();
-        self.app
-            .subscriptions
-            .entry(handle.id())
-            .or_default()
-            .push(Subscription::FromModel {
-                model_id: self.model_id,
-                callback: Box::new(move |model, payload, app, model_id| {
-                    if let Some(emitter_handle) = emitter_handle.upgrade(app) {
-                        let model = model.downcast_mut().expect("downcast is type safe");
-                        let payload = payload.downcast_ref().expect("downcast is type safe");
-                        let mut ctx = ModelContext::new(app, model_id);
-                        callback(model, emitter_handle, payload, &mut ctx);
-                    }
-                }),
-            });
+        self.app.add_model_subscription(
+            handle.id(),
+            self.model_id,
+            Box::new(ModelSubscriber::<T, ViewHandle<V>, F>(
+                callback,
+                PhantomData,
+            )),
+        );
     }
 
     pub fn unsubscribe_from_view<V>(&mut self, handle: &ViewHandle<V>)
@@ -399,19 +375,17 @@ impl<'a, T: Entity> ModelContext<'a, T> {
         F: 'static + FnOnce(&mut T, S::Output, &mut ModelContext<T>) -> U,
         U: 'static,
     {
-        self.app.spawn_abortable_erased(
+        self.app.spawn_for_model(
             erase_output::<S::Output>(Box::pin(future)),
-            SpawnCallbacks::Model {
-                model_id: self.model_id,
-                on_resolve: Box::new(move |model, output, app, model_id| {
-                    callback(
-                        downcast_entity(model),
-                        downcast_output(output),
-                        &mut ModelContext::new(app, model_id),
-                    );
-                }),
-                on_abort: Box::new(|_, _, _| {}),
-            },
+            self.model_id,
+            Box::new(move |model, output, app, model_id| {
+                callback(
+                    downcast_entity(model),
+                    downcast_output(output),
+                    &mut ModelContext::new(app, model_id),
+                );
+            }),
+            None,
         )
     }
 
@@ -445,24 +419,22 @@ impl<'a, T: Entity> ModelContext<'a, T> {
         F: 'static + FnOnce(&mut T, S::Output, &mut ModelContext<T>),
         A: 'static + FnOnce(&mut T, &mut ModelContext<T>),
     {
-        self.app.spawn_abortable_erased(
+        self.app.spawn_for_model(
             erase_output::<S::Output>(Box::pin(future)),
-            SpawnCallbacks::Model {
-                model_id: self.model_id,
-                on_resolve: Box::new(move |model, output, app, model_id| {
-                    on_resolve(
-                        downcast_entity(model),
-                        downcast_output(output),
-                        &mut ModelContext::new(app, model_id),
-                    );
-                }),
-                on_abort: Box::new(move |model, app, model_id| {
-                    on_abort(
-                        downcast_entity(model),
-                        &mut ModelContext::new(app, model_id),
-                    );
-                }),
-            },
+            self.model_id,
+            Box::new(move |model, output, app, model_id| {
+                on_resolve(
+                    downcast_entity(model),
+                    downcast_output(output),
+                    &mut ModelContext::new(app, model_id),
+                );
+            }),
+            Some(Box::new(move |model, app, model_id| {
+                on_abort(
+                    downcast_entity(model),
+                    &mut ModelContext::new(app, model_id),
+                );
+            })),
         )
     }
 
@@ -633,6 +605,9 @@ impl<M> GetSingletonModelHandle for ModelContext<'_, M> {
 /// A task which must run in the context of a model of type `M`.
 type ModelTask<M> = Box<dyn FnOnce(&mut M, &mut ModelContext<M>) + Send + 'static>;
 
+/// Work which must run in the context of a model of type `M`, and which produces an `R`.
+type ModelWork<M, R> = Box<dyn FnOnce(&mut M, &mut ModelContext<M>) -> R + Send + 'static>;
+
 /// A handle for spawning model tasks from background threads.
 pub struct ModelSpawner<M> {
     task_sender: async_channel::Sender<ModelTask<M>>,
@@ -646,11 +621,20 @@ impl<M> Clone for ModelSpawner<M> {
     }
 }
 
-impl<M> ModelSpawner<M> {
+impl<M: 'static> ModelSpawner<M> {
     /// Spawn a task that will execute on the main thread, in the context of a model.
-    pub async fn spawn<R: Send + 'static>(
+    pub fn spawn<R: Send + 'static>(
         &self,
         work: impl FnOnce(&mut M, &mut ModelContext<M>) -> R + Send + 'static,
+    ) -> impl Future<Output = Result<R, ModelDropped>> {
+        self.spawn_boxed(Box::new(work))
+    }
+
+    /// The body of [`Self::spawn`]. It takes the work boxed so that this future is compiled once
+    /// per result type, instead of once per closure.
+    async fn spawn_boxed<R: Send + 'static>(
+        &self,
+        work: ModelWork<M, R>,
     ) -> Result<R, ModelDropped> {
         let (tx, rx) = futures::channel::oneshot::channel();
         let span = tracing::Span::current();

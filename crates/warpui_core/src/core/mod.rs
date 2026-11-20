@@ -4,6 +4,7 @@ mod autotracking;
 mod entity;
 mod model;
 mod spawn;
+mod subscription;
 mod view;
 mod window;
 
@@ -27,6 +28,7 @@ use futures_util::future::BoxFuture;
 pub use model::*;
 use pathfinder_geometry::rect::RectF;
 use serde::{Deserialize, Serialize};
+use subscription::{ModelEventCallback, ViewEventCallback};
 pub use view::*;
 pub use window::*;
 
@@ -456,9 +458,6 @@ impl DroppedItems {
     }
 }
 
-type SubscriptionFromModelCallback = dyn FnMut(&mut dyn Any, &dyn Any, &mut AppContext, EntityId);
-type SubscriptionFromViewCallback =
-    dyn FnMut(&mut dyn Any, &dyn Any, &mut AppContext, WindowId, EntityId);
 type SubscriptionFromAppCallback = dyn FnMut(&dyn Any, &mut AppContext, EntityId);
 
 /// Key that uniquely identifies a subscription for deferred unsubscribe tracking.
@@ -485,13 +484,13 @@ enum Subscription {
     /// The [`Entity`] is subscribed to from a [`Model`].
     FromModel {
         model_id: EntityId,
-        callback: Box<SubscriptionFromModelCallback>,
+        callback: Box<dyn ModelEventCallback>,
     },
     /// The [`Entity`] is subscribed to from a [`View`].
     FromView {
         window_id: WindowId,
         view_id: EntityId,
-        callback: Box<SubscriptionFromViewCallback>,
+        callback: Box<dyn ViewEventCallback>,
     },
     /// The [`Entity`] is subscribed to from the [`App`].
     FromApp {
