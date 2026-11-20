@@ -564,9 +564,6 @@ inherits = "dev"
 opt-level = "s"
 
 [patch.crates-io]
-# candle-core 0.11.1 calls __cpuid_count from a safe fn; rustc 1.92 rejects it.
-# Published-crate layout on an orphan branch (warpdotdev/candle is archived).
-candle-core = { git = "https://github.com/warpdotdev/warp.git", rev = "3039bbc3e7f93d92aaeae6eb726e2f3cae0e3b6d" }
 # Pinned to the merge commit of servo/core-foundation-rs#746, which fixes a
 # double-retain bug in `CTFontCollection::get_descriptors` that leaks the
 # CoreText font-descriptor NSArray on every call. The fix is not yet in any
