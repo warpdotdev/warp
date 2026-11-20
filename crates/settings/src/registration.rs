@@ -5,6 +5,7 @@
 //! [`SettingCallbacks`] preserves setting-specific method resolution.
 
 use anyhow::{Result, anyhow};
+use serde::Serialize;
 use serde::de::DeserializeOwned;
 use settings_value::SettingsValue;
 use warpui_core::{
@@ -35,6 +36,14 @@ fn parse_value_strict<V: SettingsValue + DeserializeOwned>(
     V::from_file_value(&json_val)
         .or_else(|| serde_json::from_str(serialized).ok())
         .ok_or_else(|| anyhow!("Failed to parse value for {}", storage_key))
+}
+
+/// Serializes a default value in its stored form and in its settings-file form.
+fn serialize_default<V: Serialize + SettingsValue>(default: &V) -> (String, String) {
+    let serialized = serde_json::to_string(default).expect("default should serialize");
+    let file_serialized = serde_json::to_string(&default.to_file_value())
+        .expect("default file value should serialize");
+    (serialized, file_serialized)
 }
 
 /// Compares two serialized values of the given setting for semantic equality.
@@ -109,12 +118,8 @@ pub fn register_setting_events<S, C>(
     <S::Group as Entity>::Event: 'static,
     C: GetSingletonModelHandle + AddSingletonModel + UpdateModel,
 {
-    let serialized_default_value =
-        serde_json::to_string(&S::default_value()).expect("default should serialize");
-    let file_serialized_default_value = {
-        let file_value = S::default_value().to_file_value();
-        serde_json::to_string(&file_value).expect("default file value should serialize")
-    };
+    let (serialized_default_value, file_serialized_default_value) =
+        serialize_default(&S::default_value());
     register_setting_events_impl(
         settings_group,
         SettingMetadata {
@@ -174,7 +179,7 @@ fn register_setting_events_impl<G, V, C>(
             metadata.toml_key,
             metadata.max_table_depth,
             metadata.is_private,
-            move |value, from_cloud_sync, ctx| {
+            Box::new(move |value, from_cloud_sync, ctx| {
                 let Some(value) = parse_value::<V>(&value) else {
                     return Err(anyhow!(
                         "Failed to parse updated value for setting {}: Not updating",
@@ -184,13 +189,13 @@ fn register_setting_events_impl<G, V, C>(
                 settings_group_update_clone.update(ctx, |settings_group, ctx| {
                     (callbacks.apply_set)(settings_group, value, from_cloud_sync, ctx)
                 })
-            },
-            move |ctx| {
+            }),
+            Box::new(move |ctx| {
                 settings_group_reset_clone.update(ctx, |settings_group, ctx| {
                     (callbacks.apply_clear)(settings_group, ctx)
                 })
-            },
-            move |value, explicitly_set, ctx| {
+            }),
+            Box::new(move |value, explicitly_set, ctx| {
                 let Some(value) = parse_value::<V>(&value) else {
                     return Err(anyhow!(
                         "Failed to parse loaded value for setting {}: Not loading",
@@ -200,11 +205,11 @@ fn register_setting_events_impl<G, V, C>(
                 settings_group_load_clone.update(ctx, |settings_group, ctx| {
                     (callbacks.apply_load)(settings_group, value, explicitly_set, ctx)
                 })
-            },
-            equals,
-            move |ctx| {
+            }),
+            Box::new(equals),
+            Box::new(move |ctx| {
                 (callbacks.current_value_is_syncable)(settings_group_is_syncable_clone.as_ref(ctx))
-            },
+            }),
         );
     });
 }
