@@ -81,6 +81,19 @@ pub struct ModifiersState {
     pub func: bool,
 }
 
+/// Where a trackpad scroll event falls in its gesture (macOS `NSEvent.phase` / `momentumPhase`).
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum ScrollPhase {
+    /// The fingers started scrolling: the first event of a new gesture.
+    Began,
+    /// The fingers are on the trackpad (changed, stationary or may-begin).
+    Changed,
+    /// The fingers lifted, or the gesture was cancelled.
+    Ended,
+    /// Inertial scrolling the system sends after the fingers lift.
+    Momentum,
+}
+
 #[derive(Copy, Clone, Debug)]
 pub enum KeyState {
     Pressed,
@@ -103,6 +116,9 @@ pub enum Event {
         position: Vector2F,
         delta: Vector2F,
         precise: bool,
+        /// `None` when the platform or device doesn't report one (mouse wheels, non-macOS
+        /// platforms, synthesized events).
+        phase: Option<ScrollPhase>,
         modifiers: ModifiersState,
     },
     LeftMouseDown {
@@ -291,11 +307,13 @@ impl Scale for Event {
                 position,
                 delta,
                 precise,
+                phase,
                 modifiers,
             } => Event::ScrollWheel {
                 position: position.scale_up(zoom_factor),
                 delta,
                 precise,
+                phase,
                 modifiers,
             },
             Event::LeftMouseDown {

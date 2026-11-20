@@ -46,7 +46,8 @@ pub(crate) fn is_conversation_open_in_other_visible_view(
 }
 
 /// Finds the pane group containing the given terminal view across all
-/// visible panes/tabs. Used to distinguish same-tab vs cross-tab focus.
+/// visible panes of every tab, in every space. Used to distinguish same-tab vs
+/// cross-tab focus.
 pub(crate) fn pane_group_id_containing_terminal_view(
     terminal_view_id: EntityId,
     app: &AppContext,
@@ -54,7 +55,7 @@ pub(crate) fn pane_group_id_containing_terminal_view(
     let registry = WorkspaceRegistry::as_ref(app);
     for (_, workspace_handle) in registry.all_workspaces(app) {
         let workspace = workspace_handle.as_ref(app);
-        for pane_group_handle in workspace.tab_views() {
+        for pane_group_handle in workspace.all_tab_views() {
             let pane_group = pane_group_handle.as_ref(app);
             for pane_id in pane_group.visible_pane_ids() {
                 if let Some(terminal_view) = pane_group.terminal_view_from_pane_id(pane_id, app)

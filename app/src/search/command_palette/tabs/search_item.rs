@@ -59,8 +59,15 @@ impl SearchItemTrait for SearchItem {
     ) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
 
+        let label = match &self.tab.space_name {
+            Some(space_name) => format!(
+                "{} · {space_name} · Tab {}",
+                self.tab.title, self.tab.tab_index
+            ),
+            None => format!("{} · Tab {}", self.tab.title, self.tab.tab_index),
+        };
         let title_text = Text::new_inline(
-            format!("{} · Tab {}", self.tab.title, self.tab.tab_index),
+            label,
             appearance.ui_font_family(),
             appearance.monospace_font_size(),
         )

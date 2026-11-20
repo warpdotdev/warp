@@ -23,6 +23,7 @@ fn single_tab_snapshot(root: PaneNodeSnapshot) -> AppState {
                 right_panel: None,
                 group_id: None,
                 pinned: false,
+                space_id: None,
             }],
             active_tab_index: 0,
             team_uid: None,
@@ -39,6 +40,8 @@ fn single_tab_snapshot(root: PaneNodeSnapshot) -> AppState {
             right_panel_width: None,
             agent_management_filters: None,
             tab_groups: vec![],
+            spaces: vec![],
+            active_space: None,
         }],
         active_window_index: Some(0),
         block_lists: Default::default(),
@@ -65,6 +68,8 @@ fn multi_tab_snapshot(active_tab_index: usize, tabs: Vec<TabSnapshot>) -> AppSta
             right_panel_width: None,
             agent_management_filters: None,
             tab_groups: vec![],
+            spaces: vec![],
+            active_space: None,
         }],
         active_window_index: Some(0),
         block_lists: Default::default(),
@@ -391,6 +396,7 @@ fn test_config_with_active_tab_index() {
                 right_panel: None,
                 group_id: None,
                 pinned: false,
+                space_id: None,
             };
             3
         ],
@@ -427,6 +433,7 @@ fn test_config_with_active_tab_index_and_filtered_tabs() {
                 right_panel: None,
                 group_id: None,
                 pinned: false,
+                space_id: None,
             },
             TabSnapshot {
                 custom_title: None,
@@ -458,6 +465,7 @@ fn test_config_with_active_tab_index_and_filtered_tabs() {
                 right_panel: None,
                 group_id: None,
                 pinned: false,
+                space_id: None,
             },
         ],
     );
@@ -501,6 +509,7 @@ fn test_config_with_active_tab_being_filtered() {
                 right_panel: None,
                 group_id: None,
                 pinned: false,
+                space_id: None,
             },
             TabSnapshot {
                 custom_title: None,
@@ -524,6 +533,7 @@ fn test_config_with_active_tab_being_filtered() {
                 right_panel: None,
                 group_id: None,
                 pinned: false,
+                space_id: None,
             },
         ],
     );
@@ -561,6 +571,7 @@ fn terminal_tab(cwd: &str, group_id: Option<TabGroupId>) -> TabSnapshot {
         right_panel: None,
         group_id,
         pinned: false,
+        space_id: None,
     }
 }
 
@@ -583,6 +594,7 @@ fn unsaveable_tab(group_id: Option<TabGroupId>) -> TabSnapshot {
         right_panel: None,
         group_id,
         pinned: false,
+        space_id: None,
     }
 }
 

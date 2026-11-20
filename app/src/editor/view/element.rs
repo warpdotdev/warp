@@ -2170,6 +2170,7 @@ impl Element for EditorElement {
                 delta,
                 precise,
                 modifiers: ModifiersState { ctrl: false, .. },
+                ..
             } => self.scroll(*position, *delta, *precise, ctx, app),
             Event::KeyDown { keystroke, .. } => self.key_down(keystroke, ctx),
             Event::ModifierKeyChanged {

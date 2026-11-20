@@ -15,9 +15,9 @@ use super::schema::{
     generic_string_objects, ignored_suggestions, mcp_environment_variables,
     mcp_server_installations, mcp_server_panes, notebook_panes, notebooks, object_actions,
     object_metadata, object_permissions, pane_branches, pane_leaves, pane_nodes, panels,
-    project_rules, projects, server_experiments, settings_panes, tab_groups, tabs, team_members,
-    team_settings, teams, terminal_panes, user_profiles, windows, workflow_panes, workflows,
-    workspace_language_server, workspace_metadata, workspace_teams, workspaces,
+    project_rules, projects, server_experiments, settings_panes, spaces, tab_groups, tabs,
+    team_members, team_settings, teams, terminal_panes, user_profiles, windows, workflow_panes,
+    workflows, workspace_language_server, workspace_metadata, workspace_teams, workspaces,
 };
 
 #[derive(Insertable)]
@@ -44,6 +44,7 @@ pub struct Window {
     pub left_panel_open: Option<bool>,
     pub vertical_tabs_panel_open: Option<bool>,
     pub team_uid: Option<String>,
+    pub active_space_index: Option<i32>,
 }
 
 #[derive(Identifiable, Insertable, Queryable)]
@@ -348,6 +349,7 @@ pub struct NewWindow {
     pub left_panel_open: Option<bool>,
     pub vertical_tabs_panel_open: Option<bool>,
     pub team_uid: Option<String>,
+    pub active_space_index: Option<i32>,
 }
 
 #[derive(Identifiable, Queryable, Associations)]
@@ -359,6 +361,7 @@ pub struct Tab {
     pub color: Option<String>,
     pub tab_group_id: Option<i32>,
     pub pinned: bool,
+    pub space_id: Option<i32>,
 }
 
 #[derive(Insertable)]
@@ -369,6 +372,7 @@ pub struct NewTab {
     pub color: Option<String>,
     pub tab_group_id: Option<i32>,
     pub pinned: bool,
+    pub space_id: Option<i32>,
 }
 
 /// Persisted form of a tab group. `name` is optional — untitled groups omit
@@ -393,6 +397,31 @@ pub struct NewTabGroup {
     pub color: Option<String>,
     pub collapsed: bool,
     pub pinned: bool,
+}
+
+/// Persisted form of a space: a named, colored set of tabs within a window. `name` is optional,
+/// like a tab group's.
+#[derive(Identifiable, Queryable, Associations)]
+#[diesel(belongs_to(Window))]
+#[diesel(table_name = spaces)]
+pub struct Space {
+    pub id: i32,
+    pub window_id: i32,
+    pub name: Option<String>,
+    pub color: Option<String>,
+    pub position: i32,
+    /// Index of the space's active tab among its own tabs.
+    pub active_tab_index: i32,
+}
+
+#[derive(Insertable)]
+#[diesel(table_name = spaces)]
+pub struct NewSpace {
+    pub window_id: i32,
+    pub name: Option<String>,
+    pub color: Option<String>,
+    pub position: i32,
+    pub active_tab_index: i32,
 }
 
 /// The panes data model includes pane_nodes, pane_leaves and pane_branches.

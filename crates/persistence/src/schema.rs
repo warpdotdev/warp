@@ -356,6 +356,17 @@ diesel::table! {
 }
 
 diesel::table! {
+    spaces (id) {
+        id -> Integer,
+        window_id -> Integer,
+        name -> Nullable<Text>,
+        color -> Nullable<Text>,
+        position -> Integer,
+        active_tab_index -> Integer,
+    }
+}
+
+diesel::table! {
     tab_groups (id) {
         id -> Integer,
         window_id -> Integer,
@@ -374,6 +385,7 @@ diesel::table! {
         color -> Nullable<Text>,
         tab_group_id -> Nullable<Integer>,
         pinned -> Bool,
+        space_id -> Nullable<Integer>,
     }
 }
 
@@ -456,6 +468,7 @@ diesel::table! {
         left_panel_open -> Nullable<Bool>,
         vertical_tabs_panel_open -> Nullable<Bool>,
         team_uid -> Nullable<Text>,
+        active_space_index -> Nullable<Integer>,
     }
 }
 
@@ -519,7 +532,9 @@ diesel::joinable!(pane_branches -> pane_nodes (pane_node_id));
 diesel::joinable!(pane_leaves -> pane_nodes (pane_node_id));
 diesel::joinable!(pane_nodes -> tabs (tab_id));
 diesel::joinable!(panels -> tabs (tab_id));
+diesel::joinable!(spaces -> windows (window_id));
 diesel::joinable!(tab_groups -> windows (window_id));
+diesel::joinable!(tabs -> spaces (space_id));
 diesel::joinable!(tabs -> tab_groups (tab_group_id));
 diesel::joinable!(tabs -> windows (window_id));
 diesel::joinable!(team_members -> teams (team_id));
@@ -533,6 +548,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     pane_leaves,
     pane_nodes,
     panels,
+    spaces,
     tab_groups,
     tabs,
     windows,

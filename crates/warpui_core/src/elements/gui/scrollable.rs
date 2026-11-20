@@ -652,6 +652,7 @@ impl Element for Scrollable {
                 delta,
                 precise,
                 modifiers: ModifiersState { ctrl: false, .. },
+                ..
             } => {
                 if !self.child.should_handle_scroll_wheel() {
                     return handled;

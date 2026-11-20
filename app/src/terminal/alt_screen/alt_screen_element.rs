@@ -877,6 +877,7 @@ impl Element for AltScreenElement {
                 delta,
                 precise,
                 modifiers: ModifiersState { ctrl: false, .. },
+                ..
             } if in_bounds => self.on_scroll(to_local(*position), *delta, *precise, ctx),
             Event::LeftMouseDown {
                 position,

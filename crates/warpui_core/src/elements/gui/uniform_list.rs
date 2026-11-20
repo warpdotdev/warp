@@ -279,6 +279,7 @@ where
             delta,
             precise,
             modifiers: ModifiersState { ctrl: false, .. },
+            ..
         }) = event.at_z_index(z_index, ctx)
         {
             self.scroll_internal(*position, *delta, *precise, ctx, app)

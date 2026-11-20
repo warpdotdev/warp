@@ -254,6 +254,7 @@ impl RenderableBlock for RenderableTable {
                 delta,
                 precise,
                 modifiers,
+                ..
             } if !modifiers.ctrl => {
                 let Some(bounds) = self.viewport_bounds else {
                     return false;

@@ -6,6 +6,7 @@ use session_sharing_protocol::common::SessionId;
 use ui_components::lightbox;
 use warp_util::path::LineAndColumnArg;
 use warpui::accessibility::AccessibilityVerbosity;
+use warpui::event::ScrollPhase;
 use warpui::geometry::rect::RectF;
 use warpui::geometry::vector::Vector2F;
 use warpui::platform::Cursor;
@@ -46,6 +47,7 @@ use crate::themes::theme::AnsiColorIdentifier;
 use crate::themes::theme_chooser::ThemeChooserMode;
 use crate::workflows::{WorkflowSelectionSource, WorkflowSource, WorkflowType};
 use crate::workspace::PaneViewLocator;
+use crate::workspace::space::SpaceId;
 use crate::workspace::tab_group::TabGroupId;
 
 /// This enum determines how the search query is initialized when opening command search.
@@ -245,6 +247,57 @@ pub enum WorkspaceAction {
     PinActiveTabGroup,
     /// Unpins the active tab's group.
     UnpinActiveTabGroup,
+    /// Switches to the space at the given 1-based position. No-op if it doesn't exist.
+    SwitchToSpace(usize),
+    /// Switches to the next space, without wrapping.
+    NextSpace,
+    /// Switches to the previous space, without wrapping.
+    PrevSpace,
+    /// Creates a new space after the existing ones and switches to it.
+    NewSpace,
+    /// Switches to the given space. Used by the switcher chips, whose positions shift on delete.
+    SwitchToSpaceById(SpaceId),
+    ToggleSpaceRightClickMenu {
+        space_id: SpaceId,
+        position: Vector2F,
+    },
+    /// Opens an inline editor over the given space's switcher chip.
+    RenameSpace(SpaceId),
+    RenameActiveSpace,
+    ToggleSpaceColor {
+        color: AnsiColorIdentifier,
+        space_id: SpaceId,
+    },
+    /// Deletes the space, moving its tabs and groups to the previous space (else the next one).
+    /// No-op for the last remaining space.
+    DeleteSpace(SpaceId),
+    DeleteActiveSpace,
+    /// Moves the tab to `space_id`, or to a new space when `None`, without switching spaces.
+    MoveTabToSpace {
+        tab_index: usize,
+        space_id: Option<SpaceId>,
+    },
+    /// Moves every member of the group, and the group itself, to `space_id` (or a new space).
+    MoveTabGroupToSpace {
+        group_id: TabGroupId,
+        space_id: Option<SpaceId>,
+    },
+    /// Moves the multi-selection to `space_id` (or a new space).
+    MoveSelectedTabsToSpace {
+        space_id: Option<SpaceId>,
+    },
+    /// A space switcher chip is being dragged to `position` (its painted rect).
+    DragSpace {
+        space_id: SpaceId,
+        position: RectF,
+    },
+    DropSpace,
+    /// A scroll event over the vertical tabs panel, fed to the space swipe detector.
+    SwipeSpaces {
+        delta: Vector2F,
+        precise: bool,
+        phase: Option<ScrollPhase>,
+    },
     AddDefaultTab,
     AddTerminalTab {
         hide_homepage: bool,
@@ -982,6 +1035,20 @@ impl WorkspaceAction {
             | UnpinTabGroup(_)
             | PinActiveTabGroup
             | UnpinActiveTabGroup
+            | SwitchToSpace(_)
+            | NextSpace
+            | PrevSpace
+            | NewSpace
+            | SwitchToSpaceById(_)
+            | RenameSpace(_)
+            | RenameActiveSpace
+            | ToggleSpaceColor { .. }
+            | DeleteSpace(_)
+            | DeleteActiveSpace
+            | MoveTabToSpace { .. }
+            | MoveTabGroupToSpace { .. }
+            | MoveSelectedTabsToSpace { .. }
+            | DropSpace
             | ToggleTabColor { .. }
             | ToggleTabGroupColor { .. }
             | AddDefaultTab
@@ -1045,6 +1112,9 @@ impl WorkspaceAction {
             | ToggleTabRightClickMenu { .. }
             | ToggleTabSelectionRightClickMenu { .. }
             | ToggleTabGroupRightClickMenu { .. }
+            | ToggleSpaceRightClickMenu { .. }
+            | DragSpace { .. }
+            | SwipeSpaces { .. }
             | ToggleVerticalTabsPaneContextMenu { .. }
             | OpenNewSessionMenu { .. }
             | ToggleTabConfigsMenu

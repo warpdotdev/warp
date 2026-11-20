@@ -1533,6 +1533,7 @@ impl Element for SingleBlock {
             delta,
             precise,
             modifiers: ModifiersState { ctrl: false, .. },
+            ..
         }) = event.at_z_index(self.z_index().unwrap(), ctx)
             && self.rect().unwrap().contains_point(*position)
         {
