@@ -1205,6 +1205,8 @@ pub struct Workspace {
     left_panel_view: ViewHandle<LeftPanelView>,
     left_panel_views: Vec<ToolPanelView>,
     worktree_panel: ViewHandle<WorktreePanelView>,
+    /// Worktree each tab was opened for from the Worktrees view, keyed by the tab's pane group.
+    worktree_tabs: HashMap<EntityId, PathBuf>,
     right_panel_view: ViewHandle<RightPanelView>,
     working_directories_model: ModelHandle<pane_group::WorkingDirectoriesModel>,
     agent_management_view: ViewHandle<AgentManagementView>,
@@ -3565,6 +3567,7 @@ impl Workspace {
             left_panel_view,
             left_panel_views,
             worktree_panel,
+            worktree_tabs: HashMap::new(),
             right_panel_view,
             working_directories_model,
             shown_staging_banner_count: 0,
@@ -23075,6 +23078,9 @@ impl Workspace {
                 self.update_worktree_panel_activity(ctx);
             }
             WorktreePanelEvent::OpenWorktree(path) => self.open_worktree(path.clone(), ctx),
+            WorktreePanelEvent::OpenWorktreeInNewTab(path) => {
+                self.open_worktree_in_new_tab(path.clone(), ctx);
+            }
             WorktreePanelEvent::NewWorktree { repository } => {
                 self.open_new_worktree_modal(Some(repository.clone()), ctx);
             }
@@ -23082,31 +23088,58 @@ impl Workspace {
         }
     }
 
-    /// Switches to a tab with a terminal in `worktree`, preferring the active tab, or opens a new
-    /// tab there when none exists. Then shows the project explorer, which follows the active
-    /// tab's directory, so the worktree's files are listed.
+    /// Shows the tab for `worktree`, so all of that worktree's panes come with it: the active tab
+    /// if it belongs to the worktree, otherwise the tab opened for it from the Worktrees view, then
+    /// any tab with a terminal in it. Opens a new tab for the worktree when there is none.
     fn open_worktree(&mut self, worktree: PathBuf, ctx: &mut ViewContext<Self>) {
+        let live_pane_groups: HashSet<EntityId> =
+            self.tabs.iter().map(|tab| tab.pane_group.id()).collect();
+        self.worktree_tabs
+            .retain(|pane_group, _| live_pane_groups.contains(pane_group));
+
+        let bound_tabs: Vec<usize> = self
+            .tabs
+            .iter()
+            .enumerate()
+            .filter(|(_, tab)| self.worktree_tabs.get(&tab.pane_group.id()) == Some(&worktree))
+            .map(|(index, _)| index)
+            .collect();
         let terminals = self.worktree_terminal_activity(ctx);
         let panel = self.worktree_panel.as_ref(ctx);
-        let tab_indices: Vec<usize> = terminals
+        let tabs_with_terminal_in_worktree: Vec<usize> = terminals
             .iter()
             .filter(|terminal| panel.worktree_containing(&terminal.cwd) == Some(worktree.as_path()))
             .map(|terminal| terminal.tab_index)
             .collect();
-        if tab_indices.contains(&self.active_tab_index) {
+        let active_tab_is_unbound_or_bound_here = self
+            .tabs
+            .get(self.active_tab_index)
+            .and_then(|tab| self.worktree_tabs.get(&tab.pane_group.id()))
+            .is_none_or(|bound| bound == &worktree);
+
+        if bound_tabs.contains(&self.active_tab_index)
+            || (active_tab_is_unbound_or_bound_here
+                && tabs_with_terminal_in_worktree.contains(&self.active_tab_index))
+        {
             self.focus_active_tab(ctx);
-        } else if let Some(&tab_index) = tab_indices.first() {
+        } else if let Some(&tab_index) = bound_tabs
+            .first()
+            .or_else(|| tabs_with_terminal_in_worktree.first())
+        {
             self.activate_tab(tab_index, ctx);
         } else {
-            self.open_directory_in_new_tab(worktree, ctx);
+            self.open_worktree_in_new_tab(worktree, ctx);
+            return;
         }
         self.update_worktree_panel_activity(ctx);
-        if self
-            .left_panel_views
-            .contains(&ToolPanelView::ProjectExplorer)
-        {
-            self.open_left_panel_view(&LeftPanelAction::ProjectExplorer, ctx);
+    }
+
+    fn open_worktree_in_new_tab(&mut self, worktree: PathBuf, ctx: &mut ViewContext<Self>) {
+        self.open_directory_in_new_tab(worktree.clone(), ctx);
+        if let Some(tab) = self.tabs.get(self.active_tab_index) {
+            self.worktree_tabs.insert(tab.pane_group.id(), worktree);
         }
+        self.update_worktree_panel_activity(ctx);
     }
 
     fn add_repository_to_worktree_panel(&mut self, ctx: &mut ViewContext<Self>) {

@@ -36,14 +36,27 @@ the most urgent status wins and the status line reads e.g. "2 agents · Needs in
 
 ## Navigation
 
-Clicking a worktree:
+Each worktree has its own tab, so a worktree keeps all of its panes (splits, agents, running
+commands) and switching worktrees brings that whole layout back.
 
-1. stays on the current tab if it already has a terminal in that worktree,
-2. otherwise switches to the first tab with a terminal in that worktree,
-3. otherwise opens a new tab in the worktree directory,
+- **Single click** shows the worktree's tab: the current tab if it belongs to the worktree,
+  otherwise the tab opened for it from the Worktrees view, otherwise any tab with a terminal in
+  it. If there is none, a new tab opens in the worktree and becomes its tab.
+- **Double click** always opens an additional tab in the worktree.
 
-and then switches the tools panel to the Project explorer, which follows the active tab's terminal
-and therefore lists the worktree's files. Click the branch icon to return to the Worktrees view.
+The tools panel stays on the Worktrees view. The Project explorer follows the active tab's
+terminal, so switching to it lists the worktree's files.
+
+## Deleting a worktree
+
+Right-click a worktree for **Open**, **Open in new tab**, **Delete worktree**, and **Delete worktree and local branch**.
+
+- Deleting runs `git worktree remove` (without `--force`), so git refuses to delete a worktree with
+  modified or untracked files; a toast shows git's reason.
+- **Delete worktree** keeps the branch. **Delete worktree and local branch** then runs
+  `git branch -d`, which only deletes a branch that is merged; otherwise the worktree is still
+  deleted, the branch is kept, and a toast says why. Remote branches are never touched.
+- The main worktree can't be deleted, and detached worktrees have no branch option.
 
 ## Opening, closing, and resizing
 

@@ -7,18 +7,21 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use pathfinder_color::ColorU;
+use pathfinder_geometry::vector::Vector2F;
 use warp_core::ui::Icon;
 use warp_core::ui::theme::Fill as ThemeFill;
 use warp_core::ui::theme::color::internal_colors;
 use warp_util::git::run_git_command;
+use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::elements::{
-    ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container, CornerRadius,
-    CrossAxisAlignment, Element, Empty, Fill, Flex, Hoverable, MainAxisAlignment, MainAxisSize,
-    MouseStateHandle, ParentElement, Radius, ScrollbarWidth, Shrinkable, Text,
+    ChildAnchor, ChildView, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container,
+    CornerRadius, CrossAxisAlignment, Element, Empty, Fill, Flex, Hoverable, MainAxisAlignment,
+    MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement,
+    ParentOffsetBounds, Radius, SavePosition, ScrollbarWidth, Shrinkable, Stack, Text,
 };
 use warpui::platform::Cursor;
 use warpui::ui_components::components::UiComponent;
-use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext};
+use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle};
 
 pub use self::model::{AgentActivity, AgentState, TerminalActivity};
 use self::model::{
@@ -28,6 +31,7 @@ use super::vertical_tabs::summary_conversation_status_for_terminal;
 use crate::ai::agent::conversation::ConversationStatus;
 use crate::ai::persisted_workspace::PersistedWorkspace;
 use crate::appearance::Appearance;
+use crate::menu::{self, Menu, MenuItem, MenuItemFields};
 use crate::settings::WorktreeSettings;
 use crate::terminal::TerminalView;
 use crate::terminal::cli_agent::CLIAgent;
@@ -38,6 +42,8 @@ use crate::view_components::DismissibleToast;
 use crate::workspace::ToastStack;
 
 const TICK_INTERVAL: Duration = Duration::from_secs(2);
+/// A single click waits this long before acting, so it can be superseded by a double click.
+const DOUBLE_CLICK_INTERVAL: Duration = Duration::from_millis(250);
 /// Git worktrees are re-listed every this many ticks.
 const GIT_REFRESH_TICKS: u32 = 5;
 /// Merged pull requests are checked every this many ticks (~5 minutes), since each check is a
@@ -53,7 +59,18 @@ const WORKTREE_INDENT: f32 = 20.;
 #[derive(Clone, Debug, PartialEq)]
 pub enum WorktreePanelAction {
     ToggleRepository(PathBuf),
+    ClickWorktree(PathBuf),
+    DoubleClickWorktree(PathBuf),
     OpenWorktree(PathBuf),
+    OpenWorktreeInNewTab(PathBuf),
+    OpenWorktreeContextMenu {
+        worktree: PathBuf,
+        position: Vector2F,
+    },
+    DeleteWorktree {
+        worktree: PathBuf,
+        delete_branch: bool,
+    },
     NewWorktree(PathBuf),
     AddRepository,
     Refresh,
@@ -62,7 +79,9 @@ pub enum WorktreePanelAction {
 pub enum WorktreePanelEvent {
     /// Asks the workspace to report its terminals via [`WorktreePanelView::set_terminal_activity`].
     RequestTerminalActivity,
+    /// Moves the active tab into the worktree.
     OpenWorktree(PathBuf),
+    OpenWorktreeInNewTab(PathBuf),
     NewWorktree {
         repository: PathBuf,
     },
@@ -93,6 +112,11 @@ pub struct WorktreePanelView {
     worktree_mouse_states: HashMap<PathBuf, MouseStateHandle>,
     header_mouse_states: HeaderMouseStates,
     scroll_state: ClippedScrollStateHandle,
+    context_menu: ViewHandle<Menu<WorktreePanelAction>>,
+    /// Where the open context menu is anchored, relative to the panel.
+    context_menu_position: Option<Vector2F>,
+    position_id: String,
+    pending_single_click: Option<SpawnedFutureHandle>,
     /// Whether the Worktrees tab is the visible tools panel view.
     is_visible: bool,
     ticks: u32,
@@ -102,6 +126,17 @@ pub struct WorktreePanelView {
 
 impl WorktreePanelView {
     pub fn new(ctx: &mut ViewContext<Self>) -> Self {
+        let context_menu = ctx.add_typed_action_view(|_| {
+            Menu::new()
+                .prevent_interaction_with_other_elements()
+                .with_drop_shadow()
+        });
+        ctx.subscribe_to_view(&context_menu, |me, _, event, ctx| {
+            if let menu::Event::Close { .. } = event {
+                me.context_menu_position = None;
+                ctx.notify();
+            }
+        });
         let view = Self {
             repositories: Vec::new(),
             terminals: Vec::new(),
@@ -112,6 +147,10 @@ impl WorktreePanelView {
             worktree_mouse_states: HashMap::new(),
             header_mouse_states: HeaderMouseStates::default(),
             scroll_state: ClippedScrollStateHandle::default(),
+            context_menu,
+            context_menu_position: None,
+            position_id: format!("worktree_panel_{}", ctx.view_id()),
+            pending_single_click: None,
             is_visible: false,
             ticks: 0,
             git_refresh_in_flight: false,
@@ -341,7 +380,12 @@ impl WorktreePanelView {
                     if me.activity.contains_key(&worktree) {
                         continue;
                     }
-                    me.remove_worktree(repository, worktree, pr_number, ctx);
+                    me.remove_worktree(
+                        repository,
+                        worktree,
+                        WorktreeRemoval::PullRequestMerged(pr_number),
+                        ctx,
+                    );
                 }
             },
         );
@@ -351,7 +395,7 @@ impl WorktreePanelView {
         &mut self,
         repository: PathBuf,
         worktree: PathBuf,
-        pr_number: u64,
+        reason: WorktreeRemoval,
         ctx: &mut ViewContext<Self>,
     ) {
         let window_id = ctx.window_id();
@@ -359,28 +403,65 @@ impl WorktreePanelView {
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_default();
+        let branch_to_delete = match &reason {
+            WorktreeRemoval::Requested { delete_branch } => delete_branch.clone(),
+            WorktreeRemoval::PullRequestMerged(_) => None,
+        };
         ctx.spawn(
             async move {
                 let worktree_arg = worktree.to_string_lossy().into_owned();
-                run_git_command(&repository, &["worktree", "remove", &worktree_arg]).await
+                let worktree_result =
+                    run_git_command(&repository, &["worktree", "remove", &worktree_arg]).await;
+                let branch_result = match (&worktree_result, branch_to_delete) {
+                    // `-d` rather than `-D`, so git refuses to drop commits that aren't merged.
+                    (Ok(_), Some(branch)) => {
+                        let result =
+                            run_git_command(&repository, &["branch", "-d", "--", &branch]).await;
+                        Some(match result {
+                            Ok(_) => Ok(branch),
+                            Err(error) => Err((branch, error)),
+                        })
+                    }
+                    _ => None,
+                };
+                (worktree_result, branch_result)
             },
-            move |me, result, ctx| match result {
-                Ok(_) => {
-                    let message = format!(
-                        "Removed worktree {worktree_name} because PR #{pr_number} was merged."
-                    );
-                    ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-                        toast_stack.add_ephemeral_toast(
-                            DismissibleToast::success(message),
-                            window_id,
-                            ctx,
-                        );
-                    });
-                    me.refresh_repositories(ctx);
-                }
-                Err(error) => {
-                    log::info!("Did not remove worktree after its PR merged: {error:#}");
-                }
+            move |me, (worktree_result, branch_result), ctx| {
+                let toast = match (worktree_result, &reason, branch_result) {
+                    (Ok(_), WorktreeRemoval::PullRequestMerged(pr_number), _) => {
+                        DismissibleToast::success(format!(
+                            "Removed worktree {worktree_name} because PR #{pr_number} was merged."
+                        ))
+                    }
+                    (Ok(_), WorktreeRemoval::Requested { .. }, None) => {
+                        DismissibleToast::success(format!("Deleted worktree {worktree_name}."))
+                    }
+                    (Ok(_), WorktreeRemoval::Requested { .. }, Some(Ok(branch))) => {
+                        DismissibleToast::success(format!(
+                            "Deleted worktree {worktree_name} and branch {branch}."
+                        ))
+                    }
+                    (Ok(_), WorktreeRemoval::Requested { .. }, Some(Err((branch, error)))) => {
+                        DismissibleToast::error(format!(
+                            "Deleted worktree {worktree_name}, but kept branch {branch}: {}",
+                            git_error_message(&error)
+                        ))
+                    }
+                    (Err(error), WorktreeRemoval::PullRequestMerged(_), _) => {
+                        log::info!("Did not remove worktree after its PR merged: {error:#}");
+                        return;
+                    }
+                    (Err(error), WorktreeRemoval::Requested { .. }, _) => {
+                        DismissibleToast::error(format!(
+                            "Couldn't delete worktree {worktree_name}: {}",
+                            git_error_message(&error)
+                        ))
+                    }
+                };
+                ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+                    toast_stack.add_ephemeral_toast(toast, window_id, ctx);
+                });
+                me.refresh_repositories(ctx);
             },
         );
     }
@@ -397,11 +478,42 @@ impl WorktreePanelView {
             })
     }
 
+    fn worktree(&self, path: &Path) -> Option<&model::Worktree> {
+        self.repositories
+            .iter()
+            .flat_map(|repository| &repository.worktrees)
+            .find(|worktree| worktree.path == path)
+    }
+
     fn is_worktree_selected(&self, worktree: &Path) -> bool {
         self.activity
             .get(worktree)
             .is_some_and(|activity| activity.tab_indices.contains(&self.active_tab_index))
     }
+}
+
+enum WorktreeRemoval {
+    PullRequestMerged(u64),
+    Requested {
+        /// Local branch to delete along with the worktree.
+        delete_branch: Option<String>,
+    },
+}
+
+/// Git's own explanation (e.g. "contains modified or untracked files"), without the wrapper text.
+fn git_error_message(error: &anyhow::Error) -> String {
+    let message = error.to_string();
+    message
+        .lines()
+        .map(str::trim)
+        .map(|line| {
+            line.strip_prefix("Git command failed:")
+                .unwrap_or(line)
+                .trim()
+        })
+        .find_map(|line| line.strip_prefix("fatal:").or(line.strip_prefix("error:")))
+        .map(|line| line.trim().to_owned())
+        .unwrap_or(message)
 }
 
 async fn list_repository(path: &Path) -> Option<Repository> {
@@ -468,8 +580,106 @@ impl TypedActionView for WorktreePanelView {
                     ctx.notify();
                 }
             }
+            WorktreePanelAction::ClickWorktree(path) => {
+                if let Some(pending) = self.pending_single_click.take() {
+                    pending.abort();
+                }
+                let path = path.clone();
+                self.pending_single_click = Some(ctx.spawn(
+                    async { Timer::after(DOUBLE_CLICK_INTERVAL).await },
+                    move |me, _, ctx| {
+                        me.pending_single_click = None;
+                        ctx.emit(WorktreePanelEvent::OpenWorktree(path));
+                    },
+                ));
+            }
+            WorktreePanelAction::DoubleClickWorktree(path) => {
+                if let Some(pending) = self.pending_single_click.take() {
+                    pending.abort();
+                }
+                ctx.emit(WorktreePanelEvent::OpenWorktreeInNewTab(path.clone()));
+            }
             WorktreePanelAction::OpenWorktree(path) => {
+                self.context_menu_position = None;
                 ctx.emit(WorktreePanelEvent::OpenWorktree(path.clone()));
+            }
+            WorktreePanelAction::OpenWorktreeInNewTab(path) => {
+                self.context_menu_position = None;
+                ctx.emit(WorktreePanelEvent::OpenWorktreeInNewTab(path.clone()));
+            }
+            WorktreePanelAction::OpenWorktreeContextMenu { worktree, position } => {
+                let Some(worktree) = self.worktree(worktree) else {
+                    return;
+                };
+                let mut items = vec![
+                    MenuItemFields::new("Open")
+                        .with_on_select_action(WorktreePanelAction::OpenWorktree(
+                            worktree.path.clone(),
+                        ))
+                        .into_item(),
+                    MenuItemFields::new("Open in new tab")
+                        .with_on_select_action(WorktreePanelAction::OpenWorktreeInNewTab(
+                            worktree.path.clone(),
+                        ))
+                        .into_item(),
+                    MenuItem::Separator,
+                ];
+                if worktree.is_main {
+                    items.push(
+                        MenuItemFields::new("Delete worktree")
+                            .with_disabled(true)
+                            .with_tooltip("The main worktree can't be deleted")
+                            .into_item(),
+                    );
+                } else {
+                    items.push(
+                        MenuItemFields::new("Delete worktree")
+                            .with_on_select_action(WorktreePanelAction::DeleteWorktree {
+                                worktree: worktree.path.clone(),
+                                delete_branch: false,
+                            })
+                            .into_item(),
+                    );
+                    if let Some(branch) = &worktree.branch {
+                        items.push(
+                            MenuItemFields::new("Delete worktree and local branch")
+                                .with_tooltip(format!(
+                                    "Also deletes {branch} if it has been merged"
+                                ))
+                                .with_on_select_action(WorktreePanelAction::DeleteWorktree {
+                                    worktree: worktree.path.clone(),
+                                    delete_branch: true,
+                                })
+                                .into_item(),
+                        );
+                    }
+                }
+                self.context_menu.update(ctx, move |menu, ctx| {
+                    menu.set_items(items, ctx);
+                    ctx.notify();
+                });
+                self.context_menu_position = Some(*position);
+                ctx.notify();
+            }
+            WorktreePanelAction::DeleteWorktree {
+                worktree,
+                delete_branch,
+            } => {
+                self.context_menu_position = None;
+                let target = self.repositories.iter().find_map(|repository| {
+                    repository
+                        .worktrees
+                        .iter()
+                        .find(|candidate| &candidate.path == worktree && !candidate.is_main)
+                        .map(|candidate| (repository.root.clone(), candidate.branch.clone()))
+                });
+                if let Some((root, branch)) = target {
+                    let reason = WorktreeRemoval::Requested {
+                        delete_branch: branch.filter(|_| *delete_branch),
+                    };
+                    self.remove_worktree(root, worktree.clone(), reason, ctx);
+                }
+                ctx.notify();
             }
             WorktreePanelAction::NewWorktree(repository) => {
                 ctx.emit(WorktreePanelEvent::NewWorktree {
@@ -522,11 +732,26 @@ impl View for WorktreePanelView {
         .with_overlayed_scrollbar()
         .finish();
 
-        Flex::column()
+        let panel = Flex::column()
             .with_main_axis_size(MainAxisSize::Max)
             .with_child(self.render_header(appearance))
             .with_child(Shrinkable::new(1., scrollable).finish())
-            .finish()
+            .finish();
+
+        let mut stack = Stack::new();
+        stack.add_child(SavePosition::new(panel, &self.position_id).finish());
+        if let Some(position) = self.context_menu_position {
+            stack.add_positioned_overlay_child(
+                ChildView::new(&self.context_menu).finish(),
+                OffsetPositioning::offset_from_parent(
+                    position,
+                    ParentOffsetBounds::WindowByPosition,
+                    ParentAnchor::TopLeft,
+                    ChildAnchor::TopLeft,
+                ),
+            );
+        }
+        stack.finish()
     }
 }
 
@@ -708,6 +933,9 @@ impl WorktreePanelView {
             .finish();
 
         let path = worktree.path.clone();
+        let double_click_path = worktree.path.clone();
+        let context_menu_path = worktree.path.clone();
+        let position_id = self.position_id.clone();
         Hoverable::new(mouse_state.clone(), move |hover| {
             let mut container = Container::new(content)
                 .with_padding_left(WORKTREE_INDENT)
@@ -723,7 +951,21 @@ impl WorktreePanelView {
             container.finish()
         })
         .on_click(move |ctx, _, _| {
-            ctx.dispatch_typed_action(WorktreePanelAction::OpenWorktree(path.clone()));
+            ctx.dispatch_typed_action(WorktreePanelAction::ClickWorktree(path.clone()));
+        })
+        .on_double_click(move |ctx, _, _| {
+            ctx.dispatch_typed_action(WorktreePanelAction::DoubleClickWorktree(
+                double_click_path.clone(),
+            ));
+        })
+        .on_right_click(move |ctx, _, position| {
+            let Some(panel_bounds) = ctx.element_position_by_id(&position_id) else {
+                return;
+            };
+            ctx.dispatch_typed_action(WorktreePanelAction::OpenWorktreeContextMenu {
+                worktree: context_menu_path.clone(),
+                position: position - panel_bounds.origin(),
+            });
         })
         .with_cursor(Cursor::PointingHand)
         .finish()
@@ -812,3 +1054,7 @@ fn status_dot(
     .with_height(STATUS_DOT_SIZE)
     .finish()
 }
+
+#[cfg(test)]
+#[path = "mod_tests.rs"]
+mod tests;
