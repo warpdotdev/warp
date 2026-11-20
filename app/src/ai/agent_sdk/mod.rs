@@ -2342,7 +2342,7 @@ fn launch_command(
     let cli_name = warp_cli::binary_name().unwrap_or_else(|| "warp".to_string());
     authenticate_then_execute(
         global_options.api_key.clone(),
-        &format!("You are not logged in - please log in with `{cli_name} login` to continue."),
+        &format!("Please log in again with `{cli_name} login` to continue."),
         ctx,
         move |ctx| dispatch_command(ctx, command.clone(), global_options.clone()),
     )
@@ -2360,20 +2360,27 @@ pub fn authenticate_then_execute(
     let auth_state = AuthStateProvider::handle(ctx).as_ref(ctx).get();
     let Some(authentication) = command_authentication(pending_api_key, auth_state.is_logged_in())
     else {
-        return Err(anyhow::anyhow!("{}", login_hint));
+        return Err(anyhow::anyhow!("You are not logged in. {}", login_hint));
     };
 
     // On staging the warp-server is fronted by IAP, so establish an IAP token
     // before *any* warp-server request.
     let iap = IapManager::handle(ctx);
     if !iap.as_ref(ctx).is_enabled() || iap.as_ref(ctx).has_valid_token() {
-        authenticate_and_execute(ctx, parent_span, authentication, execute);
+        authenticate_and_execute(
+            ctx,
+            parent_span,
+            authentication,
+            login_hint.to_owned(),
+            execute,
+        );
         return Ok(());
     }
 
     let mut execute = Some(execute);
     let mut handled = false;
     let parent_span_for_iap = parent_span.clone();
+    let login_hint = login_hint.to_owned();
     ctx.subscribe_to_model(&iap, move |_, event, ctx| {
         let _guard = parent_span_for_iap.enter();
         if handled {
@@ -2389,6 +2396,7 @@ pub fn authenticate_then_execute(
                         ctx,
                         parent_span.clone(),
                         authentication.clone(),
+                        login_hint.clone(),
                         execute,
                     );
                 }
@@ -2416,10 +2424,9 @@ fn authenticate_and_execute(
     ctx: &mut AppContext,
     parent_span: tracing::Span,
     authentication: CommandAuthentication,
+    login_hint: String,
     execute: impl FnOnce(&mut AppContext) -> anyhow::Result<()> + 'static,
 ) {
-    let cli_name = warp_cli::binary_name().unwrap_or_else(|| "warp".to_string());
-
     // Subscribe to auth events and wait for validation before running the command.
     let mut execute_once = Some(execute);
     let mut dispatched = false;
@@ -2444,7 +2451,7 @@ fn authenticate_and_execute(
                 let message = if auth_state.is_api_key_authenticated() {
                     "Your API key is invalid. Please provide a valid key via '--api-key' or the WARP_API_KEY environment variable.".to_string()
                 } else {
-                    format!("Your credentials are invalid. Please log in again with `{cli_name} login`.")
+                    format!("Your credentials are invalid. {} If it appears that you are already logged in, log out and log in again.", login_hint)
                 };
                 report_fatal_error(anyhow::anyhow!(message), ctx);
             }

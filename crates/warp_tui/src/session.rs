@@ -235,7 +235,7 @@ pub fn run() -> Result<()> {
                          API-key authentication. Unset WARP_API_KEY, restart Warp \
                          Agent CLI without --api-key, and sign in again using your browser."
                     } else {
-                        "You are not logged in - please open Warp Agent CLI to log in."
+                        "Please open Warp Agent CLI to log in again."
                     };
                     if let Err(error) =
                         authenticate_then_execute(None, login_hint, ctx, move |ctx| {
