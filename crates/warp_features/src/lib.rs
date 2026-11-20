@@ -572,9 +572,6 @@ pub enum FeatureFlag {
     /// Enables Warp Managed Secrets functionality.
     WarpManagedSecrets,
 
-    /// Enables support for AM file diffs backed by the V4A patch format.
-    V4AFileDiffs,
-
     /// Enables loading conversations in the Agent Management View.
     InteractiveConversationManagementView,
 
