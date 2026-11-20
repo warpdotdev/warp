@@ -157,7 +157,15 @@ const MUSE_COLOR: ColorU = ColorU {
     a: 255,
 };
 
-/// Represents a CLI agent (e.g., Claude Code, Gemini CLI, Codex, Amp, Droid, OpenCode, Copilot, Pi, Auggie, Cursor, Goose, Hermes, Mistral Vibe, Grok Build, Kiro CLI, Muse Code)
+/// Devin brand color (#317CFF, from cli.devin.ai)
+const DEVIN_COLOR: ColorU = ColorU {
+    r: 49,
+    g: 124,
+    b: 255,
+    a: 255,
+};
+
+/// Represents a CLI agent (e.g., Claude Code, Gemini CLI, Codex, Amp, Droid, OpenCode, Copilot, Pi, Auggie, Cursor, Goose, Hermes, Mistral Vibe, Grok Build, Kiro CLI, Muse Code, Devin)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Sequence, Serialize, Deserialize)]
 pub enum CLIAgent {
     Claude,
@@ -178,6 +186,7 @@ pub enum CLIAgent {
     Grok,
     Kiro,
     Muse,
+    Devin,
     /// Warp's own headless TUI.
     WarpTui,
     /// Represents an unknown/custom CLI agent matched by user-configured regex patterns.
@@ -206,6 +215,7 @@ impl CLIAgent {
             CLIAgent::Grok => "Grok",
             CLIAgent::Kiro => "Kiro",
             CLIAgent::Muse => "Muse",
+            CLIAgent::Devin => "Devin",
             CLIAgent::WarpTui => "WarpTui",
             CLIAgent::Unknown => "Unknown",
         }
@@ -240,6 +250,7 @@ impl CLIAgent {
             CLIAgent::Grok => &["grok"],
             CLIAgent::Kiro => &["kiro-cli", "kiro"],
             CLIAgent::Muse => &["muse"],
+            CLIAgent::Devin => &["devin"],
             CLIAgent::Unknown => &[],
         }
     }
@@ -298,6 +309,7 @@ impl CLIAgent {
             CLIAgent::Grok => "Grok Build",
             CLIAgent::Kiro => "Kiro CLI",
             CLIAgent::Muse => "Muse Code",
+            CLIAgent::Devin => "Devin",
             CLIAgent::WarpTui => "Warp TUI",
             CLIAgent::Unknown => "CLI Agent",
         }
@@ -327,6 +339,10 @@ impl CLIAgent {
             CLIAgent::Grok => Some(Icon::GrokLogo),
             CLIAgent::Kiro => Some(Icon::KiroLogo),
             CLIAgent::Muse => Some(Icon::MuseLogo),
+            // Devin is recognized but ships without a brand asset. The brand color
+            // still drives the toolbar tile; an `Icon::DevinLogo` can be wired
+            // up in a follow-up once an officially licensed SVG is available.
+            CLIAgent::Devin => None,
             CLIAgent::WarpTui => Some(Icon::Warp),
             CLIAgent::Unknown => None,
         }
@@ -367,6 +383,7 @@ impl CLIAgent {
                 SkillProvider::Claude,
                 SkillProvider::Codex,
             ],
+            CLIAgent::Devin => &[SkillProvider::Agents],
             CLIAgent::WarpTui => &[],
             CLIAgent::Unknown => &[],
         }
@@ -426,6 +443,7 @@ impl CLIAgent {
             CLIAgent::Grok => Some(GROK_COLOR),
             CLIAgent::Kiro => Some(KIRO_PURPLE),
             CLIAgent::Muse => Some(MUSE_COLOR),
+            CLIAgent::Devin => Some(DEVIN_COLOR),
             CLIAgent::WarpTui => Some(ColorU::black()),
             CLIAgent::Unknown => None,
         }
