@@ -37,6 +37,9 @@ use crate::terminal::model::grid::RespectDisplayedOutput;
 use crate::terminal::model::index::Point;
 use crate::terminal::model::session::ExecuteCommandOptions;
 use crate::terminal::model::terminal_model::ShellProcessInfo;
+use crate::terminal::shared_session::sharer::network::{
+    AMBIENT_SESSION_STARTUP_TIMEOUT, SessionSharingStartupTimeout,
+};
 use crate::terminal::shared_session::{
     self, IsSharedSessionCreator, SharedSessionScrollbackType, SharedSessionSource,
 };
@@ -110,8 +113,9 @@ pub(crate) enum ShareSessionError {
 }
 
 const TERMINAL_SESSION_BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(60);
-/// The total time to wait for session sharing to start, including retries.
-const TERMINAL_SESSION_SHARE_DELAY: Duration = Duration::from_secs(20);
+/// Allows the network deadline to expire and deliver its failure before the fallback wait ends.
+const TERMINAL_SESSION_SHARE_DELAY: Duration =
+    AMBIENT_SESSION_STARTUP_TIMEOUT.saturating_add(Duration::from_secs(5));
 
 /// Whether to wait for a requested share, which is skipped when the server runs behind ngrok.
 fn sharing_expected(should_share: bool) -> bool {
@@ -1092,6 +1096,9 @@ impl TerminalDriver {
             crate::terminal::view::Event::FailedToShareSession { reason, cause } => {
                 if let Some(tx) = self.session_share_tx.take() {
                     let error = match cause {
+                        Some(cause) if cause.is::<SessionSharingStartupTimeout>() => {
+                            ShareSessionError::Timeout
+                        }
                         Some(cause) => ShareSessionError::Internal(cause.clone()),
                         None => ShareSessionError::Failed(reason.clone()),
                     };

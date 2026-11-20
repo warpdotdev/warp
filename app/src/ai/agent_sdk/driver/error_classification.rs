@@ -45,8 +45,7 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
                     .to_string()
                 }
                 ShareSessionError::Timeout => {
-                    "Failed to share agent session: timed out waiting for the session sharing \
-                     server to respond. Please check your network connection and try again."
+                    "Timed out starting session sharing. Please retry the run."
                     .to_string()
                 }
                 ShareSessionError::Interrupted => {
