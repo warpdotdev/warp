@@ -39,18 +39,31 @@ impl DaemonPaths {
     /// The paths used by the app and the daemon it spawns: `<state dir>/ts`,
     /// or a fallback directory if that would make the socket path too long.
     pub fn default_for_user() -> Self {
-        let state_dir = warp_core::paths::state_dir();
+        Self::for_state_dir(
+            &warp_core::paths::state_dir(),
+            runtime_dir(),
+            std::env::var_os("TMPDIR"),
+            nix::unistd::geteuid().as_raw(),
+        )
+    }
+
+    /// The paths for the daemon of `state_dir`: `<state dir>/ts`, or a
+    /// fallback directory unique to `state_dir` if that would make the socket
+    /// path too long, so that different channels and homes never share a
+    /// daemon.
+    pub(crate) fn for_state_dir(
+        state_dir: &Path,
+        runtime_dir: Option<OsString>,
+        tmpdir: Option<OsString>,
+        uid: u32,
+    ) -> Self {
         if !state_dir.as_os_str().is_empty() {
             let paths = Self::in_dir(state_dir.join("ts"));
             if paths.socket.as_os_str().len() <= MAX_SOCKET_PATH_LEN {
                 return paths;
             }
         }
-        Self::in_dir(fallback_dir(
-            runtime_dir(),
-            std::env::var_os("TMPDIR"),
-            nix::unistd::geteuid().as_raw(),
-        ))
+        Self::in_dir(fallback_dir(runtime_dir, tmpdir, uid, state_dir))
     }
 
     /// Creates the directory with mode 0700 if needed and checks that it is a
@@ -108,24 +121,43 @@ fn runtime_dir() -> Option<OsString> {
 }
 
 /// The directory used when the state directory makes the socket path too
-/// long: `<runtime dir>/warp-ts` (already per-user and private), else
-/// `<$TMPDIR or /tmp>/warp-ts-<uid>`.
+/// long: `<runtime dir>/warp-ts-<key>` (the runtime dir is already per-user
+/// and private), else `<$TMPDIR or /tmp>/warp-ts-<uid>-<key>`, where `<key>`
+/// is derived from the state directory.
 pub(crate) fn fallback_dir(
     runtime_dir: Option<OsString>,
     tmpdir: Option<OsString>,
     uid: u32,
+    state_dir: &Path,
 ) -> PathBuf {
+    let key = state_dir_key(state_dir);
     if let Some(runtime_dir) = runtime_dir
         .map(PathBuf::from)
         .filter(|dir| dir.is_absolute())
     {
-        return runtime_dir.join("warp-ts");
+        return runtime_dir.join(format!("warp-ts-{key}"));
     }
     let tmp = tmpdir
         .map(PathBuf::from)
         .filter(|dir| dir.is_absolute())
         .unwrap_or_else(|| PathBuf::from("/tmp"));
-    tmp.join(format!("warp-ts-{uid}"))
+    tmp.join(format!("warp-ts-{uid}-{key}"))
+}
+
+/// A short key that is stable across processes and builds: the low 48 bits
+/// of the 64-bit FNV-1a hash of the path bytes, in hex.
+pub(crate) fn state_dir_key(state_dir: &Path) -> String {
+    use std::os::unix::ffi::OsStrExt;
+    const OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+    const PRIME: u64 = 0x0000_0100_0000_01b3;
+    let hash = state_dir
+        .as_os_str()
+        .as_bytes()
+        .iter()
+        .fold(OFFSET_BASIS, |hash, byte| {
+            (hash ^ u64::from(*byte)).wrapping_mul(PRIME)
+        });
+    format!("{:012x}", hash & 0xffff_ffff_ffff)
 }
 
 /// Fails unless `dir` is a directory (not a symlink) owned by the current
