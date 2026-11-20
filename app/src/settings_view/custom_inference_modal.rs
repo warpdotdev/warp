@@ -1,5 +1,6 @@
 use ::ai::api_keys::{CustomEndpoint, CustomEndpointSchema, validate_custom_endpoint_url};
 use warp_editor::editor::NavigationKey;
+use warpui::r#async::SpawnedFutureHandle;
 use warpui::elements::{
     Border, ChildView, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container,
     CornerRadius, CrossAxisAlignment, Empty, Expanded, Flex, MainAxisSize, MouseStateHandle,
@@ -13,6 +14,8 @@ use warpui::units::Pixels;
 use warpui::{
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
+
+use crate::ai::discover_models::{DiscoverModelsError, DiscoveredModel, new_models};
 
 use crate::appearance::{Appearance, AppearanceEvent};
 use crate::editor::{
@@ -74,9 +77,22 @@ pub enum CustomEndpointModalAction {
     Cancel,
     Save,
     AddModel,
+    FetchModels,
     RemoveModel(usize),
     RemoveEndpoint,
     SetSchema(CustomEndpointSchema),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+enum FetchStatus {
+    #[default]
+    Idle,
+    InProgress,
+    Success {
+        added: usize,
+    },
+    NoNew,
+    Failed(&'static str),
 }
 
 struct ModelRow {
@@ -96,10 +112,13 @@ pub struct CustomEndpointModal {
     cancel_button_mouse_state: MouseStateHandle,
     save_button_mouse_state: MouseStateHandle,
     add_model_button_mouse_state: MouseStateHandle,
+    fetch_models_button_mouse_state: MouseStateHandle,
     remove_endpoint_button: ViewHandle<ActionButton>,
     editing_index: Option<usize>,
     url_has_error: bool,
     scroll_state: ClippedScrollStateHandle,
+    fetch_status: FetchStatus,
+    fetch_handle: Option<SpawnedFutureHandle>,
 }
 
 impl CustomEndpointModal {
@@ -276,10 +295,13 @@ impl CustomEndpointModal {
             cancel_button_mouse_state: Default::default(),
             save_button_mouse_state: Default::default(),
             add_model_button_mouse_state: Default::default(),
+            fetch_models_button_mouse_state: Default::default(),
             remove_endpoint_button,
             editing_index,
             url_has_error,
             scroll_state: Default::default(),
+            fetch_status: FetchStatus::Idle,
+            fetch_handle: None,
         }
     }
 
@@ -345,6 +367,7 @@ impl CustomEndpointModal {
         editing_index: Option<usize>,
         ctx: &mut ViewContext<Self>,
     ) {
+        self.abort_fetch();
         self.editing_index = editing_index;
         self.scroll_state = Default::default();
         self.endpoint_name_editor.update(ctx, |editor, ctx| {
@@ -413,6 +436,7 @@ impl CustomEndpointModal {
     }
 
     pub fn on_close(&mut self, ctx: &mut ViewContext<Self>) {
+        self.abort_fetch();
         self.endpoint_name_editor.update(ctx, |editor, ctx| {
             editor.clear_buffer_and_reset_undo_stack(ctx);
         });
@@ -516,11 +540,7 @@ impl CustomEndpointModal {
         ctx.emit(CustomEndpointModalEvent::Close);
     }
 
-    fn add_model(&mut self, ctx: &mut ViewContext<Self>) {
-        let font_family = Appearance::as_ref(ctx).ui_font_family();
-        let text_colors = crate::settings_view::editor_text_colors(Appearance::as_ref(ctx));
-        let row = Self::create_model_row(None, None, None, font_family, &text_colors, ctx);
-        // Subscribe to the new editors
+    fn subscribe_model_editors(row: &ModelRow, ctx: &mut ViewContext<Self>) {
         let name_editor = row.name_editor.clone();
         ctx.subscribe_to_view(&name_editor, |me, editor, event, ctx| {
             me.handle_model_editor_event(&editor, event, ctx);
@@ -529,6 +549,132 @@ impl CustomEndpointModal {
         ctx.subscribe_to_view(&alias_editor, |me, editor, event, ctx| {
             me.handle_model_editor_event(&editor, event, ctx);
         });
+    }
+
+    fn abort_fetch(&mut self) {
+        if let Some(handle) = self.fetch_handle.take() {
+            handle.abort();
+        }
+        self.fetch_status = FetchStatus::Idle;
+    }
+
+    fn fetch_status_line(&self) -> Option<(String, bool)> {
+        match self.fetch_status {
+            FetchStatus::Idle | FetchStatus::InProgress => None,
+            FetchStatus::Success { added } => Some((format!("Found {added} models"), false)),
+            FetchStatus::NoNew => Some(("No new models".to_string(), false)),
+            FetchStatus::Failed(message) => Some((message.to_string(), true)),
+        }
+    }
+
+    fn can_fetch_models(&self, app: &AppContext) -> bool {
+        if matches!(self.fetch_status, FetchStatus::InProgress) {
+            return false;
+        }
+        let url = self.endpoint_url_editor.as_ref(app).buffer_text(app);
+        let api_key = self.api_key_editor.as_ref(app).buffer_text(app);
+        !url.trim().is_empty() && !api_key.trim().is_empty() && validate_url(&url).is_ok()
+    }
+
+    fn is_blank_row(&self, index: usize, app: &AppContext) -> bool {
+        let Some(row) = self.model_rows.get(index) else {
+            return false;
+        };
+        row.name_editor
+            .as_ref(app)
+            .buffer_text(app)
+            .trim()
+            .is_empty()
+            && row
+                .alias_editor
+                .as_ref(app)
+                .buffer_text(app)
+                .trim()
+                .is_empty()
+    }
+
+    fn fetch_models(&mut self, ctx: &mut ViewContext<Self>) {
+        if !self.can_fetch_models(ctx) {
+            return;
+        }
+        let url = self.endpoint_url_editor.as_ref(ctx).buffer_text(ctx);
+        let api_key = self.api_key_editor.as_ref(ctx).buffer_text(ctx);
+        if validate_url(&url).is_err() {
+            self.fetch_status = FetchStatus::Failed("Fetch failed: unexpected response");
+            ctx.notify();
+            return;
+        }
+        if let Some(handle) = self.fetch_handle.take() {
+            handle.abort();
+        }
+        self.fetch_status = FetchStatus::InProgress;
+        ctx.notify();
+        let handle = ctx.spawn(
+            async move {
+                let client = http_client::Client::new();
+                crate::ai::discover_models::discover_models(&client, &url, &api_key).await
+            },
+            |me, result, ctx| {
+                me.fetch_handle = None;
+                match result {
+                    Ok(models) => me.apply_discovered_models(models, ctx),
+                    Err(err) => {
+                        me.fetch_status = FetchStatus::Failed(fetch_failed_message(err));
+                        ctx.notify();
+                    }
+                }
+            },
+        );
+        self.fetch_handle = Some(handle);
+    }
+
+    fn apply_discovered_models(
+        &mut self,
+        models: Vec<DiscoveredModel>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let existing: Vec<String> = self
+            .model_rows
+            .iter()
+            .map(|row| row.name_editor.as_ref(ctx).buffer_text(ctx))
+            .collect();
+        let new_models: Vec<DiscoveredModel> = new_models(&models, &existing)
+            .into_iter()
+            .cloned()
+            .collect();
+        if new_models.is_empty() {
+            self.fetch_status = FetchStatus::NoNew;
+            ctx.notify();
+            return;
+        }
+        if self.model_rows.len() == 1 && self.is_blank_row(0, ctx) {
+            self.remove_model(0, ctx);
+        }
+        let font_family = Appearance::as_ref(ctx).ui_font_family();
+        let text_colors = crate::settings_view::editor_text_colors(Appearance::as_ref(ctx));
+        let added = new_models.len();
+        for model in &new_models {
+            let row = Self::create_model_row(
+                Some(&model.id),
+                model.alias.as_deref(),
+                None,
+                font_family,
+                &text_colors,
+                ctx,
+            );
+            Self::subscribe_model_editors(&row, ctx);
+            self.model_rows.push(row);
+        }
+        self.scroll_state.scroll_to(Pixels::new(f32::MAX));
+        self.fetch_status = FetchStatus::Success { added };
+        ctx.notify();
+    }
+
+    fn add_model(&mut self, ctx: &mut ViewContext<Self>) {
+        let font_family = Appearance::as_ref(ctx).ui_font_family();
+        let text_colors = crate::settings_view::editor_text_colors(Appearance::as_ref(ctx));
+        let row = Self::create_model_row(None, None, None, font_family, &text_colors, ctx);
+        Self::subscribe_model_editors(&row, ctx);
         self.model_rows.push(row);
         // ClippedScrollable clamps this to its true maximum after laying out the new row.
         // Until the form overflows, that maximum remains zero and the modal grows naturally.
@@ -974,11 +1120,67 @@ impl View for CustomEndpointModal {
             })
             .finish();
 
+        let fetch_in_progress = matches!(self.fetch_status, FetchStatus::InProgress);
+        let mut fetch_models_button = appearance
+            .ui_builder()
+            .button(
+                ButtonVariant::Secondary,
+                self.fetch_models_button_mouse_state.clone(),
+            )
+            .with_text_label(if fetch_in_progress {
+                "Fetching…".to_string()
+            } else {
+                "Fetch models".to_string()
+            })
+            .with_style(UiComponentStyles {
+                font_size: Some(14.),
+                padding: Some(Coords::uniform(6.).left(8.).right(8.)),
+                ..Default::default()
+            });
+        if !self.can_fetch_models(app) {
+            fetch_models_button = fetch_models_button.disabled();
+        }
+        let fetch_models_button = fetch_models_button
+            .build()
+            .on_click(move |ctx, _, _| {
+                ctx.dispatch_typed_action(CustomEndpointModalAction::FetchModels);
+            })
+            .finish();
+
+        let model_actions = Flex::row()
+            .with_spacing(8.)
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_child(add_model_button)
+            .with_child(fetch_models_button)
+            .finish();
+
         column.add_child(
-            Container::new(add_model_button)
-                .with_margin_bottom(24.)
+            Container::new(model_actions)
+                .with_margin_bottom(if matches!(self.fetch_status, FetchStatus::Idle) {
+                    24.
+                } else {
+                    8.
+                })
                 .finish(),
         );
+
+        if let Some((status_text, is_error)) = self.fetch_status_line() {
+            let status_color = if is_error {
+                theme.ui_error_color()
+            } else {
+                theme.nonactive_ui_text_color().into()
+            };
+            column.add_child(
+                Container::new(
+                    Text::new(status_text, appearance.ui_font_family(), LABEL_FONT_SIZE)
+                        .with_color(status_color)
+                        .soft_wrap(true)
+                        .finish(),
+                )
+                .with_margin_bottom(24.)
+                .finish(),
+            );
+        }
 
         // Bottom buttons row
         let mut buttons_row = Flex::row()
@@ -1090,6 +1292,18 @@ fn is_endpoint_form_valid(name: &str, url: &str, api_key: &str, has_models: bool
         && validate_url(url).is_ok()
 }
 
+fn fetch_failed_message(error: DiscoverModelsError) -> &'static str {
+    match error {
+        DiscoverModelsError::Unauthorized => "Fetch failed: unauthorized",
+        DiscoverModelsError::NotFound => "Fetch failed: not found",
+        DiscoverModelsError::Network => "Fetch failed: network error",
+        DiscoverModelsError::NoModels => "Fetch failed: no models",
+        DiscoverModelsError::EmptyUrl
+        | DiscoverModelsError::EmptyKey
+        | DiscoverModelsError::UnexpectedResponse => "Fetch failed: unexpected response",
+    }
+}
+
 impl TypedActionView for CustomEndpointModal {
     type Action = CustomEndpointModalAction;
 
@@ -1098,6 +1312,7 @@ impl TypedActionView for CustomEndpointModal {
             CustomEndpointModalAction::Cancel => self.cancel(ctx),
             CustomEndpointModalAction::Save => self.save(ctx),
             CustomEndpointModalAction::AddModel => self.add_model(ctx),
+            CustomEndpointModalAction::FetchModels => self.fetch_models(ctx),
             CustomEndpointModalAction::RemoveModel(index) => self.remove_model(*index, ctx),
             CustomEndpointModalAction::RemoveEndpoint => {
                 if let Some(index) = self.editing_index {
