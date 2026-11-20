@@ -1057,9 +1057,7 @@ fn all_commands_for_all_surfaces() -> Vec<StaticCommand> {
             CONTINUE_LOCALLY.clone(),
         ]);
 
-        if FeatureFlag::ForkFromCommand.is_enabled() {
-            commands.push(FORK_FROM);
-        }
+        commands.push(FORK_FROM);
     }
 
     if !cfg!(target_family = "wasm") {
