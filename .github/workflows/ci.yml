@@ -64,10 +64,10 @@ jobs:
       wasm-runner: ${{ steps.wasm_runner_type.outputs.value }}
     steps:
       - name: Checkout sources
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@v6.0.3
 
       - name: Check changed files
-        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        uses: dorny/paths-filter@v4.0.3
         id: filter
         with:
           filters: |
@@ -78,7 +78,7 @@ jobs:
               - '**.rs'
 
       - name: Check for build inputs
-        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        uses: dorny/paths-filter@v4.0.3
         id: build_filter
         with:
           predicate-quantifier: every
@@ -169,16 +169,16 @@ jobs:
       contents: 'read'
       id-token: 'write'
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: actions/checkout@v6.0.3
 
-      - uses: ./.github/actions/prepare_environment
+      - uses: $/.github/actions/prepare_environment
         with:
           target_os: ${{ matrix.os }}
           is_self_hosted: ${{ matrix.is_self_hosted }}
           install_test_deps: true
 
       - name: Install Shells
-        uses: ConorMacBride/install-package@3e7ad059e07782ee54fa35f827df52aae0626f30 # v1
+        uses: ConorMacBride/install-package@v1.1.0
         if: ${{ matrix.is_self_hosted == false }}
         with:
           apt: zsh fish
@@ -242,7 +242,7 @@ jobs:
 
       - name: Install cargo nextest
         if: ${{ matrix.is_self_hosted == false }}
-        uses: taiki-e/install-action@f7e5d7c961414b23f5b25b2da9294395d08513ad # v2.87.26
+        uses: taiki-e/install-action@v2.87.26
         with:
           tool: nextest
 
@@ -262,7 +262,7 @@ jobs:
       - name: Set up gcloud authentication for SSH tests
         # Skipped for fork PRs - see HAS_GCP_AUTH definition above.
         if: env.HAS_GCP_AUTH == 'true'
-        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        uses: google-github-actions/auth@v3.0.0
         with:
           workload_identity_provider: projects/63595664881/locations/global/workloadIdentityPools/github-pool/providers/github-provider
           service_account: github-ci-workflow@warp-ssh-integration-testing.iam.gserviceaccount.com
@@ -270,13 +270,13 @@ jobs:
       - name: Install gcloud CLI tool
         # Skipped for fork PRs - see HAS_GCP_AUTH definition above.
         if: env.HAS_GCP_AUTH == 'true'
-        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+        uses: google-github-actions/setup-gcloud@v3.0.1
         with:
           version: '>= 397.0.0'
 
       - name: Install vim for richer alt-screen tests
         if: ${{ matrix.is_self_hosted == false }}
-        uses: ConorMacBride/install-package@3e7ad059e07782ee54fa35f827df52aae0626f30 # v1
+        uses: ConorMacBride/install-package@v1.1.0
         with:
           brew: vim
           apt: vim
@@ -306,7 +306,7 @@ jobs:
       - name: Upload macOS compile timings
         if: ${{ matrix.os == 'macos' && !cancelled() }}
         continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: cargo-timings-macos
           path: target/cargo-timings/cargo-timing.html
@@ -329,7 +329,7 @@ jobs:
         # Run this step even when the tests fail. Skip if the workflow is cancelled.
         if: ${{ !cancelled() }}
         continue-on-error: true
-        uses: trunk-io/analytics-uploader@a86313c7029d22e6ea2d5c346060a224d90053dc # v2.1.6
+        uses: trunk-io/analytics-uploader@v2.1.6
         with:
           junit-paths: target/nextest/ci/junit.xml
           cli-version: 0.12.5
@@ -342,7 +342,7 @@ jobs:
       - name: Run shell-agnostic integration tests
         # Run this step even if a previous test step fails
         if: matrix.os != 'windows' && (success() || failure())
-        uses: coactions/setup-xvfb@b6b4fcfb9f5a895edadc3bc76318fae0ac17c8b3 # v1
+        uses: coactions/setup-xvfb@v1.0.1
         with:
           run: cargo nextest run ${{ env.WORKSPACE_TEST_ARGS }} -E "package(integration) and not test(shell_integration_tests)${{ env.EXCLUDE_SSH_TESTS_FILTER }}${{ env.EXCLUDE_REMOTE_SERVER_TESTS_FILTER }}"
         env:
@@ -354,7 +354,7 @@ jobs:
         # Run this step even when the tests fail. Skip if the workflow is cancelled.
         if: ${{ matrix.os != 'windows' && !cancelled() }}
         continue-on-error: true
-        uses: trunk-io/analytics-uploader@a86313c7029d22e6ea2d5c346060a224d90053dc # v2.1.6
+        uses: trunk-io/analytics-uploader@v2.1.6
         with:
           junit-paths: target/nextest/ci/junit.xml
           cli-version: 0.12.5
@@ -367,7 +367,7 @@ jobs:
       - name: Run shell integration tests against default version of bash
         # Run this step even if a previous test step fails
         if: matrix.os != 'windows' && (success() || failure())
-        uses: coactions/setup-xvfb@b6b4fcfb9f5a895edadc3bc76318fae0ac17c8b3 # v1
+        uses: coactions/setup-xvfb@v1.0.1
         with:
           run: cargo nextest run ${{ env.WORKSPACE_TEST_ARGS }} -E "package(integration) and test(shell_integration_tests)${{ env.EXCLUDE_SSH_TESTS_FILTER }}${{ env.EXCLUDE_REMOTE_SERVER_TESTS_FILTER }}"
         env:
@@ -377,7 +377,7 @@ jobs:
         # Run this step even when the tests fail. Skip if the workflow is cancelled.
         if: ${{ matrix.os != 'windows' && !cancelled() }}
         continue-on-error: true
-        uses: trunk-io/analytics-uploader@a86313c7029d22e6ea2d5c346060a224d90053dc # v2.1.6
+        uses: trunk-io/analytics-uploader@v2.1.6
         with:
           junit-paths: target/nextest/ci/junit.xml
           cli-version: 0.12.5
@@ -393,7 +393,7 @@ jobs:
         # was released in 2007. Most Linux distros ship with a relatively
         # new (version 5.0+) version of Bash.
         if: (success() || failure()) && runner.os == 'macos'
-        uses: coactions/setup-xvfb@b6b4fcfb9f5a895edadc3bc76318fae0ac17c8b3 # v1
+        uses: coactions/setup-xvfb@v1.0.1
         with:
           run: cargo nextest run ${{ env.WORKSPACE_TEST_ARGS }} -E "package(integration) and test(shell_integration_tests)${{ env.EXCLUDE_SSH_TESTS_FILTER }}${{ env.EXCLUDE_REMOTE_SERVER_TESTS_FILTER }}"
         env:
@@ -403,7 +403,7 @@ jobs:
         # Run this step even when the tests fail. Skip if the workflow is cancelled.
         if: ${{ matrix.os != 'windows' && !cancelled() }}
         continue-on-error: true
-        uses: trunk-io/analytics-uploader@a86313c7029d22e6ea2d5c346060a224d90053dc # v2.1.6
+        uses: trunk-io/analytics-uploader@v2.1.6
         with:
           junit-paths: target/nextest/ci/junit.xml
           cli-version: 0.12.5
@@ -416,7 +416,7 @@ jobs:
       - name: Run shell integration tests against fish
         # Run this step even if a previous test step fails
         if: matrix.os != 'windows' && (success() || failure())
-        uses: coactions/setup-xvfb@b6b4fcfb9f5a895edadc3bc76318fae0ac17c8b3 # v1
+        uses: coactions/setup-xvfb@v1.0.1
         with:
           run: cargo nextest run ${{ env.WORKSPACE_TEST_ARGS }} -E "package(integration) and test(shell_integration_tests)${{ env.EXCLUDE_SSH_TESTS_FILTER }}${{ env.EXCLUDE_REMOTE_SERVER_TESTS_FILTER }}"
         env:
@@ -426,7 +426,7 @@ jobs:
         # Run this step even when the tests fail. Skip if the workflow is cancelled.
         if: ${{ matrix.os != 'windows' && !cancelled() }}
         continue-on-error: true
-        uses: trunk-io/analytics-uploader@a86313c7029d22e6ea2d5c346060a224d90053dc # v2.1.6
+        uses: trunk-io/analytics-uploader@v2.1.6
         with:
           junit-paths: target/nextest/ci/junit.xml
           cli-version: 0.12.5
@@ -439,7 +439,7 @@ jobs:
       - name: Run shell integration tests against zsh
         # Run this step even if a previous test step fails
         if: matrix.os != 'windows' && (success() || failure())
-        uses: coactions/setup-xvfb@b6b4fcfb9f5a895edadc3bc76318fae0ac17c8b3 # v1
+        uses: coactions/setup-xvfb@v1.0.1
         with:
           run: cargo nextest run ${{ env.WORKSPACE_TEST_ARGS }} -E "package(integration) and test(shell_integration_tests)${{ env.EXCLUDE_SSH_TESTS_FILTER }}${{ env.EXCLUDE_REMOTE_SERVER_TESTS_FILTER }}"
         env:
@@ -449,7 +449,7 @@ jobs:
         # Run this step even when the tests fail. Skip if the workflow is cancelled.
         if: ${{ matrix.os != 'windows' && !cancelled() }}
         continue-on-error: true
-        uses: trunk-io/analytics-uploader@a86313c7029d22e6ea2d5c346060a224d90053dc # v2.1.6
+        uses: trunk-io/analytics-uploader@v2.1.6
         with:
           junit-paths: target/nextest/ci/junit.xml
           cli-version: 0.12.5
@@ -462,7 +462,7 @@ jobs:
       - name: Run shell integration tests against powershell
         # Run this step even if a previous test step fails
         if: matrix.os != 'windows' && (success() || failure())
-        uses: coactions/setup-xvfb@b6b4fcfb9f5a895edadc3bc76318fae0ac17c8b3 # v1
+        uses: coactions/setup-xvfb@v1.0.1
         with:
           run: cargo nextest run ${{ env.WORKSPACE_TEST_ARGS }} -E "package(integration) and test(shell_integration_tests)${{ env.EXCLUDE_SSH_TESTS_FILTER }}${{ env.EXCLUDE_REMOTE_SERVER_TESTS_FILTER }}"
         env:
@@ -472,7 +472,7 @@ jobs:
         # Run this step even when the tests fail. Skip if the workflow is cancelled.
         if: ${{ matrix.os != 'windows' && !cancelled() }}
         continue-on-error: true
-        uses: trunk-io/analytics-uploader@a86313c7029d22e6ea2d5c346060a224d90053dc # v2.1.6
+        uses: trunk-io/analytics-uploader@v2.1.6
         with:
           junit-paths: target/nextest/ci/junit.xml
           cli-version: 0.12.5
@@ -510,16 +510,16 @@ jobs:
       contents: 'read'
       id-token: 'write'
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: actions/checkout@v6.0.3
 
-      - uses: ./.github/actions/prepare_environment
+      - uses: $/.github/actions/prepare_environment
         with:
           target_os: linux
           is_self_hosted: false
           install_test_deps: true
 
       - name: Install Shells
-        uses: ConorMacBride/install-package@3e7ad059e07782ee54fa35f827df52aae0626f30 # v1
+        uses: ConorMacBride/install-package@v1.1.0
         with:
           apt: zsh fish
 
@@ -533,18 +533,18 @@ jobs:
           echo "::notice title=Remote Server Tests - Default Bash Version::$DEFAULT_BASH_VERSION"
 
       - name: Install cargo nextest
-        uses: taiki-e/install-action@f7e5d7c961414b23f5b25b2da9294395d08513ad # v2.87.26
+        uses: taiki-e/install-action@v2.87.26
         with:
           tool: nextest
 
       - name: Set up gcloud authentication for remote-server tests
-        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        uses: google-github-actions/auth@v3.0.0
         with:
           workload_identity_provider: projects/63595664881/locations/global/workloadIdentityPools/github-pool/providers/github-provider
           service_account: github-ci-workflow@warp-ssh-integration-testing.iam.gserviceaccount.com
 
       - name: Install gcloud CLI tool
-        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+        uses: google-github-actions/setup-gcloud@v3.0.1
         with:
           version: '>= 397.0.0'
 
@@ -562,7 +562,7 @@ jobs:
         run: script/deploy_remote_server_to_test_vm
 
       - name: Run remote-server integration tests
-        uses: coactions/setup-xvfb@b6b4fcfb9f5a895edadc3bc76318fae0ac17c8b3 # v1
+        uses: coactions/setup-xvfb@v1.0.1
         with:
           run: cargo nextest run ${{ env.WORKSPACE_TEST_ARGS }} -E "package(integration) and test(/remote_server/)"
         env:
@@ -572,7 +572,7 @@ jobs:
       - name: Upload results of remote-server integration tests to trunk.io
         if: ${{ !cancelled() }}
         continue-on-error: true
-        uses: trunk-io/analytics-uploader@a86313c7029d22e6ea2d5c346060a224d90053dc # v2.1.6
+        uses: trunk-io/analytics-uploader@v2.1.6
         with:
           junit-paths: target/nextest/ci/junit.xml
           cli-version: 0.12.5
@@ -590,7 +590,7 @@ jobs:
     if: ${{ needs.params.outputs.affects-database-schema == 'true' }}
     steps:
       - name: Checkout sources
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@v6.0.3
 
       - name: Install cargo-binstall
         run: ./script/install_cargo_binstall
@@ -641,9 +641,9 @@ jobs:
     needs: params
     if: ${{ needs.params.outputs.needs-build == 'true' }}
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: actions/checkout@v6.0.3
 
-      - uses: ./.github/actions/prepare_environment
+      - uses: $/.github/actions/prepare_environment
         with:
           target_os: ${{ matrix.os }}
           is_self_hosted: ${{ matrix.is_self_hosted }}
@@ -694,7 +694,7 @@ jobs:
     if: ${{ needs.params.outputs.needs-build == 'true' }}
     steps:
       - name: Checkout sources
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@v6.0.3
       
       - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
         with:
@@ -723,7 +723,7 @@ jobs:
           find . -name "*.wgsl" -exec wgslfmt --check {} +
 
       - name: Install ShellCheck
-        uses: ConorMacBride/install-package@3e7ad059e07782ee54fa35f827df52aae0626f30 # v1
+        uses: ConorMacBride/install-package@v1.1.0
         with:
           apt: shellcheck
 
@@ -766,9 +766,9 @@ jobs:
           IS_SELF_HOSTED="${{ contains(fromJSON(needs.params.outputs.wasm-runner), 'self-hosted') }}"
           echo "value=$IS_SELF_HOSTED" >> $GITHUB_OUTPUT
 
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: actions/checkout@v6.0.3
 
-      - uses: ./.github/actions/prepare_environment
+      - uses: $/.github/actions/prepare_environment
         with:
           target_os: wasm
           is_self_hosted: ${{ steps.is_self_hosted.outputs.value }}
@@ -829,9 +829,9 @@ jobs:
     needs: params
     if: ${{ needs.params.outputs.needs-build == 'true' }}
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: actions/checkout@v6.0.3
 
-      - uses: ./.github/actions/prepare_environment
+      - uses: $/.github/actions/prepare_environment
         with:
           target_os: ${{ matrix.os }}
           is_self_hosted: ${{ matrix.is_self_hosted }}
@@ -863,9 +863,9 @@ jobs:
     needs: params
     if: ${{ needs.params.outputs.needs-build == 'true' }}
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: actions/checkout@v6.0.3
 
-      - uses: ./.github/actions/prepare_environment
+      - uses: $/.github/actions/prepare_environment
         with:
           target_os: linux
           is_self_hosted: false

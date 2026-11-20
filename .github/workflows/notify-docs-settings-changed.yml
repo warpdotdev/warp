@@ -31,14 +31,14 @@ jobs:
     steps:
       - name: Mint docs token
         id: app_token
-        uses: octo-sts/action@f603d3be9d8dd9871a265776e625a27b00effe05 # v1.1.1
+        uses: octo-sts/action@v1.1.1
         with:
           scope: warpdotdev/docs
           identity: warp-internal-dispatch
 
       - name: Send repository_dispatch to warpdotdev/docs
         id: dispatch
-        uses: peter-evans/repository-dispatch@v4
+        uses: peter-evans/repository-dispatch@v4.0.1
         with:
           repository: warpdotdev/docs
           token: ${{ steps.app_token.outputs.token }}
