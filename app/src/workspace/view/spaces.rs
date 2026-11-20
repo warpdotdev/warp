@@ -5,13 +5,14 @@ use itertools::{Either, Itertools};
 use warp_core::features::FeatureFlag;
 use warp_core::ui::theme::AnsiColors;
 use warpui::geometry::vector::Vector2F;
-use warpui::{EntityId, SingletonEntity, ViewContext};
+use warpui::{EntityId, SingletonEntity, ViewContext, ViewHandle};
 
 use super::vertical_tabs::space_display_name;
 use super::{Workspace, group_member_indices};
 use crate::app_state::{SpaceSnapshot, TabGroupSnapshot, TabSnapshot, WindowSnapshot};
 use crate::appearance::Appearance;
 use crate::menu::{MenuItem, MenuItemFields};
+use crate::pane_group::PaneGroup;
 use crate::tab::{
     ColorPickerTarget, SelectedTabColor, TabData, color_picker_menu_items, uses_vertical_tabs,
 };
@@ -57,6 +58,66 @@ impl Workspace {
                 .enumerate()
                 .map(|(index, tab)| (space.id, index, tab))
         })
+    }
+
+    /// Pane groups of every tab in the window, across every space.
+    pub(crate) fn all_tab_views(&self) -> impl Iterator<Item = &ViewHandle<PaneGroup>> {
+        self.all_tabs().map(|(.., tab)| &tab.pane_group)
+    }
+
+    /// Every tab in the window in Ctrl+Tab order, each with its index in its space and, when the
+    /// window has more than one space, its space's display name. The active space's tabs come
+    /// first, then each hidden space's in switcher order; each space's tabs are ordered by its
+    /// own most-recently-used order.
+    pub(super) fn tabs_in_mru_order(&self) -> Vec<(Option<String>, usize, &TabData)> {
+        let label_spaces = FeatureFlag::Spaces.is_enabled() && self.spaces.len() > 1;
+        let active_space_index = self.active_space_index();
+        let space_order = std::iter::once(active_space_index)
+            .chain((0..self.spaces.len()).filter(|index| *index != active_space_index));
+        space_order
+            .filter_map(|space_index| {
+                let space = self.spaces.get(space_index)?;
+                let (tabs, mru_order) = if space.id == self.active_space {
+                    (self.tabs.as_slice(), self.tab_mru_order.as_slice())
+                } else {
+                    let stash = self.stashed_spaces.get(&space.id)?;
+                    (stash.tabs.as_slice(), stash.tab_mru_order.as_slice())
+                };
+                let label = label_spaces.then(|| space_display_name(space, space_index + 1));
+                Some(mru_order.iter().filter_map(move |pane_group_id| {
+                    let (index, tab) = tabs
+                        .iter()
+                        .find_position(|tab| tab.pane_group.id() == *pane_group_id)?;
+                    Some((label.clone(), index, tab))
+                }))
+            })
+            .flatten()
+            .collect()
+    }
+
+    /// Returns the live index of the tab whose pane group is `pane_group_id`. A tab in a hidden
+    /// space becomes that space's active tab and the space is switched to first, so jumps from
+    /// outside the tab list (palette, notifications, conversation links) can land on it.
+    pub(super) fn reveal_tab_by_pane_group_id(
+        &mut self,
+        pane_group_id: EntityId,
+        ctx: &mut ViewContext<Self>,
+    ) -> Option<usize> {
+        if let Some(index) = self
+            .tabs
+            .iter()
+            .position(|tab| tab.pane_group.id() == pane_group_id)
+        {
+            return Some(index);
+        }
+        let (space_id, index) = self.all_tabs().find_map(|(space_id, index, tab)| {
+            (tab.pane_group.id() == pane_group_id).then_some((space_id, index))
+        })?;
+        if let Some(stash) = self.stashed_spaces.get_mut(&space_id) {
+            stash.active_tab_index = index;
+        }
+        self.switch_space(space_id, ctx);
+        (self.active_space == space_id).then_some(index)
     }
 
     /// All tab groups in the window, across every space.

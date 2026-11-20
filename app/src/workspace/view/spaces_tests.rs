@@ -3,11 +3,13 @@ use warpui::{App, AppContext, EntityId, SingletonEntity as _, TypedActionView as
 
 use crate::appearance::Appearance;
 use crate::menu::MenuItem;
+use crate::session_management::SessionNavigationData;
 use crate::tab::{SelectedTabColor, TabData};
 use crate::ui_components::color_dot::TAB_COLOR_OPTIONS;
 use crate::workspace::WorkspaceAction;
 use crate::workspace::space::SpaceId;
 use crate::workspace::tab_group::{TabGroup, TabGroupId};
+use crate::workspace::util::PaneViewLocator;
 use crate::workspace::view::Workspace;
 use crate::workspace::view::tests::{initialize_app, mock_workspace, restored_workspace};
 
@@ -860,6 +862,241 @@ fn test_restore_shows_nearest_space_with_tabs_when_active_space_has_none() {
             assert_eq!(workspace.spaces.len(), 2);
             assert_eq!(workspace.active_space, workspace.spaces[0].id);
             assert_eq!(live_tab_titles(workspace, ctx), ["first"]);
+        });
+    });
+}
+
+#[test]
+fn test_jumps_to_a_tab_in_a_hidden_space_switch_to_that_space() {
+    let _spaces_guard = FeatureFlag::Spaces.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            let first_space = workspace.active_space;
+            workspace.add_terminal_tab(false, ctx);
+            workspace.activate_tab(0, ctx);
+            let hidden_tab = workspace.tabs[1].pane_group.clone();
+
+            workspace.handle_action(&WorkspaceAction::NewSpace, ctx);
+            let second_space = workspace.active_space;
+            let second_space_tab = workspace.active_tab_pane_group().clone();
+
+            // Ctrl+Tab and other palette jumps.
+            workspace.activate_tab_by_pane_group_id(hidden_tab.id(), ctx);
+            assert_eq!(workspace.active_space, first_space);
+            assert_eq!(workspace.active_tab_index(), 1);
+            assert_eq!(workspace.active_tab_pane_group().id(), hidden_tab.id());
+            assert_eq!(workspace.tab_mru_order().first(), Some(&hidden_tab.id()));
+
+            // Notification clicks and session/conversation navigation.
+            let locator = PaneViewLocator {
+                pane_group_id: second_space_tab.id(),
+                pane_id: second_space_tab.as_ref(ctx).focused_pane_id(ctx),
+            };
+            workspace.focus_pane(locator, ctx);
+            assert_eq!(workspace.active_space, second_space);
+            assert_eq!(
+                workspace.active_tab_pane_group().id(),
+                second_space_tab.id()
+            );
+
+            // The first space remembers the tab the jump landed on.
+            workspace.handle_action(&WorkspaceAction::SwitchToSpaceById(first_space), ctx);
+            assert_eq!(workspace.active_tab_pane_group().id(), hidden_tab.id());
+        });
+    });
+}
+
+#[test]
+fn test_ctrl_tab_lists_tabs_of_every_space_with_space_labels() {
+    let _spaces_guard = FeatureFlag::Spaces.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            let window_id = ctx.window_id();
+            let single_space_tabs = workspace.tab_navigation_data(window_id, ctx);
+            assert!(single_space_tabs.iter().all(|tab| tab.space_name.is_none()));
+
+            let first_space = workspace.active_space;
+            workspace.add_terminal_tab(false, ctx);
+            let first_space_tabs = live_tab_ids(workspace);
+            workspace.handle_action(&WorkspaceAction::NewSpace, ctx);
+            workspace.spaces[1].name = Some("Infra".to_string());
+            let second_space_tab = workspace.active_tab_pane_group().id();
+
+            let tabs = workspace.tab_navigation_data(window_id, ctx);
+            let entries = tabs
+                .iter()
+                .map(|tab| (tab.pane_group_id, tab.space_name.as_deref(), tab.tab_index))
+                .collect::<Vec<_>>();
+            // The active space comes first; the hidden space follows in its own MRU order
+            // (most recent first) with its placeholder name.
+            assert_eq!(
+                entries,
+                vec![
+                    (second_space_tab, Some("Infra"), 1),
+                    (first_space_tabs[1], Some("Space 1"), 2),
+                    (first_space_tabs[0], Some("Space 1"), 1),
+                ]
+            );
+
+            // Selecting a hidden space's entry switches to that space.
+            workspace.activate_tab_by_pane_group_id(tabs[2].pane_group_id, ctx);
+            assert_eq!(workspace.active_space, first_space);
+            assert_eq!(workspace.active_tab_pane_group().id(), first_space_tabs[0]);
+        });
+    });
+}
+
+#[test]
+fn test_vertical_tabs_search_stays_within_active_space() {
+    let _spaces_guard = FeatureFlag::Spaces.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            let name_group = |workspace: &mut Workspace, indices: &[usize]| {
+                let group_id = group_live_tabs(workspace, indices);
+                if let Some(group) = workspace.tab_groups.get_mut(&group_id) {
+                    group.name = Some("alpha".to_string());
+                }
+            };
+            let first_space = workspace.active_space;
+            workspace.add_terminal_tab(false, ctx);
+            workspace.add_terminal_tab(false, ctx);
+            name_group(workspace, &[1, 2]);
+
+            workspace.handle_action(&WorkspaceAction::NewSpace, ctx);
+            workspace.add_terminal_tab(false, ctx);
+            name_group(workspace, &[0, 1]);
+
+            workspace.handle_action(&WorkspaceAction::SwitchToSpaceById(first_space), ctx);
+            workspace.activate_tab(1, ctx);
+            workspace.vertical_tabs_panel.search_query = "alpha".to_string();
+
+            let matching = workspace.vertical_tabs_panel.matching_tab_indices(
+                &workspace.tabs,
+                &workspace.tab_groups,
+                workspace.active_tab_index,
+                ctx,
+            );
+            assert_eq!(matching, vec![1, 2]);
+
+            // Cycling through search results never leaves the active space.
+            workspace.activate_next_tab(ctx);
+            assert_eq!(workspace.active_tab_index(), 2);
+            workspace.activate_next_tab(ctx);
+            assert_eq!(workspace.active_tab_index(), 1);
+            assert_eq!(workspace.active_space, first_space);
+        });
+    });
+}
+
+#[test]
+fn test_window_sessions_include_hidden_spaces() {
+    let _spaces_guard = FeatureFlag::Spaces.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        let window_id = workspace.update(&mut app, |workspace, ctx| {
+            workspace.add_terminal_tab(false, ctx);
+            workspace.handle_action(&WorkspaceAction::NewSpace, ctx);
+            assert_eq!(workspace.tab_count(), 1);
+            assert_eq!(
+                workspace.workspace_sessions(ctx.window_id(), ctx).count(),
+                3
+            );
+            ctx.window_id()
+        });
+
+        // What the window-close and quit warnings count running commands in.
+        let window_sessions = app.read(|ctx| {
+            SessionNavigationData::all_sessions(ctx)
+                .filter(|session| session.window_id() == window_id)
+                .count()
+        });
+        assert_eq!(window_sessions, 3);
+    });
+}
+
+#[test]
+fn test_dragging_out_last_tab_of_space_keeps_window_and_switches_space() {
+    let _spaces_guard = FeatureFlag::Spaces.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        let window_id = workspace.update(&mut app, |workspace, ctx| {
+            let first_space = workspace.active_space;
+            let first_space_tab = workspace.active_tab_pane_group().id();
+            workspace.handle_action(&WorkspaceAction::NewSpace, ctx);
+
+            // What a cross-window drop does to the source once the tab is in another window.
+            workspace.remove_tab_without_undo(0, ctx);
+
+            assert_eq!(workspace.active_space, first_space);
+            assert_eq!(live_tab_ids(workspace), vec![first_space_tab]);
+            assert_eq!(workspace.spaces.len(), 2);
+            ctx.window_id()
+        });
+        app.update(|_| ());
+        assert!(app.is_window_open(window_id));
+    });
+}
+
+#[test]
+fn test_tab_dropped_into_another_window_joins_its_active_space() {
+    let _spaces_guard = FeatureFlag::Spaces.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let source = mock_workspace(&mut app);
+        let (source_window, transferred_tab) = source.update(&mut app, |workspace, ctx| {
+            workspace.add_terminal_tab(false, ctx);
+            let transferred_tab = workspace
+                .get_tab_transfer_info_for_attach(1, ctx)
+                .expect("tab exists");
+            workspace.prepare_for_transferred_tab_attach(&transferred_tab.pane_group, ctx);
+            (ctx.window_id(), transferred_tab)
+        });
+        let moved_tab = transferred_tab.pane_group.id();
+
+        let target = mock_workspace(&mut app);
+        let (target_window, hidden_space, hidden_tabs) =
+            target.update(&mut app, |workspace, ctx| {
+                let hidden_space = workspace.active_space;
+                let hidden_tabs = live_tab_ids(workspace);
+                workspace.handle_action(&WorkspaceAction::NewSpace, ctx);
+                (ctx.window_id(), hidden_space, hidden_tabs)
+            });
+
+        app.update(|ctx| {
+            ctx.transfer_view_tree_to_window(moved_tab, source_window, target_window);
+        });
+        target.update(&mut app, |workspace, ctx| {
+            let active_space = workspace.active_space;
+            workspace.insert_transferred_tab_at_index(transferred_tab, 1, ctx);
+
+            assert_eq!(workspace.active_space, active_space);
+            assert_eq!(workspace.active_tab_pane_group().id(), moved_tab);
+            assert!(tab_ids_in(workspace, active_space).contains(&moved_tab));
+            assert_eq!(tab_ids_in(workspace, hidden_space), hidden_tabs);
+        });
+        source.update(&mut app, |workspace, ctx| {
+            workspace.remove_tab_without_undo(1, ctx);
+            assert_eq!(workspace.tab_count(), 1);
         });
     });
 }

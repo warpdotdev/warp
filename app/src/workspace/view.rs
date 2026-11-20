@@ -5401,24 +5401,16 @@ impl Workspace {
         pane_group_id: EntityId,
         ctx: &mut ViewContext<Self>,
     ) {
-        if let Some(index) = self
-            .tabs
-            .iter()
-            .position(|t| t.pane_group.id() == pane_group_id)
-        {
+        if let Some(index) = self.reveal_tab_by_pane_group_id(pane_group_id, ctx) {
             self.activate_tab(index, ctx);
         }
     }
 
     fn tab_navigation_data(&self, window_id: WindowId, ctx: &AppContext) -> Vec<TabNavigationData> {
-        self.tab_mru_order
-            .iter()
-            .filter_map(|&pane_group_id| {
-                let (tab_index, tab) = self
-                    .tabs
-                    .iter()
-                    .enumerate()
-                    .find(|(_, t)| t.pane_group.id() == pane_group_id)?;
+        self.tabs_in_mru_order()
+            .into_iter()
+            .map(|(space_name, tab_index, tab)| {
+                let pane_group_id = tab.pane_group.id();
                 let title = tab.pane_group.as_ref(ctx).display_title(ctx);
                 let subtitle = tab
                     .pane_group
@@ -5432,14 +5424,15 @@ impl Workspace {
                         }
                         p.display().to_string()
                     });
-                Some(TabNavigationData {
+                TabNavigationData {
                     pane_group_id,
                     title,
                     subtitle,
                     window_id,
                     tab_index: tab_index + 1,
                     color: tab.color(),
-                })
+                    space_name,
+                }
             })
             .collect()
     }
@@ -5459,14 +5452,14 @@ impl Workspace {
         &self,
         task_id: AmbientAgentTaskId,
         ctx: &AppContext,
-    ) -> Option<(usize, PaneViewLocator)> {
+    ) -> Option<PaneViewLocator> {
         // First, check ActiveAgentViewsModel for the terminal view that has this task registered.
         // This is the authoritative source since it's updated when the session is joined.
         let active_terminal_view_id =
             ActiveAgentViewsModel::as_ref(ctx).get_terminal_view_id_for_ambient_task(task_id);
 
-        self.tabs.iter().enumerate().find_map(|(index, tab)| {
-            let pane_group = tab.pane_group.as_ref(ctx);
+        self.all_tab_views().find_map(|pane_group_handle| {
+            let pane_group = pane_group_handle.as_ref(ctx);
             let pane_id = pane_group.visible_pane_ids().into_iter().find(|pane_id| {
                 pane_group
                     .terminal_view_from_pane_id(*pane_id, ctx)
@@ -5479,28 +5472,23 @@ impl Workspace {
                         tv.as_ref(ctx).ambient_agent_task_id_for_details_panel(ctx) == Some(task_id)
                     })
             });
-            pane_id.map(|pane_id| {
-                (
-                    index,
-                    PaneViewLocator {
-                        pane_group_id: tab.pane_group.id(),
-                        pane_id,
-                    },
-                )
+            pane_id.map(|pane_id| PaneViewLocator {
+                pane_group_id: pane_group_handle.id(),
+                pane_id,
             })
         })
     }
 
-    /// Gets all sessions in the current workspace.
+    /// Gets all sessions in the current workspace, including those in hidden spaces.
     pub fn workspace_sessions<'a>(
         &'a self,
         window_id: WindowId,
         app: &'a AppContext,
     ) -> impl Iterator<Item = SessionNavigationData> + 'a {
-        self.tabs.iter().flat_map(move |tab| {
+        self.all_tab_views().flat_map(move |pane_group| {
             // Each tab has a pane group
-            let pane_group_id = tab.pane_group.id();
-            let view = tab.pane_group.as_ref(app);
+            let pane_group_id = pane_group.id();
+            let view = pane_group.as_ref(app);
 
             view.pane_sessions(pane_group_id, window_id, app)
         })
@@ -6056,14 +6044,11 @@ impl Workspace {
     }
 
     /// Focuses the given pane, revealing it first if it is hidden behind a
-    /// temporary swap.
+    /// temporary swap or in a hidden space.
     pub fn focus_pane(&mut self, pane_view_locator: PaneViewLocator, ctx: &mut ViewContext<Self>) {
-        if let Some((index, tab)) = self
-            .tabs
-            .iter()
-            .enumerate()
-            .find(|(_, tab_data)| tab_data.pane_group.id() == pane_view_locator.pane_group_id)
+        if let Some(index) = self.reveal_tab_by_pane_group_id(pane_view_locator.pane_group_id, ctx)
         {
+            let tab = &self.tabs[index];
             // Update the pane group to focus the active pane,
             // and then focus the pane group (tab). The order is important
             // because if we otherwise focus the tab first and another pane
@@ -6078,29 +6063,27 @@ impl Workspace {
         }
     }
 
-    /// Searches this workspace's tabs for the given terminal view and focuses it.
+    /// Searches this workspace's tabs, in every space, for the given terminal view and focuses it.
     /// Returns true if the terminal view was found and focused.
     fn focus_terminal_view_locally(
         &mut self,
         terminal_view_id: EntityId,
         ctx: &mut ViewContext<Self>,
     ) -> bool {
-        for tab in self.tabs.iter() {
-            let pane_group_handle = &tab.pane_group;
-            let pane_group = pane_group_handle.as_ref(ctx);
-            if let Some(pane_id) = pane_group.find_pane_id_for_terminal_view(terminal_view_id, ctx)
-            {
-                self.focus_pane(
-                    PaneViewLocator {
-                        pane_group_id: pane_group_handle.id(),
-                        pane_id,
-                    },
-                    ctx,
-                );
-                return true;
-            }
-        }
-        false
+        let locator = self.all_tab_views().find_map(|pane_group_handle| {
+            let pane_id = pane_group_handle
+                .as_ref(ctx)
+                .find_pane_id_for_terminal_view(terminal_view_id, ctx)?;
+            Some(PaneViewLocator {
+                pane_group_id: pane_group_handle.id(),
+                pane_id,
+            })
+        });
+        let Some(locator) = locator else {
+            return false;
+        };
+        self.focus_pane(locator, ctx);
+        true
     }
 
     /// Searches other windows for the given terminal view and focuses it there.
@@ -6116,18 +6099,21 @@ impl Workspace {
             .iter()
             .filter(|(win_id, _)| *win_id != current_window)
             .find_map(|(win_id, workspace)| {
-                workspace.as_ref(ctx).tab_views().find_map(|pane_group| {
-                    let pane_id = pane_group
-                        .as_ref(ctx)
-                        .find_pane_id_for_terminal_view(terminal_view_id, ctx)?;
-                    Some((
-                        *win_id,
-                        PaneViewLocator {
-                            pane_group_id: pane_group.id(),
-                            pane_id,
-                        },
-                    ))
-                })
+                workspace
+                    .as_ref(ctx)
+                    .all_tab_views()
+                    .find_map(|pane_group| {
+                        let pane_id = pane_group
+                            .as_ref(ctx)
+                            .find_pane_id_for_terminal_view(terminal_view_id, ctx)?;
+                        Some((
+                            *win_id,
+                            PaneViewLocator {
+                                pane_group_id: pane_group.id(),
+                                pane_id,
+                            },
+                        ))
+                    })
             });
 
         if let Some((window_id, locator)) = result {
@@ -6151,12 +6137,8 @@ impl Workspace {
         pane_id: PaneId,
         ctx: &mut ViewContext<Self>,
     ) {
-        if let Some(tab) = self
-            .tabs
-            .iter()
-            .find(|tab_data| tab_data.pane_group.id() == pane_group_id)
-        {
-            tab.pane_group.update(ctx, |view, ctx| {
+        if let Some(pane_group) = self.get_pane_group_view_with_id(pane_group_id) {
+            pane_group.update(ctx, |view, ctx| {
                 view.show_notification_error(notification_error, pane_id, ctx);
             });
 
@@ -11695,9 +11677,10 @@ impl Workspace {
         }
     }
 
-    /// Returns the pane group with the matching EntityId, or None if it doesn't exist.
+    /// Returns the pane group with the matching EntityId in any space, or None if it doesn't
+    /// exist.
     fn get_pane_group_view_with_id(&self, id: EntityId) -> Option<&ViewHandle<PaneGroup>> {
-        self.tab_views().find(|view| view.id() == id)
+        self.all_tab_views().find(|view| view.id() == id)
     }
 
     // The workspace manages the close confirmation dialog, so it may need to close a pane after the user confirms in the dialog.
@@ -12719,7 +12702,7 @@ impl Workspace {
     /// Update this workspace when it is reopened after being closed.
     pub fn handle_reopen(&mut self, ctx: &mut ViewContext<Self>) {
         self.sync_window_button_visibility(ctx);
-        for pane_group in self.tab_views() {
+        for pane_group in self.all_tab_views() {
             pane_group.update(ctx, |pane_group, ctx| {
                 pane_group.reattach_panes(ctx);
             })
@@ -16722,12 +16705,7 @@ impl Workspace {
                 ctx.notify();
             }
             pane_group::Event::FocusPaneGroup => {
-                for (index, tab) in self.tabs.iter().enumerate() {
-                    if tab.pane_group.id() == pane_group.id() {
-                        self.activate_tab(index, ctx);
-                        break;
-                    }
-                }
+                self.activate_tab_by_pane_group_id(pane_group.id(), ctx);
             }
             pane_group::Event::FocusPane { pane_to_focus } => {
                 let Some(tab_index_to_focus) = self
@@ -25969,7 +25947,7 @@ impl TypedActionView for Workspace {
                 // through to opening a fresh shared-session tab.
                 let existing_pane = self.find_pane_with_ambient_agent_conversation(*task_id, ctx);
                 let mut attached_locator = None;
-                if let Some((_, locator)) = existing_pane
+                if let Some(locator) = existing_pane
                     && let Some(pane_group) = self
                         .get_pane_group_view_with_id(locator.pane_group_id)
                         .cloned()
@@ -25998,7 +25976,7 @@ impl TypedActionView for Workspace {
             } => {
                 // Check if there's already a terminal viewing this conversation's task.
                 if let Some(task_id) = ambient_agent_task_id
-                    && let Some((_, locator)) =
+                    && let Some(locator) =
                         self.find_pane_with_ambient_agent_conversation(*task_id, ctx)
                 {
                     self.focus_pane(locator, ctx);
@@ -28364,7 +28342,7 @@ impl View for Workspace {
     /// Update this workspace when it has been closed, but may still be restored.
     fn on_window_closed(&mut self, ctx: &mut ViewContext<Self>) {
         if !self.suppress_detach_panes_on_window_close {
-            for pane_group in self.tab_views() {
+            for pane_group in self.all_tab_views() {
                 pane_group.update(ctx, |pane_group, ctx| {
                     pane_group.detach_panes(ctx);
                 });
@@ -28830,6 +28808,14 @@ impl Workspace {
                 }
                 if source_was_single_tab {
                     self.close_window_for_content_transfer(ctx);
+                } else if self.tabs.len() == 1 {
+                    // The placeholder is the active space's only tab (other spaces have tabs).
+                    // `remove_tab` would switch to another space before the tab is put back.
+                    let placeholder = self.tabs.remove(source_tab_index);
+                    self.tab_mru_order.clear();
+                    if let Some(group_id) = placeholder.group_id {
+                        self.prune_empty_tab_group(group_id, ctx);
+                    }
                 } else {
                     self.remove_tab_without_undo(source_tab_index, ctx);
                 }
@@ -29012,7 +28998,9 @@ impl Workspace {
             return;
         }
 
-        let source_is_single_tab = self.tabs.len() == 1;
+        // A window whose other spaces still have tabs must not travel with its last visible tab,
+        // so that drag detaches the tab into a preview window like a multi-tab drag.
+        let source_is_single_tab = self.tabs.len() == 1 && !self.hidden_spaces_have_tabs();
         if (is_drag_outside_tab_bar || source_is_single_tab)
             && FeatureFlag::DragTabsToWindows.is_enabled()
         {
@@ -29103,7 +29091,12 @@ impl Workspace {
                 });
             }
 
-            if !source_was_single_tab && current_index == self.active_tab_index {
+            // With spaces, the detached tab can be the only live one; it then stays active until
+            // the drop removes it and switches spaces.
+            if !source_was_single_tab
+                && current_index == self.active_tab_index
+                && self.tabs.len() > 1
+            {
                 let adjacent = if current_index + 1 < self.tabs.len() {
                     current_index + 1
                 } else {

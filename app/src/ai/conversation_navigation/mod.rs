@@ -159,7 +159,7 @@ impl ConversationNavigationData {
             let workspace = workspace_handle.as_ref(app);
             let active_tab_pane_group_id = workspace.active_tab_pane_group().id();
 
-            for pane_group_handle in workspace.tab_views() {
+            for pane_group_handle in workspace.all_tab_views() {
                 // Use try_as_ref to avoid panicking if the pane group is currently
                 // being mutated (e.g., during a split operation that creates a new
                 // terminal view which calls this function).

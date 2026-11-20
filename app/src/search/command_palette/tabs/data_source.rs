@@ -6,7 +6,8 @@ use crate::search::data_source::{Query, QueryResult};
 use crate::search::mixer::{DataSourceRunErrorWrapper, SyncDataSource};
 use crate::session_management::TabNavigationData;
 
-/// Data source that produces tabs sorted by MRU order for the Ctrl+Tab palette.
+/// Data source that produces tabs sorted by MRU order for the Ctrl+Tab palette, across every space
+/// of the window.
 ///
 /// Holds a pre-computed snapshot of tab data rather than a workspace handle,
 /// because the synchronous query runs while the workspace view is borrowed
@@ -47,11 +48,14 @@ impl SyncDataSource for DataSource {
             .enumerate()
             .filter(|(_, tab)| {
                 query_text.is_empty()
-                    || tab.title.to_lowercase().contains(&query_text)
-                    || tab
-                        .subtitle
-                        .as_deref()
-                        .is_some_and(|s| s.to_lowercase().contains(&query_text))
+                    || [
+                        Some(tab.title.as_str()),
+                        tab.subtitle.as_deref(),
+                        tab.space_name.as_deref(),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    .any(|text| text.to_lowercase().contains(&query_text))
             })
             .map(|(i, tab)| QueryResult::from(SearchItem::new(tab.clone(), i)))
             .collect();
