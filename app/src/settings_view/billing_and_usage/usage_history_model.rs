@@ -39,6 +39,16 @@ impl UsageHistoryModel {
         &self.entries
     }
 
+    #[cfg(test)]
+    pub(crate) fn set_entries_for_test(
+        &mut self,
+        entries: Vec<warp_graphql::queries::get_conversation_usage::ConversationUsage>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.entries = entries;
+        ctx.notify();
+    }
+
     pub fn is_loading(&self) -> bool {
         self.is_loading
     }
