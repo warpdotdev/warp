@@ -96,7 +96,8 @@ pub(crate) struct BridgeLaunch {
 }
 
 /// Builds the shell command that launches the agent described by `launch_file` through the
-/// bridge. The bridge is this same executable, so the command names it by path.
+/// bridge. The bridge is this same executable, so the command names it by path. Under
+/// PowerShell the bridge's output is piped into the host so the shell waits for it to exit.
 pub(crate) fn bridge_command(launch_file: &Path, shell_family: ShellFamily) -> Result<String> {
     let executable = std::env::current_exe()
         .context("Failed to locate the running executable for the ACP bridge")?;
@@ -114,14 +115,20 @@ fn render_bridge_command(
 ) -> String {
     let executable = executable.display().to_string();
     let executable = shell_family.shell_escape(&executable);
-    let invocation = match shell_family {
-        ShellFamily::Posix => executable,
-        ShellFamily::PowerShell => format!("& {executable}").into(),
-    };
-    format!(
-        "{invocation} acp-bridge --launch-file {}",
-        shell_family.shell_escape(&launch_file.display().to_string())
-    )
+    let launch_file = launch_file.display().to_string();
+    let launch_file = shell_family.shell_escape(&launch_file);
+    match shell_family {
+        ShellFamily::Posix => format!("{executable} acp-bridge --launch-file {launch_file}"),
+        // The release Windows CLI is a GUI-subsystem binary, and PowerShell only waits for one
+        // when its output is consumed by the pipeline; otherwise the block ends as soon as the
+        // bridge is spawned and the driver treats the harness as exited. The bridge's stdout is
+        // not the protocol stream on Windows (that goes over the loopback socket), only
+        // diagnostics, so piping it into the host both makes the shell wait and surfaces bridge
+        // errors in the block.
+        ShellFamily::PowerShell => {
+            format!("& {executable} acp-bridge --launch-file {launch_file} | Out-Host")
+        }
+    }
 }
 
 /// Worker-side entry point. Only returns on failure; on success the agent's exit status becomes
