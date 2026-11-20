@@ -493,9 +493,15 @@ impl HarnessRunner for ClaudeHarnessRunner {
                 id
             }
         };
-        self.start_parent_bridge(foreground)
-            .await
-            .map_err(AgentDriverError::ConfigBuildFailed)?;
+        log::info!("Claude harness startup: stage=message_bridge event=started");
+        setup_events
+            .record_result(SetupStep::ClaudeMessageBridge, async {
+                self.start_parent_bridge(foreground)
+                    .await
+                    .map_err(AgentDriverError::ConfigBuildFailed)
+            })
+            .await?;
+        log::info!("Claude harness startup: stage=message_bridge event=completed");
 
         let cli_name = self.cli_name.clone();
         let session_id = self.session_id;
@@ -510,34 +516,41 @@ impl HarnessRunner for ClaudeHarnessRunner {
             .map(|file| file.path().display().to_string());
         let resuming = self.preexisting_conversation_id.is_some();
         let terminal_driver = self.terminal_driver.clone();
-        let command_handle = match foreground
-            .spawn(move |_, ctx| {
-                terminal_driver.update(ctx, |driver, ctx| {
-                    let shell_type = driver
-                        .active_session_shell_type(ctx)
-                        .unwrap_or(ShellType::Bash);
-                    let command = claude_command(
-                        &cli_name,
-                        &session_id,
-                        &prompt_path,
-                        system_prompt_path.as_deref(),
-                        mcp_config_path.as_deref(),
-                        resuming,
-                        shell_type,
-                    );
-                    driver.execute_command(&command, ctx)
-                })
+        log::info!("Claude harness startup: stage=command_start event=started");
+        let command_handle = setup_events
+            .record_result(SetupStep::ClaudeCommandStart, async {
+                let command_handle = match foreground
+                    .spawn(move |_, ctx| {
+                        terminal_driver.update(ctx, |driver, ctx| {
+                            let shell_type = driver
+                                .active_session_shell_type(ctx)
+                                .unwrap_or(ShellType::Bash);
+                            let command = claude_command(
+                                &cli_name,
+                                &session_id,
+                                &prompt_path,
+                                system_prompt_path.as_deref(),
+                                mcp_config_path.as_deref(),
+                                resuming,
+                                shell_type,
+                            );
+                            driver.execute_command(&command, ctx)
+                        })
+                    })
+                    .await??
+                    .await
+                {
+                    Ok(command_handle) => command_handle,
+                    Err(err) => {
+                        self.cleanup_parent_bridge(false)
+                            .map_err(AgentDriverError::ConfigBuildFailed)?;
+                        return Err(err);
+                    }
+                };
+                Ok(command_handle)
             })
-            .await??
-            .await
-        {
-            Ok(command_handle) => command_handle,
-            Err(err) => {
-                self.cleanup_parent_bridge(false)
-                    .map_err(AgentDriverError::ConfigBuildFailed)?;
-                return Err(err);
-            }
-        };
+            .await?;
+        log::info!("Claude harness startup: stage=command_start event=completed");
 
         // Only store conversation info once the CLI command has started.
         *self.state.lock() = ClaudeRunnerState::Running {
