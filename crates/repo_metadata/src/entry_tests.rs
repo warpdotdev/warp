@@ -191,15 +191,22 @@ fn gitignore_rooted(root: &std::path::Path, content: &str) -> Arc<Gitignore> {
     Arc::new(gitignore)
 }
 
+/// Platform-specific descend decision for a gitignored directory.
+///
+/// Linux prunes the directory and its descendants from the recursive root
+/// watch: inotify skips rejected subtrees, and an expanded ignored directory
+/// gets an explicit non-recursive watch. Other platforms keep both watchable
+/// so a change below the ignored directory can reach repository subscribers.
+/// Tracked directories are watched on every platform. The ignored directory
+/// and its descendant share one decision, preserving ancestor monotonicity.
 #[test]
-fn should_watch_prunes_gitignored_directory() {
+fn should_watch_gitignored_directory_respects_recursive_backend() {
     let temp_dir = tempfile::tempdir().unwrap();
     let root = dunce::canonicalize(temp_dir.path()).unwrap();
     fs::create_dir(root.join("node_modules")).unwrap();
     fs::create_dir(root.join("src")).unwrap();
     let gitignores = vec![gitignore_rooted(&root, "node_modules/\n")];
 
-    // Root and non-ignored dirs are watched; the gitignored dir is pruned.
     assert!(super::should_watch_repo_directory(
         &root,
         &root,
@@ -212,20 +219,16 @@ fn should_watch_prunes_gitignored_directory() {
         &gitignores,
         &[]
     ));
-    assert!(!super::should_watch_repo_directory(
-        &root.join("node_modules"),
-        &root,
-        &gitignores,
-        &[]
-    ));
-    // Descendants of an ignored dir are also pruned (ancestor-aware), which is
-    // what preserves the watcher's monotonicity invariant.
-    assert!(!super::should_watch_repo_directory(
-        &root.join("node_modules/foo"),
-        &root,
-        &gitignores,
-        &[]
-    ));
+
+    let watch_ignored = !cfg!(target_os = "linux");
+    assert_eq!(
+        super::should_watch_repo_directory(&root.join("node_modules"), &root, &gitignores, &[]),
+        watch_ignored
+    );
+    assert_eq!(
+        super::should_watch_repo_directory(&root.join("node_modules/foo"), &root, &gitignores, &[]),
+        watch_ignored
+    );
 }
 
 #[cfg(unix)]
@@ -352,13 +355,17 @@ fn should_watch_descends_to_force_included_under_ignored_ancestor() {
         &gitignores,
         &force_included
     ));
-    // A sibling ignored dir that is not force-included is still pruned.
-    assert!(!super::should_watch_repo_directory(
-        &root.join(".agents/other"),
-        &root,
-        &gitignores,
-        &force_included
-    ));
+    // A sibling ignored dir that is not force-included is pruned on Linux.
+    // Other platforms keep it on the recursive root watch.
+    assert_eq!(
+        super::should_watch_repo_directory(
+            &root.join(".agents/other"),
+            &root,
+            &gitignores,
+            &force_included
+        ),
+        !cfg!(target_os = "linux")
+    );
 }
 
 #[test]
@@ -371,7 +378,8 @@ fn should_watch_handles_nested_ignored_ancestor_with_deeper_force_included() {
     let force_included = vec![std::path::PathBuf::from("a/b/c")];
 
     // `a/b` is ignored but `a/b/c` is force-included: descend along the whole
-    // prefix and into it, while pruning the ignored sibling.
+    // prefix and into it. The ignored sibling is pruned on Linux and kept on
+    // platforms whose recursive root watch reports its events.
     assert!(super::should_watch_repo_directory(
         &root.join("a"),
         &root,
@@ -390,12 +398,15 @@ fn should_watch_handles_nested_ignored_ancestor_with_deeper_force_included() {
         &gitignores,
         &force_included
     ));
-    assert!(!super::should_watch_repo_directory(
-        &root.join("a/b/other"),
-        &root,
-        &gitignores,
-        &force_included
-    ));
+    assert_eq!(
+        super::should_watch_repo_directory(
+            &root.join("a/b/other"),
+            &root,
+            &gitignores,
+            &force_included
+        ),
+        !cfg!(target_os = "linux")
+    );
 }
 
 #[test]
@@ -975,10 +986,11 @@ fn should_watch_directory_in_git_path_prunes_non_allowlisted_subtrees() {
     )));
 }
 
-/// Documents the watch-filter invariant: gitignore is applied only by the
-/// descend predicate (`should_watch_repo_directory`), so gitignored paths are
-/// pruned from recursive registration but their events are still emitted (the
-/// emit predicate only suppresses non-allowlisted `.git/` internals).
+/// Documents the watch-filter invariant: gitignore pruning lives only in the
+/// descend predicate (`should_watch_repo_directory`), and only on Linux.
+/// Gitignored, non-`.git` paths are still emitted (the emit predicate only
+/// suppresses non-allowlisted `.git/` internals) and tagged `is_ignored`
+/// downstream.
 #[test]
 fn gitignore_affects_descend_predicate_but_not_emitted_events() {
     use std::path::Path;
@@ -995,14 +1007,13 @@ fn gitignore_affects_descend_predicate_but_not_emitted_events() {
     let node_modules = root_path.join("node_modules");
     let src = root_path.join("src");
 
-    // Descend predicate: the gitignored dir is pruned from recursive
-    // registration, while a tracked dir is still descended into.
-    assert!(!should_watch_repo_directory(
-        &node_modules,
-        &root_path,
-        &gitignores,
-        &[]
-    ));
+    // Descend predicate: Linux prunes the gitignored dir from recursive
+    // registration. Other platforms keep it watchable. A tracked dir is
+    // descended into on every platform.
+    assert_eq!(
+        should_watch_repo_directory(&node_modules, &root_path, &gitignores, &[]),
+        !cfg!(target_os = "linux")
+    );
     assert!(should_watch_repo_directory(
         &src,
         &root_path,
