@@ -6172,6 +6172,7 @@ impl PaneGroup {
                     initial_size,
                     model_event_sender,
                     chosen_shell,
+                    Uuid::from_slice(terminal_session_uuid).ok(),
                     ctx,
                     |surface_init, ctx| {
                         create_terminal_view_surface(

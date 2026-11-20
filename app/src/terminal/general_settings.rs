@@ -37,6 +37,19 @@ define_settings_group!(GeneralSettings, settings: [
         toml_path: "general.restore_session",
         description: "Whether to restore the previous session when Warp starts up.",
     },
+    persistent_sessions: PersistentSessions {
+        type: bool,
+        default: true,
+        supported_platforms: SupportedPlatforms::OR(
+            Box::new(SupportedPlatforms::MAC),
+            Box::new(SupportedPlatforms::LINUX),
+        ),
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
+        private: false,
+        toml_path: "general.persistent_sessions",
+        description: "Whether shells keep running in the background after quitting Warp and reattach on relaunch.",
+    },
     add_app_as_login_item: LoginItem {
         type: bool,
         default: true,
@@ -178,3 +191,29 @@ define_settings_group!(GeneralSettings, settings: [
         private: true,
     },
 ]);
+
+impl GeneralSettings {
+    /// Whether new local shells should be owned by the persistent session
+    /// daemon, so they keep running after Warp quits.
+    pub fn should_persist_sessions(&self) -> bool {
+        persistent_sessions_enabled(
+            *self.persistent_sessions,
+            *self.restore_session,
+            std::env::var_os("APPIMAGE").is_some(),
+        )
+    }
+}
+
+/// Persistence requires session restoration, and is disabled for AppImages
+/// because unmounting the image can crash a daemon started from it.
+pub fn persistent_sessions_enabled(
+    persistent_sessions: bool,
+    restore_session: bool,
+    is_appimage: bool,
+) -> bool {
+    cfg!(unix) && persistent_sessions && restore_session && !is_appimage
+}
+
+#[cfg(test)]
+#[path = "general_settings_tests.rs"]
+mod tests;

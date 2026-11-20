@@ -916,6 +916,74 @@ fn open_from_restored(arg: &OpenFromRestoredArg, ctx: &mut AppContext) {
             }
         }
     }
+
+    #[cfg(all(feature = "local_tty", unix))]
+    prune_persistent_sessions(arg.app_state.as_ref(), ctx);
+}
+
+/// Kills daemon sessions that no restored terminal pane will reattach to.
+///
+/// Runs on a background thread, since pruning waits for the daemon to kill
+/// the sessions.
+#[cfg(all(feature = "local_tty", unix))]
+fn prune_persistent_sessions(app_state: Option<&crate::app_state::AppState>, ctx: &mut AppContext) {
+    let Some(keep) = persistent_sessions_to_keep(
+        app_state,
+        GeneralSettings::as_ref(ctx).should_persist_sessions(),
+    ) else {
+        return;
+    };
+    let sessions =
+        crate::terminal::local_tty::spawner::PtySpawner::as_ref(ctx).persistent_sessions();
+    if let Err(err) = std::thread::Builder::new()
+        .name("persistent-session-prune".to_owned())
+        .spawn(move || sessions.prune(keep))
+    {
+        log::warn!("Failed to start persistent session prune thread: {err}");
+    }
+}
+
+/// Returns the daemon sessions to keep when pruning, or `None` if no snapshot
+/// was restored, in which case nothing is known about which sessions are
+/// stale and none are pruned.
+#[cfg(all(feature = "local_tty", unix))]
+fn persistent_sessions_to_keep(
+    app_state: Option<&crate::app_state::AppState>,
+    persist_sessions: bool,
+) -> Option<Vec<crate::terminal::local_tty::server::PersistentSessionId>> {
+    let app_state = app_state?;
+    let mut uuids = Vec::new();
+    if persist_sessions {
+        for window in &app_state.windows {
+            for tab in &window.tabs {
+                collect_terminal_session_ids(&tab.root, &mut uuids);
+            }
+        }
+    }
+    Some(uuids)
+}
+
+#[cfg(all(feature = "local_tty", unix))]
+fn collect_terminal_session_ids(
+    node: &crate::app_state::PaneNodeSnapshot,
+    uuids: &mut Vec<crate::terminal::local_tty::server::PersistentSessionId>,
+) {
+    use crate::app_state::{LeafContents, PaneNodeSnapshot};
+
+    match node {
+        PaneNodeSnapshot::Branch(branch) => {
+            for (_, child) in &branch.children {
+                collect_terminal_session_ids(child, uuids);
+            }
+        }
+        PaneNodeSnapshot::Leaf(leaf) => {
+            if let LeafContents::Terminal(terminal) = &leaf.contents
+                && let Ok(uuid) = uuid::Uuid::from_slice(&terminal.uuid)
+            {
+                uuids.push(uuid.into());
+            }
+        }
+    }
 }
 
 fn path_if_directory(path: &Path) -> Option<&Path> {

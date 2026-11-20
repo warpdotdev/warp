@@ -56,6 +56,8 @@ pub struct UnsavedStateSummary<'a> {
     pub shared_sessions: usize,
     /// Whether or not there are unsaved code changes.
     unsaved_code_changes: bool,
+    /// Whether quitting leaves shells running in the background.
+    sessions_keep_running: bool,
 }
 
 /// Builder for a warning dialog that displays unsaved state.
@@ -309,6 +311,23 @@ impl UnsavedStateSummary<'static> {
     }
 }
 
+/// Whether every running command in `summary` keeps running after quitting:
+/// only when the whole app quits with persistence on and each of their shells
+/// is owned by a live persistent session daemon.
+fn sessions_keep_running_after_quit(
+    scope: &QuitScope<'_>,
+    persist_sessions: bool,
+    summary: &RunningSessionSummary<'_>,
+) -> bool {
+    matches!(scope, QuitScope::App)
+        && persist_sessions
+        && !summary.long_running_cmds.is_empty()
+        && summary
+            .long_running_cmds
+            .iter()
+            .all(|session| session.persists_after_quit())
+}
+
 impl<'a> UnsavedStateSummary<'a> {
     pub fn for_pane(
         pane_group: &'a PaneGroup,
@@ -337,8 +356,14 @@ impl<'a> UnsavedStateSummary<'a> {
         let code_review_summary = CodeEditorSummary::new(&code_review_views);
 
         let num_shared_sessions = scope.shared_sessions(ctx);
+        let sessions_keep_running = sessions_keep_running_after_quit(
+            &scope,
+            GeneralSettings::as_ref(ctx).should_persist_sessions(),
+            &sessions_summary,
+        );
 
         UnsavedStateSummary {
+            sessions_keep_running,
             scope,
             total_long_running_commands: sessions_summary.long_running_cmds.len(),
             windows_with_long_running_commands: sessions_summary.windows_running().len(),
@@ -425,6 +450,9 @@ impl<'a> UnsavedStateSummary<'a> {
                 );
             }
             process_info_text.push_str(scope_suffix);
+            if self.sessions_keep_running {
+                process_info_text.push_str(" They will keep running in the background.");
+            }
             info_text_lines.push(process_info_text);
         }
 
@@ -614,3 +642,7 @@ fn on_disable_warning_modal(ctx: &mut AppContext) {
     });
     send_telemetry_from_app_ctx!(TelemetryEvent::QuitModalDisabled, ctx);
 }
+
+#[cfg(test)]
+#[path = "quit_warning_tests.rs"]
+mod tests;

@@ -29,6 +29,9 @@ pub struct SessionNavigationData {
     is_read_only: bool,
     /// The sharing status of the session.
     shared_session_status: SharedSessionStatus,
+    /// Whether the session's shell is owned by the persistent session daemon,
+    /// so it keeps running after the app quits.
+    persists_after_quit: bool,
 }
 
 impl SessionNavigationData {
@@ -111,7 +114,17 @@ impl SessionNavigationData {
             is_read_only,
             window_id,
             shared_session_status,
+            persists_after_quit: false,
         }
+    }
+
+    pub fn with_persists_after_quit(mut self, persists_after_quit: bool) -> Self {
+        self.persists_after_quit = persists_after_quit;
+        self
+    }
+
+    pub fn persists_after_quit(&self) -> bool {
+        self.persists_after_quit
     }
 
     pub fn prompt(&self) -> &str {

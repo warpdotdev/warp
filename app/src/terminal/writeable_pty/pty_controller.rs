@@ -7,6 +7,7 @@ use parking_lot::FairMutex;
 use thiserror::Error;
 use warp_completer::meta::Span;
 #[cfg(feature = "local_fs")]
+use warp_core::SessionId;
 use warp_errors::report_error;
 use warp_util::path::ShellFamily;
 use warpui::r#async::block_on;
@@ -88,6 +89,11 @@ pub struct PtyController<T: EventLoopSender> {
     bootstrap_file: Option<TempBootstrapFile>,
     in_flight_native_completions_results_tx:
         Option<async_channel::Sender<(Vec<ShellCompletion>, Option<Span>)>>,
+    /// Set when reattaching to a shell that is already bootstrapped, so the
+    /// replayed `InitShell` hook of that session does not write the bootstrap
+    /// script again. Cleared by the next `InitShell`, whichever session it is
+    /// for.
+    skip_bootstrap_write_for: Option<SessionId>,
 }
 
 impl<T: EventLoopSender> PtyController<T> {
@@ -186,7 +192,14 @@ impl<T: EventLoopSender> PtyController<T> {
             #[cfg(not(target_family = "wasm"))]
             bootstrap_file: None,
             in_flight_native_completions_results_tx: None,
+            skip_bootstrap_write_for: None,
         }
+    }
+
+    /// Skips the bootstrap script write if the next `InitShell` hook is for
+    /// `session_id`.
+    pub fn skip_bootstrap_write_for(&mut self, session_id: SessionId) {
+        self.skip_bootstrap_write_for = Some(session_id);
     }
 
     /// Sends bindkey to notify shell process to switch to PS1 logic for prompt
@@ -327,6 +340,15 @@ impl<T: EventLoopSender> PtyController<T> {
         pending_session_info: &SessionInfo,
         ctx: &mut ModelContext<Self>,
     ) {
+        if let Some(session_id) = self.skip_bootstrap_write_for.take() {
+            if session_id == pending_session_info.session_id {
+                log::info!("Skipping bootstrap script write for reattached session");
+                return;
+            }
+            log::warn!(
+                "Reattached session was bootstrapped again under another id; writing the bootstrap script"
+            );
+        }
         let shell_type = pending_session_info.shell.shell_type();
 
         #[cfg(feature = "local_fs")]
