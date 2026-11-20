@@ -4147,6 +4147,7 @@ fn report_external_reference_required_args_parse() {
     assert_eq!(report_args.reference_type, "LINEAR_ISSUE");
     assert!(report_args.title.is_none());
     assert!(report_args.metadata.is_none());
+    assert!(report_args.origin.is_none());
 }
 
 #[test]
@@ -4161,6 +4162,8 @@ fn report_external_reference_optional_title_parses() {
         "https://github.com/warpdotdev/warp/pull/1",
         "--reference-type",
         "GITHUB_PR",
+        "--origin",
+        "factory_agent",
         "--title",
         "My pull request",
         "--metadata",
@@ -4178,6 +4181,7 @@ fn report_external_reference_optional_title_parses() {
         panic!("Expected report-external-reference subcommand");
     };
 
+    assert_eq!(report_args.origin.as_deref(), Some("factory_agent"));
     assert_eq!(report_args.url, "https://github.com/warpdotdev/warp/pull/1");
     assert_eq!(report_args.reference_type, "GITHUB_PR");
     assert_eq!(report_args.title.as_deref(), Some("My pull request"));
