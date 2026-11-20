@@ -2775,6 +2775,8 @@ jobs:
         uses: google-github-actions/upload-cloud-storage@6397bd7208e18d13ba2619ee21b9873edc94427a # v3.0.0
         with:
           path: ${{ steps.bundle_app.outputs.installer_path }}
+          # WinGet Delivery Optimization needs byte ranges and hashes over the original installer bytes.
+          gzip: false
           destination: warp-releases/${{ steps.get-config.outputs.channel }}/${{ needs.prepare_release.outputs.release_tag }}
           process_gcloudignore: false
           # IMPORTANT: both the key and value of the cache-control header must be all lowercase;
