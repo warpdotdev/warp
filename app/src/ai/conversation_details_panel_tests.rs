@@ -458,8 +458,7 @@ fn test_from_conversation_uses_charged_usage_dollar_total() {
     });
 }
 
-/// Without streamed charges, the panel falls back to the server's cumulative billed snapshot;
-/// the provider cost is never used.
+/// Without streamed charges, the panel falls back to the server's cumulative billed snapshot.
 #[test]
 fn test_from_conversation_falls_back_to_the_billed_snapshot() {
     App::test((), |mut app| async move {
