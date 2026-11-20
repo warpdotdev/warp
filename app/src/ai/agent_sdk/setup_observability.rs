@@ -364,6 +364,8 @@ pub(crate) enum SetupStep {
     EnvironmentSkillLoading,
     GlobalSkillLoading,
     SkillsDirsLoading,
+    /// Registers skill files a standby already read, under the assigned run's listing mode.
+    SkillRegistration,
     SkillReferenceResolution,
     ConversationResumeLoading,
     /// Reading a third-party harness's launch files into the file cache, in the background
@@ -431,6 +433,8 @@ impl SetupStep {
             // Session ACLs name the requester, who is unknown before a claim.
             | Self::SharedSessionEstablishment
             | Self::ConversationResumeLoading
+            // The listing mode comes from the assigned run's configuration.
+            | Self::SkillRegistration
             // Skill references are checked out with the claimed task's credentials.
             | Self::SkillReferenceResolution
             // Third-party harness setup needs the assigned run, so standby defers these steps.
@@ -524,6 +528,9 @@ impl SetupStep {
             }
             Self::SkillsDirsLoading => {
                 span_and_name!("setup_skills_dirs_loading")
+            }
+            Self::SkillRegistration => {
+                span_and_name!("setup_skill_registration")
             }
             Self::SkillReferenceResolution => {
                 span_and_name!("setup_skill_reference_resolution")

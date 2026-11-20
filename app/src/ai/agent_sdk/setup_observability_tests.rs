@@ -41,6 +41,7 @@ const EXPECTED: &[(SetupStep, SetupScope)] = &[
     (SetupStep::TaskDataFetch, SetupScope::Run),
     (SetupStep::SharedSessionEstablishment, SetupScope::Run),
     (SetupStep::ConversationResumeLoading, SetupScope::Run),
+    (SetupStep::SkillRegistration, SetupScope::Run),
     (SetupStep::SkillReferenceResolution, SetupScope::Run),
     (SetupStep::ThirdPartyHarnessPreparation, SetupScope::Run),
     (SetupStep::ThirdPartyHarnessStart, SetupScope::Run),

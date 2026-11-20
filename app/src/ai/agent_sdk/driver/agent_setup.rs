@@ -341,16 +341,10 @@ pub(crate) async fn load_skills(
             global,
         }) => {
             setup_events
-                .record_value(
-                    SetupStep::EnvironmentSkillLoading,
-                    register_environment_skills(foreground, environment),
-                )
-                .await;
-            setup_events
-                .record_value(
-                    SetupStep::GlobalSkillLoading,
-                    register_global_skills(foreground, global),
-                )
+                .record_value(SetupStep::SkillRegistration, async {
+                    register_environment_skills(foreground, environment).await;
+                    register_global_skills(foreground, global).await;
+                })
                 .await;
         }
     }

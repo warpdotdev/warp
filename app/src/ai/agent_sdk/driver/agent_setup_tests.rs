@@ -390,7 +390,7 @@ fn prepared_skills_register_under_the_runs_listing_mode() {
                 driver
             });
             let foreground = driver.update(&mut app, |_, ctx| ctx.spawner());
-            let setup_events = SetupClientEventReporter::standby(
+            let setup_events = SetupClientEventReporter::noop(
                 Arc::new(MockAIClient::new()),
                 app.background_executor(),
             );
