@@ -59,6 +59,53 @@ fn test_trims_powershell_specifics() {
     );
 }
 
+#[test]
+fn test_ssh_wrapper_keeps_windows_shell_guard() {
+    const POSIX_GUARD: &str = r#"set -- \`# '\"' <# \" 2>nul\` || %COMSPEC%"#;
+    // fish keeps `\`` literally inside double quotes, so its wrapper uses bare backticks.
+    const FISH_GUARD: &str = r#"set -- `# '\"' <# \" 2>nul` || %COMSPEC%"#;
+    const POWERSHELL_TAIL: [&str; 2] =
+        ["exit #>", r#"iex '& (Get-Process -Id \$PID).Path -NoLogo'"#];
+
+    for (shell_type, guard) in [
+        (ShellType::Bash, POSIX_GUARD),
+        (ShellType::Zsh, POSIX_GUARD),
+        (ShellType::Fish, FISH_GUARD),
+    ] {
+        let script = render_script_for_shell(shell_type, &crate::ASSETS);
+        let lines = script.lines().collect_vec();
+
+        let guard_line = lines
+            .iter()
+            .positions(|line| *line == guard)
+            .exactly_one()
+            .unwrap_or_else(|_| panic!("{shell_type:?}: expected exactly one guard line"));
+        // cmd.exe runs only the first line of the remote command.
+        assert_eq!(
+            lines[guard_line - 1],
+            "\"",
+            "{shell_type:?}: the guard must open the remote command"
+        );
+
+        let closing_quote = guard_line
+            + lines[guard_line..]
+                .iter()
+                .position(|line| *line == "\"")
+                .unwrap_or_else(|| panic!("{shell_type:?}: the remote command is never closed"));
+        assert_eq!(
+            lines[closing_quote - 2..closing_quote],
+            POWERSHELL_TAIL,
+            "{shell_type:?}: the remote command must end with the PowerShell tail"
+        );
+        assert!(
+            lines[guard_line + 1..closing_quote - 2]
+                .iter()
+                .all(|line| !line.contains("#>")),
+            "{shell_type:?}: a `#>` in the POSIX body ends PowerShell's block comment early"
+        );
+    }
+}
+
 fn decode_script(bytes: &[u8]) -> &str {
     std::str::from_utf8(bytes).expect("should not fail to decode")
 }
