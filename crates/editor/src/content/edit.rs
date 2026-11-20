@@ -187,7 +187,10 @@ impl PreciseDelta {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct EditDelta {
     /// The exact replacement charoffset range where content was changed.
-    pub precise_deltas: Vec<PreciseDelta>,
+    ///
+    /// Wrapped in `Arc` so cloning an `EditDelta` does not copy every entry in a large
+    /// multi-delta edit.
+    pub precise_deltas: Arc<Vec<PreciseDelta>>,
     /// Offset of the old blocks that are being replaced. The start is the first
     /// character of the first block, and the end is the end of the last block -
     /// the first character after it.
