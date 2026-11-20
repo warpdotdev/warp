@@ -1,6 +1,6 @@
 # Product Spec: Spaces — switchable sets of tabs within a window
 
-**Issue:** TBD (rename this folder to `specs/GH<issue-number>/` once filed)
+**Issue:** [warpdotdev/warp#16940](https://github.com/warpdotdev/warp/issues/16940)
 **Figma:** none provided. A working prototype exists behind the `Spaces` feature flag; a GIF will be attached to the issue.
 
 ## Summary

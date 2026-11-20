@@ -1,6 +1,6 @@
 # Tech Spec: Spaces — switchable sets of tabs within a window
 
-**Issue:** TBD
+**Issue:** [warpdotdev/warp#16940](https://github.com/warpdotdev/warp/issues/16940)
 **Product spec:** [product.md](product.md)
 
 This spec describes the prototype on branch `spaces` at `527b6b92a` (based on `master` at `fdb20a15f`). Invariant numbers refer to product.md. Line references are against `527b6b92a`, approximate, and will drift.
