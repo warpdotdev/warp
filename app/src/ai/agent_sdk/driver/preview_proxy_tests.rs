@@ -1,6 +1,31 @@
 use super::*;
 use crate::server::server_api::ai::RunPreview;
 
+#[tokio::test]
+async fn proxy_route_discovery_advertises_authorization() {
+    let task_id = "550e8400-e29b-41d4-a716-446655440000".parse().unwrap();
+    let mut api = crate::server::server_api::ai::MockAIClient::new();
+    api.expect_list_run_previews()
+        .with(
+            mockall::predicate::eq(task_id),
+            mockall::predicate::eq(true),
+        )
+        .times(1)
+        .returning(|_, _| {
+            Ok(ListRunPreviewsResponse {
+                execution_id: Some(42),
+                previews: vec![],
+            })
+        });
+    let source = Client {
+        task_id,
+        execution_id: 42,
+        client: Arc::new(api),
+    };
+
+    assert!(source.previews().await.unwrap().is_empty());
+}
+
 #[test]
 #[cfg(not(target_family = "wasm"))]
 fn only_docker_sandbox_requires_viewer_credentials() {

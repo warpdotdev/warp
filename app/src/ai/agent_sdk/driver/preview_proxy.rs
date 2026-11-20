@@ -79,7 +79,9 @@ impl Manager {
                         execution_id,
                         client,
                     });
-                    let mut proxy = match Proxy::bind_with_policy(port, source, policy).await {
+                    let mut proxy = match Proxy::bind_with_policy(port, Arc::clone(&source), policy)
+                        .await
+                    {
                         Ok(proxy) => proxy,
                         Err(error) => {
                             log::error!(
@@ -88,7 +90,22 @@ impl Manager {
                             return;
                         }
                     };
-                    task_cancel.cancelled().await;
+                    loop {
+                        tokio::select! {
+                            biased;
+                            _ = task_cancel.cancelled() => break,
+                            result = source.previews() => {
+                                if result.is_ok() {
+                                    task_cancel.cancelled().await;
+                                    break;
+                                }
+                            }
+                        }
+                        tokio::select! {
+                            _ = task_cancel.cancelled() => break,
+                            _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {}
+                        }
+                    }
                     proxy.shutdown().await;
                 });
             })
@@ -115,7 +132,7 @@ impl PortSource for Client {
     }
 
     async fn previews(&self) -> anyhow::Result<Vec<PreviewRecord>> {
-        let response = self.client.list_run_previews(&self.task_id).await?;
+        let response = self.client.list_run_previews(&self.task_id, true).await?;
         preview_records(response, self.execution_id)
     }
 }
