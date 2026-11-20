@@ -298,6 +298,15 @@ fn discover(
         let Some(agent) = definition_level(skills_dir) else {
             continue;
         };
+        let Some(root) = skills_dir
+            .ancestors()
+            .nth(if agent.is_some() { 3 } else { 1 })
+        else {
+            continue;
+        };
+        let Some(reference_dir) = relative(root, skills_dir) else {
+            continue;
+        };
         let Ok(entries) = fs::read_dir(skills_dir) else {
             continue;
         };
@@ -324,10 +333,7 @@ fn discover(
                         file.source.code_forge = file.source.code_forge.or(factory_forge);
                         file
                     });
-                let reference_file = match &agent {
-                    Some(agent) => format!("agents/{agent}/skills/{name}"),
-                    None => format!("skills/{name}"),
-                };
+                let reference_file = format!("{reference_dir}/{name}");
                 (reference_file, parsed)
             })
             .collect();
@@ -340,17 +346,20 @@ fn discover(
     levels
 }
 
-/// `Some(None)` for `<root>/skills` and `Some(Some(name))` for `<root>/agents/<name>/skills`,
-/// where `<root>` holds `factory.yaml`. No other folder holds reference files.
+/// `Some(None)` for `<root>/skills` and `Some(Some(name))` for `<root>/agents/<name>/skills` or
+/// `<root>/workers/<name>/skills`, where `<root>` holds `factory.yaml`. No other folder holds references.
 fn definition_level(skills_dir: &Path) -> Option<Option<String>> {
     let is_root = |root: &Path| root.join(FACTORY_FILE).is_file();
     if skills_dir.file_name()? != "skills" {
         return None;
     }
     let parent = skills_dir.parent()?;
-    let agents = parent
-        .parent()
-        .filter(|agents| agents.file_name() == Some(OsStr::new("agents")));
+    let agents = parent.parent().filter(|agents| {
+        matches!(
+            agents.file_name().and_then(OsStr::to_str),
+            Some("agents" | "workers")
+        )
+    });
     if let Some(root) = agents.and_then(Path::parent)
         && is_root(root)
     {
