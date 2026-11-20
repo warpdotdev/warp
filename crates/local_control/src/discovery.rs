@@ -24,6 +24,10 @@
 //! OS users. The broker's kernel-reported peer-UID check is the authoritative
 //! same-user check before credential issuance. Neither mechanism distinguishes
 //! trusted Warp code from arbitrary software already running as that user.
+//!
+//! On Windows, protected DACLs stand in for owner-only permission bits, the
+//! broker is an instance-bound named pipe rather than a socket file, and the
+//! peer check compares process token user SIDs (see `windows_security`).
 use std::collections::HashSet;
 use std::fs;
 #[cfg(unix)]
@@ -40,6 +44,8 @@ use crate::protocol::{ActionMetadata, ControlError, ErrorCode, PROTOCOL_VERSION}
 
 const DISCOVERY_DIR_ENV: &str = "WARP_LOCAL_CONTROL_DISCOVERY_DIR";
 const BROKER_SOCKET_SUFFIX: &str = ".broker.sock";
+#[cfg(windows)]
+const BROKER_PIPE_PREFIX: &str = r"\\.\pipe\warp-local-control-";
 const TEMP_RECORD_SUFFIX: &str = ".json.tmp";
 const ORPHAN_SOCKET_GRACE_PERIOD: Duration = Duration::from_secs(60);
 
@@ -165,7 +171,10 @@ impl InstanceRecord {
         }
     }
 
-    /// Resolves the validated broker filename inside the private discovery directory.
+    /// Resolves the validated broker reference to a connectable path.
+    ///
+    /// On Unix this is the socket inside the private discovery directory. On
+    /// Windows it is the instance-bound named pipe derived from the same filename.
     pub fn broker_socket_path(&self) -> Result<PathBuf, ControlError> {
         self.validate_local_control_authority()?;
         let credential_broker = self.credential_broker.as_ref().ok_or_else(|| {
@@ -174,6 +183,9 @@ impl InstanceRecord {
                 "local-control credential broker is disabled for this instance",
             )
         })?;
+        #[cfg(windows)]
+        return Ok(broker_pipe_path(&credential_broker.socket_path));
+        #[cfg(not(windows))]
         Ok(discovery_dir().join(&credential_broker.socket_path))
     }
 }
@@ -281,6 +293,10 @@ pub fn discovery_dir() -> PathBuf {
     if let Some(path) = std::env::var_os(DISCOVERY_DIR_ENV) {
         return PathBuf::from(path);
     }
+    #[cfg(windows)]
+    if let Some(path) = std::env::var_os("LOCALAPPDATA") {
+        return PathBuf::from(path).join("warp").join("local-control");
+    }
     if let Some(path) = std::env::var_os("XDG_RUNTIME_DIR") {
         return PathBuf::from(path).join("warp").join("local-control");
     }
@@ -314,6 +330,9 @@ pub fn list_instances(channel: &str) -> Vec<InstanceRecord> {
 /// need invokable instances should use [`list_instances`] so candidates also
 /// pass the authenticated probe.
 pub fn list_instances_from_dir(dir: &Path, channel: &str) -> Vec<InstanceRecord> {
+    if validate_private_dir_permissions(dir).is_err() {
+        return Vec::new();
+    }
     let Ok(entries) = fs::read_dir(dir) else {
         return Vec::new();
     };
@@ -322,6 +341,12 @@ pub fn list_instances_from_dir(dir: &Path, channel: &str) -> Vec<InstanceRecord>
     for entry in entries.filter_map(Result::ok) {
         let path = entry.path();
         if !is_record_path(&path) {
+            continue;
+        }
+        // Publication always protects records, so an unprotected one is as
+        // untrustworthy as a malformed one.
+        if validate_private_permissions(&path).is_err() {
+            remove_malformed_record_artifacts(dir, &path);
             continue;
         }
         let contents = match fs::read_to_string(&path) {
@@ -458,6 +483,12 @@ fn broker_socket_filename(instance_id: &InstanceId) -> PathBuf {
     PathBuf::from(format!("{}{BROKER_SOCKET_SUFFIX}", instance_id.0))
 }
 
+/// Maps a validated broker filename to its instance-bound named pipe.
+#[cfg(windows)]
+fn broker_pipe_path(broker_filename: &Path) -> PathBuf {
+    PathBuf::from(format!("{BROKER_PIPE_PREFIX}{}", broker_filename.display()))
+}
+
 #[cfg(unix)]
 fn set_private_dir_permissions(path: &Path) -> Result<(), ControlError> {
     let mut permissions = fs::metadata(path)
@@ -468,7 +499,13 @@ fn set_private_dir_permissions(path: &Path) -> Result<(), ControlError> {
         .map_err(|err| permissions_error("protect local-control discovery directory", err))
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn set_private_dir_permissions(path: &Path) -> Result<(), ControlError> {
+    crate::windows_security::set_private_acl(path, true)?;
+    crate::windows_security::validate_private_acl(path)
+}
+
+#[cfg(all(not(unix), not(windows)))]
 fn set_private_dir_permissions(_path: &Path) -> Result<(), ControlError> {
     Err(ControlError::new(
         ErrorCode::LocalControlDisabled,
@@ -486,12 +523,44 @@ fn set_private_permissions(path: &Path) -> Result<(), ControlError> {
         .map_err(|err| permissions_error("protect local-control discovery record", err))
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn set_private_permissions(path: &Path) -> Result<(), ControlError> {
+    crate::windows_security::set_private_acl(path, false)?;
+    crate::windows_security::validate_private_acl(path)
+}
+
+#[cfg(all(not(unix), not(windows)))]
 fn set_private_permissions(_path: &Path) -> Result<(), ControlError> {
     Err(ControlError::new(
         ErrorCode::LocalControlDisabled,
         "local-control discovery publication is disabled until this platform enforces record ACLs",
     ))
+}
+
+/// Rejects a registry whose ACL could let another OS user plant or edit records.
+///
+/// Unix relies on the `0700` mode applied at publication time. Windows checks
+/// the DACL on every scan because an inherited, broader DACL is the platform
+/// default for new directories.
+#[cfg(windows)]
+fn validate_private_dir_permissions(path: &Path) -> Result<(), ControlError> {
+    crate::windows_security::validate_private_acl(path)
+}
+
+#[cfg(not(windows))]
+fn validate_private_dir_permissions(_path: &Path) -> Result<(), ControlError> {
+    Ok(())
+}
+
+/// Rejects a record whose ACL could let another OS user redirect clients.
+#[cfg(windows)]
+fn validate_private_permissions(path: &Path) -> Result<(), ControlError> {
+    crate::windows_security::validate_private_acl(path)
+}
+
+#[cfg(not(windows))]
+fn validate_private_permissions(_path: &Path) -> Result<(), ControlError> {
+    Ok(())
 }
 
 #[cfg(unix)]
