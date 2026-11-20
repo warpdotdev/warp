@@ -55,6 +55,7 @@ static_assertions.workspace = true
 thiserror.workspace = true
 typed-path.workspace = true
 unicode-general-category.workspace = true
+unicode-segmentation.workspace = true
 unicode-width.workspace = true
 urlocator.workspace = true
 uuid.workspace = true
@@ -117,7 +118,6 @@ winreg.workspace = true
 [dev-dependencies]
 serial_test = "0.8.0"
 tempfile.workspace = true
-unicode-segmentation = "1.11.0"
 warp_core = { workspace = true, features = ["test-util"] }
 
 [features]
