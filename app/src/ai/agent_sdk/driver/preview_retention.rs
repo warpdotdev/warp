@@ -12,16 +12,12 @@ use crate::server::server_api::ai::{AIClient, ListRunPreviewsResponse};
 
 const PREVIEW_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
 const PREVIEW_RECHECK_INTERVAL: Duration = Duration::from_secs(60);
-pub(super) fn is_namespace_sandbox(platform: Option<IsolationPlatformType>) -> bool {
+pub(super) fn supports_preview_retention(platform: Option<IsolationPlatformType>) -> bool {
     match platform {
         #[cfg(not(target_family = "wasm"))]
-        Some(IsolationPlatformType::Namespace) => true,
+        Some(IsolationPlatformType::Namespace | IsolationPlatformType::DockerSandbox) => true,
         #[cfg(not(target_family = "wasm"))]
-        Some(
-            IsolationPlatformType::Docker
-            | IsolationPlatformType::DockerSandbox
-            | IsolationPlatformType::Kubernetes,
-        ) => false,
+        Some(IsolationPlatformType::Docker | IsolationPlatformType::Kubernetes) => false,
         None => false,
     }
 }

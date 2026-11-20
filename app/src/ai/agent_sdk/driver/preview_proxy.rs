@@ -2,11 +2,14 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::thread::JoinHandle;
 
-use ::preview_proxy::{PortSource, PreviewRecord, Proxy};
+#[cfg(not(target_family = "wasm"))]
+use ::preview_proxy::ViewerAuthorization;
+use ::preview_proxy::{CredentialPolicy, PortSource, PreviewRecord, Proxy};
 use anyhow::Context as _;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 use uuid::Uuid;
+use warp_isolation_platform::IsolationPlatformType;
 
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::server::server_api::ai::{AIClient, ListRunPreviewsResponse};
@@ -28,12 +31,27 @@ fn listener_port(value: &str) -> anyhow::Result<u16> {
     Ok(port)
 }
 
+fn credential_policy(platform: Option<IsolationPlatformType>) -> anyhow::Result<CredentialPolicy> {
+    match platform {
+        #[cfg(not(target_family = "wasm"))]
+        Some(IsolationPlatformType::Namespace) => Ok(CredentialPolicy::Namespace),
+        #[cfg(not(target_family = "wasm"))]
+        Some(IsolationPlatformType::DockerSandbox) => Ok(CredentialPolicy::DockerSandbox),
+        #[cfg(not(target_family = "wasm"))]
+        Some(IsolationPlatformType::Docker | IsolationPlatformType::Kubernetes) => {
+            anyhow::bail!("Preview proxy requires a supported hosted sandbox")
+        }
+        None => anyhow::bail!("Preview proxy requires a supported hosted sandbox"),
+    }
+}
+
 impl Manager {
     pub(super) fn start(
         task_id: AmbientAgentTaskId,
         execution_id: Option<&str>,
         client: Arc<dyn AIClient>,
     ) -> anyhow::Result<Self> {
+        let policy = credential_policy(warp_isolation_platform::detect())?;
         let execution_id = execution_id
             .context("Preview proxy requires an execution ID")?
             .parse::<i64>()
@@ -61,7 +79,7 @@ impl Manager {
                         execution_id,
                         client,
                     });
-                    let mut proxy = match Proxy::bind(port, source).await {
+                    let mut proxy = match Proxy::bind_with_policy(port, source, policy).await {
                         Ok(proxy) => proxy,
                         Err(error) => {
                             log::error!(
@@ -83,6 +101,19 @@ impl Manager {
 }
 
 impl PortSource for Client {
+    #[cfg(not(target_family = "wasm"))]
+    async fn authorize_viewer(&self, request: ViewerAuthorization<'_>) -> anyhow::Result<()> {
+        self.client
+            .authorize_preview_viewer(
+                &self.task_id,
+                self.execution_id,
+                request.preview_id,
+                request.port,
+                request.credential,
+            )
+            .await
+    }
+
     async fn previews(&self) -> anyhow::Result<Vec<PreviewRecord>> {
         let response = self.client.list_run_previews(&self.task_id).await?;
         preview_records(response, self.execution_id)
