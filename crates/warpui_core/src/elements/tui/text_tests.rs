@@ -1,9 +1,14 @@
+use std::rc::Rc;
+
 use ratatui::style::{Color, Modifier, Style};
 
 use super::TuiText;
 use crate::elements::tui::test_support::{render_to_frame, render_to_lines};
-use crate::elements::tui::{TuiBufferExt, TuiConstraint, TuiElement, TuiLayoutContext, TuiSize};
-use crate::{App, EntityIdMap};
+use crate::elements::tui::{
+    TuiBufferExt, TuiConstraint, TuiElement, TuiLayoutContext, TuiPaintContext, TuiPaintSurface,
+    TuiScreenPosition, TuiSize,
+};
+use crate::{App, AppContext, EntityIdMap};
 
 #[test]
 fn renders_a_single_short_line() {
@@ -213,4 +218,140 @@ fn all_empty_spans_occupy_no_rows() {
         (String::new(), Style::default()),
     ]);
     assert_eq!(text.desired_height(10), 0);
+}
+
+/// Style carrying the hyperlink sentinel index 0 (see `TuiText::with_hyperlinks`).
+fn sentinel_style() -> Style {
+    Style::default().underline_color(Color::Indexed(0))
+}
+
+/// Asserts no cell in `buffer`'s `width`-wide, single row leaked the sentinel
+/// `underline_color` visibly.
+fn assert_no_leaked_sentinel(buffer: &crate::elements::tui::TuiBuffer, width: u16) {
+    for x in 0..width {
+        assert_eq!(
+            buffer[(x, 0)].underline_color,
+            Color::Reset,
+            "column {x} must not leak the hyperlink sentinel color"
+        );
+    }
+}
+
+#[test]
+fn hyperlink_sentinel_is_recorded_and_cleared_from_the_painted_cell() {
+    let text = TuiText::from_spans([("link".to_owned(), sentinel_style())])
+        .with_hyperlinks(vec![Rc::from("https://warp.dev")]);
+    let frame = render_to_frame(text, TuiSize::new(4, 1));
+
+    assert_eq!(frame.buffer.to_lines(), vec!["link"]);
+    assert_no_leaked_sentinel(&frame.buffer, 4);
+    let url: Rc<str> = Rc::from("https://warp.dev");
+    for x in 0..4 {
+        assert_eq!(frame.hyperlinks.get(&(x, 0)), Some(&url));
+    }
+}
+
+#[test]
+fn hyperlink_sentinel_is_cleared_from_both_columns_of_a_wide_grapheme() {
+    let text = TuiText::from_spans([("界".to_owned(), sentinel_style())])
+        .with_hyperlinks(vec![Rc::from("https://warp.dev")]);
+    let frame = render_to_frame(text, TuiSize::new(2, 1));
+
+    assert_eq!(frame.buffer.to_lines(), vec!["界"]);
+    assert_no_leaked_sentinel(&frame.buffer, 2);
+    let url: Rc<str> = Rc::from("https://warp.dev");
+    assert_eq!(
+        frame.hyperlinks.get(&(0, 0)),
+        Some(&url),
+        "the wide grapheme's leading column should be linked"
+    );
+}
+
+#[test]
+fn hyperlink_sentinel_is_cleared_from_ellipsized_text() {
+    let text = TuiText::from_spans([("infrastructure".to_owned(), sentinel_style())])
+        .with_hyperlinks(vec![Rc::from("https://warp.dev")])
+        .truncate_with_ellipsis();
+    let frame = render_to_frame(text, TuiSize::new(8, 1));
+
+    assert_eq!(frame.buffer.to_lines(), vec!["infra..."]);
+    assert_no_leaked_sentinel(&frame.buffer, 8);
+    let url: Rc<str> = Rc::from("https://warp.dev");
+    for x in 0..5 {
+        assert_eq!(
+            frame.hyperlinks.get(&(x, 0)),
+            Some(&url),
+            "column {x} (\"infra\") should be linked"
+        );
+    }
+}
+
+/// A single-child wrapper that narrows the active clip to a fixed window,
+/// forcing `TuiPaintSurface::render_widget`'s internal scratch-buffer copy
+/// path whenever the child's own rendered width exceeds that window.
+struct ClippedWindow {
+    child: Box<dyn TuiElement>,
+    clip_start_x: i32,
+    clip_width: u16,
+}
+
+impl TuiElement for ClippedWindow {
+    fn layout(
+        &mut self,
+        constraint: TuiConstraint,
+        ctx: &mut TuiLayoutContext,
+        app: &AppContext,
+    ) -> TuiSize {
+        self.child.layout(constraint, ctx, app);
+        TuiSize::new(self.clip_width, constraint.max.height)
+    }
+
+    fn render(
+        &mut self,
+        origin: TuiScreenPosition,
+        surface: &mut TuiPaintSurface<'_>,
+        ctx: &mut TuiPaintContext,
+    ) {
+        let clip_origin = origin.offset(self.clip_start_x, 0);
+        surface.with_clip(clip_origin, TuiSize::new(self.clip_width, 1), |surface| {
+            self.child.render(origin, surface, ctx);
+        });
+    }
+
+    fn size(&self) -> Option<TuiSize> {
+        self.child.size()
+    }
+}
+
+#[test]
+fn hyperlink_recording_respects_an_active_clip_and_the_scratch_copy_path() {
+    let text = TuiText::from_spans([("0123456789".to_owned(), sentinel_style())])
+        .with_hyperlinks(vec![Rc::from("https://warp.dev")]);
+    let clipped = ClippedWindow {
+        child: text.finish(),
+        clip_start_x: 2,
+        clip_width: 6,
+    };
+
+    let frame = render_to_frame(clipped, TuiSize::new(10, 1));
+
+    // Only the clipped window (columns 2..8) is actually painted; the rest
+    // stays blank, proving `render_widget`'s scratch-buffer copy path (used
+    // whenever only part of the row is visible) ran.
+    assert_eq!(frame.buffer.to_lines(), vec!["  234567  "]);
+    assert_no_leaked_sentinel(&frame.buffer, 10);
+    let url: Rc<str> = Rc::from("https://warp.dev");
+    for x in 2..8 {
+        assert_eq!(
+            frame.hyperlinks.get(&(x, 0)),
+            Some(&url),
+            "column {x} is inside the clip and should be linked"
+        );
+    }
+    for x in [0, 1, 8, 9] {
+        assert!(
+            !frame.hyperlinks.contains_key(&(x, 0)),
+            "column {x} was clipped and never painted, so it must not be linked"
+        );
+    }
 }
