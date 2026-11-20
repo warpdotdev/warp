@@ -30,7 +30,7 @@ use warpui_core::text::{TextBuffer, char_slice};
 use warpui_core::{AppContext, Entity, EntityId, ModelContext, ModelHandle};
 
 use super::anchor::{Anchor, AnchorSide, Anchors};
-use super::cursor::BufferCursor;
+use super::cursor::{BufferCursor, BufferTextBatch};
 use super::edit::EditDelta;
 use super::markdown::{
     BufferMarkdownParser, BufferToFormattedText, ExportedBufferBlocks, MarkdownStyle,
@@ -4934,6 +4934,10 @@ impl Buffer {
             let mut byte_index = ByteOffset::from(0);
             let mut active_color = None;
             let mut is_first_item = true;
+            // A syntax-highlighted block emits a color marker per token boundary and is
+            // rebuilt one character at a time. See [`BufferTextBatch`] for why those items
+            // must not be appended one by one (APP-5567).
+            let mut batch = BufferTextBatch::new(&mut new_content);
             while let Some(item) = buffer_cursor.item() {
                 // If current buffer cursor is at the end of the styling and the current item is not a color marker (taking
                 // into account trailing color end markers). Break out of the loop.
@@ -4947,12 +4951,12 @@ impl Buffer {
                     Some((color_range, _))
                         if color_range.end <= byte_index && active_color.is_some() =>
                     {
-                        new_content.push(BufferText::Color(ColorMarker::End));
+                        batch.push_marker(ColorMarker::End);
                         active_color = None;
                         active_color_index += 1;
                     }
                     _ if started_colored && is_first_item => {
-                        new_content.push(BufferText::Color(ColorMarker::End));
+                        batch.push_marker(ColorMarker::End);
                     }
                     _ => (),
                 };
@@ -4964,7 +4968,7 @@ impl Buffer {
                     Some((color_range, color))
                         if color_range.start == byte_index && active_color != Some(*color) =>
                     {
-                        new_content.push(BufferText::Color(ColorMarker::Start(*color)));
+                        batch.push_marker(ColorMarker::Start(*color));
                         active_color = Some(*color);
                     }
                     _ => (),
@@ -4972,7 +4976,7 @@ impl Buffer {
 
                 if let Some(c) = buffer_cursor.char() {
                     byte_index += c.len_utf8();
-                    new_content.append_str(&c.to_string());
+                    batch.push_char(c);
                     buffer_cursor.next_char_position()
                 } else {
                     buffer_cursor.next()
@@ -4984,8 +4988,10 @@ impl Buffer {
                 && color_range.end >= byte_index
                 && active_color.is_some()
             {
-                new_content.push(BufferText::Color(ColorMarker::End));
+                batch.push_marker(ColorMarker::End);
             }
+
+            batch.finish();
 
             new_content.push_tree(buffer_cursor.suffix());
             new_content
