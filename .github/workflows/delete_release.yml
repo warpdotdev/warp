@@ -30,8 +30,10 @@ jobs:
       contents: write # `git push` renames the release branch to deleted/<branch> and deletes the original
     steps:
       - name: Verify confirmation
+        env:
+          CONFIRMATION: ${{ inputs.confirmation }}
         run: |
-          if [[ "${{ inputs.confirmation }}" != "DELETE" ]]; then
+          if [[ "${CONFIRMATION}" != "DELETE" ]]; then
             echo "::error::You must type DELETE to confirm branch deletion. \
               If you're unsure about deleting, ask a TL in #oncall-client before running this workflow."
             exit 1
@@ -40,8 +42,10 @@ jobs:
 
       - name: Validate release branch
         id: validate
+        env:
+          BRANCH_INPUT: ${{ inputs.branch }}
         run: |
-          BRANCH_NAME="${{ inputs.branch }}"
+          BRANCH_NAME="${BRANCH_INPUT}"
           
           # Validate branch is a release branch and extract the channel
           if [[ ! "$BRANCH_NAME" =~ ^(stable|preview|dev)_release/ ]]; then
