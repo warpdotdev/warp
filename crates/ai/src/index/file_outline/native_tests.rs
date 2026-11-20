@@ -194,3 +194,29 @@ fmt.Println("Helper function")
     assert_eq!(symbols[4].name, "helperFunction");
     assert_eq!(symbols[4].type_prefix, Some("func".to_owned()));
 }
+
+// Regression test for APP-5840: the vendored `arborium-sql` external scanner
+// leaked its `LexerState.start_tag` allocation on every restore of saved
+// scanner state, which is triggered whenever tree-sitter's GLR error
+// recovery backtracks while parsing a Postgres-style dollar-quoted string
+// (`$tag$ ... $tag$`). This doesn't assert on memory usage directly (not
+// portably observable from a Rust unit test), but exercises the exact code
+// path that leaked and asserts the outline is still parsed correctly.
+#[test]
+fn test_parse_sql_with_dollar_quoted_string() {
+    let temp_dir = TempDir::new().unwrap();
+    let content = r#"
+CREATE FUNCTION public.foo() RETURNS trigger
+LANGUAGE plpgsql
+AS $body$
+BEGIN
+  RETURN NEW;
+END;
+$body$;
+"#;
+    let file_path = create_test_file(&temp_dir, "function.sql", content);
+
+    // SQL has no `identifiers.scm` symbols query configured, so `symbols` is
+    // always `None`; what matters here is that parsing succeeds at all.
+    parse_file_outline(&file_path).unwrap();
+}

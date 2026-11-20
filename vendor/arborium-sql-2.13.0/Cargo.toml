@@ -1,0 +1,38 @@
+# This crate is a vendored, patched copy of a third-party dependency (see the
+# `arborium-sql` override in the top-level Cargo.toml's `[patch.crates-io]`);
+# it deliberately stays out of the main workspace so it isn't subject to the
+# workspace's own lint/test policies. The empty `[workspace]` table below
+# stops Cargo from pulling it into the enclosing `warp` workspace, so its
+# `[dev-dependencies]` and tests can still be run standalone from this
+# directory.
+[workspace]
+
+[package]
+edition = "2024"
+rust-version = "1.85"
+name = "arborium-sql"
+version = "2.13.0"
+authors = ["Amos Wenger <amos@bearcove.eu>"]
+build = "build.rs"
+description = "SQL grammar for arborium (tree-sitter bindings), vendored with a local leak fix"
+homepage = "https://github.com/bearcove/arborium"
+documentation = "https://docs.rs/arborium-sql"
+readme = "README.md"
+license = "MIT"
+repository = "https://github.com/bearcove/arborium"
+
+[lib]
+name = "arborium_sql"
+path = "src/lib.rs"
+
+[dependencies]
+tree-sitter-language = "0.1"
+
+[target.'cfg(target_family = "wasm")'.dependencies]
+arborium-sysroot = "2.13.0"
+
+[build-dependencies]
+cc = "1"
+
+[dev-dependencies]
+tree-sitter = "0.25"
