@@ -132,43 +132,15 @@ impl AgentDriver {
         .await?;
         Self::read_setup_vars(foreground, false, harness == Harness::Oz).await?;
         let working_dir = harness_working_dir.clone();
-        foreground
-            .spawn(move |me, _| me.harness_working_dir = working_dir)
-            .await?;
-        let skills = if runner_preparation || harness != Harness::Oz {
-            PreparedSkills::default()
-        } else {
-            let managed_mcp_client = foreground
-                .spawn(|_, ctx| ServerApiProvider::as_ref(ctx).get_managed_mcp_client())
-                .await?;
-            let mcp_result = setup_events
-                .record_result(
-                    SetupStep::McpServerStartup,
-                    mcp_startup::start_task_and_profile_mcp_servers(
-                        &mcp_specs,
-                        managed_mcp_client,
-                        mcp_startup::McpStartupMode::Standby,
-                        task_id,
-                        foreground,
-                    ),
-                )
-                .await;
-            Self::handle_mcp_startup_result(mcp_result, foreground).await?;
-            read_skills(
-                foreground,
-                repositories.clone(),
-                global_skills,
-                setup_events,
-            )
-            .await
-        };
+        let skill_repositories = repositories.clone();
         foreground
             .spawn(move |me, _| {
+                me.harness_working_dir = working_dir;
                 let prepared = StandbyWorkspace {
                     harness,
                     configuration: prepared_configuration,
                     repositories,
-                    skills,
+                    skills: PreparedSkills::default(),
                 };
                 me.workspace = Some(if runner_preparation {
                     WorkspaceState::RunnerPrepared(prepared)
@@ -177,6 +149,35 @@ impl AgentDriver {
                 });
             })
             .await?;
+        if runner_preparation || harness != Harness::Oz {
+            return Ok(harness_working_dir);
+        }
+        let managed_mcp_client = foreground
+            .spawn(|_, ctx| ServerApiProvider::as_ref(ctx).get_managed_mcp_client())
+            .await?;
+        let mcp_result = setup_events
+            .record_result(
+                SetupStep::McpServerStartup,
+                mcp_startup::start_task_and_profile_mcp_servers(
+                    &mcp_specs,
+                    managed_mcp_client,
+                    mcp_startup::McpStartupMode::Standby,
+                    task_id,
+                    foreground,
+                ),
+            )
+            .await;
+        Self::handle_mcp_startup_result(mcp_result, foreground).await?;
+        let skills = read_skills(foreground, skill_repositories, global_skills, setup_events).await;
+        foreground
+            .spawn(move |me, _| {
+                let Some(WorkspaceState::Prepared(prepared)) = me.workspace.as_mut() else {
+                    return Err(AgentDriverError::InvalidRuntimeState);
+                };
+                prepared.skills = skills;
+                Ok(())
+            })
+            .await??;
         Ok(harness_working_dir)
     }
 }
