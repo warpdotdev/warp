@@ -1,5 +1,6 @@
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use cynic::{MutationBuilder, QueryBuilder};
 #[cfg(test)]
 use mockall::{automock, predicate::*};
@@ -16,6 +17,10 @@ use warp_graphql::mutations::delete_invite_link_domain_restriction::{
 };
 use warp_graphql::mutations::delete_team_invite::{
     DeleteTeamInvite, DeleteTeamInviteInput, DeleteTeamInviteResult, DeleteTeamInviteVariables,
+};
+use warp_graphql::mutations::generate_temporary_invite_code::{
+    GenerateTemporaryInviteCode, GenerateTemporaryInviteCodeInput,
+    GenerateTemporaryInviteCodeResult, GenerateTemporaryInviteCodeVariables,
 };
 use warp_graphql::mutations::join_team_in_workspace::{
     JoinTeamInWorkspace, JoinTeamInWorkspaceInput, JoinTeamInWorkspaceResult,
@@ -75,10 +80,22 @@ use crate::workspaces::team::{DiscoveryOptions, MembershipRole};
 use crate::workspaces::user_workspaces::{CreateTeamResponse, WorkspacesMetadataWithPricing};
 use crate::workspaces::workspace::{Workspace, WorkspaceUid};
 
+pub struct TemporaryInviteCode {
+    pub invite_uid: String,
+    pub invite_link: String,
+    pub expires_at: DateTime<Utc>,
+}
+
 #[cfg_attr(test, automock)]
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
 pub trait TeamClient: 'static + Send + Sync {
+    async fn generate_temporary_invite_code(
+        &self,
+        workspace_uid: WorkspaceUid,
+        team_uid: Option<ServerId>,
+    ) -> Result<TemporaryInviteCode>;
+
     async fn workspaces_metadata(&self) -> Result<WorkspacesMetadataWithPricing>;
 
     async fn add_invite_link_domain_restriction(
@@ -184,6 +201,42 @@ pub trait TeamClient: 'static + Send + Sync {
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
 impl TeamClient for ServerApi {
+    async fn generate_temporary_invite_code(
+        &self,
+        workspace_uid: WorkspaceUid,
+        team_uid: Option<ServerId>,
+    ) -> Result<TemporaryInviteCode> {
+        let operation = GenerateTemporaryInviteCode::build(GenerateTemporaryInviteCodeVariables {
+            input: GenerateTemporaryInviteCodeInput {
+                workspace_uid: String::from(workspace_uid).into(),
+                team_uid: team_uid.map(Into::into),
+            },
+            request_context: get_request_context(),
+        });
+        let result = self
+            .send_graphql_request(operation, None)
+            .await?
+            .generate_temporary_invite_code;
+        match result {
+            GenerateTemporaryInviteCodeResult::GenerateTemporaryInviteCodeOutput(output) => {
+                let expires_at = output
+                    .expires_at
+                    .ok_or_else(|| anyhow!("Invite link response is missing its expiry"))?;
+                Ok(TemporaryInviteCode {
+                    invite_uid: output.invite_uid.into_inner(),
+                    invite_link: output.invite_link,
+                    expires_at: expires_at.utc(),
+                })
+            }
+            GenerateTemporaryInviteCodeResult::UserFacingError(error) => {
+                Err(anyhow!(get_user_facing_error_message(error)))
+            }
+            GenerateTemporaryInviteCodeResult::Unknown => {
+                Err(anyhow!("Unable to create invite link"))
+            }
+        }
+    }
+
     #[tracing::instrument(skip_all, err, fields(tags.cloud_agent = true))]
     async fn workspaces_metadata(&self) -> Result<WorkspacesMetadataWithPricing> {
         let variables = GetWorkspacesMetadataForUserVariables {
