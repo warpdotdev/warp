@@ -23,15 +23,24 @@ fn persistent_sessions_require_restore_session_and_no_appimage() {
 fn integration_tests_only_persist_sessions_when_opted_in() {
     assert!(!persistent_sessions_allowed_for_channel(
         Channel::Integration,
-        false
+        None
     ));
     assert!(persistent_sessions_allowed_for_channel(
         Channel::Integration,
-        true
+        Some("1")
     ));
+    for value in ["", "0", "true", "yes", " 1"] {
+        assert!(
+            !persistent_sessions_allowed_for_channel(Channel::Integration, Some(value)),
+            "{value:?} must not opt in"
+        );
+    }
     assert!(persistent_sessions_allowed_for_channel(
         Channel::Stable,
-        false
+        None
     ));
-    assert!(persistent_sessions_allowed_for_channel(Channel::Oss, false));
+    assert!(persistent_sessions_allowed_for_channel(
+        Channel::Oss,
+        Some("0")
+    ));
 }
