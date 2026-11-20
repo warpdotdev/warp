@@ -1,19 +1,26 @@
 use std::time::Duration;
 
 use instant::Instant;
+use settings::Setting as _;
 use warp_core::features::FeatureFlag;
-use warpui::geometry::vector::vec2f;
-use warpui::{App, AppContext, EntityId, SingletonEntity as _, TypedActionView as _, ViewContext};
+use warpui::geometry::rect::RectF;
+use warpui::geometry::vector::{Vector2F, vec2f};
+use warpui::{
+    App, AppContext, EntityId, Event, SingletonEntity as _, TypedActionView as _, ViewContext,
+    ViewHandle, WindowId,
+};
 
 use crate::appearance::Appearance;
 use crate::menu::MenuItem;
+use crate::report_if_error;
 use crate::session_management::SessionNavigationData;
-use crate::tab::{SelectedTabColor, TabData};
+use crate::tab::{SelectedTabColor, TabData, tab_position_id};
 use crate::ui_components::color_dot::TAB_COLOR_OPTIONS;
 use crate::workspace::WorkspaceAction;
 use crate::workspace::space::SpaceId;
 use crate::workspace::swipe_detector::IDLE_GAP;
 use crate::workspace::tab_group::{TabGroup, TabGroupId};
+use crate::workspace::tab_settings::TabSettings;
 use crate::workspace::util::PaneViewLocator;
 use crate::workspace::view::Workspace;
 use crate::workspace::view::tests::{initialize_app, mock_workspace, restored_workspace};
@@ -1228,6 +1235,170 @@ fn test_swipe_is_ignored_while_dragging_renaming_or_searching() {
         workspace.update(&mut app, |workspace, ctx| {
             swipe_spaces(workspace, end + IDLE_GAP, -10., 12, ctx);
             assert_eq!(workspace.active_space, second_space);
+        });
+    });
+}
+
+/// Turns on vertical tabs and opens the panel. Unit tests build every frame eagerly, so the panel
+/// is laid out and its element positions are cached after this.
+fn open_vertical_tabs_panel(app: &mut App, workspace: &ViewHandle<Workspace>) {
+    app.update(|ctx| {
+        TabSettings::handle(ctx).update(ctx, |settings, ctx| {
+            report_if_error!(settings.use_vertical_tabs.set_value(true, ctx));
+        });
+    });
+    workspace.update(app, |workspace, ctx| {
+        workspace.vertical_tabs_panel_open = true;
+        ctx.notify();
+    });
+}
+
+fn element_rect(app: &App, window_id: WindowId, position_id: &str) -> RectF {
+    app.read(|ctx| ctx.element_position_by_id_at_last_frame(window_id, position_id))
+        .unwrap_or_else(|| panic!("{position_id} was not rendered"))
+}
+
+fn send_mouse_event(app: &mut App, window_id: WindowId, event: Event) {
+    let presenter = app.presenter(window_id).expect("window is open");
+    app.update(move |ctx| {
+        ctx.simulate_window_event(event, window_id, presenter);
+    });
+}
+
+/// Presses the left button at `from`, drags to `to` in small steps, and releases there, the way
+/// the platform delivers a real mouse drag.
+fn drag_mouse(app: &mut App, window_id: WindowId, from: Vector2F, to: Vector2F) {
+    const STEPS: u16 = 12;
+    send_mouse_event(
+        app,
+        window_id,
+        Event::LeftMouseDown {
+            position: from,
+            modifiers: Default::default(),
+            click_count: 1,
+            is_first_mouse: false,
+        },
+    );
+    for step in 1..=STEPS {
+        let position = from + (to - from) * (f32::from(step) / f32::from(STEPS));
+        send_mouse_event(
+            app,
+            window_id,
+            Event::LeftMouseDragged {
+                position,
+                modifiers: Default::default(),
+            },
+        );
+    }
+    send_mouse_event(
+        app,
+        window_id,
+        Event::LeftMouseUp {
+            position: to,
+            modifiers: Default::default(),
+        },
+    );
+}
+
+/// Drags a row through the rendered panel with the flag off and on, and with cross-window drag off
+/// (debug and OSS builds) and on (release builds).
+#[test]
+fn test_dragging_a_vertical_tab_reorders_tabs() {
+    let _vertical_tabs_guard = FeatureFlag::VerticalTabs.override_enabled(true);
+    let _grouped_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+    let _pinned_guard = FeatureFlag::PinnedTabs.override_enabled(true);
+    for (spaces_enabled, drag_to_windows) in
+        [(false, false), (true, false), (false, true), (true, true)]
+    {
+        let _spaces_guard = FeatureFlag::Spaces.override_enabled(spaces_enabled);
+        let _drag_to_windows_guard =
+            FeatureFlag::DragTabsToWindows.override_enabled(drag_to_windows);
+        App::test((), |mut app| async move {
+            initialize_app(&mut app);
+
+            let workspace = mock_workspace(&mut app);
+            let (window_id, tab_ids) = workspace.update(&mut app, |workspace, ctx| {
+                workspace.add_terminal_tab(false, ctx);
+                workspace.add_terminal_tab(false, ctx);
+                (ctx.window_id(), live_tab_ids(workspace))
+            });
+            open_vertical_tabs_panel(&mut app, &workspace);
+
+            let first = element_rect(&app, window_id, &tab_position_id(0));
+            let last = element_rect(&app, window_id, &tab_position_id(2));
+            drag_mouse(
+                &mut app,
+                window_id,
+                first.center(),
+                last.center() + vec2f(0., 4.),
+            );
+
+            workspace.read(&app, |workspace, _| {
+                assert_eq!(
+                    live_tab_ids(workspace),
+                    vec![tab_ids[1], tab_ids[2], tab_ids[0]],
+                    "spaces enabled: {spaces_enabled}, drag to windows: {drag_to_windows}"
+                );
+            });
+        });
+    }
+}
+
+#[test]
+fn test_dragging_a_vertical_tab_reorders_tabs_after_switching_spaces() {
+    let _vertical_tabs_guard = FeatureFlag::VerticalTabs.override_enabled(true);
+    let _grouped_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+    let _pinned_guard = FeatureFlag::PinnedTabs.override_enabled(true);
+    let _spaces_guard = FeatureFlag::Spaces.override_enabled(true);
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        let window_id = workspace.update(&mut app, |workspace, ctx| {
+            workspace.add_terminal_tab(false, ctx);
+            workspace.add_terminal_tab(false, ctx);
+            workspace.add_terminal_tab(false, ctx);
+            ctx.window_id()
+        });
+        open_vertical_tabs_panel(&mut app, &workspace);
+        let tab_ids = workspace.update(&mut app, |workspace, ctx| {
+            workspace.handle_action(&WorkspaceAction::NewSpace, ctx);
+            workspace.add_terminal_tab(false, ctx);
+            workspace.add_terminal_tab(false, ctx);
+            live_tab_ids(workspace)
+        });
+        let first = element_rect(&app, window_id, &tab_position_id(0));
+        let last = element_rect(&app, window_id, &tab_position_id(2));
+        drag_mouse(
+            &mut app,
+            window_id,
+            first.center(),
+            last.center() + vec2f(0., 4.),
+        );
+        workspace.read(&app, |workspace, _| {
+            assert_eq!(
+                live_tab_ids(workspace),
+                vec![tab_ids[1], tab_ids[2], tab_ids[0]]
+            );
+        });
+
+        let tab_ids = workspace.update(&mut app, |workspace, ctx| {
+            workspace.handle_action(&WorkspaceAction::SwitchToSpace(1), ctx);
+            live_tab_ids(workspace)
+        });
+        let first = element_rect(&app, window_id, &tab_position_id(0));
+        let last = element_rect(&app, window_id, &tab_position_id(3));
+        drag_mouse(
+            &mut app,
+            window_id,
+            last.center(),
+            first.center() - vec2f(0., 4.),
+        );
+        workspace.read(&app, |workspace, _| {
+            assert_eq!(
+                live_tab_ids(workspace),
+                vec![tab_ids[3], tab_ids[0], tab_ids[1], tab_ids[2]]
+            );
         });
     });
 }
