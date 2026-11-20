@@ -5,10 +5,11 @@ use instant::Instant;
 use itertools::{Either, Itertools};
 use warp_core::features::FeatureFlag;
 use warp_core::ui::theme::AnsiColors;
+use warpui::geometry::rect::RectF;
 use warpui::geometry::vector::Vector2F;
 use warpui::{AppContext, EntityId, SingletonEntity, ViewContext, ViewHandle};
 
-use super::vertical_tabs::space_display_name;
+use super::vertical_tabs::{space_chip_position_id, space_display_name};
 use super::{Workspace, group_member_indices};
 use crate::app_state::{SpaceSnapshot, TabGroupSnapshot, TabSnapshot, WindowSnapshot};
 use crate::appearance::Appearance;
@@ -297,6 +298,7 @@ impl Workspace {
             || state.is_any_pane_being_renamed()
             || state.is_any_tab_group_being_renamed()
             || state.space_being_renamed().is_some()
+            || self.vertical_tabs_panel.is_space_chip_dragging()
             || self.vertical_tabs_search_input.is_focused(app)
     }
 
@@ -335,6 +337,44 @@ impl Workspace {
         let space_id = space.id;
         self.spaces.push(space);
         space_id
+    }
+
+    /// Moves a dragged switcher chip one slot whenever its center passes the midpoint of a
+    /// neighboring chip, like tab drags. The placeholder name of an unnamed space depends on its
+    /// position, so a space that moves keeps the name it was shown with.
+    pub(super) fn on_space_chip_drag(
+        &mut self,
+        space_id: SpaceId,
+        position: RectF,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if !FeatureFlag::Spaces.is_enabled() {
+            return;
+        }
+        let Some(index) = self.spaces.iter().position(|space| space.id == space_id) else {
+            return;
+        };
+        let chip_rect = |index: usize| {
+            let space = self.spaces.get(index)?;
+            ctx.element_position_by_id(space_chip_position_id(space.id))
+        };
+        let target = space_chip_drag_index(
+            index,
+            position.center(),
+            index.checked_sub(1).and_then(chip_rect),
+            chip_rect(index + 1),
+        );
+        if target == index {
+            return;
+        }
+        for slot in [index, target] {
+            let space = &mut self.spaces[slot];
+            if space.name.is_none() {
+                space.name = Some(space_display_name(space, slot + 1));
+            }
+        }
+        self.spaces.swap(index, target);
+        ctx.notify();
     }
 
     /// Opens the inline rename editor over the space's switcher chip. The chip is only shown in
@@ -853,6 +893,31 @@ impl Workspace {
             }
             return;
         }
+    }
+}
+
+/// Slot of a switcher chip dragged from `index` with its center at `center`: one earlier once the
+/// center passes the midpoint of the chip `before` it, one later once it passes the midpoint of the
+/// chip `after` it. Positions compare in reading order, so chips wrapped onto several rows reorder
+/// too.
+pub(super) fn space_chip_drag_index(
+    index: usize,
+    center: Vector2F,
+    before: Option<RectF>,
+    after: Option<RectF>,
+) -> usize {
+    let is_before = |rect: RectF| {
+        center.y() < rect.min_y() || (center.y() <= rect.max_y() && center.x() < rect.center().x())
+    };
+    let is_after = |rect: RectF| {
+        center.y() > rect.max_y() || (center.y() >= rect.min_y() && center.x() > rect.center().x())
+    };
+    if before.is_some_and(is_before) {
+        index - 1
+    } else if after.is_some_and(is_after) {
+        index + 1
+    } else {
+        index
     }
 }
 

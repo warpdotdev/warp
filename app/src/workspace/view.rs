@@ -24410,6 +24410,8 @@ impl TypedActionView for Workspace {
             MoveSelectedTabsToSpace { space_id } => {
                 self.move_selected_tabs_to_space(*space_id, ctx)
             }
+            DragSpace { space_id, position } => self.on_space_chip_drag(*space_id, *position, ctx),
+            DropSpace => ctx.notify(),
             SwipeSpaces { delta, precise } => {
                 self.handle_space_swipe(*delta, *precise, Instant::now(), ctx)
             }

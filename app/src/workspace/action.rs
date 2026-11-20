@@ -285,6 +285,12 @@ pub enum WorkspaceAction {
     MoveSelectedTabsToSpace {
         space_id: Option<SpaceId>,
     },
+    /// A space switcher chip is being dragged to `position` (its painted rect).
+    DragSpace {
+        space_id: SpaceId,
+        position: RectF,
+    },
+    DropSpace,
     /// A scroll event over the vertical tabs panel, fed to the space swipe detector.
     SwipeSpaces {
         delta: Vector2F,
@@ -1040,6 +1046,7 @@ impl WorkspaceAction {
             | MoveTabToSpace { .. }
             | MoveTabGroupToSpace { .. }
             | MoveSelectedTabsToSpace { .. }
+            | DropSpace
             | ToggleTabColor { .. }
             | ToggleTabGroupColor { .. }
             | AddDefaultTab
@@ -1104,6 +1111,7 @@ impl WorkspaceAction {
             | ToggleTabSelectionRightClickMenu { .. }
             | ToggleTabGroupRightClickMenu { .. }
             | ToggleSpaceRightClickMenu { .. }
+            | DragSpace { .. }
             | SwipeSpaces { .. }
             | ToggleVerticalTabsPaneContextMenu { .. }
             | OpenNewSessionMenu { .. }

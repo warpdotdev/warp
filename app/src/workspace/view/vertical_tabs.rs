@@ -20,9 +20,9 @@ use warp_core::ui::theme::{AnsiColorIdentifier, Fill as WarpThemeFill, WarpTheme
 use warpui::elements::{
     Border, ChildAnchor, Clipped, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox,
     Container, CornerRadius, CrossAxisAlignment, DispatchEventResult, DragAxis, DragBarSide,
-    Draggable, DropShadow, DropTarget, Element, Empty, EventHandler, Expanded, Fill as ElementFill,
-    Flex, Highlight, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle,
-    OffsetPositioning, Padding, ParentAnchor, ParentElement, ParentOffsetBounds,
+    Draggable, DraggableState, DropShadow, DropTarget, Element, Empty, EventHandler, Expanded,
+    Fill as ElementFill, Flex, Highlight, Hoverable, MainAxisAlignment, MainAxisSize,
+    MouseStateHandle, OffsetPositioning, Padding, ParentAnchor, ParentElement, ParentOffsetBounds,
     PositionedElementAnchor, PositionedElementOffsetBounds, Radius, Resizable,
     ResizableStateHandle, SavePosition, ScrollTarget, ScrollToPositionMode, ScrollbarWidth,
     Shrinkable, Stack, Text, Wrap, resizable_state_handle,
@@ -732,6 +732,8 @@ pub(super) struct VerticalTabsPanelState {
     panel_right_click_mouse_state: MouseStateHandle,
     /// Hover states for the space switcher chips, keyed by `SpaceId`.
     space_chip_mouse_states: RefCell<HashMap<SpaceId, MouseStateHandle>>,
+    /// Drag states for the space switcher chips, keyed by `SpaceId`.
+    space_chip_drag_states: RefCell<HashMap<SpaceId, DraggableState>>,
     new_space_button_mouse_state: MouseStateHandle,
     pub(super) show_settings_popup: bool,
 }
@@ -772,6 +774,7 @@ impl Default for VerticalTabsPanelState {
             show_details_on_hover_mouse_state: Default::default(),
             panel_right_click_mouse_state: Default::default(),
             space_chip_mouse_states: RefCell::default(),
+            space_chip_drag_states: RefCell::default(),
             new_space_button_mouse_state: Default::default(),
             show_settings_popup: false,
         }
@@ -798,6 +801,14 @@ impl VerticalTabsPanelState {
 
     pub(super) fn remove_space_chip_state(&self, space_id: SpaceId) {
         self.space_chip_mouse_states.borrow_mut().remove(&space_id);
+        self.space_chip_drag_states.borrow_mut().remove(&space_id);
+    }
+
+    pub(super) fn is_space_chip_dragging(&self) -> bool {
+        self.space_chip_drag_states
+            .borrow()
+            .values()
+            .any(DraggableState::is_dragging)
     }
 
     pub(super) fn clear_detail_sidecar(&self) {
@@ -1287,6 +1298,7 @@ const SPACE_CHIP_HORIZONTAL_PADDING: f32 = 6.;
 const SPACE_CHIP_RENAME_EDITOR_WIDTH: f32 = 96.;
 const NEW_SPACE_BUTTON_PADDING: f32 = 3.;
 const SPACE_SWITCHER_VERTICAL_PADDING: f32 = 6.;
+const SPACE_SWITCHER_POSITION_ID: &str = "vertical_tabs_space_switcher";
 const SPLIT_BUTTON_HEIGHT: f32 = SEARCH_BAR_HEIGHT;
 pub(super) const VERTICAL_TABS_ADD_TAB_POSITION_ID: &str = "vertical_tabs_add_tab_button";
 pub(super) const VERTICAL_TABS_SETTINGS_BUTTON_POSITION_ID: &str = "vertical_tabs_settings_button";
@@ -1806,8 +1818,12 @@ pub(super) fn space_display_name(space: &Space, position: usize) -> String {
         .unwrap_or_else(|| format!("Space {position}"))
 }
 
+pub(super) fn space_chip_position_id(space_id: SpaceId) -> String {
+    format!("vertical_tabs_space_chip_{}", space_id.0)
+}
+
 /// Row of space chips (plus a `+` to create one) pinned to the bottom of the panel. Click switches,
-/// double-click renames inline, right-click opens the space menu.
+/// double-click renames inline, right-click opens the space menu, dragging reorders.
 fn render_space_switcher(
     state: &VerticalTabsPanelState,
     workspace: &Workspace,
@@ -1820,6 +1836,7 @@ fn render_space_switcher(
     let main_text = theme.main_text_color(theme.background());
 
     let mut chip_mouse_states = state.space_chip_mouse_states.borrow_mut();
+    let mut chip_drag_states = state.space_chip_drag_states.borrow_mut();
     let mut chips: Vec<Box<dyn Element>> = workspace
         .spaces
         .iter()
@@ -1879,23 +1896,41 @@ fn render_space_switcher(
                 .finish()
             });
             // While renaming, clicks belong to the editor.
-            if is_being_renamed {
-                return chip.finish();
-            }
-            chip.with_cursor(Cursor::PointingHand)
-                .on_click(move |ctx, _, _| {
-                    ctx.dispatch_typed_action(WorkspaceAction::SwitchToSpaceById(space_id));
-                })
-                .on_double_click(move |ctx, _, _| {
-                    ctx.dispatch_typed_action(WorkspaceAction::RenameSpace(space_id));
-                })
-                .on_right_click(move |ctx, _, position| {
-                    ctx.dispatch_typed_action(WorkspaceAction::ToggleSpaceRightClickMenu {
-                        space_id,
-                        position,
-                    });
-                })
-                .finish()
+            let chip = if is_being_renamed {
+                chip.finish()
+            } else {
+                let chip = chip
+                    .with_cursor(Cursor::PointingHand)
+                    .on_click(move |ctx, _, _| {
+                        ctx.dispatch_typed_action(WorkspaceAction::SwitchToSpaceById(space_id));
+                    })
+                    .on_double_click(move |ctx, _, _| {
+                        ctx.dispatch_typed_action(WorkspaceAction::RenameSpace(space_id));
+                    })
+                    .on_right_click(move |ctx, _, position| {
+                        ctx.dispatch_typed_action(WorkspaceAction::ToggleSpaceRightClickMenu {
+                            space_id,
+                            position,
+                        });
+                    })
+                    .finish();
+                let drag_state = chip_drag_states.entry(space_id).or_default().clone();
+                Draggable::new(drag_state, chip)
+                    .with_drag_bounds_callback(|position_cache, _| {
+                        position_cache.get_position(SPACE_SWITCHER_POSITION_ID)
+                    })
+                    .on_drag(move |ctx, _, position, _| {
+                        ctx.dispatch_typed_action(WorkspaceAction::DragSpace {
+                            space_id,
+                            position,
+                        });
+                    })
+                    .on_drop(|ctx, _, _, _| {
+                        ctx.dispatch_typed_action(WorkspaceAction::DropSpace);
+                    })
+                    .finish()
+            };
+            SavePosition::new(chip, &space_chip_position_id(space_id)).finish()
         })
         .collect();
 
@@ -1925,7 +1960,7 @@ fn render_space_switcher(
     .finish();
     chips.push(new_space_button);
 
-    Container::new(
+    let switcher = Container::new(
         Wrap::row()
             .with_spacing(CONTROL_BAR_SPACING)
             .with_run_spacing(CONTROL_BAR_SPACING)
@@ -1938,7 +1973,8 @@ fn render_space_switcher(
             .with_right(GROUP_HORIZONTAL_PADDING),
     )
     .with_border(Border::top(1.).with_border_fill(internal_colors::fg_overlay_2(theme)))
-    .finish()
+    .finish();
+    SavePosition::new(switcher, SPACE_SWITCHER_POSITION_ID).finish()
 }
 
 fn render_groups(

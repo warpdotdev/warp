@@ -23,7 +23,9 @@ use crate::workspace::tab_group::{TabGroup, TabGroupId};
 use crate::workspace::tab_settings::TabSettings;
 use crate::workspace::util::PaneViewLocator;
 use crate::workspace::view::Workspace;
+use crate::workspace::view::spaces::space_chip_drag_index;
 use crate::workspace::view::tests::{initialize_app, mock_workspace, restored_workspace};
+use crate::workspace::view::vertical_tabs::space_chip_position_id;
 
 #[test]
 fn test_switch_space_restores_each_spaces_active_tab() {
@@ -1398,6 +1400,163 @@ fn test_dragging_a_vertical_tab_reorders_tabs_after_switching_spaces() {
             assert_eq!(
                 live_tab_ids(workspace),
                 vec![tab_ids[3], tab_ids[0], tab_ids[1], tab_ids[2]]
+            );
+        });
+    });
+}
+
+fn click_at(app: &mut App, window_id: WindowId, position: Vector2F, click_count: u32) {
+    send_mouse_event(
+        app,
+        window_id,
+        Event::LeftMouseDown {
+            position,
+            modifiers: Default::default(),
+            click_count,
+            is_first_mouse: false,
+        },
+    );
+    send_mouse_event(
+        app,
+        window_id,
+        Event::LeftMouseUp {
+            position,
+            modifiers: Default::default(),
+        },
+    );
+}
+
+fn chip_rect(app: &App, window_id: WindowId, space_id: SpaceId) -> RectF {
+    element_rect(app, window_id, &space_chip_position_id(space_id))
+}
+
+#[test]
+fn test_space_chip_drag_index_follows_neighbor_midpoints() {
+    let chip = |x: f32, y: f32| Some(RectF::new(vec2f(x, y), vec2f(40., 20.)));
+    let (before, after) = (chip(0., 0.), chip(100., 0.));
+    // Dragged chip sits between them at x 50..90; its center starts at (70, 10).
+    assert_eq!(space_chip_drag_index(1, vec2f(70., 10.), before, after), 1);
+    assert_eq!(space_chip_drag_index(1, vec2f(19., 10.), before, after), 0);
+    assert_eq!(space_chip_drag_index(1, vec2f(121., 10.), before, after), 2);
+    assert_eq!(space_chip_drag_index(0, vec2f(-50., 10.), None, after), 0);
+    assert_eq!(space_chip_drag_index(2, vec2f(500., 10.), before, None), 2);
+
+    // Wrapped rows: the chip before is at the end of the row above, the chip after starts the
+    // row below.
+    let (before, after) = (chip(100., 0.), chip(0., 50.));
+    assert_eq!(space_chip_drag_index(1, vec2f(150., 35.), before, after), 1);
+    assert_eq!(space_chip_drag_index(1, vec2f(110., 10.), before, after), 0);
+    assert_eq!(space_chip_drag_index(1, vec2f(30., 60.), before, after), 2);
+}
+
+#[test]
+fn test_dragging_a_space_chip_reorders_spaces() {
+    let _vertical_tabs_guard = FeatureFlag::VerticalTabs.override_enabled(true);
+    let _spaces_guard = FeatureFlag::Spaces.override_enabled(true);
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        let (window_id, spaces) = workspace.update(&mut app, |workspace, ctx| {
+            workspace.handle_action(&WorkspaceAction::NewSpace, ctx);
+            workspace.handle_action(&WorkspaceAction::NewSpace, ctx);
+            workspace.handle_action(&WorkspaceAction::SwitchToSpace(2), ctx);
+            let spaces = workspace
+                .spaces
+                .iter()
+                .map(|space| space.id)
+                .collect::<Vec<_>>();
+            (ctx.window_id(), spaces)
+        });
+        open_vertical_tabs_panel(&mut app, &workspace);
+
+        let first = chip_rect(&app, window_id, spaces[0]);
+        let last = chip_rect(&app, window_id, spaces[2]);
+        drag_mouse(
+            &mut app,
+            window_id,
+            first.center(),
+            vec2f(last.max_x() + 2., last.center().y()),
+        );
+
+        workspace.read(&app, |workspace, _| {
+            assert_eq!(
+                workspace
+                    .spaces
+                    .iter()
+                    .map(|space| space.id)
+                    .collect::<Vec<_>>(),
+                vec![spaces[1], spaces[2], spaces[0]]
+            );
+            // Dragging doesn't switch.
+            assert_eq!(workspace.active_space, spaces[1]);
+            // Moved unnamed spaces keep the name they were shown with.
+            let names = workspace
+                .spaces
+                .iter()
+                .map(|space| space.name.as_deref())
+                .collect::<Vec<_>>();
+            assert_eq!(
+                names,
+                vec![Some("Space 2"), Some("Space 3"), Some("Space 1")]
+            );
+        });
+    });
+}
+
+#[test]
+fn test_space_chip_click_double_click_and_right_click_still_work() {
+    let _vertical_tabs_guard = FeatureFlag::VerticalTabs.override_enabled(true);
+    let _spaces_guard = FeatureFlag::Spaces.override_enabled(true);
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        let (window_id, first_space, second_space) =
+            workspace.update(&mut app, |workspace, ctx| {
+                let first_space = workspace.active_space;
+                workspace.handle_action(&WorkspaceAction::NewSpace, ctx);
+                (ctx.window_id(), first_space, workspace.active_space)
+            });
+        open_vertical_tabs_panel(&mut app, &workspace);
+
+        let first_chip = chip_rect(&app, window_id, first_space).center();
+        click_at(&mut app, window_id, first_chip, 1);
+        workspace.read(&app, |workspace, _| {
+            assert_eq!(workspace.active_space, first_space);
+            assert_eq!(
+                workspace
+                    .spaces
+                    .iter()
+                    .map(|space| space.id)
+                    .collect::<Vec<_>>(),
+                vec![first_space, second_space]
+            );
+        });
+
+        let second_chip = chip_rect(&app, window_id, second_space).center();
+        send_mouse_event(
+            &mut app,
+            window_id,
+            Event::RightMouseDown {
+                position: second_chip,
+                cmd: false,
+                shift: false,
+                click_count: 1,
+            },
+        );
+        workspace.update(&mut app, |workspace, ctx| {
+            assert!(workspace.show_space_right_click_menu.is_some());
+            workspace.toggle_space_right_click_menu(second_space, second_chip, ctx);
+        });
+
+        click_at(&mut app, window_id, second_chip, 1);
+        click_at(&mut app, window_id, second_chip, 2);
+        workspace.read(&app, |workspace, _| {
+            assert_eq!(workspace.active_space, second_space);
+            assert_eq!(
+                workspace.current_workspace_state.space_being_renamed(),
+                Some(second_space)
             );
         });
     });
