@@ -689,6 +689,9 @@ fn make_secret_value_from_gql_type(
                 "AWS ECR credential secrets cannot be updated via `--value`; re-create the secret instead"
             ))
         }
+        ManagedSecretType::HttpBearer => Err(anyhow::anyhow!(
+            "HTTP proxy credentials cannot be updated via `--value`; edit the secret on the Secrets page instead"
+        )),
     }
 }
 
@@ -1036,6 +1039,7 @@ fn format_secret_type(type_: &ManagedSecretType) -> String {
         ManagedSecretType::LlmProviderApiKey => "LLM provider API key".to_string(),
         ManagedSecretType::DockerRegistry => "Container Registry Credential".to_string(),
         ManagedSecretType::AwsEcrCredential => "AWS ECR Credential".to_string(),
+        ManagedSecretType::HttpBearer => "HTTP Proxy Credential".to_string(),
     }
 }
 

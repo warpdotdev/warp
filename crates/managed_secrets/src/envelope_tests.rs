@@ -222,6 +222,47 @@ fn test_encrypt_decrypt_docker_registry_context_and_payload() {
     );
 }
 
+/// Pins the `http_bearer` context and payload that warp-server decrypts.
+#[test]
+fn test_encrypt_decrypt_http_bearer_context_and_payload() {
+    super::init();
+
+    let private_key = read_keyset_json(TEST_PRIVATE_KEY);
+    let public_key = read_keyset_json(TEST_PUBLIC_KEY);
+    let upload_key = UploadKey {
+        encrypt: tink_hybrid::new_encrypt(&public_key).expect("failed to create encrypt primitive"),
+        public_key,
+    };
+    let secret = ManagedSecretValue::http_bearer(
+        "api.github.com",
+        vec!["GET".to_owned(), "HEAD".to_owned()],
+        vec!["/user".to_owned()],
+        "bearer-secret",
+    );
+
+    let encrypted = upload_key
+        .encrypt_secret("user123", "GITHUB", &secret)
+        .expect("failed to encrypt secret");
+    let ciphertext = base64::prelude::BASE64_STANDARD
+        .decode(&encrypted)
+        .expect("ciphertext is not valid base64");
+    let decrypt =
+        tink_hybrid::new_decrypt(&private_key).expect("failed to create decrypt primitive");
+
+    let decrypted = decrypt
+        .decrypt(&ciphertext, b"1:user123:GITHUB:http_bearer")
+        .expect("failed to decrypt with the expected context");
+    assert_eq!(
+        decrypted,
+        br#"{"host":"api.github.com","allowed_methods":["GET","HEAD"],"path_prefixes":["/user"],"bearer_token":"bearer-secret"}"#
+    );
+    assert!(
+        decrypt
+            .decrypt(&ciphertext, b"1:user123:GITHUB:raw_value")
+            .is_err()
+    );
+}
+
 /// Round-trips an `AwsEcrCredential` secret through the exact AEAD context the Go server
 /// expects (`1:<actor_uid>:<secret_name>:aws_ecr_credential`), pinning both the JSON
 /// payload and the context string this repo and warp-server must agree on byte-for-byte.

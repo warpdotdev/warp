@@ -170,6 +170,25 @@ pub fn encrypt_aws_ecr_credential_secret(
     )
 }
 
+/// Encrypt a proxy-only HTTP bearer credential and its request policy.
+#[wasm_bindgen]
+pub fn encrypt_http_bearer_secret(
+    public_key_base64: &str,
+    actor_uid: &str,
+    secret_name: &str,
+    host: &str,
+    allowed_methods: Vec<String>,
+    path_prefixes: Vec<String>,
+    bearer_token: &str,
+) -> Result<String, JsValue> {
+    do_encrypt(
+        public_key_base64,
+        actor_uid,
+        secret_name,
+        &ManagedSecretValue::http_bearer(host, allowed_methods, path_prefixes, bearer_token),
+    )
+}
+
 // ── BYO (bring-your-own) credential sealing ─────────────────────────────────
 //
 // These exports seal enterprise BYOK / BYOE credentials for team upload. They

@@ -195,7 +195,8 @@ fn provider_credential(secret: &ManagedSecretValue) -> Option<(&str, &str, Optio
         | ManagedSecretValue::AnthropicBedrockAccessKey { .. }
         | ManagedSecretValue::AnthropicBedrockApiKey { .. }
         | ManagedSecretValue::DockerRegistry { .. }
-        | ManagedSecretValue::AwsEcrCredential { .. } => None,
+        | ManagedSecretValue::AwsEcrCredential { .. }
+        | ManagedSecretValue::HttpBearer { .. } => None,
     }
 }
 

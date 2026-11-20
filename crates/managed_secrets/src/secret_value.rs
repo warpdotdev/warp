@@ -63,6 +63,14 @@ pub enum ManagedSecretValue {
         registry_host: String,
         role_arn: String,
     },
+    /// A bearer token that only an execution's credential proxy adds to matching HTTPS requests.
+    /// It is never injected into the agent process.
+    HttpBearer {
+        host: String,
+        allowed_methods: Vec<String>,
+        path_prefixes: Vec<String>,
+        bearer_token: String,
+    },
 }
 
 impl ManagedSecretValue {
@@ -144,6 +152,22 @@ impl ManagedSecretValue {
         }
     }
 
+    /// Construct a proxy-only HTTP bearer credential scoped to `host`, the request methods, and
+    /// the URL path prefixes.
+    pub fn http_bearer(
+        host: impl Into<String>,
+        allowed_methods: Vec<String>,
+        path_prefixes: Vec<String>,
+        bearer_token: impl Into<String>,
+    ) -> Self {
+        Self::HttpBearer {
+            host: host.into(),
+            allowed_methods,
+            path_prefixes,
+            bearer_token: bearer_token.into(),
+        }
+    }
+
     /// Returns an error if any env var produced by this secret would exceed [`MAX_SECRET_FIELD_BYTES`] bytes.
     pub fn validate_field_sizes(&self, name: &str) -> anyhow::Result<()> {
         let check = |env_key: &str, value: &str| -> anyhow::Result<()> {
@@ -217,6 +241,8 @@ impl ManagedSecretValue {
                 // need size validation even if it were, since neither is a password.
                 Ok(())
             }
+            // Only the execution's credential proxy receives this value; the server validates it.
+            ManagedSecretValue::HttpBearer { .. } => Ok(()),
         }
     }
 
@@ -234,6 +260,7 @@ impl ManagedSecretValue {
             ManagedSecretValue::LlmProviderApiKey { .. } => ManagedSecretType::LlmProviderApiKey,
             ManagedSecretValue::DockerRegistry { .. } => ManagedSecretType::DockerRegistry,
             ManagedSecretValue::AwsEcrCredential { .. } => ManagedSecretType::AwsEcrCredential,
+            ManagedSecretValue::HttpBearer { .. } => ManagedSecretType::HttpBearer,
         }
     }
 }
@@ -264,6 +291,9 @@ impl fmt::Debug for ManagedSecretValue {
                 .finish_non_exhaustive(),
             ManagedSecretValue::AwsEcrCredential { .. } => f
                 .debug_struct("ManagedSecret::AwsEcrCredential")
+                .finish_non_exhaustive(),
+            ManagedSecretValue::HttpBearer { .. } => f
+                .debug_struct("ManagedSecret::HttpBearer")
                 .finish_non_exhaustive(),
         }
     }
