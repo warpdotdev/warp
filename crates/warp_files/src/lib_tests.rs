@@ -1,4 +1,5 @@
 use async_channel::{Receiver, unbounded};
+use repo_metadata::DirectoryWatcher;
 use warpui_core::r#async::block_on;
 use warpui_core::{App, ModelHandle};
 
@@ -354,6 +355,71 @@ fn test_a_failed_open_registers_no_watcher() {
         files.update(app, |model, ctx| model.unsubscribe(file_id, ctx));
         assert_eq!(files.read(app, |model, _| model.file_path(file_id)), None);
     });
+}
+
+/// Registers repos at `repo_roots`, with `ignored/` gitignored in the first, opens a tracked file
+/// so that repo is subscribed, then asserts `path` reloads when it changes on disk. The file is
+/// rewritten repeatedly because the platform watcher registers asynchronously.
+fn assert_reloads_with_repo_subscribed(path: &str, repo_roots: &[&str]) {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let root = directory.path().canonicalize().expect("canonical root");
+    let path = root.join(path);
+    std::fs::create_dir_all(path.parent().unwrap()).expect("create directories");
+    std::fs::write(root.join(".gitignore"), "ignored/\n").expect("write .gitignore");
+    std::fs::write(root.join("tracked.md"), "# tracked").expect("write tracked file");
+    std::fs::write(&path, "# original").expect("write file");
+    let repo_roots: Vec<_> = repo_roots.iter().map(|repo| root.join(repo)).collect();
+
+    App::test((), |mut app| async move {
+        let app = &mut app;
+        app.add_singleton_model(|_| DetectedRepositories::default());
+        let watcher = app.add_singleton_model(DirectoryWatcher::new);
+        let files = app.add_singleton_model(FileModel::new);
+        for repo_root in repo_roots {
+            let repo_root = StandardizedPath::from_local_canonicalized(&repo_root).unwrap();
+            DetectedRepositories::handle(app).update(app, |repositories, _| {
+                repositories.insert_test_repo_root(repo_root.clone());
+            });
+            watcher
+                .update(app, |watcher, ctx| watcher.add_directory(repo_root, ctx))
+                .expect("register repo");
+        }
+
+        let (sender, receiver) = unbounded();
+        let timeout_sender = sender.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_model(&files, move |_, event, _| {
+                if let FileModelEvent::FileUpdated { .. } = event {
+                    let _ = sender.try_send(true);
+                }
+            });
+        });
+        files.update(app, |model, ctx| {
+            model.open(&root.join("tracked.md"), true, ctx);
+            model.open(&path, true, ctx);
+        });
+        std::thread::spawn(move || {
+            for _ in 0..20 {
+                std::thread::sleep(Duration::from_millis(500));
+                let _ = std::fs::write(&path, "# changed");
+            }
+            let _ = timeout_sender.try_send(false);
+        });
+
+        assert!(receiver.recv().await.unwrap(), "file was not reloaded");
+        drop(directory);
+    });
+}
+
+#[test]
+fn test_gitignored_file_reloads() {
+    assert_reloads_with_repo_subscribed("ignored/test.md", &["."]);
+}
+
+/// The layout `claude --worktree` creates: a linked worktree in a directory its parent ignores.
+#[test]
+fn test_file_in_worktree_ignored_by_parent_repo_reloads() {
+    assert_reloads_with_repo_subscribed("ignored/worktree/test.md", &[".", "ignored/worktree"]);
 }
 
 static TEST_FILE_CONTENT: &[u8] = include_bytes!("../test_data/test_file.rs");

@@ -568,6 +568,12 @@ impl Repository {
         let is_dir = path.is_dir();
         matches_gitignores(path, is_dir, &self.gitignores, true)
     }
+
+    /// Without a local filesystem no gitignore rules are loaded, so nothing is ignored.
+    #[cfg(not(feature = "local_fs"))]
+    pub fn check_gitignore_status(&self, _path: &Path) -> bool {
+        false
+    }
 }
 
 impl Entity for Repository {
