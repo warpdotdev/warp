@@ -47,6 +47,7 @@ pub struct CreateSecretArgs {
     /// Name of the secret to create.
     pub name: Option<String>,
 
+    /// Secret type. Use secret-key for values injected into agent runs as environment variables.
     #[arg(long = "type", short = 't', default_value_t = Default::default())]
     pub secret_type: SecretType,
 
@@ -266,6 +267,7 @@ pub struct ValueArgs {
 #[value(rename_all = "kebab-case")]
 pub enum SecretType {
     #[default]
+    #[value(name = "secret-key", alias = "raw-value")]
     RawValue,
     AnthropicApiKey,
     // Not exposed via the CLI `--type` flag; constructed internally for provider subcommands.
@@ -279,7 +281,7 @@ pub enum SecretType {
 impl fmt::Display for SecretType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            SecretType::RawValue => write!(f, "raw-value"),
+            SecretType::RawValue => write!(f, "secret-key"),
             SecretType::AnthropicApiKey => write!(f, "anthropic-api-key"),
             SecretType::AnthropicBedrockApiKey => write!(f, "anthropic-bedrock-api-key"),
             SecretType::OpenaiApiKey => write!(f, "openai-api-key"),
