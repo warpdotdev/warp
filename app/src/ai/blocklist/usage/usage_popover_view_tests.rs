@@ -205,87 +205,98 @@ fn model_usage_rows_does_not_merge_label_colliding_custom_endpoint_charges() {
     assert_eq!(totals.cost, Some(CostValue::new(0.0, 300.0)));
 }
 
-/// Charged-only custom sources join the same grouping rule: two same-label
-/// custom charges with no token rows produce one merged row (summed tokens
-/// and costs), not two rows sharing an identity.
 #[test]
-fn model_usage_rows_merges_same_label_charged_only_custom_sources() {
-    let messages = [request_metadata_message(api::RequestCharges {
-        usage_by_category: HashMap::from([(
-            PRIMARY_AGENT_CATEGORY.to_string(),
-            charged_usage(
-                HashMap::new(),
-                HashMap::new(),
-                HashMap::from([
-                    ("k1".to_string(), inference_usage(100, 0, 10.0, 0.0)),
-                    ("k2".to_string(), inference_usage(200, 0, 20.0, 0.0)),
-                ]),
-            ),
-        )]),
-    })];
-    let charged_usage_by_key = sum_charged_usage_by_key(messages.iter());
-    let shared_alias = |_config_key: &str| "shared-alias".to_string();
-
-    let rows = model_usage_rows(&[], &charged_usage_by_key, shared_alias);
-
-    assert_eq!(rows.len(), 1);
-    assert_eq!(
-        rows[0].key,
-        ModelRowKey::CustomEndpoint("shared-alias".into())
-    );
-    assert_eq!(rows[0].tokens, 300);
-    assert_eq!(rows[0].cost, Some(CostValue::new(0.0, 30.0)));
+fn model_usage_rows_keeps_same_alias_endpoints_distinct_through_renames() {
+    let charges = HashMap::from([
+        (
+            ModelChargeKey::CustomEndpoint("k1".into()),
+            ModelChargedUsage {
+                input_tokens: 100,
+                input_cost_in_cents: 10.,
+                ..Default::default()
+            },
+        ),
+        (
+            ModelChargeKey::CustomEndpoint("k2".into()),
+            ModelChargedUsage {
+                input_tokens: 200,
+                input_cost_in_cents: 20.,
+                ..Default::default()
+            },
+        ),
+    ]);
+    let models: Vec<_> = [("k1", 100), ("k2", 200)]
+        .into_iter()
+        .map(|(key, tokens)| ModelTokenUsage {
+            model_id: "old alias".into(),
+            custom_endpoint_config_key: Some(key.into()),
+            custom_endpoint_tokens: tokens,
+            ..Default::default()
+        })
+        .collect();
+    let rows = model_usage_rows(&models, &charges, |_| "renamed alias".to_string());
+    assert_eq!(rows.len(), 2);
+    let first = rows
+        .iter()
+        .find(|row| row.key == ModelRowKey::CustomEndpoint("k1".into()))
+        .unwrap();
+    let second = rows
+        .iter()
+        .find(|row| row.key == ModelRowKey::CustomEndpoint("k2".into()))
+        .unwrap();
+    assert_eq!(first.label, "renamed alias");
+    assert_eq!(second.label, "renamed alias");
+    assert_eq!(first.tokens, 100);
+    assert_eq!(first.cost, Some(CostValue::new(0., 10.)));
+    assert_eq!(second.tokens, 200);
+    assert_eq!(second.cost, Some(CostValue::new(0., 20.)));
+    assert_ne!(first.key.hover_key(), second.key.hover_key());
+    let charged_only = model_usage_rows(&[], &charges, |_| "shared alias".into());
+    assert_eq!(charged_only.len(), 2);
+    assert_eq!(RowTotals::of_model_rows(&charged_only).tokens, Some(300));
 }
 
-/// Ambiguous legacy labels — two custom endpoints configured with the same
-/// display alias, only one of which has attributed charges — have an explicit,
-/// order-independent rule: same-label token rows merge into one row (summed
-/// buckets) and all same-label charges sum onto it, so the displayed row is
-/// identical regardless of which token row comes first.
 #[test]
-fn model_usage_rows_merges_same_label_custom_rows_and_charges_in_any_order() {
-    let messages = [request_metadata_message(api::RequestCharges {
-        usage_by_category: HashMap::from([(
-            PRIMARY_AGENT_CATEGORY.to_string(),
-            charged_usage(
-                HashMap::new(),
-                HashMap::new(),
-                single_model_usage("k1", 100, 10.0),
-            ),
-        )]),
-    })];
-    let charged_usage_by_key = sum_charged_usage_by_key(messages.iter());
-    let custom_row = |tokens: u32| ModelTokenUsage {
-        model_id: "shared-alias".to_string(),
-        custom_endpoint_tokens: tokens,
+fn model_usage_rows_keeps_legacy_remainder_without_guessing_charge_identity() {
+    let models = [ModelTokenUsage {
+        model_id: "shared alias".into(),
+        custom_endpoint_tokens: 300,
         ..Default::default()
-    };
-    // Both endpoints resolve to the same display alias, so their charge keys
-    // only separate by config_key.
-    let shared_alias = |_config_key: &str| "shared-alias".to_string();
-
-    let charged_first = model_usage_rows(
-        &[custom_row(100), custom_row(200)],
-        &charged_usage_by_key,
-        shared_alias,
-    );
-    let uncharged_first = model_usage_rows(
-        &[custom_row(200), custom_row(100)],
-        &charged_usage_by_key,
-        shared_alias,
-    );
-
-    assert_eq!(charged_first.len(), 1);
+    }];
+    let charges = HashMap::from([(
+        ModelChargeKey::CustomEndpoint("k1".into()),
+        ModelChargedUsage {
+            input_tokens: 100,
+            input_cost_in_cents: 10.,
+            ..Default::default()
+        },
+    )]);
+    let rows = model_usage_rows(&models, &charges, |_| "shared alias".into());
+    assert_eq!(rows.len(), 2);
+    let legacy = rows
+        .iter()
+        .find(|row| row.key == ModelRowKey::LegacyCustomEndpoint)
+        .unwrap();
+    assert_eq!(legacy.label, "Unavailable custom model");
+    assert_eq!(legacy.tokens, 200);
+    assert_eq!(legacy.cost, None);
+    assert_eq!(RowTotals::of_model_rows(&rows).tokens, Some(300));
+    let token_only = model_usage_rows(&models, &HashMap::new(), identity_labels);
+    assert_eq!(token_only.len(), 1);
+    assert_eq!(token_only[0].tokens, 300);
+    let complete_charges = HashMap::from([(
+        ModelChargeKey::CustomEndpoint("k1".into()),
+        ModelChargedUsage {
+            input_tokens: 300,
+            ..Default::default()
+        },
+    )]);
     assert_eq!(
-        charged_first[0].key,
-        ModelRowKey::CustomEndpoint("shared-alias".into())
+        model_usage_rows(&models, &complete_charges, identity_labels).len(),
+        1
     );
-    assert_eq!(charged_first[0].label, "shared-alias");
-    assert_eq!(charged_first[0].tokens, 100);
-    assert_eq!(charged_first[0].cost, Some(CostValue::new(0.0, 10.0)));
-    assert_eq!(charged_first, uncharged_first);
 }
-/// including cache buckets and web search.
+
 #[test]
 fn model_usage_row_totals_match_the_charged_usage_breakdown_rows() {
     let charged_usage = ModelChargedUsage {

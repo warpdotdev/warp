@@ -12,15 +12,17 @@ use warpui::{AppContext, Element, Entity, SingletonEntity, TypedActionView, View
 
 use super::render_context_window_usage_icon;
 use crate::ai::agent::request_metadata::{
-    LegacyCharges, RequestMetadataRecord, TurnPanelData, TurnSummary, summarize_turn,
+    InferenceUsageType, LegacyCharges, RequestMetadataRecord, TurnPanelData, TurnSummary,
+    summarize_turn,
 };
 use crate::ai::blocklist::view_util::{effective_usage_unit, format_credits, format_dollars};
+use crate::ai::llms::LLMPreferences;
 use crate::appearance::Appearance;
 use crate::settings::UsageDisplayUnit;
 use crate::settings::ai::{AISettings, AISettingsChangedEvent};
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{TeamContextResolver, UserWorkspaces};
 use crate::workspaces::workspace::ChargeUnit;
 
 /// A single label/value pair rendered as a row in the panel's shared label/value columns.
@@ -59,6 +61,7 @@ pub struct RequestMetadataTurnView {
     close_button_mouse_state: MouseStateHandle,
     /// Per-model row UI state, indexed in lockstep with `summary.model_charges`.
     model_rows: Vec<ModelRowState>,
+    team_context: Option<TeamContextResolver>,
 }
 
 impl RequestMetadataTurnView {
@@ -71,7 +74,10 @@ impl RequestMetadataTurnView {
                 ctx.notify();
             }
         });
-        Self::build(data)
+        ctx.subscribe_to_model(&LLMPreferences::handle(ctx), |_, _, _, ctx| ctx.notify());
+        let mut view = Self::build(data);
+        view.team_context = Some(UserWorkspaces::team_context_resolver(ctx.handle()));
+        view
     }
 
     #[cfg(test)]
@@ -104,6 +110,7 @@ impl RequestMetadataTurnView {
             legacy_charges,
             close_button_mouse_state: MouseStateHandle::default(),
             model_rows,
+            team_context: None,
         }
     }
 
@@ -178,6 +185,7 @@ impl RequestMetadataTurnView {
         index: usize,
         appearance: &Appearance,
         usage_display_unit: UsageDisplayUnit,
+        ctx: &AppContext,
     ) -> Vec<LabelValueRow> {
         let charge = &self.summary.model_charges[index];
         let font_size = appearance.ui_font_size() + 1.;
@@ -200,7 +208,18 @@ impl RequestMetadataTurnView {
         .finish();
 
         let font_family = appearance.ui_font_family();
-        let model_id = charge.model_id.clone();
+        let model_id = self
+            .team_context
+            .as_ref()
+            .map(|resolver| {
+                LLMPreferences::as_ref(ctx).model_display_name(
+                    &charge.model_id,
+                    &resolver(ctx),
+                    charge.usage_type == InferenceUsageType::CustomEndpoint,
+                    ctx,
+                )
+            })
+            .unwrap_or_else(|| charge.model_id.clone());
         let chevron_icon = if expanded {
             Icon::ChevronDown
         } else {
@@ -305,9 +324,10 @@ impl RequestMetadataTurnView {
         &self,
         appearance: &Appearance,
         usage_display_unit: UsageDisplayUnit,
+        ctx: &AppContext,
     ) -> Vec<LabelValueRow> {
         (0..self.summary.model_charges.len())
-            .flat_map(|index| self.model_row(index, appearance, usage_display_unit))
+            .flat_map(|index| self.model_row(index, appearance, usage_display_unit, ctx))
             .collect()
     }
 
@@ -494,6 +514,7 @@ impl RequestMetadataTurnView {
         &self,
         appearance: &Appearance,
         usage_display_unit: UsageDisplayUnit,
+        ctx: &AppContext,
     ) -> LabelValueColumns {
         const ROW_MARGIN_BOTTOM: f32 = 6.;
         const SECTION_END_EXTRA_MARGIN: f32 = 8.;
@@ -549,7 +570,7 @@ impl RequestMetadataTurnView {
                     self.inference_usage_header_row(appearance, usage_display_unit);
                 push_row(inference_label, inference_value, 8.);
                 push_section_rows(
-                    self.model_usage_rows(appearance, usage_display_unit),
+                    self.model_usage_rows(appearance, usage_display_unit, ctx),
                     &mut push_row,
                 );
             }
@@ -602,7 +623,7 @@ impl View for RequestMetadataTurnView {
         let usage_display_unit =
             effective_usage_unit(turn_cost_in_cents(&self.summary.records), app);
 
-        let (labels, values) = self.build_label_value_columns(appearance, usage_display_unit);
+        let (labels, values) = self.build_label_value_columns(appearance, usage_display_unit, app);
 
         let content = Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
