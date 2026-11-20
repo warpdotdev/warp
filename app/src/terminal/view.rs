@@ -2624,6 +2624,10 @@ pub struct TerminalView {
 
     last_hover_fragment_boundary: Option<WithinModel<FragmentBoundary>>,
 
+    /// Whether the link-open modifier is held, which enables file path detection in
+    /// mouse-reporting alt-screen apps.
+    link_modifier_held: bool,
+
     bootstrap_start: Option<Instant>,
     is_login_shell_bootstrapped: bool,
     /// Set when a pending command is submitted to the shell. Cleared on the
@@ -4413,6 +4417,7 @@ impl TerminalView {
             find_link_tx,
             highlighted_link: HighlightedLinkOption::default(),
             last_hover_fragment_boundary: None,
+            link_modifier_held: false,
             bootstrap_start: None,
             is_login_shell_bootstrapped: false,
             awaiting_pending_command_completion: false,
@@ -10109,6 +10114,8 @@ impl TerminalView {
             // Arrow-key scrolling can change the alt-screen grid content, so
             // any link highlights are no longer valid.
             self.highlighted_link.invalidate();
+        } else {
+            self.clear_modifier_gated_file_link(ctx);
         }
 
         let bytes = {
@@ -27594,7 +27601,8 @@ impl TypedActionView for TerminalView {
             BlockHover(_)
             | BlockSnackbarHover { .. }
             | BlockNearSnackbarHover { .. }
-            | MaybeLinkHover { .. } => Empty,
+            | MaybeLinkHover { .. }
+            | LinkModifierChanged { .. } => Empty,
             BlockTextSelect(_) => {
                 let semantic_selection = SemanticSelection::as_ref(ctx);
                 let model = self.model.lock();
@@ -27966,6 +27974,9 @@ impl TypedActionView for TerminalView {
                 position,
                 from_editor,
             } => self.maybe_link_hover(position, *from_editor, ctx),
+            LinkModifierChanged { held, position } => {
+                self.link_modifier_changed(*held, position, ctx)
+            }
             MaybeHoverSecret { secret_handle } => self.maybe_hover_secret(*secret_handle, ctx),
             MaybeDismissToolTip { from_keybinding } => {
                 if !self.dismiss_tooltips(ctx) && *from_keybinding {

@@ -139,6 +139,11 @@ pub enum TerminalAction {
         position: Option<WithinModel<Point>>,
         from_editor: TerminalEditor,
     },
+    /// The link-open modifier (Cmd on macOS, Ctrl elsewhere) was pressed or released.
+    LinkModifierChanged {
+        held: bool,
+        position: Option<WithinModel<Point>>,
+    },
     MaybeHoverSecret {
         secret_handle: Option<SecretHandle>,
     },
@@ -513,6 +518,10 @@ impl fmt::Debug for TerminalAction {
             } => write!(
                 f,
                 "MaybeLinkHover {{ position: {position:?}, from_editor: {from_editor:?} }}"
+            ),
+            LinkModifierChanged { held, position } => write!(
+                f,
+                "LinkModifierChanged {{ held: {held}, position: {position:?} }}"
             ),
             MaybeHoverSecret { secret_handle } => {
                 write!(f, "MaybeHoverSecret {{ secret_handle: {secret_handle:?} }}")
