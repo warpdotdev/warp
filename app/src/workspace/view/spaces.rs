@@ -227,10 +227,15 @@ impl Workspace {
 
         self.clear_index_keyed_tab_ui_state(ctx);
 
+        let from_index = self.active_space_index();
         let incoming = self.stashed_spaces.remove(&target).unwrap_or_default();
         let outgoing = self.replace_live_tabs(incoming);
         self.stashed_spaces.insert(self.active_space, outgoing);
         self.active_space = target;
+        if uses_vertical_tabs(ctx) && self.vertical_tabs_panel_open {
+            self.vertical_tabs_panel
+                .start_space_slide(from_index, self.active_space_index());
+        }
 
         if self.tabs.is_empty() {
             // Not `AddDefaultTab`: some default session modes (e.g. a tab config with params)

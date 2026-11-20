@@ -1,3 +1,4 @@
+pub(super) mod space_slide;
 pub mod telemetry;
 
 use std::cell::RefCell;
@@ -5,6 +6,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use instant::Instant;
 use languages::language_by_local_filename;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::rect::RectF;
@@ -35,6 +37,7 @@ use warpui::ui_components::components::{UiComponent, UiComponentStyles};
 use warpui::ui_components::text_input::TextInput;
 use warpui::{AppContext, EntityId, SingletonEntity, ViewHandle, WindowId};
 
+use self::space_slide::{SpaceSlide, SpaceSlideElement};
 use super::{render_group_member_icon_collage, select_unique_pane_kinds};
 use crate::ai::agent::conversation::{ConversationStatus, StatusColorStyle};
 use crate::ai::agent_management::AgentNotificationsModel;
@@ -735,6 +738,8 @@ pub(super) struct VerticalTabsPanelState {
     /// Drag states for the space switcher chips, keyed by `SpaceId`.
     space_chip_drag_states: RefCell<HashMap<SpaceId, DraggableState>>,
     new_space_button_mouse_state: MouseStateHandle,
+    /// The tab list's slide after the latest space switch; ignored once it has finished.
+    pub(super) space_slide: Option<SpaceSlide>,
     pub(super) show_settings_popup: bool,
 }
 
@@ -776,6 +781,7 @@ impl Default for VerticalTabsPanelState {
             space_chip_mouse_states: RefCell::default(),
             space_chip_drag_states: RefCell::default(),
             new_space_button_mouse_state: Default::default(),
+            space_slide: None,
             show_settings_popup: false,
         }
     }
@@ -802,6 +808,12 @@ impl VerticalTabsPanelState {
     pub(super) fn remove_space_chip_state(&self, space_id: SpaceId) {
         self.space_chip_mouse_states.borrow_mut().remove(&space_id);
         self.space_chip_drag_states.borrow_mut().remove(&space_id);
+    }
+
+    /// Slides the tab list in from the side of the space switched to, restarting any slide still
+    /// running.
+    pub(super) fn start_space_slide(&mut self, from_index: usize, to_index: usize) {
+        self.space_slide = SpaceSlide::between(from_index, to_index, Instant::now());
     }
 
     pub(super) fn is_space_chip_dragging(&self) -> bool {
@@ -1709,7 +1721,7 @@ fn render_vertical_tabs_panel(
 
     let scrollable_groups = ClippedScrollable::vertical(
         state.scroll_state.clone(),
-        render_groups(state, workspace, app),
+        SpaceSlideElement::new(render_groups(state, workspace, app), state.space_slide).finish(),
         ScrollbarWidth::Custom(4.),
         theme.nonactive_ui_detail().into(),
         theme.active_ui_detail().into(),

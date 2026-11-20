@@ -26,6 +26,7 @@ use crate::workspace::view::Workspace;
 use crate::workspace::view::spaces::{SpaceChipDrop, space_chip_drag_index};
 use crate::workspace::view::tests::{initialize_app, mock_workspace, restored_workspace};
 use crate::workspace::view::vertical_tabs::space_chip_position_id;
+use crate::workspace::view::vertical_tabs::space_slide::{SlideFrom, SpaceSlide};
 
 #[test]
 fn test_switch_space_restores_each_spaces_active_tab() {
@@ -1369,6 +1370,7 @@ fn test_dragging_a_vertical_tab_reorders_tabs_after_switching_spaces() {
             workspace.add_terminal_tab(false, ctx);
             live_tab_ids(workspace)
         });
+        finish_space_slide(&mut app, &workspace);
         let first = element_rect(&app, window_id, &tab_position_id(0));
         let last = element_rect(&app, window_id, &tab_position_id(2));
         drag_mouse(
@@ -1388,6 +1390,7 @@ fn test_dragging_a_vertical_tab_reorders_tabs_after_switching_spaces() {
             workspace.handle_action(&WorkspaceAction::SwitchToSpace(1), ctx);
             live_tab_ids(workspace)
         });
+        finish_space_slide(&mut app, &workspace);
         let first = element_rect(&app, window_id, &tab_position_id(0));
         let last = element_rect(&app, window_id, &tab_position_id(3));
         drag_mouse(
@@ -1402,6 +1405,14 @@ fn test_dragging_a_vertical_tab_reorders_tabs_after_switching_spaces() {
                 vec![tab_ids[3], tab_ids[0], tab_ids[1], tab_ids[2]]
             );
         });
+    });
+}
+
+/// Ends the tab list's space-switch slide, so the next frame paints rows where they rest.
+fn finish_space_slide(app: &mut App, workspace: &ViewHandle<Workspace>) {
+    workspace.update(app, |workspace, ctx| {
+        workspace.vertical_tabs_panel.space_slide = None;
+        ctx.notify();
     });
 }
 
@@ -1702,5 +1713,147 @@ fn test_dropping_a_tab_group_on_a_space_chip_moves_the_group() {
             assert!(tab_ids_in(workspace, second_space).contains(&grouped_tab));
             assert!(workspace.all_tab_groups().any(|group| group.id == group_id));
         });
+    });
+}
+
+fn slide_from(workspace: &Workspace) -> Option<SlideFrom> {
+    workspace
+        .vertical_tabs_panel
+        .space_slide
+        .map(|slide| slide.from)
+}
+
+/// Every way of switching spaces slides the tab list in from the side of the space switched to,
+/// and a switch during a slide restarts it.
+#[test]
+fn test_switching_spaces_slides_the_tab_list_in_from_the_target_side() {
+    let _vertical_tabs_guard = FeatureFlag::VerticalTabs.override_enabled(true);
+    let _spaces_guard = FeatureFlag::Spaces.override_enabled(true);
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        open_vertical_tabs_panel(&mut app, &workspace);
+        workspace.update(&mut app, |workspace, ctx| {
+            assert_eq!(slide_from(workspace), None);
+            let first_space = workspace.active_space;
+            let first_space_tab = workspace.active_tab_pane_group().id();
+
+            workspace.handle_action(&WorkspaceAction::NewSpace, ctx);
+            assert_eq!(slide_from(workspace), Some(SlideFrom::Right));
+            let first_slide = workspace.vertical_tabs_panel.space_slide;
+            workspace.handle_action(&WorkspaceAction::NewSpace, ctx);
+
+            workspace.handle_action(&WorkspaceAction::PrevSpace, ctx);
+            assert_eq!(slide_from(workspace), Some(SlideFrom::Left));
+            assert!(
+                workspace
+                    .vertical_tabs_panel
+                    .space_slide
+                    .map(|slide| slide.started_at)
+                    >= first_slide.map(|slide| slide.started_at)
+            );
+            workspace.handle_action(&WorkspaceAction::NextSpace, ctx);
+            assert_eq!(slide_from(workspace), Some(SlideFrom::Right));
+
+            // Chip clicks and Switch to space N.
+            workspace.handle_action(&WorkspaceAction::SwitchToSpaceById(first_space), ctx);
+            assert_eq!(slide_from(workspace), Some(SlideFrom::Left));
+            workspace.handle_action(&WorkspaceAction::SwitchToSpace(3), ctx);
+            assert_eq!(slide_from(workspace), Some(SlideFrom::Right));
+
+            // Fingers moving right: previous space.
+            swipe_spaces(workspace, Instant::now(), 10., 12, ctx);
+            assert_eq!(workspace.active_space_index(), 1);
+            assert_eq!(slide_from(workspace), Some(SlideFrom::Left));
+
+            // Jumps to a tab in a hidden space.
+            workspace.activate_tab_by_pane_group_id(first_space_tab, ctx);
+            assert_eq!(workspace.active_space, first_space);
+            assert_eq!(slide_from(workspace), Some(SlideFrom::Left));
+        });
+    });
+}
+
+#[test]
+fn test_switching_spaces_without_the_vertical_tabs_panel_does_not_slide() {
+    let _vertical_tabs_guard = FeatureFlag::VerticalTabs.override_enabled(true);
+    let _spaces_guard = FeatureFlag::Spaces.override_enabled(true);
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            // Horizontal tabs.
+            workspace.handle_action(&WorkspaceAction::NewSpace, ctx);
+            assert_eq!(slide_from(workspace), None);
+        });
+        open_vertical_tabs_panel(&mut app, &workspace);
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.vertical_tabs_panel_open = false;
+            workspace.handle_action(&WorkspaceAction::PrevSpace, ctx);
+            assert_eq!(workspace.active_space_index(), 0);
+            assert_eq!(slide_from(workspace), None);
+        });
+    });
+}
+
+#[test]
+fn test_restoring_spaces_does_not_slide() {
+    let _vertical_tabs_guard = FeatureFlag::VerticalTabs.override_enabled(true);
+    let _spaces_guard = FeatureFlag::Spaces.override_enabled(true);
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        open_vertical_tabs_panel(&mut app, &workspace);
+        let snapshot = workspace.update(&mut app, |workspace, ctx| {
+            workspace.handle_action(&WorkspaceAction::NewSpace, ctx);
+            workspace.snapshot(ctx.window_id(), false, ctx)
+        });
+
+        let restored = restored_workspace(&mut app, snapshot);
+        restored.read(&app, |workspace, _| {
+            assert!(workspace.vertical_tabs_panel_open);
+            assert_eq!(workspace.active_space_index(), 1);
+            assert_eq!(slide_from(workspace), None);
+        });
+    });
+}
+
+/// The rows are painted a full list width toward the entry side at the start of a slide, and back
+/// in place once it ends.
+#[test]
+fn test_sliding_tab_list_is_painted_beside_its_resting_place() {
+    let _vertical_tabs_guard = FeatureFlag::VerticalTabs.override_enabled(true);
+    let _spaces_guard = FeatureFlag::Spaces.override_enabled(true);
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        let window_id = workspace.update(&mut app, |_, ctx| ctx.window_id());
+        open_vertical_tabs_panel(&mut app, &workspace);
+        let rest = element_rect(&app, window_id, &tab_position_id(0));
+
+        for from in [SlideFrom::Right, SlideFrom::Left] {
+            workspace.update(&mut app, |workspace, ctx| {
+                // Starting in the future keeps the slide at its first frame for the whole test.
+                workspace.vertical_tabs_panel.space_slide = Some(SpaceSlide {
+                    from,
+                    started_at: Instant::now() + Duration::from_secs(3600),
+                });
+                ctx.notify();
+            });
+            let sliding = element_rect(&app, window_id, &tab_position_id(0));
+            assert_eq!(sliding.min_y(), rest.min_y());
+            // The list is at least as wide as its rows.
+            match from {
+                SlideFrom::Right => assert!(sliding.min_x() >= rest.max_x() - 0.5),
+                SlideFrom::Left => assert!(sliding.max_x() <= rest.min_x() + 0.5),
+            }
+        }
+
+        finish_space_slide(&mut app, &workspace);
+        assert_eq!(element_rect(&app, window_id, &tab_position_id(0)), rest);
     });
 }
