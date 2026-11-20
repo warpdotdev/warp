@@ -46,6 +46,7 @@ use crate::themes::theme::AnsiColorIdentifier;
 use crate::themes::theme_chooser::ThemeChooserMode;
 use crate::workflows::{WorkflowSelectionSource, WorkflowSource, WorkflowType};
 use crate::workspace::PaneViewLocator;
+use crate::workspace::space::SpaceId;
 use crate::workspace::tab_group::TabGroupId;
 
 /// This enum determines how the search query is initialized when opening command search.
@@ -253,6 +254,37 @@ pub enum WorkspaceAction {
     PrevSpace,
     /// Creates a new space after the existing ones and switches to it.
     NewSpace,
+    /// Switches to the given space. Used by the switcher chips, whose positions shift on delete.
+    SwitchToSpaceById(SpaceId),
+    ToggleSpaceRightClickMenu {
+        space_id: SpaceId,
+        position: Vector2F,
+    },
+    /// Opens an inline editor over the given space's switcher chip.
+    RenameSpace(SpaceId),
+    RenameActiveSpace,
+    ToggleSpaceColor {
+        color: AnsiColorIdentifier,
+        space_id: SpaceId,
+    },
+    /// Deletes the space, moving its tabs and groups to the previous space (else the next one).
+    /// No-op for the last remaining space.
+    DeleteSpace(SpaceId),
+    DeleteActiveSpace,
+    /// Moves the tab to `space_id`, or to a new space when `None`, without switching spaces.
+    MoveTabToSpace {
+        tab_index: usize,
+        space_id: Option<SpaceId>,
+    },
+    /// Moves every member of the group, and the group itself, to `space_id` (or a new space).
+    MoveTabGroupToSpace {
+        group_id: TabGroupId,
+        space_id: Option<SpaceId>,
+    },
+    /// Moves the multi-selection to `space_id` (or a new space).
+    MoveSelectedTabsToSpace {
+        space_id: Option<SpaceId>,
+    },
     AddDefaultTab,
     AddTerminalTab {
         hide_homepage: bool,
@@ -994,6 +1026,15 @@ impl WorkspaceAction {
             | NextSpace
             | PrevSpace
             | NewSpace
+            | SwitchToSpaceById(_)
+            | RenameSpace(_)
+            | RenameActiveSpace
+            | ToggleSpaceColor { .. }
+            | DeleteSpace(_)
+            | DeleteActiveSpace
+            | MoveTabToSpace { .. }
+            | MoveTabGroupToSpace { .. }
+            | MoveSelectedTabsToSpace { .. }
             | ToggleTabColor { .. }
             | ToggleTabGroupColor { .. }
             | AddDefaultTab
@@ -1057,6 +1098,7 @@ impl WorkspaceAction {
             | ToggleTabRightClickMenu { .. }
             | ToggleTabSelectionRightClickMenu { .. }
             | ToggleTabGroupRightClickMenu { .. }
+            | ToggleSpaceRightClickMenu { .. }
             | ToggleVerticalTabsPaneContextMenu { .. }
             | OpenNewSessionMenu { .. }
             | ToggleTabConfigsMenu

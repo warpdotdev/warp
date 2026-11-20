@@ -6,7 +6,7 @@ use warpui::{EntityId, UpdateView, ViewContext};
 
 use super::{Workspace, group_member_indices};
 use crate::menu::{MenuItem, MenuItemFields};
-use crate::tab::{MOVE_TO_GROUP_LABEL, TabData};
+use crate::tab::{MOVE_TO_GROUP_LABEL, TabData, move_to_space_menu_items};
 use crate::workspace::action::{TabContextMenuAnchor, WorkspaceAction};
 use crate::workspace::tab_group::{TabGroup, TabGroupId};
 use crate::workspace::util::PaneViewLocator;
@@ -547,6 +547,7 @@ impl Workspace {
         if has_destination_group {
             menu_items.push(MenuItemFields::new_submenu(MOVE_TO_GROUP_LABEL).into_item());
         }
+        menu_items.extend(move_to_space_menu_items());
         menu_items
     }
 

@@ -796,6 +796,10 @@ impl VerticalTabsPanelState {
             .unwrap_or(false)
     }
 
+    pub(super) fn remove_space_chip_state(&self, space_id: SpaceId) {
+        self.space_chip_mouse_states.borrow_mut().remove(&space_id);
+    }
+
     pub(super) fn clear_detail_sidecar(&self) {
         if let Ok(mut overlay_state) = self.detail_overlay_state.lock() {
             overlay_state.active_target = None;
@@ -1280,6 +1284,7 @@ const SPACE_CHIP_DOT_SIZE: f32 = 8.;
 const SPACE_CHIP_DOT_GAP: f32 = 4.;
 const SPACE_CHIP_VERTICAL_PADDING: f32 = 2.;
 const SPACE_CHIP_HORIZONTAL_PADDING: f32 = 6.;
+const SPACE_CHIP_RENAME_EDITOR_WIDTH: f32 = 96.;
 const NEW_SPACE_BUTTON_PADDING: f32 = 3.;
 const SPACE_SWITCHER_VERTICAL_PADDING: f32 = 6.;
 const SPLIT_BUTTON_HEIGHT: f32 = SEARCH_BAR_HEIGHT;
@@ -1712,7 +1717,7 @@ fn render_vertical_tabs_panel(
         ))
         .with_child(Shrinkable::new(1., scrollable_groups).finish());
     if FeatureFlag::Spaces.is_enabled() {
-        panel_column.add_child(render_space_switcher(state, workspace, appearance));
+        panel_column.add_child(render_space_switcher(state, workspace, app));
     }
     let panel_content = panel_column.finish();
 
@@ -1780,20 +1785,23 @@ fn render_vertical_tabs_panel(
 }
 
 /// Name shown for a space; unnamed spaces use a placeholder based on their 1-based `position`.
-fn space_display_name(space: &Space, position: usize) -> String {
+pub(super) fn space_display_name(space: &Space, position: usize) -> String {
     space
         .name
         .clone()
         .unwrap_or_else(|| format!("Space {position}"))
 }
 
-/// Row of space chips (plus a `+` to create one) pinned to the bottom of the panel.
+/// Row of space chips (plus a `+` to create one) pinned to the bottom of the panel. Click switches,
+/// double-click renames inline, right-click opens the space menu.
 fn render_space_switcher(
     state: &VerticalTabsPanelState,
     workspace: &Workspace,
-    appearance: &Appearance,
+    app: &AppContext,
 ) -> Box<dyn Element> {
+    let appearance = Appearance::as_ref(app);
     let theme = appearance.theme();
+    let space_being_renamed = workspace.current_workspace_state.space_being_renamed();
     let sub_text = theme.sub_text_color(theme.background());
     let main_text = theme.main_text_color(theme.background());
 
@@ -1812,15 +1820,26 @@ fn render_space_switcher(
                 .map(|c| c.to_ansi_color(&theme.terminal_colors().normal).into())
                 .unwrap_or(sub_text);
             let mouse_state = chip_mouse_states.entry(space.id).or_default().clone();
-            Hoverable::new(mouse_state, move |hover_state| {
+            let is_being_renamed = space_being_renamed == Some(space.id);
+            let space_id = space.id;
+            let chip = Hoverable::new(mouse_state, move |hover_state| {
                 let dot = ConstrainedBox::new(UiIcon::Ellipse.to_warpui_icon(dot_fill).finish())
                     .with_width(SPACE_CHIP_DOT_SIZE)
                     .with_height(SPACE_CHIP_DOT_SIZE)
                     .finish();
-                let text =
+                let text = if is_being_renamed {
+                    ConstrainedBox::new(render_inline_tab_rename_editor(
+                        &workspace.tab_group_rename_editor,
+                        appearance,
+                        app,
+                    ))
+                    .with_width(SPACE_CHIP_RENAME_EDITOR_WIDTH)
+                    .finish()
+                } else {
                     Text::new_inline(label, appearance.ui_font_family(), SPACE_CHIP_FONT_SIZE)
                         .with_color(if is_active { main_text } else { sub_text }.into())
-                        .finish();
+                        .finish()
+                };
                 let background = if is_active {
                     internal_colors::fg_overlay_3(theme)
                 } else if hover_state.is_hovered() {
@@ -1844,12 +1863,25 @@ fn render_space_switcher(
                 .with_background(background)
                 .with_corner_radius(CornerRadius::with_all(CONTROL_BAR_BUTTON_RADIUS))
                 .finish()
-            })
-            .with_cursor(Cursor::PointingHand)
-            .on_click(move |ctx, _, _| {
-                ctx.dispatch_typed_action(WorkspaceAction::SwitchToSpace(position));
-            })
-            .finish()
+            });
+            // While renaming, clicks belong to the editor.
+            if is_being_renamed {
+                return chip.finish();
+            }
+            chip.with_cursor(Cursor::PointingHand)
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(WorkspaceAction::SwitchToSpaceById(space_id));
+                })
+                .on_double_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(WorkspaceAction::RenameSpace(space_id));
+                })
+                .on_right_click(move |ctx, _, position| {
+                    ctx.dispatch_typed_action(WorkspaceAction::ToggleSpaceRightClickMenu {
+                        space_id,
+                        position,
+                    });
+                })
+                .finish()
         })
         .collect();
 

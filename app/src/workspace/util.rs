@@ -10,6 +10,7 @@ use crate::server::ids::ServerId;
 use crate::terminal::TerminalView;
 use crate::ui_components::icons::Icon;
 use crate::window_settings::WindowSettings;
+use crate::workspace::space::SpaceId;
 use crate::workspace::tab_group::TabGroupId;
 use crate::workspace::{Workspace, WorkspaceAction};
 use crate::workspaces::team::Team;
@@ -126,6 +127,9 @@ pub struct WorkspaceState {
     pane_being_renamed: Option<PaneViewLocator>,
     /// The tab group whose header is currently being renamed inline.
     tab_group_being_renamed: Option<TabGroupId>,
+    /// The space whose switcher chip is currently being renamed inline. Shares the tab group
+    /// rename editor, so it is exclusive with `tab_group_being_renamed`.
+    space_being_renamed: Option<SpaceId>,
 }
 
 impl WorkspaceState {
@@ -144,6 +148,7 @@ impl WorkspaceState {
             || self.tab_being_renamed.is_some()
             || self.pane_being_renamed.is_some()
             || self.tab_group_being_renamed.is_some()
+            || self.space_being_renamed.is_some()
             || self.is_reward_modal_open
             || self.is_launch_config_save_modal_open
             || self.is_command_search_open
@@ -186,6 +191,7 @@ impl WorkspaceState {
         self.tab_being_renamed = None;
         self.pane_being_renamed = None;
         self.tab_group_being_renamed = None;
+        self.space_being_renamed = None;
         self.is_reward_modal_open = false;
         self.is_launch_config_save_modal_open = false;
         self.is_command_search_open = false;
@@ -230,6 +236,7 @@ impl WorkspaceState {
         self.tab_being_renamed = Some(index);
         self.pane_being_renamed = None;
         self.tab_group_being_renamed = None;
+        self.space_being_renamed = None;
     }
 
     pub fn clear_tab_being_renamed(&mut self) {
@@ -252,6 +259,7 @@ impl WorkspaceState {
         self.pane_being_renamed = Some(pane);
         self.tab_being_renamed = None;
         self.tab_group_being_renamed = None;
+        self.space_being_renamed = None;
     }
 
     pub fn clear_pane_being_renamed(&mut self) {
@@ -274,6 +282,7 @@ impl WorkspaceState {
         self.tab_group_being_renamed = Some(group_id);
         self.tab_being_renamed = None;
         self.pane_being_renamed = None;
+        self.space_being_renamed = None;
     }
 
     pub fn clear_tab_group_being_renamed(&mut self) {
@@ -282,6 +291,21 @@ impl WorkspaceState {
 
     pub fn tab_group_being_renamed(&self) -> Option<TabGroupId> {
         self.tab_group_being_renamed
+    }
+
+    pub fn set_space_being_renamed(&mut self, space_id: SpaceId) {
+        self.space_being_renamed = Some(space_id);
+        self.tab_being_renamed = None;
+        self.pane_being_renamed = None;
+        self.tab_group_being_renamed = None;
+    }
+
+    pub fn clear_space_being_renamed(&mut self) {
+        self.space_being_renamed = None;
+    }
+
+    pub fn space_being_renamed(&self) -> Option<SpaceId> {
+        self.space_being_renamed
     }
 }
 

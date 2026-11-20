@@ -51,6 +51,7 @@ use crate::util::bindings::{keybinding_name_to_display_string, keybinding_name_t
 use crate::util::color::{Opacity, coloru_with_opacity};
 use crate::util::truncation::truncate_from_end;
 use crate::window_settings::WindowSettings;
+use crate::workspace::space::SpaceId;
 use crate::workspace::sync_inputs::SyncedInputState;
 use crate::workspace::tab_group::{TabGroup, TabGroupId};
 use crate::workspace::tab_settings::{
@@ -227,6 +228,9 @@ pub(crate) fn reveals_tab_shortcut_hints(ctx: &AppContext) -> bool {
 /// Label for the tab right-click menu's "Move to group" submenu parent.
 pub const MOVE_TO_GROUP_LABEL: &str = "Move to group";
 
+/// Label for the "Move to space" submenu parent in the tab, group, and selection menus.
+pub const MOVE_TO_SPACE_LABEL: &str = "Move to space";
+
 /// Decides which tab-group context-menu entries apply to a tab, based on its
 /// group membership, whether it is the sole member of that group, and whether
 /// any *other* groups exist.
@@ -247,6 +251,15 @@ fn tab_group_menu_entry_flags(
     let has_other_groups = tab_groups.keys().any(|gid| Some(*gid) != group_id);
     let show_new_group = !(in_group && is_only_member_of_group);
     (show_new_group, has_other_groups, in_group)
+}
+
+/// The "Move to space" submenu parent, when spaces are enabled. Like "Move to group", it has no
+/// action of its own; the workspace fills its sidecar.
+pub(crate) fn move_to_space_menu_items() -> Vec<MenuItem<WorkspaceAction>> {
+    if !FeatureFlag::Spaces.is_enabled() {
+        return vec![];
+    }
+    vec![MenuItemFields::new_submenu(MOVE_TO_SPACE_LABEL).into_item()]
 }
 
 /// True when the user has opted into vertical tabs and the feature flag is on.
@@ -836,8 +849,9 @@ impl TabData {
 
     /// Returns the tab-group entries for the top-level right-click menu:
     /// `New group with tab` (hidden only when the tab is the sole member of its
-    /// group), `Move to group` (when at least one other group exists), and
-    /// `Remove from group` (only when the tab is currently in a group).
+    /// group), `Move to group` (when at least one other group exists), `Move
+    /// to space` (when spaces are enabled), and `Remove from group` (only when
+    /// the tab is currently in a group).
     ///
     /// The `Move to group` item is a submenu parent — selecting/hovering it
     /// opens a sidecar populated by the workspace; it has no
@@ -849,7 +863,7 @@ impl TabData {
         is_only_member_of_group: bool,
     ) -> Vec<MenuItem<WorkspaceAction>> {
         if !FeatureFlag::GroupedTabs.is_enabled() {
-            return vec![];
+            return move_to_space_menu_items();
         }
         let (show_new_group, show_move_to_group, show_remove_from_group) =
             tab_group_menu_entry_flags(self.group_id, tab_groups, is_only_member_of_group);
@@ -864,6 +878,7 @@ impl TabData {
         if show_move_to_group {
             menu_items.push(MenuItemFields::new_submenu(MOVE_TO_GROUP_LABEL).into_item());
         }
+        menu_items.extend(move_to_space_menu_items());
         if show_remove_from_group {
             menu_items.push(
                 MenuItemFields::new("Remove from group")
@@ -928,6 +943,7 @@ impl TabData {
 pub(crate) enum ColorPickerTarget {
     Tab { tab_index: usize },
     Group { group_id: TabGroupId },
+    Space { space_id: SpaceId },
 }
 
 impl ColorPickerTarget {
@@ -938,6 +954,9 @@ impl ColorPickerTarget {
             }
             ColorPickerTarget::Group { group_id } => {
                 WorkspaceAction::ToggleTabGroupColor { color, group_id }
+            }
+            ColorPickerTarget::Space { space_id } => {
+                WorkspaceAction::ToggleSpaceColor { color, space_id }
             }
         }
     }

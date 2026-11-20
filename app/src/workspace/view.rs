@@ -367,11 +367,11 @@ use crate::settings_view::{SettingsSection, SettingsView, SettingsViewEvent, fla
 #[cfg(all(target_os = "windows", feature = "local_tty"))]
 use crate::shell_indicator::ShellIndicatorType;
 use crate::tab::{
-    COMPACT_TAB_WIDTH_THRESHOLD, ColorPickerTarget, MOVE_TO_GROUP_LABEL, NewSessionMenuItem,
-    PaneNameMenuTarget, SelectedTabColor, TAB_BAR_BORDER_HEIGHT, TAB_INDICATOR_HEIGHT,
-    TAB_PIN_INDICATOR_ICON_SIZE, TAB_PIN_VANISH_THRESHOLD, TabBarState, TabComponent, TabData,
-    TabShortcutModifierState, TabTelemetryAction, color_picker_menu_items, next_tab_color,
-    tab_position_id, uses_vertical_tabs,
+    COMPACT_TAB_WIDTH_THRESHOLD, ColorPickerTarget, MOVE_TO_GROUP_LABEL, MOVE_TO_SPACE_LABEL,
+    NewSessionMenuItem, PaneNameMenuTarget, SelectedTabColor, TAB_BAR_BORDER_HEIGHT,
+    TAB_INDICATOR_HEIGHT, TAB_PIN_INDICATOR_ICON_SIZE, TAB_PIN_VANISH_THRESHOLD, TabBarState,
+    TabComponent, TabData, TabShortcutModifierState, TabTelemetryAction, color_picker_menu_items,
+    move_to_space_menu_items, next_tab_color, tab_position_id, uses_vertical_tabs,
 };
 use crate::tab_configs::action_sidecar::SidecarItemKind;
 use crate::tab_configs::remove_confirmation_dialog::{
@@ -1085,6 +1085,9 @@ pub struct Workspace {
     show_tab_group_right_click_menu: Option<(TabGroupId, TabContextMenuAnchor)>,
     /// Open multi-tab selection menu (right-click on any tab in a multi-tab selection).
     show_tab_selection_right_click_menu: Option<(usize, TabContextMenuAnchor)>,
+    /// Pointer position of the open space switcher chip menu; reuses the `tab_right_click_menu`
+    /// view.
+    show_space_right_click_menu: Option<Vector2F>,
     // TODO(CORE-2300): this used to be add_tab_dropdown_menu.
     // Because we are rolling out the change behind a feature flag,
     // keep this comment here until the feature flag is removed.
@@ -1247,6 +1250,8 @@ pub struct Workspace {
     /// tab group; each selection dispatches `WorkspaceAction::MoveTabToGroup`.
     move_to_group_sidecar_menu: ViewHandle<Menu<WorkspaceAction>>,
     show_move_to_group_sidecar: bool,
+    /// Label of the submenu parent ("Move to group" or "Move to space") the sidecar is shown for.
+    move_to_sidecar_anchor_label: &'static str,
     tab_config_action_sidecar_item: Option<SidecarItemKind>,
     tab_config_action_sidecar_mouse_states: crate::tab_configs::action_sidecar::SidecarMouseStates,
     remove_tab_config_confirmation_dialog: ViewHandle<RemoveTabConfigConfirmationDialog>,
@@ -1564,6 +1569,12 @@ impl Workspace {
                 EditorEvent::Blurred | EditorEvent::Escape => {
                     self.cancel_tab_group_rename(ctx);
                 }
+                _ => {}
+            }
+        } else if self.current_workspace_state.space_being_renamed().is_some() {
+            match event {
+                EditorEvent::Enter => self.finish_space_rename(ctx),
+                EditorEvent::Blurred | EditorEvent::Escape => self.cancel_space_rename(ctx),
                 _ => {}
             }
         }
@@ -3486,6 +3497,7 @@ impl Workspace {
             show_tab_right_click_menu: None,
             show_tab_group_right_click_menu: None,
             show_tab_selection_right_click_menu: None,
+            show_space_right_click_menu: None,
             new_session_dropdown_menu,
             show_new_session_dropdown_menu: None,
             changelog_model,
@@ -3610,6 +3622,7 @@ impl Workspace {
             new_session_sidecar_add_repo_mouse_state: Default::default(),
             move_to_group_sidecar_menu,
             show_move_to_group_sidecar: false,
+            move_to_sidecar_anchor_label: MOVE_TO_GROUP_LABEL,
             tab_config_action_sidecar_item: None,
             tab_config_action_sidecar_mouse_states: Default::default(),
             remove_tab_config_confirmation_dialog:
@@ -7556,9 +7569,11 @@ impl Workspace {
             Some(id) if id == self.tab_rename_editor.id() => {
                 self.current_workspace_state.is_tab_being_renamed()
             }
-            Some(id) if id == self.tab_group_rename_editor.id() => self
-                .current_workspace_state
-                .is_any_tab_group_being_renamed(),
+            Some(id) if id == self.tab_group_rename_editor.id() => {
+                self.current_workspace_state
+                    .is_any_tab_group_being_renamed()
+                    || self.current_workspace_state.space_being_renamed().is_some()
+            }
             _ => false,
         }
     }
@@ -8161,6 +8176,7 @@ impl Workspace {
     ) {
         if self.show_tab_group_right_click_menu.is_some() {
             self.show_tab_group_right_click_menu = None;
+            self.hide_move_to_group_sidecar(ctx);
             ctx.notify();
             return;
         }
@@ -10242,12 +10258,14 @@ impl Workspace {
                 self.show_tab_right_click_menu = None;
                 self.show_tab_group_right_click_menu = None;
                 self.show_tab_selection_right_click_menu = None;
+                self.show_space_right_click_menu = None;
                 self.hide_move_to_group_sidecar(ctx);
                 if !self.current_workspace_state.is_tab_being_renamed()
                     && !self.current_workspace_state.is_any_pane_being_renamed()
                     && !self
                         .current_workspace_state
                         .is_any_tab_group_being_renamed()
+                    && self.current_workspace_state.space_being_renamed().is_none()
                 {
                     self.focus_active_tab(ctx);
                 }
@@ -10305,6 +10323,7 @@ impl Workspace {
                         .into_item(),
                 );
             }
+            items.extend(move_to_space_menu_items());
             items
         };
 
@@ -10408,12 +10427,14 @@ impl Workspace {
         menu_items
     }
 
-    /// Opens the sidecar when "Move to group" is hovered, hides it otherwise.
-    /// Handles both the single-tab pane menu and the multi-tab selection menu.
+    /// Opens the sidecar when "Move to group" or "Move to space" is hovered,
+    /// hides it otherwise. Handles the single-tab pane menu, the multi-tab
+    /// selection menu, and (for "Move to space") the tab group menu.
     fn update_move_to_group_sidecar(&mut self, ctx: &mut ViewContext<Self>) {
-        // If neither menu is open, nothing to update.
+        // If no menu with a sidecar is open, nothing to update.
         if self.show_tab_right_click_menu.is_none()
             && self.show_tab_selection_right_click_menu.is_none()
+            && self.show_tab_group_right_click_menu.is_none()
         {
             return;
         }
@@ -10439,14 +10460,24 @@ impl Workspace {
             return;
         };
 
-        if label == MOVE_TO_GROUP_LABEL {
-            // Single-tab pane menu carries a `tab_index`; the multi-tab
-            // selection menu has no single source tab so we pass `None` and
-            // the sidecar builder infers the multi-tab selection.
-            let source_tab_index = self
-                .show_tab_right_click_menu
-                .map(|(tab_index, _)| tab_index);
-            let items = self.build_move_to_group_sidecar_items(source_tab_index);
+        if label == MOVE_TO_GROUP_LABEL || label == MOVE_TO_SPACE_LABEL {
+            let (anchor_label, items) = if label == MOVE_TO_GROUP_LABEL {
+                // Single-tab pane menu carries a `tab_index`; the multi-tab
+                // selection menu has no single source tab so we pass `None` and
+                // the sidecar builder infers the multi-tab selection.
+                let source_tab_index = self
+                    .show_tab_right_click_menu
+                    .map(|(tab_index, _)| tab_index);
+                (
+                    MOVE_TO_GROUP_LABEL,
+                    self.build_move_to_group_sidecar_items(source_tab_index),
+                )
+            } else {
+                (
+                    MOVE_TO_SPACE_LABEL,
+                    self.build_move_to_space_sidecar_items(),
+                )
+            };
             if items.is_empty() {
                 self.hide_move_to_group_sidecar(ctx);
                 return;
@@ -10456,6 +10487,7 @@ impl Workspace {
                     menu.set_items(items, view_ctx);
                 });
             self.show_move_to_group_sidecar = true;
+            self.move_to_sidecar_anchor_label = anchor_label;
 
             let sidecar_rect = ctx.element_position_by_id_at_last_frame(
                 self.window_id,
@@ -10483,9 +10515,9 @@ impl Workspace {
         ctx.notify();
     }
 
-    /// Shared between the single-tab pane menu and the multi-tab selection
-    /// menu render paths so the two parent menus can't drift apart in how
-    /// they position the "move to group" sidecar.
+    /// Shared between the single-tab pane menu, the multi-tab selection menu,
+    /// and the tab group menu render paths so the parent menus can't drift
+    /// apart in how they position the "move to group/space" sidecar.
     fn add_move_to_group_sidecar_overlay(&self, stack: &mut Stack, app: &AppContext) {
         if !self.show_move_to_group_sidecar {
             return;
@@ -10497,8 +10529,11 @@ impl Workspace {
         .finish();
 
         // Flip the anchor side when the sidecar would overflow the window.
-        let render_left =
-            self.should_render_sidecar_left(MOVE_TO_GROUP_LABEL, MOVE_TO_GROUP_SIDECAR_WIDTH, app);
+        let render_left = self.should_render_sidecar_left(
+            self.move_to_sidecar_anchor_label,
+            MOVE_TO_GROUP_SIDECAR_WIDTH,
+            app,
+        );
         let (offset, parent_anchor, child_anchor) = if render_left {
             (
                 vec2f(-4., 0.),
@@ -10516,7 +10551,7 @@ impl Workspace {
         stack.add_positioned_overlay_child(
             sidecar_element,
             OffsetPositioning::offset_from_save_position_element(
-                MOVE_TO_GROUP_LABEL,
+                self.move_to_sidecar_anchor_label,
                 offset,
                 PositionedElementOffsetBounds::WindowByPosition,
                 parent_anchor,
@@ -10537,6 +10572,7 @@ impl Workspace {
                 if *via_select_item {
                     self.show_tab_right_click_menu = None;
                     self.show_tab_selection_right_click_menu = None;
+                    self.show_tab_group_right_click_menu = None;
                 }
                 self.show_move_to_group_sidecar = false;
                 self.tab_right_click_menu.update(ctx, |menu, _| {
@@ -12312,8 +12348,8 @@ impl Workspace {
             .clear_detail_sidecar_if_for_pane_group(pane_group.id());
 
         // If this is the last tab, close the window instead of actually removing
-        // the tab.
-        if self.tabs.len() == 1 {
+        // the tab. With spaces, the window stays open while another space has tabs.
+        if self.tabs.len() == 1 && !self.hidden_spaces_have_tabs() {
             if ContextFlag::CloseWindow.is_enabled() {
                 ctx.close_window();
             }
@@ -12369,6 +12405,13 @@ impl Workspace {
             });
         }
 
+        if self.tabs.is_empty() {
+            self.switch_to_nearest_non_empty_space(ctx);
+            ctx.dispatch_global_action("workspace:save_app", ());
+            ctx.notify();
+            return;
+        }
+
         match index.cmp(&self.active_tab_index) {
             Ordering::Equal => {
                 // Activate the tab that was immediately after the closed one — to the
@@ -12394,7 +12437,7 @@ impl Workspace {
     fn should_confirm_close_session(&self, ctx: &mut ViewContext<Self>) -> bool {
         // If we're closing the only remaining tab, we're actually going to close the window.
         // We don't need a user confirmation here because there's already another one on window close.
-        if self.tab_count() == 1 {
+        if self.tab_count() == 1 && !self.hidden_spaces_have_tabs() {
             return false;
         }
         // TODO: remove session sharing flag check when long-running commands are included
@@ -12516,7 +12559,7 @@ impl Workspace {
         add_to_undo_stack: bool,
         ctx: &mut ViewContext<Self>,
     ) {
-        let is_last_tab = self.tabs.len() == 1;
+        let is_last_tab = self.tabs.len() == 1 && !self.hidden_spaces_have_tabs();
         if !ContextFlag::CloseWindow.is_enabled() && is_last_tab {
             return;
         }
@@ -24298,6 +24341,7 @@ impl TypedActionView for Workspace {
                 self.cancel_tab_rename(ctx);
                 self.cancel_pane_rename(ctx);
                 self.cancel_tab_group_rename(ctx);
+                self.cancel_space_rename(ctx);
             }
             NewTabGroupFromTab(tab_index) => self.new_tab_group_from_tab(*tab_index, ctx),
             MoveTabToGroup {
@@ -24357,6 +24401,25 @@ impl TypedActionView for Workspace {
             NextSpace => self.switch_to_adjacent_space(1, ctx),
             PrevSpace => self.switch_to_adjacent_space(-1, ctx),
             NewSpace => self.create_and_switch_to_new_space(ctx),
+            SwitchToSpaceById(space_id) => self.switch_space(*space_id, ctx),
+            ToggleSpaceRightClickMenu { space_id, position } => {
+                self.toggle_space_right_click_menu(*space_id, *position, ctx)
+            }
+            RenameSpace(space_id) => self.rename_space(*space_id, ctx),
+            RenameActiveSpace => self.rename_space(self.active_space, ctx),
+            ToggleSpaceColor { color, space_id } => self.toggle_space_color(*space_id, *color, ctx),
+            DeleteSpace(space_id) => self.delete_space(*space_id, ctx),
+            DeleteActiveSpace => self.delete_space(self.active_space, ctx),
+            MoveTabToSpace {
+                tab_index,
+                space_id,
+            } => self.move_tab_to_space(*tab_index, *space_id, ctx),
+            MoveTabGroupToSpace { group_id, space_id } => {
+                self.move_tab_group_to_space(*group_id, *space_id, ctx)
+            }
+            MoveSelectedTabsToSpace { space_id } => {
+                self.move_selected_tabs_to_space(*space_id, ctx)
+            }
             AddDefaultTab => {
                 let effective_mode = AISettings::as_ref(ctx).default_session_mode(ctx);
                 match effective_mode {
@@ -27358,7 +27421,25 @@ impl View for Workspace {
                     ChildView::new(&self.tab_right_click_menu).finish(),
                     positioning,
                 );
+                self.add_move_to_group_sidecar_overlay(&mut stack, app);
             }
+        }
+
+        // Space switcher chip menu (reuses the `tab_right_click_menu` view). Chips only exist in
+        // the vertical tabs panel.
+        if let Some(position) = self.show_space_right_click_menu
+            && uses_vertical_tabs(app)
+            && self.vertical_tabs_panel_open
+        {
+            stack.add_positioned_overlay_child(
+                ChildView::new(&self.tab_right_click_menu).finish(),
+                OffsetPositioning::offset_from_parent(
+                    position,
+                    ParentOffsetBounds::WindowByPosition,
+                    ParentAnchor::TopLeft,
+                    ChildAnchor::TopLeft,
+                ),
+            );
         }
 
         // Render the new session dropdown menu. This is outside the tab bar visibility

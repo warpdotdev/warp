@@ -1075,6 +1075,16 @@ pub fn init(app: &mut AppContext) {
                     "Create new space",
                     WorkspaceAction::NewSpace,
                 ),
+                space_binding(
+                    "workspace:rename_active_space",
+                    "Rename current space",
+                    WorkspaceAction::RenameActiveSpace,
+                ),
+                space_binding(
+                    "workspace:delete_active_space",
+                    "Delete current space",
+                    WorkspaceAction::DeleteActiveSpace,
+                ),
             ]),
     );
 
