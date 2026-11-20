@@ -26945,6 +26945,15 @@ impl View for Workspace {
 
         let tab_bar_mode = self.tab_bar_mode(app);
 
+        // A background image is dimmed by the root workspace container below, which has the
+        // image's bounds. Dimming it here would leave the `WORKSPACE_PADDING` around the panels
+        // showing the image undimmed.
+        let panels_background = if appearance.theme().background_image().is_some() {
+            ElementFill::None
+        } else {
+            util::get_terminal_background_fill(self.window_id, app)
+        };
+
         // For WASM simplified tab bar views (Warp Drive objects, shared sessions, conversation transcripts),
         // we render the tab bar outside of panels so that the details panel only affects content below the tab bar.
         cfg_if::cfg_if! {
@@ -26968,7 +26977,7 @@ impl View for Workspace {
             let panels_row = self.render_panels(app, Shrinkable::new(1.0, content).finish(), true);
             outer_column.add_child(Shrinkable::new(1.0, panels_row).finish());
             Container::new(outer_column.finish())
-                .with_background(util::get_terminal_background_fill(self.window_id, app))
+                .with_background(panels_background)
                 .finish()
         } else {
             let mut outer_column = Flex::column();
@@ -26979,7 +26988,7 @@ impl View for Workspace {
             let panels_row = self.render_panels(app, Shrinkable::new(1.0, content).finish(), false);
             outer_column.add_child(Shrinkable::new(1.0, panels_row).finish());
             Container::new(outer_column.finish())
-                .with_background(util::get_terminal_background_fill(self.window_id, app))
+                .with_background(panels_background)
                 .finish()
         };
         let mut stack = Stack::new();
@@ -28061,7 +28070,11 @@ impl View for Workspace {
                     )
                     .finish(),
                 );
-                stack.add_child(workspace.finish());
+                stack.add_child(
+                    workspace
+                        .with_background(util::get_terminal_background_fill(self.window_id, app))
+                        .finish(),
+                );
             }
             _ => {
                 stack.add_child(
