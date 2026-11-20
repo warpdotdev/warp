@@ -526,3 +526,7 @@ impl PtyHandle for DaemonPtyHandle {
 #[cfg(test)]
 #[path = "daemon_client_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "daemon_e2e_tests.rs"]
+mod e2e_tests;
