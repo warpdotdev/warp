@@ -48,6 +48,7 @@ pub enum ChipValue {
     Text(String),
     GitDiffStats(display_chip::GitLineChanges),
     GitBranchStatus(display_chip::GitBranchTrackingStatus),
+    OperatingSystem(display_chip::OperatingSystemInfo),
 }
 
 impl ChipValue {
@@ -55,7 +56,9 @@ impl ChipValue {
     pub fn as_text(&self) -> Option<&str> {
         match self {
             ChipValue::Text(s) => Some(s),
-            ChipValue::GitDiffStats(_) | ChipValue::GitBranchStatus(_) => None,
+            ChipValue::GitDiffStats(_)
+            | ChipValue::GitBranchStatus(_)
+            | ChipValue::OperatingSystem(_) => None,
         }
     }
 
@@ -63,14 +66,23 @@ impl ChipValue {
     pub fn as_git_diff_stats(&self) -> Option<&display_chip::GitLineChanges> {
         match self {
             ChipValue::GitDiffStats(g) => Some(g),
-            ChipValue::Text(_) | ChipValue::GitBranchStatus(_) => None,
+            ChipValue::Text(_) | ChipValue::GitBranchStatus(_) | ChipValue::OperatingSystem(_) => {
+                None
+            }
         }
     }
 
     pub fn as_git_branch_tracking_status(&self) -> Option<&display_chip::GitBranchTrackingStatus> {
         match self {
             ChipValue::GitBranchStatus(status) => Some(status),
-            ChipValue::Text(_) | ChipValue::GitDiffStats(_) => None,
+            ChipValue::Text(_) | ChipValue::GitDiffStats(_) | ChipValue::OperatingSystem(_) => None,
+        }
+    }
+
+    pub fn as_operating_system_info(&self) -> Option<&display_chip::OperatingSystemInfo> {
+        match self {
+            ChipValue::OperatingSystem(info) => Some(info),
+            ChipValue::Text(_) | ChipValue::GitDiffStats(_) | ChipValue::GitBranchStatus(_) => None,
         }
     }
 }
@@ -93,6 +105,7 @@ impl std::fmt::Display for ChipValue {
                 )
             }
             ChipValue::GitBranchStatus(status) => f.write_str(&status.display_text()),
+            ChipValue::OperatingSystem(info) => f.write_str(info.name()),
         }
     }
 }
@@ -181,6 +194,8 @@ pub enum ContextChipKind {
     Date,
     Time12,
     Time24,
+    OperatingSystem,
+    OperatingSystemLogo,
     VirtualEnvironment,
     CondaEnvironment,
     NodeVersion,
@@ -300,6 +315,28 @@ impl ContextChipKind {
                 builtins::time24,
                 TIME_REFRESH_CONFIG,
             )),
+            Self::OperatingSystem => Some(ContextChip::builtin_with_runtime_policy(
+                "Operating System",
+                builtins::operating_system,
+                RefreshConfig::OnDemandOnly,
+                ChipRuntimePolicy::new(
+                    std::iter::empty::<&str>(),
+                    false,
+                    None,
+                    [ChipFingerprintInput::SessionId],
+                ),
+            )),
+            Self::OperatingSystemLogo => Some(ContextChip::builtin_with_runtime_policy(
+                "Operating System Logo",
+                builtins::operating_system,
+                RefreshConfig::OnDemandOnly,
+                ChipRuntimePolicy::new(
+                    std::iter::empty::<&str>(),
+                    false,
+                    None,
+                    [ChipFingerprintInput::SessionId],
+                ),
+            )),
             Self::Custom { title } => {
                 log::warn!("Tried to use custom chip {title}");
                 None
@@ -415,6 +452,12 @@ impl ContextChipKind {
             Self::Date => ChipValue::Text("July 12, 2023".to_string()),
             Self::Time12 => ChipValue::Text("03:48 pm".to_string()),
             Self::Time24 => ChipValue::Text("15:48".to_string()),
+            Self::OperatingSystem | Self::OperatingSystemLogo => {
+                ChipValue::OperatingSystem(display_chip::OperatingSystemInfo::new(
+                    "Fedora Linux",
+                    display_chip::OperatingSystemLogo::Fedora,
+                ))
+            }
             Self::Custom { .. } => ChipValue::Text("custom chip".to_string()),
             Self::KubernetesContext => ChipValue::Text("kube-context".to_string()),
             Self::SvnBranch => ChipValue::Text("svn-feature-branch".to_string()),
@@ -449,6 +492,9 @@ impl ContextChipKind {
             Self::Date => prompt_colors.input_prompt_date,
             Self::Time12 => prompt_colors.input_prompt_time,
             Self::Time24 => prompt_colors.input_prompt_time,
+            Self::OperatingSystem | Self::OperatingSystemLogo => {
+                prompt_colors.input_prompt_user_and_host
+            }
             Self::KubernetesContext => prompt_colors.input_prompt_kubernetes,
             Self::SvnBranch => prompt_colors.input_prompt_branch,
             Self::SvnDirtyItems => prompt_colors.input_prompt_svn,
@@ -487,6 +533,7 @@ impl ContextChipKind {
             Self::KubernetesContext => format!("⎈ {text}"),
             Self::SvnBranch => format!("svn:({text})"),
             Self::SvnDirtyItems => format!("±{text}"),
+            Self::OperatingSystemLogo => String::new(),
             _ => text,
         }
     }
@@ -539,6 +586,7 @@ impl ContextChipKind {
             Self::Hostname => Some(Icon::Laptop),
             Self::Date => Some(Icon::CalendarDate),
             Self::Time12 | Self::Time24 => Some(Icon::Clock),
+            Self::OperatingSystem | Self::OperatingSystemLogo => Some(Icon::Linux),
             Self::VirtualEnvironment | Self::CondaEnvironment | Self::Subshell => {
                 Some(Icon::Terminal)
             }
@@ -566,6 +614,8 @@ pub fn available_chips() -> Vec<ContextChipKind> {
         ContextChipKind::WorkingDirectory,
         ContextChipKind::Username,
         ContextChipKind::Hostname,
+        ContextChipKind::OperatingSystem,
+        ContextChipKind::OperatingSystemLogo,
         ContextChipKind::Ssh,
         ContextChipKind::ShellGitBranch,
         ContextChipKind::GitBranchStatus,
@@ -607,6 +657,11 @@ pub fn git_line_changes_from_chips(chips: &[ChipResult]) -> Option<display_chip:
                         lines_removed: 0,
                     }),
                 ChipValue::GitBranchStatus(_) => display_chip::GitLineChanges {
+                    files_changed: 0,
+                    lines_added: 0,
+                    lines_removed: 0,
+                },
+                ChipValue::OperatingSystem(_) => display_chip::GitLineChanges {
                     files_changed: 0,
                     lines_added: 0,
                     lines_removed: 0,
