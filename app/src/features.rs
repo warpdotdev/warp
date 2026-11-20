@@ -301,6 +301,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::SummarizationCancellationConfirmation,
         #[cfg(feature = "code_review_find")]
         FeatureFlag::CodeReviewFind,
+        #[cfg(feature = "side_by_side_diff_layout")]
+        FeatureFlag::SideBySideDiffLayout,
         #[cfg(feature = "ui_zoom")]
         FeatureFlag::UIZoom,
         #[cfg(feature = "auto_open_code_review_pane")]
