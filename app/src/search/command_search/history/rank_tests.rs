@@ -22,6 +22,9 @@ struct Scenario {
     start_ts: Option<DateTime<Local>>,
     session_id: Option<SessionId>,
     exit_ok: bool,
+    total_execution_count: u32,
+    cwd_execution_count: u32,
+    pwd_known_execution_count: u32,
 }
 
 impl Scenario {
@@ -32,6 +35,9 @@ impl Scenario {
             start_ts: None,
             session_id: None,
             exit_ok: true,
+            total_execution_count: 0,
+            cwd_execution_count: 0,
+            pwd_known_execution_count: 0,
         }
     }
 
@@ -50,6 +56,17 @@ impl Scenario {
         self
     }
 
+    fn executed(mut self, total_execution_count: u32) -> Self {
+        self.total_execution_count = total_execution_count;
+        self
+    }
+
+    fn cwd_counts(mut self, cwd_execution_count: u32, pwd_known_execution_count: u32) -> Self {
+        self.cwd_execution_count = cwd_execution_count;
+        self.pwd_known_execution_count = pwd_known_execution_count;
+        self
+    }
+
     fn rank(&self, current_session_id: SessionId) -> OrderedFloat<f64> {
         let tokens = tokenize_query(self.query);
         let (_, match_quality) = match_history_command(self.command, &tokens)
@@ -65,6 +82,9 @@ impl Scenario {
             match_quality,
             now: now(),
             current_session_id,
+            total_execution_count: self.total_execution_count,
+            cwd_execution_count: self.cwd_execution_count,
+            pwd_known_execution_count: self.pwd_known_execution_count,
             is_blank_query: false,
         })
         .expect("scenario match quality should clear the score floor")
@@ -163,6 +183,95 @@ fn exit_failure_is_penalized() {
 }
 
 #[test]
+fn frequency_prior_favors_more_common_commands() {
+    let session = SessionId::from(1);
+    let frequent = Scenario::new("npm run build", "npm run build")
+        .days_ago(1)
+        .executed(20);
+    let rare = Scenario::new("npm run build", "npm run build")
+        .days_ago(1)
+        .executed(1);
+
+    assert!(frequent.rank(session) > rare.rank(session));
+}
+
+#[test]
+fn cwd_prior_favors_the_current_directory() {
+    let session = SessionId::from(1);
+    let run_here_often = Scenario::new("git status", "git status")
+        .days_ago(1)
+        .cwd_counts(45, 50);
+    let run_elsewhere_often = Scenario::new("git status", "git status")
+        .days_ago(1)
+        .cwd_counts(5, 50);
+
+    assert!(run_here_often.rank(session) > run_elsewhere_often.rank(session));
+}
+
+#[test]
+fn unknown_cwd_is_neutral_between_a_match_and_a_mismatch() {
+    let session = SessionId::from(1);
+    let confirmed_match = Scenario::new("git status", "git status")
+        .days_ago(1)
+        .cwd_counts(50, 50);
+    let unknown_cwd = Scenario::new("git status", "git status").days_ago(1);
+    let confirmed_mismatch = Scenario::new("git status", "git status")
+        .days_ago(1)
+        .cwd_counts(0, 50);
+
+    assert!(
+        confirmed_match.rank(session) > unknown_cwd.rank(session),
+        "no pwd data at all must not outrank a command confirmed to run here"
+    );
+    assert!(
+        unknown_cwd.rank(session) > confirmed_mismatch.rank(session),
+        "no pwd data at all must still outrank a command confirmed to run elsewhere"
+    );
+}
+
+#[test]
+fn cwd_prior_smooths_a_single_observation_toward_neutral() {
+    // A single matching run and a well-evidenced 45-of-50 track record both look like "always
+    // matched" as a raw fraction (1/1 vs 45/50 ~= 0.9), but confidence should scale with
+    // evidence: the single observation must not reach (or beat) the well-evidenced one.
+    let session = SessionId::from(1);
+    let single_observation = Scenario::new("git status", "git status")
+        .days_ago(1)
+        .cwd_counts(1, 1);
+    let well_evidenced = Scenario::new("git status", "git status")
+        .days_ago(1)
+        .cwd_counts(45, 50);
+
+    assert!(
+        well_evidenced.rank(session) > single_observation.rank(session),
+        "a single matching observation shouldn't outrank a well-evidenced track record"
+    );
+}
+
+#[test]
+fn cwd_affinity_smooths_toward_neutral_and_converges_with_evidence() {
+    // Direct check of the Beta(K, K)-smoothed fraction itself, pinning down the exact values
+    // the constants above produce (K = CWD_PRIOR_SMOOTHING_STRENGTH = 3.0).
+    assert_eq!(
+        cwd_affinity(0, 0),
+        0.5,
+        "no pwd data at all must be neutral"
+    );
+    assert!(
+        (cwd_affinity(1, 1) - 4.0 / 7.0).abs() < 1e-9,
+        "a single matching observation should land close to, not at, neutral"
+    );
+    assert!(
+        (cwd_affinity(45, 50) - 48.0 / 56.0).abs() < 1e-9,
+        "a well-evidenced fraction should barely be shrunk from its raw value"
+    );
+    assert!(
+        (cwd_affinity(5, 50) - 8.0 / 56.0).abs() < 1e-9,
+        "a well-evidenced low fraction should stay low"
+    );
+}
+
+#[test]
 fn missing_timestamp_ranks_between_confirmed_fresh_and_confirmed_ancient() {
     // A missing timestamp gets a neutral, mid-range recency (MISSING_TIMESTAMP_RECENCY) rather
     // than being guessed at or treated as confirmed-worst. That ordering -- unknown strictly
@@ -192,6 +301,9 @@ fn match_score_floor_filters_out_low_quality_matches() {
         match_quality: low_quality,
         now: now(),
         current_session_id: SessionId::from(1),
+        total_execution_count: 0,
+        cwd_execution_count: 0,
+        pwd_known_execution_count: 0,
         is_blank_query: false,
     });
 
@@ -223,6 +335,9 @@ fn blank_query_ignores_priors_and_yields_a_result() {
             match_quality: zero_quality,
             now: now(),
             current_session_id: SessionId::from(1),
+            total_execution_count: 0,
+            cwd_execution_count: 0,
+            pwd_known_execution_count: 0,
             is_blank_query: true,
         })
     };
