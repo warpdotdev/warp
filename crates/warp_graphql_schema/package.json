@@ -1,5 +1,8 @@
 {
   "private": true,
+  "engines": {
+    "node": ">=22.15.0"
+  },
   "scripts": {
     "generate": "graphql-codegen -r ts-node/register"
   },
