@@ -31,9 +31,111 @@ use crate::render::layout::{
 };
 use crate::render::model::test_utils::TEST_STYLES;
 use crate::render::model::{
-    BlockItem, CODE_EDITOR_HIDDEN_SECTION_EXPANSION_LINES, LineCount, RenderLayoutOptions,
+    BlockItem, CODE_EDITOR_HIDDEN_SECTION_EXPANSION_LINES, LineCount, Paragraph,
+    RenderLayoutOptions,
 };
 
+#[test]
+fn test_large_temporary_diff_uses_deferred_paragraphs() {
+    App::test((), |app| async move {
+        app.read(|ctx| {
+            let layout = TextLayout::new(
+                ctx.font_cache().text_layout_system(),
+                &TEST_STYLES,
+                f32::MAX,
+            );
+            let line_count = MAX_LAYOUT_TASKS_PER_PARALLEL_CHUNK * 3;
+            let blocks = layout_temporary_blocks(
+                (0..line_count)
+                    .map(|_| TemporaryBlock {
+                        content: format!("{}\n", "removed diff line".repeat(8)),
+                        insert_before: LineCount::zero(),
+                        line_decoration: None,
+                        inline_text_decorations: Vec::new(),
+                    })
+                    .collect(),
+                &layout,
+            );
+            let blocks = blocks
+                .get(&LineCount::zero())
+                .expect("temporary diff blocks should be laid out");
+
+            assert_eq!(blocks.len(), line_count);
+            let mut retained_payload = (0, 0);
+            for block in blocks {
+                let BlockItem::TemporaryBlock {
+                    paragraph_block, ..
+                } = block
+                else {
+                    panic!("expected a temporary block");
+                };
+                assert!(paragraph_block.paragraphs().all(Paragraph::is_deferred));
+                retained_payload = paragraph_block.paragraphs().fold(
+                    retained_payload,
+                    |(glyphs, carets), paragraph| {
+                        let (paragraph_glyphs, paragraph_carets) =
+                            paragraph.retained_payload_counts();
+                        (glyphs + paragraph_glyphs, carets + paragraph_carets)
+                    },
+                );
+            }
+            assert_eq!(retained_payload.0, 0);
+            assert!(retained_payload.1 <= line_count * 2);
+        });
+    })
+}
+
+#[test]
+fn test_large_multiline_code_block_bounds_retained_layout_during_processing() {
+    App::test((), |app| async move {
+        app.read(|ctx| {
+            let layout = TextLayout::new(
+                ctx.font_cache().text_layout_system(),
+                &TEST_STYLES,
+                f32::MAX,
+            );
+
+            let line_count = MAX_LAYOUT_TASKS_PER_PARALLEL_CHUNK * 3;
+            let style = BufferBlockStyle::CodeBlock {
+                code_block_type: CodeBlockType::default(),
+            };
+            let block: Vec<StyledBufferRun> = (0..line_count)
+                .map(|i| StyledBufferRun {
+                    run: format!("unique code line {i}\n"),
+                    text_styles: TextStylesWithMetadata::default(),
+                    block_style: style.clone(),
+                })
+                .collect();
+            let content_length = block
+                .iter()
+                .map(|run| CharOffset::from(run.run.chars().count()))
+                .fold(CharOffset::zero(), |acc, len| acc + len);
+            let text_block = StyledTextBlock {
+                block,
+                style,
+                content_length,
+            };
+
+            let (block_item, _) = LayoutTask::Text(&text_block)
+                .run(&layout, BlockLocation::Middle, false)
+                .expect("large multiline code block should lay out");
+
+            let BlockItem::RunnableCodeBlock {
+                paragraph_block, ..
+            } = block_item
+            else {
+                panic!("expected a runnable code block");
+            };
+            assert_eq!(paragraph_block.paragraphs().len(), line_count);
+            assert!(paragraph_block.paragraphs().all(Paragraph::is_deferred));
+            for (index, paragraph) in paragraph_block.paragraphs().enumerate() {
+                let (glyphs, carets) = paragraph.retained_payload_counts();
+                assert_eq!(glyphs, 0, "paragraph {index} retained glyphs");
+                assert!(carets <= 2, "paragraph {index} retained {carets} carets");
+            }
+        });
+    })
+}
 #[test]
 fn test_highlight_urls() {
     let mut test_styled_buffer_runs = vec![
@@ -304,6 +406,74 @@ fn test_layout_delta_never_takes_ownership_of_new_lines_with_multiple_owners() {
     })
 }
 
+#[test]
+fn test_layout_delta_defers_unwrapped_paragraph_payloads_without_changing_geometry() {
+    App::test((), |app| async move {
+        app.read(|ctx| {
+            let unwrapped_layout = TextLayout::new(
+                ctx.font_cache().text_layout_system(),
+                &TEST_STYLES,
+                f32::MAX,
+            );
+            let wrapped_layout =
+                TextLayout::new(ctx.font_cache().text_layout_system(), &TEST_STYLES, 80.0);
+            let new_lines = vec![
+                identifiable_text_block(6),
+                identifiable_text_block(9),
+                identifiable_text_block(4),
+            ];
+            let total_len = new_lines
+                .iter()
+                .map(StyledBufferBlock::content_length)
+                .fold(CharOffset::zero(), |sum, len| sum + len);
+            let delta = EditDelta {
+                old_offset: CharOffset::from(1)..CharOffset::from(1) + total_len,
+                new_lines: Arc::new(new_lines),
+                ..EditDelta::default()
+            };
+
+            let deferred = delta.layout_delta(
+                &unwrapped_layout,
+                None,
+                &RenderLayoutOptions::default(),
+                None,
+                ctx,
+            );
+            let fully_laid_out = delta.layout_delta(
+                &wrapped_layout,
+                None,
+                &RenderLayoutOptions::default(),
+                None,
+                ctx,
+            );
+
+            assert_eq!(
+                deferred.laid_out_line.len(),
+                fully_laid_out.laid_out_line.len()
+            );
+            for (deferred, full) in deferred
+                .laid_out_line
+                .iter()
+                .zip(&fully_laid_out.laid_out_line)
+            {
+                assert_eq!(deferred.content_length(), full.content_length());
+                assert_eq!(deferred.height(), full.height());
+                assert_eq!(deferred.width(), full.width());
+                assert_eq!(deferred.lines(), full.lines());
+                let (BlockItem::Paragraph(deferred), BlockItem::Paragraph(full)) = (deferred, full)
+                else {
+                    panic!("expected paragraph blocks");
+                };
+                assert!(deferred.is_deferred());
+                assert!(!full.is_deferred());
+            }
+            assert_eq!(
+                deferred.trailing_newline.is_some(),
+                fully_laid_out.trailing_newline.is_some()
+            );
+        });
+    })
+}
 #[test]
 fn test_layout_partial_url() {
     // Regression test for laying out a partially-styled autodetected URL (CLD-871).
