@@ -56,7 +56,7 @@ impl ThirdPartyHarness for GeminiHarness {
         install_docs_url(self.harness())
     }
 
-    fn build_runner(
+    async fn build_runner(
         &self,
         prompt: &str,
         system_prompt: Option<&str>,
@@ -68,6 +68,7 @@ impl ThirdPartyHarness for GeminiHarness {
         _task_id: Option<AmbientAgentTaskId>,
         server_api: Arc<ServerApi>,
         terminal_driver: ModelHandle<TerminalDriver>,
+        _: &ModelSpawner<AgentDriver>,
         _resume: Option<ResumePayload>,
         _resolved_env_vars: &HashMap<OsString, OsString>,
         skill_dirs: &[PathBuf],

@@ -3895,7 +3895,7 @@ fn deferred_repository_semantic_skill_publication_without_initial_inventory() {
                     let _capability = warp_core::features::FeatureFlag::FactoryDeferredRepositories
                         .override_enabled(!use_factory_repositories);
                     let should_activate = use_factory_repositories;
-                    initialize_workspace_test_app(&mut app);
+                    initialize_app_for_terminal_view(&mut app);
                     let root = TempDir::new().unwrap();
                     let skill_parent = root.path().join(skill_parent);
                     fs::write(&skill_parent, "existing file").unwrap();
@@ -3917,7 +3917,22 @@ fn deferred_repository_semantic_skill_publication_without_initial_inventory() {
                             ManagedSecretValue::raw_value("1"),
                         );
                     }
-                    let driver = app.update(|ctx| AgentDriver::create(options, ctx).unwrap());
+                    // File publication does not require a host shell process.
+                    let terminal = add_window_with_terminal(&mut app, None);
+                    let driver = app.update(|ctx| {
+                        AgentDriver::create_with_terminal_factory(options, ctx, |options, ctx| {
+                            assert!(!options.should_share);
+                            assert!(options.task_id.is_none());
+                            let driver = super::terminal::TerminalDriver::create_from_existing_view(
+                                terminal, ctx,
+                            );
+                            driver.update(ctx, |driver, _| {
+                                driver.launch_env_vars_for_test = Some(options.env_vars);
+                            });
+                            Ok(driver)
+                        })
+                        .unwrap()
+                    });
                     let foreground = driver.update(&mut app, |driver, ctx| {
                         let Some(super::WorkspaceState::Pending(workspace)) =
                             driver.workspace.take()
