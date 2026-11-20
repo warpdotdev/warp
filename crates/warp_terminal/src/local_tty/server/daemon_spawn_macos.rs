@@ -31,13 +31,34 @@ pub(crate) fn set_disclaim_fn() -> Option<SetDisclaimFn> {
     Some(unsafe { std::mem::transmute::<*mut libc::c_void, SetDisclaimFn>(symbol) })
 }
 
+/// What happened to a disclaimed spawn.
+#[derive(Debug)]
+pub(crate) enum DisclaimedSpawn {
+    /// The process ran and exited with this status.
+    Exited(ExitStatus),
+    /// The process was launched but could not be waited for.
+    WaitFailed(anyhow::Error),
+    /// Nothing was launched, so a regular spawn can be tried instead.
+    NotLaunched(anyhow::Error),
+}
+
 /// Spawns `program` with `args`, the current environment, null stdio, and no
 /// other inherited fds, disclaiming responsibility for it, and waits for it.
 pub(crate) fn spawn_disclaimed_and_wait(
     program: &Path,
     args: &[&OsStr],
     set_disclaim: SetDisclaimFn,
-) -> Result<ExitStatus> {
+) -> DisclaimedSpawn {
+    match launch(program, args, set_disclaim) {
+        Ok(pid) => match wait_for(pid) {
+            Ok(status) => DisclaimedSpawn::Exited(status),
+            Err(err) => DisclaimedSpawn::WaitFailed(err),
+        },
+        Err(err) => DisclaimedSpawn::NotLaunched(err),
+    }
+}
+
+fn launch(program: &Path, args: &[&OsStr], set_disclaim: SetDisclaimFn) -> Result<libc::pid_t> {
     let program = to_cstring(program.as_os_str())?;
     let mut owned_args = vec![program.clone()];
     for arg in args {
@@ -120,7 +141,7 @@ pub(crate) fn spawn_disclaimed_and_wait(
         },
         "posix_spawn",
     )?;
-    wait_for(pid)
+    Ok(pid)
 }
 
 fn wait_for(pid: libc::pid_t) -> Result<ExitStatus> {

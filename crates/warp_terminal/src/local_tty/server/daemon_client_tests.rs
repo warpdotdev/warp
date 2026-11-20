@@ -171,3 +171,36 @@ fn oversized_request_fails_without_dropping_the_connection() {
     assert!(client.list().unwrap().is_empty());
     running.stop();
 }
+
+#[cfg(target_os = "macos")]
+mod disclaimed_launcher {
+    use std::os::unix::process::ExitStatusExt;
+    use std::process::ExitStatus;
+
+    use super::super::disclaimed_launcher_result;
+    use super::super::spawn_macos::DisclaimedSpawn;
+
+    #[test]
+    fn a_successful_launcher_is_final() {
+        let result = disclaimed_launcher_result(DisclaimedSpawn::Exited(ExitStatus::from_raw(0)));
+        assert!(matches!(result, Some(Ok(()))));
+    }
+
+    #[test]
+    fn a_failed_launcher_is_an_error_without_a_second_spawn() {
+        let result =
+            disclaimed_launcher_result(DisclaimedSpawn::Exited(ExitStatus::from_raw(1 << 8)));
+        assert!(matches!(result, Some(Err(_))));
+        let result =
+            disclaimed_launcher_result(DisclaimedSpawn::WaitFailed(anyhow::anyhow!("ECHILD")));
+        assert!(matches!(result, Some(Err(_))));
+    }
+
+    #[test]
+    fn nothing_launched_falls_back_to_a_regular_spawn() {
+        let result = disclaimed_launcher_result(DisclaimedSpawn::NotLaunched(anyhow::anyhow!(
+            "responsibility_spawnattrs_setdisclaim failed"
+        )));
+        assert!(result.is_none());
+    }
+}

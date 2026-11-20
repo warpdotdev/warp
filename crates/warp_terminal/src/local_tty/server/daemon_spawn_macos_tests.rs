@@ -6,9 +6,23 @@ use super::*;
 
 fn run_sh(script: &str, args: &[&str]) -> ExitStatus {
     let set_disclaim = set_disclaim_fn().expect("the disclaim symbol is available");
+    match spawn_disclaimed_and_wait(Path::new("/bin/sh"), &sh_args(script, args), set_disclaim) {
+        DisclaimedSpawn::Exited(status) => status,
+        other => panic!("expected the shell to run, got {other:?}"),
+    }
+}
+
+fn sh_args<'a>(script: &'a str, args: &'a [&'a str]) -> Vec<&'a OsStr> {
     let mut all_args: Vec<&OsStr> = vec![OsStr::new("-c"), OsStr::new(script), OsStr::new("sh")];
     all_args.extend(args.iter().map(OsStr::new));
-    spawn_disclaimed_and_wait(Path::new("/bin/sh"), &all_args, set_disclaim).unwrap()
+    all_args
+}
+
+unsafe extern "C" fn failing_set_disclaim(
+    _attr: *mut libc::posix_spawnattr_t,
+    _disclaim: c_int,
+) -> c_int {
+    libc::ENOTSUP
 }
 
 #[test]
@@ -30,6 +44,35 @@ fn disclaimed_spawn_inherits_the_environment() {
     let status = run_sh(r#"test "$WARP_DISCLAIM_SPAWN_TEST" = example-value"#, &[]);
     unsafe { std::env::remove_var(key) };
     assert!(status.success());
+}
+
+#[test]
+fn a_failing_disclaim_launches_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let marker = dir.path().join("ran");
+    let script = format!("touch {}", marker.display());
+    let outcome = spawn_disclaimed_and_wait(
+        Path::new("/bin/sh"),
+        &sh_args(&script, &[]),
+        failing_set_disclaim,
+    );
+    assert!(
+        matches!(&outcome, DisclaimedSpawn::NotLaunched(err)
+            if err.to_string().contains("responsibility_spawnattrs_setdisclaim")),
+        "{outcome:?}"
+    );
+    assert!(!marker.exists());
+}
+
+#[test]
+fn a_missing_program_launches_nothing() {
+    let set_disclaim = set_disclaim_fn().expect("the disclaim symbol is available");
+    let outcome =
+        spawn_disclaimed_and_wait(Path::new("/nonexistent/example-daemon"), &[], set_disclaim);
+    assert!(
+        matches!(outcome, DisclaimedSpawn::NotLaunched(_)),
+        "{outcome:?}"
+    );
 }
 
 #[test]

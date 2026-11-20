@@ -473,19 +473,17 @@ fn spawn_daemon_command(program: &PathBuf) -> Result<()> {
     #[cfg(target_os = "macos")]
     if let Some(set_disclaim) = spawn_macos::set_disclaim_fn() {
         let subcommand = warp_cli::terminal_server_subcommand();
-        let status = spawn_macos::spawn_disclaimed_and_wait(
+        let outcome = spawn_macos::spawn_disclaimed_and_wait(
             program,
             &[
                 std::ffi::OsStr::new(&subcommand),
                 std::ffi::OsStr::new("--daemon"),
             ],
             set_disclaim,
-        )
-        .context("Failed to spawn terminal daemon")?;
-        if !status.success() {
-            bail!("terminal daemon launcher exited with {status}");
+        );
+        if let Some(result) = disclaimed_launcher_result(outcome) {
+            return result;
         }
-        return Ok(());
     }
     let mut command = command::blocking::Command::new(program);
     command
@@ -510,6 +508,27 @@ fn spawn_daemon_command(program: &PathBuf) -> Result<()> {
         bail!("terminal daemon launcher exited with {status}");
     }
     Ok(())
+}
+
+/// The result of a disclaimed daemon launch, or `None` if nothing was
+/// launched and the regular spawn should be used instead.
+#[cfg(target_os = "macos")]
+fn disclaimed_launcher_result(outcome: spawn_macos::DisclaimedSpawn) -> Option<Result<()>> {
+    match outcome {
+        spawn_macos::DisclaimedSpawn::Exited(status) if status.success() => Some(Ok(())),
+        spawn_macos::DisclaimedSpawn::Exited(status) => Some(Err(anyhow!(
+            "terminal daemon launcher exited with {status}"
+        ))),
+        spawn_macos::DisclaimedSpawn::WaitFailed(err) => {
+            Some(Err(err.context("Failed to wait for terminal daemon")))
+        }
+        spawn_macos::DisclaimedSpawn::NotLaunched(err) => {
+            log::warn!(
+                "Could not spawn the terminal daemon with disclaimed responsibility; falling back to a regular spawn: {err:#}"
+            );
+            None
+        }
+    }
 }
 
 pub struct AttachedSession {
