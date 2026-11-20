@@ -4,7 +4,7 @@ use std::ffi::{OsStr, OsString};
 use std::future::Future;
 use std::io::{self, Write};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime};
@@ -479,6 +479,49 @@ impl<T: Clone + Send + 'static> IdleTimeoutSender<T> {
     }
 }
 
+const PENDING_NATIVE_START_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Bounds accepted native work before a turn starts, without extending the bound on queue churn.
+#[derive(Clone, Default)]
+struct PendingNativeStart {
+    armed: Arc<AtomicBool>,
+}
+
+impl PendingNativeStart {
+    fn is_armed(&self) -> bool {
+        self.armed.load(Ordering::SeqCst)
+    }
+
+    fn started(&self, exit: &IdleTimeoutSender<SDKConversationOutputStatus>) {
+        self.armed.store(false, Ordering::SeqCst);
+        exit.cancel_idle_timeout();
+    }
+
+    fn settle(
+        &self,
+        exit: &IdleTimeoutSender<SDKConversationOutputStatus>,
+        status: SDKConversationOutputStatus,
+        has_pending: bool,
+        idle_on_complete: Option<Duration>,
+    ) {
+        if has_pending
+            && matches!(
+                status,
+                SDKConversationOutputStatus::Success | SDKConversationOutputStatus::Blocked { .. }
+            )
+        {
+            if !self.armed.swap(true, Ordering::SeqCst) {
+                // Preparation must not be kept alive indefinitely by a queue or active previews.
+                exit.end_run_after(PENDING_NATIVE_START_TIMEOUT, status);
+            }
+        } else {
+            self.armed.store(false, Ordering::SeqCst);
+            let idle = idle_window_for_terminal_status(&status, idle_on_complete);
+            exit.complete_with_optional_idle(idle, status);
+        }
+    }
+}
+
 /// Owns the post-failure debug window's idle deadline and the set of debug-turn conversations
 /// pinning it open, for the retained setup-failure lingering path (REMOTE-2661). The idle timer
 /// is free to expire only when no turn is pinning it. Idempotent by turn ID.
@@ -499,7 +542,9 @@ impl<T: Clone + Send + 'static> Clone for DebugWindowController<T> {
 }
 
 impl<T: Clone + Send + 'static> DebugWindowController<T> {
-    fn new(idle_timeout: IdleTimeoutSender<T>) -> Self {
+    fn new(mut idle_timeout: IdleTimeoutSender<T>) -> Self {
+        // Previews alone must not extend setup debugging.
+        idle_timeout.preview_retention = None;
         Self {
             idle_timeout,
             active_turns: Arc::new(Mutex::new(HashSet::new())),
@@ -601,38 +646,29 @@ fn debug_turn_task_state(status: &ConversationStatus) -> Option<AgentTaskState> 
 /// How long the driver should stay alive after the conversation reaches `status`. `None` exits
 /// immediately.
 ///
-/// The two windows are deliberately independent and neither is a fallback for the other:
-/// `idle_on_complete` keeps a healthy run available for a follow-up, while `idle_on_fail` keeps a
-/// failed run's shared session attachable. The agent process is the session sharer, so exiting on
-/// error is what tears that session down.
+/// Real-run failures exit immediately; setup debugging uses its own retained lifecycle.
 fn idle_window_for_terminal_status(
     status: &SDKConversationOutputStatus,
     idle_on_complete: Option<Duration>,
-    idle_on_fail: Option<Duration>,
 ) -> Option<Duration> {
     match status {
         SDKConversationOutputStatus::Success
         | SDKConversationOutputStatus::Blocked { .. }
         | SDKConversationOutputStatus::Cancelled { .. } => idle_on_complete,
-        SDKConversationOutputStatus::Error { .. } => idle_on_fail,
+        SDKConversationOutputStatus::Error { .. } => None,
     }
 }
 
 /// [`idle_window_for_terminal_status`] for a third-party CLI harness session.
-///
-/// A failed CLI session is the same situation as a failed Oz conversation — the agent process is
-/// still the session sharer — so `--idle-on-fail` has to apply to both, or the flag silently does
-/// nothing depending on which harness the run happened to use.
 fn idle_window_for_cli_session_status(
     status: &CLIAgentSessionStatus,
     idle_on_complete: Option<Duration>,
-    idle_on_fail: Option<Duration>,
 ) -> Option<Duration> {
     match status {
         CLIAgentSessionStatus::Success
         | CLIAgentSessionStatus::Blocked { .. }
         | CLIAgentSessionStatus::Cancelled => idle_on_complete,
-        CLIAgentSessionStatus::Failed { .. } => idle_on_fail,
+        CLIAgentSessionStatus::Failed { .. } => None,
         CLIAgentSessionStatus::InProgress => None,
     }
 }
@@ -646,7 +682,7 @@ enum HarnessIdleAction {
     /// The turn settled; exit after `window`, or immediately when `None`.
     Exit {
         window: Option<Duration>,
-        /// The window is a post-failure debug window, kept open by viewer input.
+        /// Whether the turn failed.
         failed: bool,
     },
     /// Quiescent but not settled; leave the signal as it is.
@@ -660,10 +696,14 @@ enum HarnessIdleAction {
 fn harness_idle_action_for_conversation_status(
     status: &ConversationStatus,
     idle_on_complete: Option<Duration>,
-    idle_on_fail: Option<Duration>,
     is_settling_turn: bool,
 ) -> HarnessIdleAction {
-    if is_settling_turn && !matches!(status, ConversationStatus::InProgress) {
+    if is_settling_turn
+        && !matches!(
+            status,
+            ConversationStatus::InProgress | ConversationStatus::Error
+        )
+    {
         return HarnessIdleAction::Ignore;
     }
     match status {
@@ -675,7 +715,7 @@ fn harness_idle_action_for_conversation_status(
             failed: false,
         },
         ConversationStatus::Error => HarnessIdleAction::Exit {
-            window: idle_on_fail,
+            window: None,
             failed: true,
         },
         ConversationStatus::TransientError | ConversationStatus::WaitingForEvents => {
@@ -740,9 +780,7 @@ pub struct AgentDriverOptions {
     pub should_share: bool,
     /// How long to keep the session alive after the agent run completes, if at all.
     pub idle_on_complete: Option<Duration>,
-    /// How long to keep the session alive after the agent run ends in a terminal error, if at
-    /// all. Set by the cloud worker from the environment's post-failure session retention policy
-    /// so the failed run's shared session stays attachable for debugging.
+    /// Idle inspection window for a failed environment setup, including authorized debug turns.
     pub idle_on_fail: Option<Duration>,
     /// If set, resume an existing conversation instead of starting fresh. The variant
     /// determines which harness-specific path is taken (Oz transcript restore vs.
@@ -1099,14 +1137,8 @@ pub struct AgentDriver {
     // and exit after this period of inactivity.
     idle_on_complete: Option<Duration>,
 
-    // Optional idle timeout after a terminal error. If set, the process (and with it the shared
-    // session it is sharing) stays alive after the conversation fails, so a human can attach to
-    // the failed run and keep working in its environment.
+    // Optional setup-inspection window. Runtime failures always exit immediately.
     idle_on_fail: Option<Duration>,
-
-    // Whether a viewer-input subscription is already refreshing an open debug window. Guards
-    // against stacking a second subscription when a run fails, is resumed, and fails again.
-    debug_window_refresh_installed: bool,
 
     // When the debug window's deadline was last published to the server, used to throttle
     // republishing on high-frequency viewer input.
@@ -1662,7 +1694,6 @@ impl AgentDriver {
             harness: None,
             idle_on_complete: None,
             idle_on_fail: None,
-            debug_window_refresh_installed: false,
             last_published_debug_deadline: None,
             restored_conversation_id: None,
             resume_payload: None,
@@ -2917,7 +2948,7 @@ impl AgentDriver {
 
         let (tx, rx) = oneshot::channel::<()>();
         let armed = foreground.spawn(move |me, ctx| {
-            let controller = DebugWindowController::new(me.idle_timeout_sender(tx, ctx));
+            let controller = DebugWindowController::new(IdleTimeoutSender::new(tx));
             me.arm_setup_failure_debug_window(controller, window, ctx);
         });
         if let Err(error) = armed.await {
@@ -2934,38 +2965,8 @@ impl AgentDriver {
         );
     }
 
-    /// Arms a post-failure debug window and pushes its deadline out on every viewer input, so a
-    /// session someone is working in is not torn down underneath them.
-    ///
-    /// Both failure paths route through here so a conversation error and a setup failure behave
-    /// identically. The refresh subscription is installed once per driver.
-    fn arm_debug_window<T: Clone + Send + 'static>(
-        &mut self,
-        idle_timeout: IdleTimeoutSender<T>,
-        value: T,
-        window: Duration,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        // Recorded on the timer rather than captured below, so re-arming supersedes it.
-        idle_timeout.arm_refreshable(window, value);
-
-        // A newly armed window always publishes. The throttle exists for keystroke-level
-        // refreshes; letting it suppress this would leave the previous window's deadline on the
-        // run, which reads as already-expired and hides that the session is reachable.
-        self.last_published_debug_deadline = None;
-        self.publish_debug_window_deadline(window, None, None, ctx);
-
-        if self.debug_window_refresh_installed {
-            return;
-        }
-        self.debug_window_refresh_installed = true;
-
-        self.subscribe_to_viewer_input_refresh(ctx, move || idle_timeout.refresh());
-    }
-
     /// Subscribes the terminal driver's viewer-input events to `refresh`, publishing the
-    /// resulting deadline on each keystroke. Callers supply the refresh function so a pin-aware
-    /// one and a plain one can share this wiring.
+    /// resulting deadline on each keystroke.
     fn subscribe_to_viewer_input_refresh(
         &self,
         ctx: &mut ModelContext<Self>,
@@ -2984,11 +2985,7 @@ impl AgentDriver {
         });
     }
 
-    /// Arms the post-failure debug window for a retained environment-setup failure and installs
-    /// the subscriptions that keep it alive across a debug turn (REMOTE-2661).
-    ///
-    /// Unlike [`Self::arm_debug_window`], no conversation exists yet: a turn pins the window for
-    /// its duration (accepted → terminal) since there's no viewer input to refresh it otherwise.
+    /// Retains a failed setup across authorized debug turns, independently of the real run.
     fn arm_setup_failure_debug_window(
         &mut self,
         controller: DebugWindowController<()>,
@@ -4158,8 +4155,10 @@ impl AgentDriver {
             .native_prompt_conversation_id();
         let restored_conversation_id = prepared_conversation_id.or(self.restored_conversation_id);
         let queue_run_exit = run_exit.clone();
+        let pending_start = PendingNativeStart::default();
         if let Some(conversation_id) = prepared_conversation_id {
             let queue_run_exit = queue_run_exit.clone();
+            let pending_start = pending_start.clone();
             ctx.subscribe_to_model(&QueuedQueryModel::handle(ctx), move |me, _, event, ctx| {
                 let event_id = match event {
                     QueuedQueryEvent::Appended {
@@ -4176,18 +4175,30 @@ impl AgentDriver {
                     return;
                 }
                 let queue = QueuedQueryModel::as_ref(ctx);
-                if queue.has_pending_native_injections(conversation_id) {
-                    queue_run_exit.cancel_idle_timeout();
-                } else if BlocklistAIHistoryModel::as_ref(ctx)
-                    .conversation(&conversation_id)
-                    .is_some_and(|conversation| {
-                        conversation.status() == &ConversationStatus::Success
-                    })
-                {
-                    queue_run_exit.complete_with_optional_idle(
-                        me.idle_on_complete,
-                        SDKConversationOutputStatus::Success,
-                    );
+                let Some(conversation) =
+                    BlocklistAIHistoryModel::as_ref(ctx).conversation(&conversation_id)
+                else {
+                    return;
+                };
+                let status = match conversation.status() {
+                    ConversationStatus::Success => SDKConversationOutputStatus::Success,
+                    ConversationStatus::Blocked { blocked_action } => {
+                        SDKConversationOutputStatus::Blocked {
+                            blocked_action: blocked_action.clone(),
+                        }
+                    }
+                    ConversationStatus::InProgress if conversation.exchange_count() == 0 => {
+                        SDKConversationOutputStatus::Success
+                    }
+                    ConversationStatus::InProgress
+                    | ConversationStatus::Error
+                    | ConversationStatus::Cancelled
+                    | ConversationStatus::TransientError
+                    | ConversationStatus::WaitingForEvents => return,
+                };
+                let has_pending = queue.has_pending_native_injections(conversation_id);
+                if has_pending || pending_start.is_armed() {
+                    pending_start.settle(&queue_run_exit, status, has_pending, me.idle_on_complete);
                 }
             });
         }
@@ -4199,8 +4210,7 @@ impl AgentDriver {
         //
         // When `skip_initial_turn` is set, also schedule the deferred `Success`
         // now so the run isn't stuck waiting for a turn that will never arrive.
-        // The `AppendedExchange` handler below cancels this timer if a follow-up
-        // shows up, keeping the run alive long enough to handle the new turn.
+        // A real InProgress turn cancels the timer; accepted work still preparing is bounded.
         if matches!(&task_prompt, AgentRunPrompt::ServerSide { .. }) {
             self.terminal_driver.update(ctx, |td, ctx| {
                 td.with_terminal_view(ctx, |terminal, ctx| {
@@ -4227,9 +4237,9 @@ impl AgentDriver {
                 .as_ref(ctx)
                 .ai_controller()
                 .clone();
-            ctx.subscribe_to_model(&controller, move |me, _, event, ctx| {
+            ctx.subscribe_to_model(&controller, move |_, _, event, _| {
                 if let BlocklistAIControllerEvent::RunPromptHalted { reason, .. } = event {
-                    me.end_run_for_halted_prompt(halt_run_exit.clone(), reason, ctx);
+                    Self::end_run_for_halted_prompt(halt_run_exit.clone(), reason);
                 }
             });
             if self.skip_initial_turn && prepared_conversation_id.is_none() {
@@ -4244,6 +4254,7 @@ impl AgentDriver {
         let history_model_handle = BlocklistAIHistoryModel::handle(ctx);
         let terminal_id = self.terminal_driver.as_ref(ctx).terminal_view().id();
         let mut written_conversation_id = false;
+        let history_pending_start = pending_start.clone();
 
         ctx.subscribe_to_model(&history_model_handle, move |me, _, event, ctx| {
             if event.terminal_surface_id().is_some_and(|id| id != terminal_id) {
@@ -4316,10 +4327,6 @@ impl AgentDriver {
                         writer.append(paths);
                     }
 
-                    // Reset the idle timer only if we've already scheduled one.
-                    // This handles the case where a follow-up query creates new exchanges after
-                    // the conversation has finished and an idle timer was set.
-                    run_exit.cancel_idle_timeout();
                 }
                 BlocklistAIHistoryEvent::UpdatedStreamingExchange {
                     exchange_id,
@@ -4389,7 +4396,7 @@ impl AgentDriver {
                             "Ambient agent idle lifecycle: event=idle_timeout_cancel_requested task_id={:?} terminal_view_id={terminal_id:?} trigger=conversation_in_progress",
                             me.task_id
                         );
-                        run_exit.cancel_idle_timeout();
+                        history_pending_start.started(&run_exit);
                         return;
                     }
 
@@ -4455,19 +4462,17 @@ impl AgentDriver {
                         );
                         let conversation_id = *conversation_id;
                         let run_exit = run_exit.clone();
+                        let pending_start = history_pending_start.clone();
                         ctx.spawn(stops_settled, move |me, _, ctx| {
-                            me.end_run_for_settled_conversation(conversation_id, &run_exit, ctx);
+                            me.end_run_for_settled_conversation(conversation_id, &run_exit, &pending_start, ctx);
                         });
                         return;
                     }
-                    me.end_run_for_settled_conversation(*conversation_id, &run_exit, ctx);
+                    me.end_run_for_settled_conversation(*conversation_id, &run_exit, &history_pending_start, ctx);
                 }
 
-                BlocklistAIHistoryEvent::SetActiveConversation { .. } => {
-                    // Continuing an existing conversation should reset the idle timer.
-                    run_exit.cancel_idle_timeout();
-                }
-                BlocklistAIHistoryEvent::StartedNewConversation { .. }
+                BlocklistAIHistoryEvent::SetActiveConversation { .. }
+                | BlocklistAIHistoryEvent::StartedNewConversation { .. }
                 | BlocklistAIHistoryEvent::ReassignedExchange { .. }
                 | BlocklistAIHistoryEvent::ClearedConversationsForTerminalSurface { .. }
                 | BlocklistAIHistoryEvent::UpdatedAutoexecuteOverride { .. }
@@ -4607,19 +4612,20 @@ impl AgentDriver {
                     terminal.drain_queued_prompts(conversation_id, FinishReason::Complete, ctx);
                 });
             });
-            if !QueuedQueryModel::as_ref(ctx).has_pending_native_injections(conversation_id)
-                && !self
-                    .terminal_driver
-                    .as_ref(ctx)
-                    .terminal_view()
-                    .as_ref(ctx)
-                    .ai_controller()
-                    .as_ref(ctx)
-                    .has_active_stream_for_conversation(conversation_id, ctx)
+            if !self
+                .terminal_driver
+                .as_ref(ctx)
+                .terminal_view()
+                .as_ref(ctx)
+                .ai_controller()
+                .as_ref(ctx)
+                .has_active_stream_for_conversation(conversation_id, ctx)
             {
-                queue_run_exit.complete_with_optional_idle(
-                    self.idle_on_complete,
+                pending_start.settle(
+                    &queue_run_exit,
                     SDKConversationOutputStatus::Success,
+                    QueuedQueryModel::as_ref(ctx).has_pending_native_injections(conversation_id),
+                    self.idle_on_complete,
                 );
             }
         }
@@ -4652,6 +4658,7 @@ impl AgentDriver {
         &mut self,
         conversation_id: AIConversationId,
         run_exit: &IdleTimeoutSender<SDKConversationOutputStatus>,
+        pending_start: &PendingNativeStart,
         ctx: &mut ModelContext<Self>,
     ) {
         let terminal_id = self.terminal_driver.as_ref(ctx).terminal_view().id();
@@ -4685,27 +4692,9 @@ impl AgentDriver {
             }
         };
 
-        if matches!(output_status, SDKConversationOutputStatus::Success)
-            && QueuedQueryModel::as_ref(ctx).has_pending_native_injections(conversation_id)
-        {
-            log::info!(
-                "event=worker_exit_deferred task_id={:?} conversation_id={conversation_id} reason=pending_native_injections queue_len={}",
-                self.task_id,
-                QueuedQueryModel::as_ref(ctx).queue(conversation_id).len(),
-            );
-            run_exit.cancel_idle_timeout();
-            return;
-        }
-
-        // Errors here are terminal: in-flight recoveries surface as TransientError, which never
-        // reaches this point. Whether the process outlives either kind of terminal status is
-        // controlled by the `--idle-on-complete` / `--idle-on-fail` flags; see
-        // `idle_window_for_terminal_status`.
-        let idle_window = idle_window_for_terminal_status(
-            &output_status,
-            self.idle_on_complete,
-            self.idle_on_fail,
-        );
+        // In-flight recoveries surface as TransientError; terminal errors must not enter setup
+        // inspection retention after their stop hooks settle.
+        let idle_window = idle_window_for_terminal_status(&output_status, self.idle_on_complete);
         let outcome = terminal_status_log_outcome(&output_status);
         if let Some(idle_timeout) = idle_window {
             log::info!(
@@ -4718,24 +4707,12 @@ impl AgentDriver {
                 self.task_id
             );
         }
-        match idle_window {
-            // A failure window is held open by the human working in the session, so it goes
-            // through the shared arming path that refreshes on viewer input. The success window
-            // has no such notion.
-            Some(window) if matches!(output_status, SDKConversationOutputStatus::Error { .. }) => {
-                self.arm_debug_window(run_exit.clone(), output_status, window, ctx);
-            }
-            // Whether the run exits immediately (no idle window) or a deferred window later
-            // elapses on its own, `run_exit`'s `on_commit` hook (see `execute_run`) commits the
-            // conversation exiting synchronously, on whichever thread completes the run,
-            // strictly before the completion signal is observable. That covers both cases
-            // uniformly, closing off any orchestration event still buffered for this
-            // conversation before it could otherwise race the teardown that follows and get
-            // cancelled, leaving the run stuck `InProgress` (QUALITY-1801).
-            None | Some(_) => {
-                run_exit.complete_with_optional_idle(idle_window, output_status);
-            }
-        }
+        pending_start.settle(
+            run_exit,
+            output_status,
+            QueuedQueryModel::as_ref(ctx).has_pending_native_injections(conversation_id),
+            self.idle_on_complete,
+        );
     }
 
     /// Write the inputs to an exchange to stdout.
@@ -4842,7 +4819,6 @@ impl AgentDriver {
                             let idle_window = idle_window_for_cli_session_status(
                                 status,
                                 me.idle_on_complete,
-                                me.idle_on_fail,
                             );
                             let outcome = cli_session_status_log_outcome(status);
                             if let Some(idle_timeout) = idle_window {
@@ -4856,16 +4832,7 @@ impl AgentDriver {
                                     me.task_id
                                 );
                             }
-                            match idle_window {
-                                // A failure window is held open by whoever is debugging in the
-                                // session, so it refreshes on viewer input like the Oz path.
-                                Some(window)
-                                    if matches!(status, CLIAgentSessionStatus::Failed { .. }) =>
-                                {
-                                    me.arm_debug_window(harness_exit.clone(), (), window, ctx);
-                                }
-                                _ => harness_exit.complete_with_optional_idle(idle_window, ()),
-                            }
+                            harness_exit.complete_with_optional_idle(idle_window, ());
                         }
                         CLIAgentSessionStatus::InProgress => {
                             log::info!(
@@ -4923,8 +4890,8 @@ impl AgentDriver {
     /// Drives the harness exit signal from the status of the driver's bound native conversation,
     /// for harnesses that author that conversation's turns themselves (see
     /// `ConversationDriver::ExternalHarness`). Mirrors [`Self::subscribe_to_cli_agent_session_events`]
-    /// so `--idle-on-complete`, `--idle-on-fail`, and the viewer-input debug window behave the
-    /// same whichever way a third-party harness reports progress.
+    /// so completion idle windows and immediate failure exits behave the same whichever way a
+    /// third-party harness reports progress.
     fn subscribe_to_native_conversation_status_events(
         &self,
         harness_exit: IdleTimeoutSender<()>,
@@ -4962,7 +4929,6 @@ impl AgentDriver {
             match harness_idle_action_for_conversation_status(
                 new_status,
                 me.idle_on_complete,
-                me.idle_on_fail,
                 is_settling_turn,
             ) {
                 HarnessIdleAction::CancelIdle => {
@@ -4978,14 +4944,7 @@ impl AgentDriver {
                         "Ambient agent harness lifecycle: event=turn_settled task_id={:?} conversation_id={conversation_id} failed={failed} idle_window={window:?}",
                         me.task_id
                     );
-                    match window {
-                        // A failure window is held open by whoever is debugging in the
-                        // session, so it refreshes on viewer input like the other paths.
-                        Some(window) if failed => {
-                            me.arm_debug_window(harness_exit.clone(), (), window, ctx)
-                        }
-                        _ => harness_exit.complete_with_optional_idle(window, ()),
-                    }
+                    harness_exit.complete_with_optional_idle(window, ());
                 }
                 HarnessIdleAction::Ignore => {
                     if is_settling_turn {

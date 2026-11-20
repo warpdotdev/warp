@@ -41,7 +41,7 @@ use super::{
     AgentDriver, AgentDriverError, AgentRunPrompt, CLIAgentSessionStatus, DebugWindowController,
     HarnessIdleAction, IdleTimeoutSender, LEGACY_OZ_PARENT_LISTENER_MANAGED_EXTERNALLY_ENV,
     LEGACY_OZ_PARENT_STATE_ROOT_ENV, OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV,
-    OZ_MESSAGE_LISTENER_STATE_ROOT_ENV, PlatformErrorCode, PluginInstallError,
+    OZ_MESSAGE_LISTENER_STATE_ROOT_ENV, PendingNativeStart, PlatformErrorCode, PluginInstallError,
     SDKConversationOutputStatus, WARP_MESSAGE_LISTENER_STATE_ROOT_ENV, build_secret_env_vars,
     debug_turn_task_state, harness_idle_action_for_conversation_status,
     idle_window_for_cli_session_status, idle_window_for_terminal_status,
@@ -74,7 +74,9 @@ use crate::ai::llms::LLMId;
 use crate::ai::skills::{SkillDescriptor, SkillManager};
 use crate::server::server_api::ServerApiProvider;
 use crate::terminal::CLIAgent;
-use crate::terminal::cli_agent_sessions::{CLIAgentSessionsModel, CLIAgentSessionsModelEvent};
+use crate::terminal::cli_agent_sessions::{
+    BlockedSource, CLIAgentSessionsModel, CLIAgentSessionsModelEvent,
+};
 use crate::test_util::assert_eventually;
 use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
 use crate::workspace::view::tests::initialize_app as initialize_workspace_test_app;
@@ -412,6 +414,133 @@ fn idle_timeout_sender_complete_with_optional_idle_some_then_cancel_invalidates_
     assert_eq!(rx.try_recv().unwrap(), None);
 }
 
+#[test]
+fn pending_native_start_is_bounded_without_idle_and_queue_churn_does_not_reset_it() {
+    for status in [
+        SDKConversationOutputStatus::Success,
+        SDKConversationOutputStatus::Blocked {
+            blocked_action: "approval".into(),
+        },
+    ] {
+        let (tx, mut rx) = oneshot::channel();
+        let (wait, release) = manual_idle_wait();
+        let sender = IdleTimeoutSender::new(tx).with_wait(wait);
+        let pending = PendingNativeStart::default();
+        pending.settle(&sender, status.clone(), true, None);
+        let generation = sender.generation.load(Ordering::SeqCst);
+        assert!(pending.is_armed());
+        for _ in 0..3 {
+            pending.settle(&sender, status.clone(), true, None);
+        }
+        assert_eq!(sender.generation.load(Ordering::SeqCst), generation);
+        assert!(rx.try_recv().unwrap().is_none());
+        release.send(()).unwrap();
+        block_on(async {
+            assert_eventually!(
+                rx.try_recv().unwrap().is_some(),
+                "accepted work never started and lost its bounded exit"
+            );
+        });
+    }
+}
+
+#[test]
+fn pending_native_start_removal_restores_terminal_idle_policy() {
+    for status in [
+        SDKConversationOutputStatus::Success,
+        SDKConversationOutputStatus::Blocked {
+            blocked_action: "approval".into(),
+        },
+    ] {
+        let (tx, mut rx) = oneshot::channel();
+        let (wait, _release) = manual_idle_wait();
+        let sender = IdleTimeoutSender::new(tx).with_wait(wait);
+        let pending = PendingNativeStart::default();
+        pending.settle(&sender, status.clone(), true, None);
+        pending.settle(&sender, status, false, None);
+        assert!(!pending.is_armed());
+        assert!(rx.try_recv().unwrap().is_some());
+    }
+}
+
+#[test]
+fn pending_native_start_only_actual_start_cancels_watchdog() {
+    let (tx, mut rx) = oneshot::channel();
+    let (wait, release) = manual_idle_wait();
+    let sender = IdleTimeoutSender::new(tx).with_wait(wait);
+    let pending = PendingNativeStart::default();
+    pending.settle(&sender, SDKConversationOutputStatus::Success, true, None);
+    pending.started(&sender);
+    assert!(!pending.is_armed());
+    release.send(()).unwrap();
+    assert!(rx.try_recv().unwrap().is_none());
+    pending.settle(&sender, error_status(), false, None);
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(Some(SDKConversationOutputStatus::Error { .. }))
+    ));
+}
+
+#[test]
+fn retained_setup_debug_turns_pin_and_rearm_after_debug_errors() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let terminal_id = terminal.id();
+        let temp = TempDir::new().unwrap();
+        let driver = app.add_model(|ctx| {
+            let terminal_driver =
+                super::terminal::TerminalDriver::create_from_existing_view(terminal, ctx);
+            AgentDriver::new_for_test(temp.path().to_path_buf(), terminal_driver, ctx)
+        });
+        let id = BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
+            let id = history.start_new_conversation(terminal_id, false, false, false, ctx);
+            history.update_conversation_status(terminal_id, id, ConversationStatus::Error, ctx);
+            id
+        });
+        let (tx, mut rx) = oneshot::channel();
+        let (wait, _release) = manual_idle_wait();
+        let controller = DebugWindowController::new(IdleTimeoutSender::new(tx).with_wait(wait));
+        let observer = controller.clone();
+        driver.update(&mut app, |driver, ctx| {
+            driver.arm_setup_failure_debug_window(controller, Duration::from_secs(900), ctx);
+        });
+        assert_eq!(
+            observer.refresh_from_last_armed(),
+            Some(Duration::from_secs(900))
+        );
+        for terminal_status in [
+            ConversationStatus::Error,
+            ConversationStatus::Success,
+            ConversationStatus::Blocked {
+                blocked_action: "approval".into(),
+            },
+        ] {
+            BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
+                history.update_conversation_status(
+                    terminal_id,
+                    id,
+                    ConversationStatus::InProgress,
+                    ctx,
+                );
+            });
+            assert!(observer.is_pinned());
+            assert_eq!(observer.refresh_from_last_armed(), None);
+            assert_eq!(rx.try_recv().unwrap(), None);
+            BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
+                history.update_conversation_status(terminal_id, id, terminal_status, ctx);
+            });
+            assert!(!observer.is_pinned());
+            assert_eq!(
+                observer.refresh_from_last_armed(),
+                Some(Duration::from_secs(900))
+            );
+            assert_eq!(rx.try_recv().unwrap(), None);
+        }
+        observer.idle_timeout.end_run_now(());
+    });
+}
+
 // ── DebugWindowController tests ───────────────────────────────────────────────────
 
 #[test]
@@ -609,58 +738,107 @@ fn error_status() -> SDKConversationOutputStatus {
 }
 
 #[test]
-fn terminal_error_defers_by_idle_on_fail() {
-    // The agent process is the shared-session sharer, so a failed run must be able to outlive
-    // its own failure for the session to stay attachable while the sandbox is retained.
-    let window =
-        idle_window_for_terminal_status(&error_status(), None, Some(Duration::from_secs(15 * 60)));
-
-    assert_eq!(window, Some(Duration::from_secs(15 * 60)));
-}
-
-#[test]
-fn terminal_error_exits_immediately_without_idle_on_fail() {
-    let window =
-        idle_window_for_terminal_status(&error_status(), Some(Duration::from_secs(45 * 60)), None);
-
-    assert_eq!(
-        window, None,
-        "--idle-on-complete must not act as a fallback for a terminal error"
-    );
+fn terminal_error_exits_immediately() {
+    for idle_on_complete in [None, Some(Duration::from_secs(45 * 60))] {
+        assert_eq!(
+            idle_window_for_terminal_status(&error_status(), idle_on_complete),
+            None
+        );
+    }
 }
 
 #[test]
 fn non_error_completion_defers_by_idle_on_complete() {
-    // The failure window must not leak into the success/blocked/cancelled lifecycle.
     let cases = [
-        ("success", SDKConversationOutputStatus::Success),
-        (
-            "blocked",
-            SDKConversationOutputStatus::Blocked {
-                blocked_action: "approve".to_string(),
-            },
-        ),
-        (
-            "cancelled",
-            SDKConversationOutputStatus::Cancelled {
-                reason: CancellationReason::ManuallyCancelled,
-            },
-        ),
+        SDKConversationOutputStatus::Success,
+        SDKConversationOutputStatus::Blocked {
+            blocked_action: "approve".to_string(),
+        },
+        SDKConversationOutputStatus::Cancelled {
+            reason: CancellationReason::ManuallyCancelled,
+        },
     ];
-
-    for (label, status) in cases {
-        let window = idle_window_for_terminal_status(
-            &status,
-            Some(Duration::from_secs(45 * 60)),
-            Some(Duration::from_secs(15 * 60)),
-        );
-
+    for status in cases {
         assert_eq!(
-            window,
+            idle_window_for_terminal_status(&status, Some(Duration::from_secs(45 * 60))),
             Some(Duration::from_secs(45 * 60)),
-            "unexpected window for {label}"
         );
     }
+}
+
+#[test]
+fn runtime_error_exits_despite_configured_setup_retention_and_queued_followups() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let terminal_id = terminal.id();
+        let controller = terminal.read(&app, |terminal, _| terminal.ai_controller().clone());
+        let (id, _stream) =
+            conversation_with_in_progress_mock_stream(&mut app, terminal_id, &controller);
+        controller.update(&mut app, |controller, ctx| {
+            controller.bind_native_prompt_conversation(Some(id), ctx);
+        });
+        let temp = TempDir::new().unwrap();
+        let driver = app.add_model(|ctx| {
+            let terminal_driver =
+                super::terminal::TerminalDriver::create_from_existing_view(terminal, ctx);
+            let mut driver =
+                AgentDriver::new_for_test(temp.path().to_path_buf(), terminal_driver, ctx);
+            driver.idle_on_complete = Some(Duration::from_secs(600));
+            driver.idle_on_fail = Some(Duration::from_secs(900));
+            driver.run_conversation_id = Some(id);
+            driver.skip_initial_turn = true;
+            driver
+        });
+        let mut completion = driver.update(&mut app, |driver, ctx| {
+            driver.execute_run(AgentRunPrompt::Local(String::new()), ctx)
+        });
+        QueuedQueryModel::handle(&app).update(&mut app, |queue, ctx| {
+            queue.append(
+                id,
+                QueuedQuery::new_shared_session_prompt(
+                    "pending before failure".into(),
+                    ParticipantId::new(),
+                    vec![],
+                    None,
+                ),
+                ctx,
+            );
+        });
+        BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
+            history
+                .conversation_mut(&id)
+                .unwrap()
+                .update_status_with_error(
+                    ConversationStatus::Error,
+                    Some(RenderableAIError::InternalWarpError),
+                    terminal_id,
+                    ctx,
+                );
+        });
+        OrchestrationEventService::handle(&app).read(&app, |service, _| {
+            assert!(service.is_conversation_exiting(id));
+        });
+        QueuedQueryModel::handle(&app).update(&mut app, |queue, ctx| {
+            queue.append(
+                id,
+                QueuedQuery::new_shared_session_prompt(
+                    "arrived after failure".into(),
+                    ParticipantId::new(),
+                    vec![],
+                    None,
+                ),
+                ctx,
+            );
+        });
+        assert_eventually!(
+            matches!(
+                completion.try_recv(),
+                Ok(Some(SDKConversationOutputStatus::Error { .. }))
+            ),
+            "a queued follow-up suppressed runtime failure exit"
+        );
+    });
 }
 
 #[test]
@@ -770,97 +948,65 @@ fn cancelling_the_idle_timeout_stops_a_later_refresh_from_resurrecting_it() {
 }
 
 #[test]
-fn failed_cli_harness_session_defers_by_idle_on_fail() {
-    // The flag lives on `warp agent run`, so it has to behave the same whichever harness the run
-    // uses; a failed CLI session is the same "process is the session sharer" situation.
-    let idle_on_complete = Some(Duration::from_secs(45 * 60));
-    let idle_on_fail = Some(Duration::from_secs(15 * 60));
-
+fn failed_cli_harness_session_exits_immediately() {
     let failed = CLIAgentSessionStatus::Failed {
         error_type: None,
         message: Some("boom".to_string()),
     };
     assert_eq!(
-        idle_window_for_cli_session_status(&failed, idle_on_complete, idle_on_fail),
-        idle_on_fail
-    );
-    assert_eq!(
-        idle_window_for_cli_session_status(&failed, idle_on_complete, None),
-        None,
-        "--idle-on-complete must not act as a fallback for a failed CLI session"
-    );
-    assert_eq!(
-        idle_window_for_cli_session_status(
-            &CLIAgentSessionStatus::Success,
-            idle_on_complete,
-            idle_on_fail
-        ),
-        idle_on_complete
-    );
-    assert_eq!(
-        idle_window_for_cli_session_status(
-            &CLIAgentSessionStatus::InProgress,
-            idle_on_complete,
-            idle_on_fail
-        ),
+        idle_window_for_cli_session_status(&failed, Some(Duration::from_secs(2700))),
         None
     );
+    for status in [
+        CLIAgentSessionStatus::Success,
+        CLIAgentSessionStatus::Cancelled,
+        CLIAgentSessionStatus::Blocked {
+            message: Some("approval".to_string()),
+            source: BlockedSource::PermissionRequest,
+        },
+    ] {
+        assert_eq!(
+            idle_window_for_cli_session_status(&status, Some(Duration::from_secs(2700))),
+            Some(Duration::from_secs(2700))
+        );
+    }
     assert_eq!(
-        idle_window_for_cli_session_status(
-            &CLIAgentSessionStatus::Cancelled,
-            idle_on_complete,
-            idle_on_fail
-        ),
-        idle_on_complete,
-        "a Ctrl-C cancellation is a non-error completion, like Success or Blocked"
+        idle_window_for_cli_session_status(&CLIAgentSessionStatus::InProgress, None),
+        None
     );
 }
 
 #[test]
 fn native_conversation_status_drives_the_harness_exit_like_a_cli_session() {
-    let idle_on_complete = Some(Duration::from_secs(45 * 60));
-    let idle_on_fail = Some(Duration::from_secs(15 * 60));
+    let idle = Some(Duration::from_secs(2700));
     let action = |status: &ConversationStatus| {
-        harness_idle_action_for_conversation_status(status, idle_on_complete, idle_on_fail, false)
+        harness_idle_action_for_conversation_status(status, idle, false)
     };
-
     assert_eq!(
         action(&ConversationStatus::InProgress),
         HarnessIdleAction::CancelIdle
     );
-    assert_eq!(
-        action(&ConversationStatus::Success),
-        HarnessIdleAction::Exit {
-            window: idle_on_complete,
-            failed: false,
-        }
-    );
-    assert_eq!(
-        action(&ConversationStatus::Cancelled),
-        HarnessIdleAction::Exit {
-            window: idle_on_complete,
-            failed: false,
-        }
-    );
+    for status in [
+        ConversationStatus::Success,
+        ConversationStatus::Cancelled,
+        ConversationStatus::Blocked {
+            blocked_action: "approval".to_string(),
+        },
+    ] {
+        assert_eq!(
+            action(&status),
+            HarnessIdleAction::Exit {
+                window: idle,
+                failed: false
+            }
+        );
+    }
     assert_eq!(
         action(&ConversationStatus::Error),
         HarnessIdleAction::Exit {
-            window: idle_on_fail,
-            failed: true,
-        }
-    );
-    assert_eq!(
-        harness_idle_action_for_conversation_status(
-            &ConversationStatus::Error,
-            idle_on_complete,
-            None,
-            false
-        ),
-        HarnessIdleAction::Exit {
             window: None,
-            failed: true,
-        },
-        "--idle-on-complete must not act as a fallback for a failed turn"
+            failed: true
+        }
     );
     assert_eq!(
         action(&ConversationStatus::WaitingForEvents),
@@ -873,42 +1019,23 @@ fn native_conversation_status_drives_the_harness_exit_like_a_cli_session() {
 }
 
 #[test]
-fn a_settling_harness_turn_defers_the_exit_but_not_the_idle_cancel() {
-    // A steer finishes the cancelled turn's stream (Success or Cancelled) moments before the
-    // follow-up's turn begins; with no idle window that status would end the run underneath
-    // the follow-up.
-    let settling = |status: &ConversationStatus| {
-        harness_idle_action_for_conversation_status(status, None, None, true)
-    };
+fn a_settling_harness_turn_defers_nonerror_exit_but_not_runtime_failure() {
+    for status in [ConversationStatus::Success, ConversationStatus::Cancelled] {
+        assert_eq!(
+            harness_idle_action_for_conversation_status(&status, None, true),
+            HarnessIdleAction::Ignore
+        );
+    }
     assert_eq!(
-        settling(&ConversationStatus::Success),
-        HarnessIdleAction::Ignore
-    );
-    assert_eq!(
-        settling(&ConversationStatus::Cancelled),
-        HarnessIdleAction::Ignore
-    );
-    assert_eq!(
-        settling(&ConversationStatus::Error),
-        HarnessIdleAction::Ignore
-    );
-    assert_eq!(
-        settling(&ConversationStatus::InProgress),
-        HarnessIdleAction::CancelIdle,
-        "the follow-up's turn must still cancel a pending idle exit"
-    );
-    assert_eq!(
-        harness_idle_action_for_conversation_status(
-            &ConversationStatus::Cancelled,
-            None,
-            None,
-            false
-        ),
+        harness_idle_action_for_conversation_status(&ConversationStatus::Error, None, true),
         HarnessIdleAction::Exit {
             window: None,
-            failed: false,
-        },
-        "once the harness is no longer settling, a cancelled turn ends the run as before"
+            failed: true
+        }
+    );
+    assert_eq!(
+        harness_idle_action_for_conversation_status(&ConversationStatus::InProgress, None, true),
+        HarnessIdleAction::CancelIdle
     );
 }
 
@@ -2970,6 +3097,72 @@ fn driver_wired_for_terminal(
         driver.execute_run(AgentRunPrompt::Local(String::new()), ctx)
     });
     driver_handle
+}
+
+#[test]
+fn unstarted_terminal_followup_and_selection_keep_bounded_exit() {
+    for status in [
+        ConversationStatus::Blocked {
+            blocked_action: "approval".into(),
+        },
+        ConversationStatus::Cancelled,
+    ] {
+        for clear_queue in [false, true] {
+            let status = status.clone();
+            App::test((), |mut app| async move {
+                initialize_app_for_terminal_view(&mut app);
+                let terminal = add_window_with_terminal(&mut app, None);
+                let terminal_id = terminal.id();
+                let controller = terminal.read(&app, |view, _| view.ai_controller().clone());
+                let (id, stream) =
+                    conversation_with_in_progress_mock_stream(&mut app, terminal_id, &controller);
+                controller.update(&mut app, |controller, ctx| {
+                    controller.bind_native_prompt_conversation(Some(id), ctx);
+                });
+                let (wait, release) = manual_idle_wait();
+                set_test_idle_wait_override(Some(wait));
+                let _driver =
+                    driver_wired_for_terminal(&mut app, terminal, Some(Duration::from_secs(900)));
+                set_test_idle_wait_override(None);
+                complete_mock_stream_successfully(&mut app, &stream);
+                BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
+                    history.update_conversation_status(terminal_id, id, status, ctx);
+                });
+                QueuedQueryModel::handle(&app).update(&mut app, |queue, ctx| {
+                    queue.append(
+                        id,
+                        QueuedQuery::new_shared_session_prompt(
+                            "not prepared".into(),
+                            ParticipantId::new(),
+                            vec![AgentAttachment::FileReference {
+                                attachment_id: "file".into(),
+                                file_name: "file.txt".into(),
+                            }],
+                            None,
+                        ),
+                        ctx,
+                    );
+                    if clear_queue {
+                        queue.clear_queue(id, ctx);
+                    }
+                });
+                BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
+                    history.mark_active_conversation_id(id, terminal_id, ctx);
+                });
+                assert!(
+                    !OrchestrationEventService::handle(&app)
+                        .read(&app, |service, _| service.is_conversation_exiting(id))
+                );
+                // Closing the gate releases every superseded timer as well as the current one.
+                drop(release);
+                assert_eventually!(
+                    OrchestrationEventService::handle(&app)
+                        .read(&app, |service, _| service.is_conversation_exiting(id)),
+                    "an unstarted terminal follow-up or selection orphaned the idle timer"
+                );
+            });
+        }
+    }
 }
 
 #[test]

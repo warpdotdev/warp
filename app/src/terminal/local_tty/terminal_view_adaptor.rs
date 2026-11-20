@@ -54,7 +54,7 @@ use crate::persistence::ModelEvent;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::telemetry::{TelemetryAgentViewEntryOrigin, TelemetryEvent};
 use crate::terminal::cli_agent_sessions::{
-    CLIAgentInputState, CLIAgentSessionsModel, CLIAgentSessionsModelEvent,
+    CLIAgentInputState, CLIAgentSessionStatus, CLIAgentSessionsModel, CLIAgentSessionsModelEvent,
 };
 use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
 use crate::terminal::session_settings::{SessionSettings, SessionSettingsChangedEvent};
@@ -155,6 +155,20 @@ fn accept_agent_prompt(
     };
 
     let terminal_view_id = terminal_view.id();
+    let cli_harness_task_id = LocalAgentTaskSyncModel::as_ref(ctx)
+        .cli_harness_task_id_for_terminal_view(terminal_view_id);
+    if cli_harness_task_id.is_some()
+        && CLIAgentSessionsModel::as_ref(ctx)
+            .session(terminal_view_id)
+            .is_some_and(|session| matches!(session.status, CLIAgentSessionStatus::Cancelled))
+        || terminal_view
+            .as_ref(ctx)
+            .ai_controller()
+            .as_ref(ctx)
+            .rejects_shared_session_prompts(ctx)
+    {
+        return;
+    }
     let has_active_cli_agent = CLIAgentSessionsModel::as_ref(ctx)
         .session(terminal_view_id)
         .is_some();
@@ -175,9 +189,7 @@ fn accept_agent_prompt(
     // launched (see its call site in `AgentDriver::subscribe_to_cli_agent_session_events`), so
     // this is true independent of whether the CLI-harness session above has actually started a
     // live PTY yet.
-    if let Some(task_id) =
-        LocalAgentTaskSyncModel::as_ref(ctx).cli_harness_task_id_for_terminal_view(terminal_view_id)
-    {
+    if let Some(task_id) = cli_harness_task_id {
         log::info!(
             "event=prompt_routed terminal_id={terminal_view_id:?} participant_id={participant_id} task_id={task_id} destination=pending_cli",
         );
@@ -1569,11 +1581,11 @@ impl TerminalManager<TerminalView> {
                         return;
                     }
 
-                    // REMOTE-2661: a no-token prompt is how a debug conversation bootstraps
-                    // into a retained setup-failure session. The sharer only knows the
+                    // A restored viewer may still send the original conversation token.
+                    // Every retained setup-debug prompt needs authorization. The sharer knows the
                     // participant's firebase_uid from presence, not a credential, so this must
                     // be authorized by the server before being honored.
-                    if request.server_conversation_token.is_none() {
+                    {
                         let task_id = model.lock().ambient_agent_task_id().filter(|task_id| {
                             AgentConversationsModel::as_ref(ctx)
                                 .get_task_data(task_id)

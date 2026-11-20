@@ -119,7 +119,6 @@ impl OrchestrationEventService {
     /// (QUALITY-1801). Assumes [`ExitCommitHandle::commit`] already committed the exiting flag
     /// for this conversation — by the time this runs, on the model thread, it always has — so
     /// this only does the part that needs model access: the flag itself is not touched here.
-    #[cfg(not(target_family = "wasm"))]
     pub fn drop_pending_events_for_exiting_conversation(
         &mut self,
         conversation_id: AIConversationId,

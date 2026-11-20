@@ -210,9 +210,8 @@ impl GuiSlashCommandDataSource {
             availability |= Availability::CLOUD_MODE_V2_COMPOSER;
         }
 
-        // REMOTE-2661: a retained setup-failure session has no conversation to continue, so it
-        // gates like the ordinary "no active conversation" case; `execute_slash_command` routes
-        // `/agent`/`/new` through the authenticated follow-up service for this pane.
+        // Setup debugging can start before a conversation exists, so its first prompt must not
+        // require an active conversation.
         let is_retained_setup_failure_debug_pane = self
             .ambient_agent_view_model
             .as_ref()
