@@ -258,9 +258,12 @@ pub struct LocalRepoMetadataModel {
     lazy_loaded_paths: HashMap<StandardizedPath, usize>,
     /// Spawned filesystem tree build tasks keyed by owning repo and target directory.
     build_tasks: HashMap<BuildTaskKey, BuildTask>,
-    /// Spawned watcher update tasks keyed by repository root, then spawned future.
+    /// Watcher update pipeline keyed by repository root. At most one
+    /// filesystem-walking task is in flight per repository; events that arrive
+    /// while it runs are coalesced into the queue's `pending` update and
+    /// applied by the next task. See [`Self::enqueue_watcher_update`].
     #[cfg(feature = "local_fs")]
-    watcher_update_tasks: HashMap<StandardizedPath, HashMap<FutureId, SpawnedFutureHandle>>,
+    watcher_update_tasks: HashMap<StandardizedPath, WatcherUpdateQueue>,
     /// File system watcher for monitoring changes.
     #[cfg(feature = "local_fs")]
     watcher: Option<ModelHandle<BulkFilesystemWatcher>>,
@@ -293,6 +296,47 @@ struct RepoUpdate {
     added: Vec<PathBuf>,
     deleted: Vec<PathBuf>,
     moved: HashMap<PathBuf, PathBuf>,
+}
+
+#[cfg(feature = "local_fs")]
+impl RepoUpdate {
+    /// Folds a later update into this one. Paths are deduplicated so a
+    /// directory touched by several coalesced events is walked once, not once
+    /// per event. Ordering between an add and a delete of the same path does
+    /// not matter: [`LocalRepoMetadataModel::compute_file_tree_mutations`]
+    /// emits removals first and re-checks the live filesystem before adding.
+    fn merge(&mut self, other: RepoUpdate) {
+        for path in other.added {
+            if !self.added.contains(&path) {
+                self.added.push(path);
+            }
+        }
+        for path in other.deleted {
+            if !self.deleted.contains(&path) {
+                self.deleted.push(path);
+            }
+        }
+        self.moved.extend(other.moved);
+    }
+}
+
+/// Per-repository watcher update pipeline: one walking task at a time, later
+/// events merged into `pending` until that task completes.
+///
+/// Without this bound, every debounced watcher tick spawned its own subtree
+/// walk regardless of whether the previous one had finished. A directory that
+/// is touched every second (e.g. an agent tool writing under `.claude/`) then
+/// accumulates concurrent walks of the same subtree until every core is busy
+/// and each in-flight walk holds its own copy of the subtree in memory
+/// (warpdotdev/warp#8409). Serializing per repository also guarantees that
+/// mutations are applied in event order.
+#[cfg(feature = "local_fs")]
+#[derive(Default)]
+struct WatcherUpdateQueue {
+    /// The single walking task currently running for this repository.
+    in_flight: Option<(FutureId, SpawnedFutureHandle)>,
+    /// Updates that arrived while `in_flight` was running, merged together.
+    pending: Option<RepoUpdate>,
 }
 #[cfg(feature = "local_fs")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -588,9 +632,28 @@ impl LocalRepoMetadataModel {
         let mut repo_updates: HashMap<StandardizedPath, RepoUpdate> = HashMap::new();
         let symlink_target_paths = self.add_symlink_target_updates(event, &mut repo_updates);
 
-        // Process added or updated files
-        for path in event.added_or_updated_iter() {
+        // Process created files and directories.
+        for path in &event.added {
             if let Some(repo_path) = self.find_repository_for_watcher_entry_path(path) {
+                let repo_update = repo_updates.entry(repo_path).or_default();
+                repo_update.added.push(path.to_path_buf());
+            }
+        }
+
+        // Process modified paths. A modification event on a directory that is
+        // already in the tree carries no information of its own: Windows
+        // (`ReadDirectoryChangesW`) reports the parent directory as modified
+        // whenever a child is created, removed or renamed, and each of those
+        // children arrives as its own event. Treating the directory as newly
+        // added would rebuild its entire subtree on every event, which for a
+        // large, frequently touched directory keeps every core busy
+        // (warpdotdev/warp#8409). Files, and directories not yet in the tree,
+        // still flow through so metadata refreshes and missed creates are kept.
+        for path in &event.modified {
+            if let Some(repo_path) = self.find_repository_for_watcher_entry_path(path) {
+                if self.is_indexed_directory(&repo_path, path) {
+                    continue;
+                }
                 let repo_update = repo_updates.entry(repo_path).or_default();
                 repo_update.added.push(path.to_path_buf());
             }
@@ -622,10 +685,85 @@ impl LocalRepoMetadataModel {
         ctx.emit(RepositoryMetadataEvent::FileTreeUpdated {
             paths: repo_updates.keys().cloned().collect(),
         });
-        // Apply updates to each affected repository asynchronously.
-        // Phase 1 (background thread): compute lightweight mutations via filesystem I/O.
-        // Phase 2 (main thread callback): apply mutations directly to the tree — no clone needed.
+        // Apply updates to each affected repository asynchronously, at most one
+        // walking task per repository at a time (see [`WatcherUpdateQueue`]).
         for (repo_path, repo_scoped_update) in repo_updates {
+            self.enqueue_watcher_update(repo_path, repo_scoped_update, ctx);
+        }
+    }
+
+    /// Returns true when `path` is already present in `repo_path`'s tree as a
+    /// directory (loaded, lazy or ignored placeholder alike).
+    #[cfg(feature = "local_fs")]
+    fn is_indexed_directory(&self, repo_path: &StandardizedPath, path: &Path) -> bool {
+        let Some(IndexedRepoState::Indexed(state)) = self.repositories.get(repo_path) else {
+            return false;
+        };
+        let Ok(path) = StandardizedPath::try_from_local(path) else {
+            return false;
+        };
+        matches!(
+            state.entry.get(&path),
+            Some(FileTreeEntryState::Directory(_))
+        )
+    }
+
+    /// Queues a watcher update for `repo_path`. If a walking task is already
+    /// in flight for the repository the update is merged into the pending
+    /// batch and dispatched when that task completes; otherwise it starts now.
+    #[cfg(feature = "local_fs")]
+    fn enqueue_watcher_update(
+        &mut self,
+        repo_path: StandardizedPath,
+        update: RepoUpdate,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let queue = self
+            .watcher_update_tasks
+            .entry(repo_path.clone())
+            .or_default();
+        if queue.in_flight.is_some() {
+            queue
+                .pending
+                .get_or_insert_with(RepoUpdate::default)
+                .merge(update);
+            return;
+        }
+        self.spawn_watcher_update(repo_path, update, ctx);
+    }
+
+    /// Starts the next pending update for `repo_path`, if any, once the
+    /// in-flight task has finished. Drops the queue entry when idle.
+    #[cfg(feature = "local_fs")]
+    fn dispatch_pending_watcher_update(
+        &mut self,
+        repo_path: &StandardizedPath,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some(queue) = self.watcher_update_tasks.get_mut(repo_path) else {
+            return;
+        };
+        if queue.in_flight.is_some() {
+            return;
+        }
+        match queue.pending.take() {
+            Some(next) => self.spawn_watcher_update(repo_path.clone(), next, ctx),
+            None => {
+                self.watcher_update_tasks.remove(repo_path);
+            }
+        }
+    }
+
+    /// Phase 1 (background thread): compute lightweight mutations via filesystem I/O.
+    /// Phase 2 (main thread callback): apply mutations directly to the tree — no clone needed.
+    #[cfg(feature = "local_fs")]
+    fn spawn_watcher_update(
+        &mut self,
+        repo_path: StandardizedPath,
+        repo_scoped_update: RepoUpdate,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        {
             if let Some(IndexedRepoState::Indexed(state)) = self.repositories.get(&repo_path) {
                 let repo_path_clone = repo_path.clone();
                 let gitignores_clone = state.gitignores.clone();
@@ -709,6 +847,10 @@ impl LocalRepoMetadataModel {
                         for removed in &removed_roots {
                             model.unwatch_removed_subtree(&repo_path, removed, ctx);
                         }
+
+                        // Events that arrived while this task ran were merged
+                        // into the repository's pending batch; walk them now.
+                        model.dispatch_pending_watcher_update(&repo_path, ctx);
                     },
                 );
                 task_future_id.set(Some(update_handle.future_id()));
@@ -839,38 +981,37 @@ impl LocalRepoMetadataModel {
         handle: SpawnedFutureHandle,
     ) {
         let future_id = handle.future_id();
-        if let Some(existing_task) = self
-            .watcher_update_tasks
-            .entry(repo_path)
-            .or_default()
-            .insert(future_id, handle)
-        {
+        let queue = self.watcher_update_tasks.entry(repo_path).or_default();
+        if let Some((_, existing_task)) = queue.in_flight.replace((future_id, handle)) {
             existing_task.abort();
         }
     }
 
     #[cfg(feature = "local_fs")]
+    /// Marks the in-flight task for `repo_path` as complete. Returns `None`
+    /// when `future_id` is not the current in-flight task (stale completion).
+    /// The queue entry is retained so the completion callback can dispatch
+    /// any pending batch; [`Self::dispatch_pending_watcher_update`] removes it
+    /// when idle.
     fn finish_watcher_update_task(
         &mut self,
         repo_path: &StandardizedPath,
         future_id: Option<FutureId>,
     ) -> Option<SpawnedFutureHandle> {
         let future_id = future_id?;
-        let (handle, remove_repo_entry) = {
-            let tasks = self.watcher_update_tasks.get_mut(repo_path)?;
-            let handle = tasks.remove(&future_id)?;
-            (handle, tasks.is_empty())
-        };
-        if remove_repo_entry {
-            self.watcher_update_tasks.remove(repo_path);
+        let queue = self.watcher_update_tasks.get_mut(repo_path)?;
+        match &queue.in_flight {
+            Some((in_flight_id, _)) if *in_flight_id == future_id => {
+                queue.in_flight.take().map(|(_, handle)| handle)
+            }
+            _ => None,
         }
-        Some(handle)
     }
 
     #[cfg(feature = "local_fs")]
     fn abort_watcher_update_tasks_for_repo(&mut self, repo_path: &StandardizedPath) {
-        if let Some(tasks) = self.watcher_update_tasks.remove(repo_path) {
-            for handle in tasks.into_values() {
+        if let Some(queue) = self.watcher_update_tasks.remove(repo_path) {
+            if let Some((_, handle)) = queue.in_flight {
                 handle.abort();
             }
         }
