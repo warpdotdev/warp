@@ -36,6 +36,7 @@ struct OutlineState {
     status: OutlineStatus,
     /// Subscriber ID for repository updates (if watching).
     subscriber_id: Option<SubscriberId>,
+    generation: u64,
 }
 
 pub enum RepoOutlinesEvent {
@@ -43,17 +44,46 @@ pub enum RepoOutlinesEvent {
 }
 
 const MAX_REPO_FILE_SIZE_LIMIT: usize = 5000;
+const MAX_RETAINED_REPO_OUTLINES: usize = 3;
 
+#[derive(Default)]
+struct RepoRecency {
+    paths: VecDeque<PathBuf>,
+}
+
+impl RepoRecency {
+    fn touch(&mut self, path: &Path) -> Option<PathBuf> {
+        if let Some(position) = self.paths.iter().position(|candidate| candidate == path) {
+            self.paths.remove(position);
+        }
+        self.paths.push_back(path.to_path_buf());
+
+        (self.paths.len() > MAX_RETAINED_REPO_OUTLINES)
+            .then(|| self.paths.pop_front())
+            .flatten()
+    }
+
+    fn clear(&mut self) {
+        self.paths.clear();
+    }
+}
+
+struct ActiveOutlineTask {
+    repo_path: PathBuf,
+    generation: u64,
+    abort_handle: AbortHandle,
+}
 pub struct RepoOutlines {
     outlines: HashMap<PathBuf, OutlineState>,
+    repo_recency: RepoRecency,
 
     /// Queue of paths to be scanned for git repo outlines.
     outline_queue: VecDeque<PathBuf>,
 
-    /// An `AbortHandle` for the active outline computation task.
-    active_outline_task: Option<AbortHandle>,
+    active_outline_task: Option<ActiveOutlineTask>,
 
     indexing_enabled: bool,
+    next_generation: u64,
 }
 
 const REPO_WATCHER_DEBOUNCE_DURATION: Duration = Duration::from_secs(10);
@@ -101,9 +131,11 @@ impl RepoOutlines {
 
         Self {
             outlines: Default::default(),
+            repo_recency: Default::default(),
             outline_queue: Default::default(),
             active_outline_task: Default::default(),
             indexing_enabled,
+            next_generation: 0,
         }
     }
 
@@ -112,27 +144,68 @@ impl RepoOutlines {
     pub fn new_for_test(_ctx: &mut ModelContext<Self>) -> Self {
         Self {
             outlines: Default::default(),
+            repo_recency: Default::default(),
             outline_queue: Default::default(),
             active_outline_task: Default::default(),
             indexing_enabled: true,
+            next_generation: 0,
         }
     }
 
     fn index_repo(&mut self, repository: ModelHandle<Repository>, ctx: &mut ModelContext<Self>) {
         let repo_path = repository.as_ref(ctx).root_dir().to_local_path_lossy();
-        if self.get_outline_internal(&repo_path).is_none()
-            && self.should_build_outlines(ctx)
-            && !self.outline_queue.contains(&repo_path)
+        if let Some(retained_repo_path) = self
+            .get_outline_internal(&repo_path)
+            .map(|(_, retained_repo_path)| retained_repo_path)
         {
+            self.repo_recency.touch(&retained_repo_path);
+        } else if self.should_build_outlines(ctx) && !self.outline_queue.contains(&repo_path) {
+            let generation = self.next_generation;
+            self.next_generation = self.next_generation.wrapping_add(1);
             let outline_state = OutlineState {
                 repository,
                 status: OutlineStatus::Pending,
                 subscriber_id: None,
+                generation,
             };
-            self.outlines.insert(repo_path.clone(), outline_state);
-            self.outline_queue.push_back(repo_path);
+            self.outline_queue.push_back(repo_path.clone());
+            self.retain_outline_state(repo_path, outline_state, ctx);
             self.compute_next_outline(ctx);
         }
+    }
+    fn retain_outline_state(
+        &mut self,
+        repo_path: PathBuf,
+        outline_state: OutlineState,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.outlines.insert(repo_path.clone(), outline_state);
+        if let Some(evicted_path) = self.repo_recency.touch(&repo_path) {
+            self.evict_repo(&evicted_path, ctx);
+        }
+    }
+
+    fn evict_repo(&mut self, repo_path: &Path, ctx: &mut ModelContext<Self>) {
+        self.outline_queue
+            .retain(|queued_path| queued_path != repo_path);
+        if self
+            .active_outline_task
+            .as_ref()
+            .is_some_and(|task| task.repo_path == repo_path)
+            && let Some(task) = self.active_outline_task.take()
+        {
+            task.abort_handle.abort();
+        }
+        let Some(mut state) = self.outlines.remove(repo_path) else {
+            return;
+        };
+
+        if let Some(subscriber_id) = state.subscriber_id.take() {
+            state.repository.update(ctx, |repo, ctx| {
+                repo.stop_watching(subscriber_id, ctx);
+            });
+        }
+        ctx.emit(RepoOutlinesEvent::OutlinesUpdated(repo_path.to_path_buf()));
     }
 
     /// Check if outlines should be built based on if codebase context enabled OR
@@ -166,7 +239,11 @@ impl RepoOutlines {
             }
 
             me.outlines = HashMap::default();
+            me.repo_recency.clear();
             me.outline_queue = VecDeque::default();
+            if let Some(task) = me.active_outline_task.take() {
+                task.abort_handle.abort();
+            }
         }
     }
 
@@ -205,15 +282,26 @@ impl RepoOutlines {
             && self.active_outline_task.is_none()
             && let Some(repo_root) = self.outline_queue.pop_front()
         {
-            self.compute_outline_for_repo(repo_root, ctx);
+            let Some(generation) = self.outlines.get(&repo_root).map(|state| state.generation)
+            else {
+                self.compute_next_outline(ctx);
+                return;
+            };
+            self.compute_outline_for_repo(repo_root, generation, ctx);
         }
     }
 
     /// Computes the outline for the repo with the given root path.
     ///
     /// `repo_root` is assumed to be the root of a code repository.
-    fn compute_outline_for_repo(&mut self, repo_root: PathBuf, ctx: &mut ModelContext<Self>) {
+    fn compute_outline_for_repo(
+        &mut self,
+        repo_root: PathBuf,
+        generation: u64,
+        ctx: &mut ModelContext<Self>,
+    ) {
         let root_path_clone = repo_root.clone();
+        let active_repo_path = repo_root.clone();
 
         let scan_start = Instant::now();
         let scan_abort_handle = ctx
@@ -229,11 +317,25 @@ impl RepoOutlines {
                         .map(|outline| (canonicalized_path, outline, scan_start.elapsed()))
                 },
                 move |me, res, ctx| {
+                    if !me.active_outline_task.as_ref().is_some_and(|task| {
+                        task.repo_path == root_path_clone && task.generation == generation
+                    }) {
+                        return;
+                    }
                     // Don't process this result if the setting has been disabled.
                     // The abort handle doesn't always abort.
                     if me.should_build_outlines(ctx) {
                         match res {
                             Ok((canonicalized_path, outline, parse_duration)) => {
+                                let is_current_generation = me
+                                    .outlines
+                                    .get(canonicalized_path.as_path_buf())
+                                    .is_some_and(|state| state.generation == generation);
+                                if !is_current_generation {
+                                    me.active_outline_task = None;
+                                    me.compute_next_outline(ctx);
+                                    return;
+                                }
                                 send_telemetry_from_ctx!(
                                     TelemetryEvent::RepoOutlineConstructionSuccess {
                                         total_parse_seconds: parse_duration.as_secs() as usize,
@@ -260,6 +362,8 @@ impl RepoOutlines {
                                     Ok(handle) => handle,
                                     Err(e) => {
                                         report_error!(e);
+                                        me.active_outline_task = None;
+                                        me.compute_next_outline(ctx);
                                         return;
                                     }
                                 };
@@ -268,11 +372,14 @@ impl RepoOutlines {
                                 me.start_repository_subscription(
                                     &repository_handle,
                                     canonicalized_path.as_path_buf().clone(),
+                                    generation,
                                     ctx,
                                 );
 
-                                if let Some(outline_state) =
-                                    me.outlines.get_mut(canonicalized_path.as_path_buf())
+                                if let Some(outline_state) = me
+                                    .outlines
+                                    .get_mut(canonicalized_path.as_path_buf())
+                                    .filter(|state| state.generation == generation)
                                 {
                                     outline_state.status = OutlineStatus::Complete(outline);
                                 }
@@ -296,7 +403,11 @@ impl RepoOutlines {
                                     },
                                     ctx
                                 );
-                                if let Some(outline_state) = me.outlines.get_mut(&root_path_clone) {
+                                if let Some(outline_state) = me
+                                    .outlines
+                                    .get_mut(&root_path_clone)
+                                    .filter(|state| state.generation == generation)
+                                {
                                     outline_state.status = OutlineStatus::Failed;
                                 }
                             }
@@ -308,13 +419,18 @@ impl RepoOutlines {
                 },
             )
             .abort_handle();
-        self.active_outline_task = Some(scan_abort_handle);
+        self.active_outline_task = Some(ActiveOutlineTask {
+            repo_path: active_repo_path,
+            generation,
+            abort_handle: scan_abort_handle,
+        });
     }
 
     fn start_repository_subscription(
         &mut self,
         repository_handle: &ModelHandle<Repository>,
         repo_path: PathBuf,
+        generation: u64,
         ctx: &mut ModelContext<Self>,
     ) {
         let (repository_update_tx, repository_update_rx) = async_channel::unbounded();
@@ -333,7 +449,11 @@ impl RepoOutlines {
         let subscriber_id = start.subscriber_id;
 
         // Store subscriber id so callers can always unsubscribe.
-        if let Some(state) = self.outlines.get_mut(&repo_path) {
+        if let Some(state) = self
+            .outlines
+            .get_mut(&repo_path)
+            .filter(|state| state.generation == generation)
+        {
             state.subscriber_id = Some(subscriber_id);
         }
 
@@ -352,7 +472,11 @@ impl RepoOutlines {
                     });
                 }
 
-                if let Some(state) = me.outlines.get_mut(&repo_path_for_cleanup) {
+                if let Some(state) = me
+                    .outlines
+                    .get_mut(&repo_path_for_cleanup)
+                    .filter(|state| state.generation == generation)
+                {
                     state.subscriber_id = None;
                 }
             }
@@ -363,7 +487,7 @@ impl RepoOutlines {
         ctx.spawn_stream_local(
             repository_update_rx.clone(),
             move |me, update: RepositoryUpdate, ctx| {
-                me.handle_repository_update(&repo_path_for_updates, update, ctx);
+                me.handle_repository_update(&repo_path_for_updates, generation, update, ctx);
             },
             |_, _| {},
         );
@@ -372,10 +496,18 @@ impl RepoOutlines {
     fn handle_repository_update(
         &mut self,
         repo_path: &Path,
+        generation: u64,
         update: RepositoryUpdate,
         ctx: &mut ModelContext<Self>,
     ) {
         if update.is_empty() {
+            return;
+        }
+        if self
+            .outlines
+            .get(repo_path)
+            .is_none_or(|state| state.generation != generation)
+        {
             return;
         }
 
@@ -398,7 +530,11 @@ impl RepoOutlines {
                         }
                     },
                     move |me, (outline, repo_path), ctx| {
-                        if let Some(state) = me.outlines.get_mut(&repo_path) {
+                        if let Some(state) = me
+                            .outlines
+                            .get_mut(&repo_path)
+                            .filter(|state| state.generation == generation)
+                        {
                             state.status = OutlineStatus::Complete(outline);
                             ctx.emit(RepoOutlinesEvent::OutlinesUpdated(repo_path));
                         }
@@ -446,3 +582,7 @@ impl RepositorySubscriber for OutlineRepositorySubscriber {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "native_tests.rs"]
+mod tests;
