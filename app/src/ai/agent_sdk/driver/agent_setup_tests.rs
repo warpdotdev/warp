@@ -227,17 +227,12 @@ fn standby_provider_setup_precedes_workspace_preparation() {
 
 #[test]
 fn environment_skill_setup_uses_harness_working_dir_as_listing_fallback() {
-    assert_environment_skill_listing_fallback(true, false);
+    assert_environment_skill_listing_fallback(true);
 }
 
 #[test]
 fn environment_skill_setup_without_cwd_scoping_sets_no_listing_fallback() {
-    assert_environment_skill_listing_fallback(false, false);
-}
-
-#[test]
-fn skill_delta_experiment_uses_harness_working_dir_as_listing_fallback() {
-    assert_environment_skill_listing_fallback(false, true);
+    assert_environment_skill_listing_fallback(false);
 }
 
 fn project_skill(name: &str, dir: &Path) -> ParsedSkill {
@@ -263,9 +258,9 @@ fn listed_skill_names(app: &mut App) -> Vec<String> {
     })
 }
 
-fn assert_environment_skill_listing_fallback(flag_enabled: bool, skill_deltas: bool) {
+fn assert_environment_skill_listing_fallback(cwd_scoped: bool) {
     App::test((), move |mut app| async move {
-        let _flag = FeatureFlag::CwdScopedCloudSkills.override_enabled(flag_enabled);
+        let _flag = FeatureFlag::CwdScopedCloudSkills.override_enabled(cwd_scoped);
         initialize_app_for_terminal_view(&mut app);
         let root = TempDir::new().unwrap();
         let working_dir = dunce::canonicalize(root.path()).unwrap();
@@ -275,10 +270,6 @@ fn assert_environment_skill_listing_fallback(flag_enabled: bool, skill_deltas: b
             let terminal_driver = TerminalDriver::create_from_existing_view(terminal, ctx);
             let mut driver = AgentDriver::new_for_test(working_dir.clone(), terminal_driver, ctx);
             driver.harness_working_dir = harness_dir.clone();
-            driver.experimental = Some(serde_json::Map::from_iter([(
-                "skillsListingDeltas".into(),
-                serde_json::Value::Bool(skill_deltas),
-            )]));
             driver
         });
         let foreground = driver.update(&mut app, |_, ctx| ctx.spawner());
@@ -294,8 +285,11 @@ fn assert_environment_skill_listing_fallback(flag_enabled: bool, skill_deltas: b
         });
         let names = listed_skill_names(&mut app);
 
-        let scoped = flag_enabled || skill_deltas;
-        assert_eq!(names.contains(&"harness".to_string()), scoped, "{names:?}");
+        assert_eq!(
+            names.contains(&"harness".to_string()),
+            cwd_scoped,
+            "{names:?}"
+        );
         assert!(!names.contains(&"sibling".to_string()), "{names:?}");
     });
 }
@@ -321,10 +315,6 @@ fn read_skills_leaves_the_skill_manager_untouched() {
             let terminal_driver = TerminalDriver::create_from_existing_view(terminal, ctx);
             let mut driver = AgentDriver::new_for_test(working_dir.clone(), terminal_driver, ctx);
             driver.harness_working_dir = harness_dir.clone();
-            driver.experimental = Some(serde_json::Map::from_iter([(
-                "skillsListingDeltas".into(),
-                serde_json::Value::Bool(true),
-            )]));
             driver
         });
         let foreground = driver.update(&mut app, |_, ctx| ctx.spawner());
@@ -365,13 +355,13 @@ fn read_skills_leaves_the_skill_manager_untouched() {
 }
 
 /// A run assigned to a standby registers the skills the standby read under the run's own listing
-/// mode: scoped to the harness directory with global skills at home tier when the run opted into
-/// skill listing deltas, and unscoped otherwise.
+/// mode: scoped to the harness directory with global skills at home tier when `CwdScopedCloudSkills`
+/// is enabled, and unscoped otherwise.
 #[test]
 fn prepared_skills_register_under_the_runs_listing_mode() {
-    for skill_deltas in [true, false] {
+    for cwd_scoped in [true, false] {
         App::test((), move |mut app| async move {
-            let _flag = FeatureFlag::CwdScopedCloudSkills.override_enabled(false);
+            let _flag = FeatureFlag::CwdScopedCloudSkills.override_enabled(cwd_scoped);
             initialize_app_for_terminal_view(&mut app);
             let root = TempDir::new().unwrap();
             let working_dir = dunce::canonicalize(root.path()).unwrap();
@@ -382,10 +372,6 @@ fn prepared_skills_register_under_the_runs_listing_mode() {
                 let mut driver =
                     AgentDriver::new_for_test(working_dir.clone(), terminal_driver, ctx);
                 driver.harness_working_dir = harness_dir.clone();
-                driver.experimental = Some(serde_json::Map::from_iter([(
-                    "skillsListingDeltas".into(),
-                    serde_json::Value::Bool(skill_deltas),
-                )]));
                 driver.skill_dirs.clear();
                 driver
             });
@@ -421,7 +407,7 @@ fn prepared_skills_register_under_the_runs_listing_mode() {
                     .map(|skill| skill.scope)
             };
             assert_eq!(scope_of("standby-harness"), Some(SkillScope::Project));
-            if skill_deltas {
+            if cwd_scoped {
                 assert_eq!(scope_of("standby-sibling"), None);
                 assert_eq!(scope_of("standby-global"), Some(SkillScope::Home));
             } else {

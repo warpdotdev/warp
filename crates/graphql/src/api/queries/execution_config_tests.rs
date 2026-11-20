@@ -57,7 +57,7 @@ fn bootstrap_fetches_all_task_data_in_one_operation() {
             supports_deferred_repositories
         );
         assert!(query.contains("supportsAgentHooks: true"));
-        for field in ["agentHookSources", "onAsk", "strict", "experimentalJson"] {
+        for field in ["agentHookSources", "onAsk", "strict"] {
             assert!(query.contains(field), "missing {field}");
         }
         assert!(!query.contains("@skip"));
@@ -101,8 +101,7 @@ fn configuration_json() -> serde_json::Value {
         "idleOnCompleteSeconds": null,
         "idleOnFailSeconds": null,
         "snapshotDisabled": false,
-        "agentHookSources": [],
-        "experimentalJson": null
+        "agentHookSources": []
     })
 }
 
@@ -113,21 +112,6 @@ fn a_field_this_client_does_not_select_is_ignored() {
     let mut json = configuration_json();
     json["addedByANewerServer"] = serde_json::json!("value");
     serde_json::from_value::<super::ExecutionConfiguration>(json).expect("decodes");
-}
-
-#[test]
-fn experiment_values_decode_as_the_json_text_the_server_sent() {
-    let mut json = configuration_json();
-    let config: super::ExecutionConfiguration =
-        serde_json::from_value(json.clone()).expect("decodes");
-    assert_eq!(config.experimental_json, None);
-
-    json["experimentalJson"] = serde_json::json!(r#"{"skillsListingDeltas":true}"#);
-    let config: super::ExecutionConfiguration = serde_json::from_value(json).expect("decodes");
-    assert_eq!(
-        config.experimental_json.as_deref(),
-        Some(r#"{"skillsListingDeltas":true}"#)
-    );
 }
 
 #[test]

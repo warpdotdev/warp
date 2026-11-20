@@ -93,7 +93,6 @@ pub struct ExecutionConfiguration {
     pub idle_on_fail_seconds: Option<i32>,
     pub snapshot_disabled: bool,
     pub agent_hook_sources: Vec<AgentHookSource>,
-    pub experimental_json: Option<String>,
 }
 
 #[derive(cynic::Enum, Clone, Copy, Debug, PartialEq, Eq)]

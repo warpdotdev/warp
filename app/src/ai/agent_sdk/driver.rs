@@ -1081,6 +1081,10 @@ pub struct AgentDriver {
     use_factory_repositories: bool,
     github_credential_mode: GitHubCredentialMode,
     credential_store_owner: Option<ManagedStoreOwner>,
+    #[allow(
+        dead_code,
+        reason = "the driver retains server-owned experiments without interpreting them"
+    )]
     pub experimental: Option<serde_json::Map<String, serde_json::Value>>,
     team_scope: Option<HeadlessTeamScope>,
     bedrock_oidc_credentials: Option<BedrockOidcCredentialsConfig>,
@@ -1522,16 +1526,6 @@ impl From<PrepareEnvironmentError> for AgentDriverError {
 }
 
 impl AgentDriver {
-    fn cwd_scoped_cloud_skills_enabled(&self) -> bool {
-        FeatureFlag::CwdScopedCloudSkills.is_enabled()
-            || self
-                .experimental
-                .as_ref()
-                .and_then(|experiments| experiments.get("skillsListingDeltas"))
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(false)
-    }
-
     fn idle_timeout_sender<T: Send + 'static>(
         &self,
         tx: oneshot::Sender<T>,
