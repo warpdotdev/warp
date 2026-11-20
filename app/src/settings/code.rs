@@ -100,4 +100,15 @@ define_settings_group!(CodeSettings, settings: [
         toml_path: "code.editor.auto_save",
         description: "Whether the Warp text editor automatically saves changes as you type and when the editor loses focus.",
     },
+    // Layout used to render diffs in the code review pane.
+    diff_layout: DiffLayoutSetting {
+        type: crate::code::diff_layout::DiffLayout,
+        default: crate::code::diff_layout::DiffLayout::Inline,
+        supported_platforms: SupportedPlatforms::DESKTOP,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
+        private: false,
+        toml_path: "code.editor.diff_layout",
+        description: "Layout for code review diffs: 'inline' (unified) or 'side_by_side' (split).",
+    },
 ]);

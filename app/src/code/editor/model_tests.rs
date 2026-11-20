@@ -9,6 +9,7 @@ use warp_util::content_version::ContentVersion;
 use warpui::App;
 
 use super::*;
+use crate::code::editor::diff_alignment::DiffAlignment;
 use crate::code::editor::line::EditorLineLocation;
 use crate::code::editor::view::code_text_styles;
 use crate::settings::FontSettings;
@@ -1314,5 +1315,167 @@ fn test_line_at_vertical_offset_returns_none_for_invalid() {
             beyond.is_none(),
             "Expected None for offset beyond content height"
         );
+    })
+}
+
+fn current_line_top(
+    app: &App,
+    editor: &ModelHandle<CodeEditorModel>,
+    line: usize,
+) -> Option<Pixels> {
+    app.read(|ctx| {
+        let render_state = editor.as_ref(ctx).render_state().as_ref(ctx);
+        // The render state reports offsets relative to the viewport; add the scroll position back
+        // so both panes are compared in content space.
+        render_state
+            .vertical_offset_at_render_location(RenderLineLocation::Current(LineCount::from(line)))
+            .map(|offset| offset + render_state.viewport().scroll_top())
+    })
+}
+
+/// Builds the modified (right) and base (left) panes of a split diff for `base_text` and
+/// `current_text`, laid out and decorated.
+async fn split_panes(
+    app: &mut App,
+    base_text: &str,
+    current_text: &str,
+) -> (
+    ModelHandle<CodeEditorModel>,
+    ModelHandle<CodeEditorModel>,
+    DiffAlignment,
+) {
+    let modified = mock_model_with_diff(app, base_text, current_text, ContentVersion::new());
+    layout_model(app, &modified).await;
+    compute_diff_and_expand(app, &modified).await;
+    modified.update(app, |editor, ctx| {
+        editor.set_diff_decoration_mode(DiffDecorationMode::SplitModified, ctx);
+    });
+    layout_model(app, &modified).await;
+
+    let alignment = app.read(|ctx| modified.as_ref(ctx).split_diff_alignment(ctx));
+    let baseline = mock_model(app, base_text, ContentVersion::new());
+    layout_model(app, &baseline).await;
+    baseline.update(app, |editor, ctx| {
+        editor.set_diff_decoration_mode(
+            DiffDecorationMode::SplitBaseline {
+                removed_lines: alignment.changed_base_lines(),
+                gaps: alignment.base_gaps(),
+            },
+            ctx,
+        );
+    });
+    layout_model(app, &baseline).await;
+    (modified, baseline, alignment)
+}
+
+fn assert_rows_aligned(
+    app: &App,
+    modified: &ModelHandle<CodeEditorModel>,
+    baseline: &ModelHandle<CodeEditorModel>,
+    alignment: &DiffAlignment,
+) {
+    let mut paired_rows = 0;
+    for row in alignment.rows() {
+        let (Some(base), Some(current)) = (row.base, row.modified) else {
+            continue;
+        };
+        paired_rows += 1;
+        assert_eq!(
+            current_line_top(app, baseline, base),
+            current_line_top(app, modified, current),
+            "base line {base} and modified line {current} should share a row"
+        );
+    }
+    assert!(paired_rows > 0);
+}
+
+#[test]
+fn test_split_panes_align_every_paired_row() {
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+        // Two removed lines replaced by one, an unchanged run, then two added lines.
+        let base_text = "a\nb\nc\nd\ne\nf\ng\n";
+        let current_text = "a\nX\nd\ne\nNEW1\nNEW2\nf\ng\n";
+        let (modified, baseline, alignment) = split_panes(&mut app, base_text, current_text).await;
+
+        let line_height = app.read(|ctx| modified.as_ref(ctx).line_height(ctx));
+        // "f" sits below one gap row on the right (the unpaired removed line) and two gap rows on
+        // the left (the added lines), so both panes put it at row 7.
+        assert_eq!(alignment.modified_line_for_base_line(5), Some(6));
+        let f_top = current_line_top(&app, &baseline, 5).expect("line should be laid out");
+        assert_eq!(f_top.as_f32(), 7. * line_height);
+        assert_rows_aligned(&app, &modified, &baseline, &alignment);
+    })
+}
+
+#[test]
+fn test_split_modified_pane_draws_gaps_instead_of_removed_text() {
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+        // Two removed lines replaced by one: one unpaired removed line becomes one gap row.
+        let base_text = "a\nb\nc\nd\n";
+        let current_text = "a\nX\nd\n";
+        let (modified, _, _) = split_panes(&mut app, base_text, current_text).await;
+
+        let line_height = app.read(|ctx| modified.as_ref(ctx).line_height(ctx));
+        // Unified would stack two removed lines above "X"; split shows only "X" and a gap row
+        // before "d".
+        let x_top = current_line_top(&app, &modified, 1).unwrap();
+        let d_top = current_line_top(&app, &modified, 2).unwrap();
+        assert_eq!(x_top.as_f32(), line_height);
+        assert_eq!(d_top.as_f32(), 3. * line_height);
+    })
+}
+
+#[test]
+fn test_split_baseline_fills_survive_selection_changes() {
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+        let base_text = "a\nb\nc\nd\ne\nf\ng\n";
+        let current_text = "a\nX\nd\ne\nNEW1\nNEW2\nf\ng\n";
+        let (modified, baseline, alignment) = split_panes(&mut app, base_text, current_text).await;
+        let line_decorations = |app: &App| {
+            app.read(|ctx| {
+                baseline
+                    .as_ref(ctx)
+                    .render_state()
+                    .as_ref(ctx)
+                    .decorations()
+                    .line_decoration_ranges()
+                    .to_vec()
+            })
+        };
+        let before = line_decorations(&app);
+        assert!(!before.is_empty());
+
+        baseline.update(&mut app, |editor, ctx| {
+            editor.select_all(ctx);
+            editor.cursor_at(CharOffset::from(1), ctx);
+        });
+        layout_model(&mut app, &baseline).await;
+
+        assert_eq!(line_decorations(&app), before);
+        assert_rows_aligned(&app, &modified, &baseline, &alignment);
+    })
+}
+
+#[test]
+fn test_split_alignment_counts_lines_with_and_without_a_trailing_newline() {
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+        for (base_text, current_text) in [("a\nb\nc\n", "a\nB\nc\n"), ("a\nb\nc", "a\nB\nc")] {
+            let modified =
+                mock_model_with_diff(&mut app, base_text, current_text, ContentVersion::new());
+            layout_model(&mut app, &modified).await;
+            compute_diff_and_expand(&mut app, &modified).await;
+            let alignment = app.read(|ctx| modified.as_ref(ctx).split_diff_alignment(ctx));
+            assert_eq!(
+                alignment.rows().len(),
+                current_text.lines().count(),
+                "{current_text:?}"
+            );
+            assert!(alignment.base_gaps().is_empty(), "{current_text:?}");
+            assert!(alignment.modified_gaps().is_empty(), "{current_text:?}");
+        }
     })
 }

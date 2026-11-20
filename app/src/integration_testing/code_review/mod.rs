@@ -1,7 +1,10 @@
 use warpui::integration::{AssertionCallback, AssertionOutcome, TestStep};
 use warpui::{App, ViewHandle, WindowId, async_assert};
 
+pub use crate::code::diff_layout::DiffLayout;
+use crate::code::diff_layout::switch_diff_layout;
 use crate::code_review::code_review_view::{CodeReviewView, CodeReviewVisibleAnchorForTest};
+use crate::code_review::telemetry_event::DiffLayoutChangeSource;
 
 /// Expected scroll region type for assertions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -285,5 +288,60 @@ pub fn expand_first_hidden_section_and_assert_full_reveal(
             "expected a full expansion to remove exactly one hidden section in {file_path:?} \
              (a chunked reveal would leave the count unchanged)"
         );
+    })
+}
+
+/// Switches the diff layout through `switch_diff_layout`, like the command palette toggle.
+pub fn switch_code_review_diff_layout(layout: DiffLayout) -> TestStep {
+    TestStep::new(&format!("Switch the code review diff layout to {layout:?}")).with_action(
+        move |app, _, _| {
+            app.update(|ctx| {
+                switch_diff_layout(layout, DiffLayoutChangeSource::CommandPalette, ctx);
+            });
+        },
+    )
+}
+
+/// Asserts the file is shown as a split diff whose paired rows line up in both panes.
+pub fn assert_code_review_split_aligned(file_path: impl Into<String>) -> AssertionCallback {
+    let file_path = file_path.into();
+    Box::new(move |app, window_id| {
+        let Some(code_review_view) = try_single_code_review_view(app, window_id) else {
+            return AssertionOutcome::failure(
+                "code review view not yet available in the window".to_string(),
+            );
+        };
+        code_review_view.read(app, |code_review_view, ctx| {
+            match code_review_view.split_alignment_for_test(&file_path, ctx) {
+                None => AssertionOutcome::failure(format!("{file_path} has no base pane")),
+                Some((0, _)) => {
+                    AssertionOutcome::failure("no paired rows were laid out in both panes".into())
+                }
+                Some((_, misaligned)) => async_assert!(
+                    misaligned.is_empty(),
+                    "misaligned (base, modified) rows: {misaligned:?}"
+                ),
+            }
+        })
+    })
+}
+
+/// Asserts the file is shown as a unified diff (no base pane).
+pub fn assert_code_review_unified(file_path: impl Into<String>) -> AssertionCallback {
+    let file_path = file_path.into();
+    Box::new(move |app, window_id| {
+        let Some(code_review_view) = try_single_code_review_view(app, window_id) else {
+            return AssertionOutcome::failure(
+                "code review view not yet available in the window".to_string(),
+            );
+        };
+        code_review_view.read(app, |code_review_view, ctx| {
+            async_assert!(
+                code_review_view
+                    .split_alignment_for_test(&file_path, ctx)
+                    .is_none(),
+                "expected {file_path} to have no base pane"
+            )
+        })
     })
 }

@@ -418,9 +418,43 @@ pub struct EditorWrapper<V: EditorView> {
     find_references_save_position_id: String,
     /// The line where find references card is anchored (if active).
     find_references_anchor: Option<EditorLineLocation>,
+    /// Whether temporary blocks are blank gap rows of a split diff rather than removed lines.
+    /// Gap rows get no gutter content.
+    temporary_blocks_are_gaps: bool,
 }
 
 impl<V: EditorView> EditorWrapper<V> {
+    /// The blank gap rows of a split diff pane, as viewport-relative `(top, height, fill)`.
+    ///
+    /// Gap rows have no gutter element, so their fill is painted from here rather than through
+    /// [`Self::paint_removed_line_overlays`].
+    fn gap_rows(&self) -> Vec<(f32, f32, Option<Fill>)> {
+        if !self.temporary_blocks_are_gaps {
+            return Vec::new();
+        }
+        let Some(blocks) = self.editor.blocks() else {
+            return Vec::new();
+        };
+        blocks
+            .iter()
+            .filter(|block| block.is_temporary())
+            .map(|block| {
+                let top = match &self.editor {
+                    InnerEditor::Lens(element) => {
+                        block.viewport_item().content_offset.as_f32()
+                            - element.starting_renderable_block_offset().unwrap_or(0.)
+                    }
+                    InnerEditor::FullEditor(_) => block.viewport_item().viewport_offset.as_f32(),
+                };
+                (
+                    top,
+                    block.viewport_item().content_size.y(),
+                    block.overlay_decoration(),
+                )
+            })
+            .collect()
+    }
+
     fn paint_removed_line_overlays(
         &self,
         origin: Vector2F,
@@ -540,7 +574,12 @@ impl<V: EditorView> EditorWrapper<V> {
             comment_save_position_id,
             find_references_save_position_id,
             find_references_anchor: None,
+            temporary_blocks_are_gaps: false,
         }
+    }
+
+    pub fn set_temporary_blocks_are_gaps(&mut self, temporary_blocks_are_gaps: bool) {
+        self.temporary_blocks_are_gaps = temporary_blocks_are_gaps;
     }
 
     /// Set the comment box to be displayed at a specific line
@@ -629,6 +668,9 @@ impl<V: EditorView> EditorWrapper<V> {
             // If the block is temporary, don't render line number.
             // Currently, all temporary blocks are removal hunks, either from a deleted section,
             // or the old lines from a replacement hunk.
+            if block.is_temporary() && self.temporary_blocks_are_gaps {
+                continue;
+            }
             if block.is_temporary() {
                 let diff_range = self.diff_status.removed_diff_range(line_count);
                 let range_already_clicked = diff_range
@@ -1376,6 +1418,8 @@ impl<V: EditorView> Element for EditorWrapper<V> {
         ctx.scene
             .start_layer(ClipBounds::BoundedByActiveLayerAnd(overlay_clip));
 
+        let gap_rows = self.gap_rows();
+
         // Added/replaced lines: one rect per LineDecoration range.
         {
             let model = self.model().as_ref(app);
@@ -1388,14 +1432,35 @@ impl<V: EditorView> Element for EditorWrapper<V> {
                 InnerEditor::FullEditor(_) => model.viewport().scroll_top(),
             };
             for decoration in model.decorations().line_decoration_ranges() {
-                let start_y = content.y_offset_at_line(decoration.start);
-                let end_y = content.y_offset_at_line(decoration.end);
+                let start_y = (content.y_offset_at_line(decoration.start) - y_adjustment).as_f32();
+                let mut end_y = (content.y_offset_at_line(decoration.end) - y_adjustment).as_f32();
+                // The next line's offset sits below any gap rows inserted before it. Stop at the
+                // first one so a removed line's fill doesn't spill into the gap rows under it.
+                if let Some(first_gap_top) = gap_rows
+                    .iter()
+                    .map(|(top, _, _)| *top)
+                    .filter(|top| *top >= start_y && *top < end_y)
+                    .reduce(f32::min)
+                {
+                    end_y = first_gap_top;
+                }
                 ctx.scene
                     .draw_rect_without_hit_recording(RectF::new(
-                        origin + vec2f(0., (start_y - y_adjustment).as_f32()),
-                        vec2f(wrapper_size.x(), (end_y - start_y).as_f32()),
+                        origin + vec2f(0., start_y),
+                        vec2f(wrapper_size.x(), end_y - start_y),
                     ))
                     .with_background(decoration.overlay);
+            }
+        }
+
+        for (top, height, fill) in &gap_rows {
+            if let Some(fill) = fill {
+                ctx.scene
+                    .draw_rect_without_hit_recording(RectF::new(
+                        origin + vec2f(0., *top),
+                        vec2f(wrapper_size.x(), *height),
+                    ))
+                    .with_background(*fill);
             }
         }
 
