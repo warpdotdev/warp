@@ -5,6 +5,7 @@ use instant::Instant;
 use itertools::{Either, Itertools};
 use warp_core::features::FeatureFlag;
 use warp_core::ui::theme::AnsiColors;
+use warpui::event::ScrollPhase;
 use warpui::geometry::rect::RectF;
 use warpui::geometry::vector::Vector2F;
 use warpui::{AppContext, EntityId, SingletonEntity, ViewContext, ViewHandle};
@@ -277,15 +278,16 @@ impl Workspace {
         &mut self,
         delta: Vector2F,
         precise: bool,
+        phase: Option<ScrollPhase>,
         now: Instant,
         ctx: &mut ViewContext<Self>,
     ) {
         if !FeatureFlag::Spaces.is_enabled() {
             return;
         }
-        let Some(direction) = self
-            .space_swipe_detector
-            .feed(delta.x(), delta.y(), precise, now)
+        let Some(direction) =
+            self.space_swipe_detector
+                .feed(delta.x(), delta.y(), precise, phase, now)
         else {
             return;
         };

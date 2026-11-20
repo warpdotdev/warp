@@ -437,6 +437,7 @@ fn test_scroll_sender_receives_events_on_scroll() {
                         position: vec2f(100., 150.),
                         delta: vec2f(0., -50.),
                         precise: true,
+                        phase: None,
                         modifiers: Default::default(),
                     },
                     window_id,

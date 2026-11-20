@@ -6,6 +6,7 @@ use session_sharing_protocol::common::SessionId;
 use ui_components::lightbox;
 use warp_util::path::LineAndColumnArg;
 use warpui::accessibility::AccessibilityVerbosity;
+use warpui::event::ScrollPhase;
 use warpui::geometry::rect::RectF;
 use warpui::geometry::vector::Vector2F;
 use warpui::platform::Cursor;
@@ -295,6 +296,7 @@ pub enum WorkspaceAction {
     SwipeSpaces {
         delta: Vector2F,
         precise: bool,
+        phase: Option<ScrollPhase>,
     },
     AddDefaultTab,
     AddTerminalTab {

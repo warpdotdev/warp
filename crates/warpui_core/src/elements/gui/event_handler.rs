@@ -8,7 +8,7 @@ use super::{
     LayoutContext, PaintContext, Point, SelectableElement, Selection, SelectionFragment,
     SizeConstraint, ZIndex,
 };
-use crate::event::{DispatchedEvent, EventDiscriminants, KeyState, ModifiersState};
+use crate::event::{DispatchedEvent, EventDiscriminants, KeyState, ModifiersState, ScrollPhase};
 use crate::keymap::Keystroke;
 use crate::platform::keyboard::KeyCode;
 use crate::text::word_boundaries::WordBoundariesPolicy;
@@ -19,13 +19,14 @@ type HandlerWithModifiers = Box<
     dyn FnMut(&mut EventContext, &AppContext, Vector2F, &ModifiersState) -> DispatchEventResult,
 >;
 /// Receives the scroll delta, whether it is precise (trackpad) rather than line-based (mouse wheel),
-/// and the modifiers.
+/// the trackpad gesture phase if known, and the modifiers.
 type ScrollWheelHandler = Box<
     dyn FnMut(
         &mut EventContext,
         &AppContext,
         Vector2F,
         bool,
+        Option<ScrollPhase>,
         &ModifiersState,
     ) -> DispatchEventResult,
 >;
@@ -208,6 +209,7 @@ impl EventHandler {
                 &AppContext,
                 Vector2F,
                 bool,
+                Option<ScrollPhase>,
                 &ModifiersState,
             ) -> DispatchEventResult,
     {
@@ -379,13 +381,14 @@ impl Element for EventHandler {
                 position,
                 delta,
                 precise,
+                phase,
                 modifiers,
             }) => {
                 if let Some(callback) = self.scroll_wheel.as_ref()
                     && let Some(rect) = ctx.visible_rect(self.origin.unwrap(), self.size().unwrap())
                     && rect.contains_point(*position)
                     && matches!(
-                        callback.borrow_mut()(ctx, app, *delta, *precise, modifiers),
+                        callback.borrow_mut()(ctx, app, *delta, *precise, *phase, modifiers),
                         DispatchEventResult::StopPropagation
                     )
                 {

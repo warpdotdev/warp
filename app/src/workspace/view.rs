@@ -24416,9 +24416,11 @@ impl TypedActionView for Workspace {
             }
             DragSpace { space_id, position } => self.on_space_chip_drag(*space_id, *position, ctx),
             DropSpace => ctx.notify(),
-            SwipeSpaces { delta, precise } => {
-                self.handle_space_swipe(*delta, *precise, Instant::now(), ctx)
-            }
+            SwipeSpaces {
+                delta,
+                precise,
+                phase,
+            } => self.handle_space_swipe(*delta, *precise, *phase, Instant::now(), ctx),
             AddDefaultTab => {
                 let effective_mode = AISettings::as_ref(ctx).default_session_mode(ctx);
                 match effective_mode {
@@ -28317,7 +28319,7 @@ impl View for Workspace {
         #[cfg(any(windows, target_os = "linux"))]
         {
             event_handler =
-                event_handler.on_scroll_wheel(move |ctx, _app, delta, _, modifiers_state| {
+                event_handler.on_scroll_wheel(move |ctx, _app, delta, _, _, modifiers_state| {
                     if !modifiers_state.ctrl {
                         return DispatchEventResult::PropagateToParent;
                     }

@@ -1128,7 +1128,7 @@ fn swipe_spaces(
     let mut now = start;
     for frame in 0..frames {
         now = start + Duration::from_millis(16 * u64::from(frame));
-        workspace.handle_space_swipe(vec2f(dx, 0.), true, now, ctx);
+        workspace.handle_space_swipe(vec2f(dx, 0.), true, None, now, ctx);
     }
     now
 }
@@ -1182,9 +1182,9 @@ fn test_vertical_and_wheel_scrolls_do_not_switch_spaces() {
             let start = Instant::now();
             for frame in 0..20 {
                 let now = start + Duration::from_millis(16 * frame);
-                workspace.handle_space_swipe(vec2f(-2., -20.), true, now, ctx);
+                workspace.handle_space_swipe(vec2f(-2., -20.), true, None, now, ctx);
                 // Shift+wheel: horizontal, but not precise.
-                workspace.handle_space_swipe(vec2f(-20., 0.), false, now, ctx);
+                workspace.handle_space_swipe(vec2f(-20., 0.), false, None, now, ctx);
             }
             assert_eq!(workspace.active_space, first_space);
         });

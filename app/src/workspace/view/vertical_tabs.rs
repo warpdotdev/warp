@@ -1768,8 +1768,12 @@ fn render_vertical_tabs_panel(
     let panel_content = if FeatureFlag::Spaces.is_enabled() {
         EventHandler::new(panel_content)
             .with_always_handle()
-            .on_scroll_wheel(|ctx, _, delta, precise, _| {
-                ctx.dispatch_typed_action(WorkspaceAction::SwipeSpaces { delta, precise });
+            .on_scroll_wheel(|ctx, _, delta, precise, phase, _| {
+                ctx.dispatch_typed_action(WorkspaceAction::SwipeSpaces {
+                    delta,
+                    precise,
+                    phase,
+                });
                 DispatchEventResult::PropagateToParent
             })
             .finish()
