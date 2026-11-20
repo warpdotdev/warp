@@ -477,6 +477,8 @@ async fn wait_for_assignment<P>(
                         "Assignment does not match the prepared generation"
                     );
                     anyhow::ensure!(expires_at > (clock.now)(), "Assignment deadline has expired");
+                    let run_id = execution_config.task_id.inner();
+                    log::info!("Pre-warmed sandbox assigned to run {run_id}");
                     held = Some(Assignment {
                         execution_config: *execution_config,
                         runtime_env,
