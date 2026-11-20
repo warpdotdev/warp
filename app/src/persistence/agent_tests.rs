@@ -59,6 +59,50 @@ fn last_modified_column(conn: &mut SqliteConnection, conversation: &str) -> Naiv
 }
 
 #[test]
+fn upsert_scopes_shared_task_ids_to_each_conversation() {
+    let mut conn = test_connection();
+    let mut original_task = task_with_user_query("shared-task", "Original query", "Original title");
+    let fork_task = task_with_user_query("shared-task", "Fork query", "Fork title");
+
+    upsert_agent_conversation(
+        &mut conn,
+        "original",
+        [&original_task],
+        empty_conversation_data(),
+    )
+    .expect("original upsert should succeed");
+    upsert_agent_conversation(&mut conn, "fork", [&fork_task], empty_conversation_data())
+        .expect("fork upsert should succeed");
+
+    let original = read_agent_conversation_by_id(&mut conn, "original")
+        .expect("original read should succeed")
+        .expect("original should exist");
+    let fork = read_agent_conversation_by_id(&mut conn, "fork")
+        .expect("fork read should succeed")
+        .expect("fork should exist");
+    assert_eq!(original.tasks, vec![original_task.clone()]);
+    assert_eq!(fork.tasks, vec![fork_task.clone()]);
+
+    original_task.description = "Updated original title".to_string();
+    upsert_agent_conversation(
+        &mut conn,
+        "original",
+        [&original_task],
+        empty_conversation_data(),
+    )
+    .expect("original update should succeed");
+
+    let updated_original = read_agent_conversation_by_id(&mut conn, "original")
+        .expect("updated original read should succeed")
+        .expect("original should still exist");
+    let unchanged_fork = read_agent_conversation_by_id(&mut conn, "fork")
+        .expect("unchanged fork read should succeed")
+        .expect("fork should still exist");
+    assert_eq!(updated_original.tasks, vec![original_task]);
+    assert_eq!(unchanged_fork.tasks, vec![fork_task]);
+}
+
+#[test]
 fn upsert_writes_summary_and_metadata_read_skips_tasks() {
     let mut conn = test_connection();
     let task = task_with_user_query("task-1", "Initial query", "Root title");
