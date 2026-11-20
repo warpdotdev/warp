@@ -493,9 +493,6 @@ pub enum FeatureFlag {
     /// Enables the web search UI (when the model executes a web search).
     WebSearchUI,
 
-    /// Enables the web fetch UI (when the model fetches content from URLs).
-    WebFetchUI,
-
     /// Displays debugging IDs for MCP servers, installations, and gallery items.
     McpDebuggingIds,
 
