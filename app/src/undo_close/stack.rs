@@ -15,7 +15,7 @@ use crate::send_telemetry_from_app_ctx;
 use crate::server::telemetry::{TelemetryEvent, UndoCloseItemType};
 use crate::tab::TabData;
 use crate::window_settings::WindowSettings;
-use crate::workspace::Workspace;
+use crate::workspace::{PaneViewLocator, Workspace};
 
 /// A unique identifier for an item in the undo close stack.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -186,6 +186,14 @@ impl UndoCloseStack {
         self.stack
             .iter()
             .any(|undo_data| matches!(&undo_data.closed_item, ClosedItem::Tab { data, .. } if data.pane_group.id() == pane_group_id))
+    }
+
+    /// Removes a pane's undo history without running its cleanup again.
+    pub(crate) fn forget_closed_pane(&mut self, locator: PaneViewLocator) {
+        self.stack.retain(|entry| {
+            !matches!(&entry.closed_item, ClosedItem::Pane { data }
+                if data.pane_group.id() == locator.pane_group_id && data.pane_id == locator.pane_id)
+        });
     }
 
     /// Discards a pane group from the undo close stack early.
