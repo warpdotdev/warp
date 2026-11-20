@@ -13,6 +13,39 @@ pub const WARP_CLI_AGENT_PROTOCOL_VERSION_ENV: &str = "WARP_CLI_AGENT_PROTOCOL_V
 /// Environment variable that identifies the hosting Warp client version.
 pub const WARP_CLIENT_VERSION_ENV: &str = "WARP_CLIENT_VERSION";
 
+/// Schema version emitted on the Warp-to-agent control channel.
+pub const CLI_AGENT_CONTROL_PROTOCOL_VERSION: u32 = 1;
+
+/// Environment variable that advertises the pane-scoped Warp-to-agent control endpoint address.
+pub const WARP_CLI_AGENT_CONTROL_SOCKET_ENV: &str = "WARP_CLI_AGENT_CONTROL_SOCKET";
+
+/// Kinds of Warp-to-agent control events.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CLIAgentControlEventKind {
+    RichInput,
+}
+
+/// Wire representation of a Warp-to-agent control event, sent as one JSON line.
+///
+/// Kept separate from [`CLIAgentNotification`] so the two directions can evolve independently.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CLIAgentControlEvent {
+    pub v: u32,
+    pub event: CLIAgentControlEventKind,
+    pub active: bool,
+}
+
+impl CLIAgentControlEvent {
+    pub fn rich_input(active: bool) -> Self {
+        Self {
+            v: CLI_AGENT_CONTROL_PROTOCOL_VERSION,
+            event: CLIAgentControlEventKind::RichInput,
+            active,
+        }
+    }
+}
+
 /// Wire representation of a structured CLI-agent notification.
 #[skip_serializing_none]
 #[derive(Debug, Clone, Serialize, Deserialize)]
