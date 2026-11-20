@@ -62,6 +62,23 @@ impl AgentNotificationsModel {
     pub(crate) fn notifications(&self) -> &NotificationItems {
         &self.notifications
     }
+    #[cfg(test)]
+    pub(crate) fn add_unread_for_terminal_view(&mut self, terminal_view_id: EntityId) {
+        self.notifications.push(NotificationItem::new(
+            "Agent task".to_owned(),
+            "Task completed.".to_owned(),
+            NotificationCategory::Complete,
+            NotificationSourceAgent::CLI {
+                agent: CLIAgent::Claude,
+                is_ambient: false,
+            },
+            NotificationOrigin::CLISession(terminal_view_id),
+            false,
+            terminal_view_id,
+            vec![],
+            None,
+        ));
+    }
 
     pub(crate) fn mark_item_read(&mut self, id: NotificationId, ctx: &mut ModelContext<Self>) {
         if self.notifications.mark_item_read(id) {
