@@ -390,11 +390,18 @@ impl Entry {
                             job.ignored,
                         ) {
                             Ok(EvaluatedEntry::File { ignored }) => {
-                                if quota == Some(0)
-                                    && options.budget_exceeded_behavior
+                                if quota == Some(0) {
+                                    if options.budget_exceeded_behavior
                                         == BudgetExceededBehavior::FailFast
-                                {
-                                    return Err(BuildTreeError::ExceededMaxFileLimit);
+                                    {
+                                        return Err(BuildTreeError::ExceededMaxFileLimit);
+                                    }
+                                    if !matches_force_included_path(
+                                        &child_path,
+                                        options.force_included_paths,
+                                    ) {
+                                        continue;
+                                    }
                                 }
                                 let metadata =
                                     consume_file(&child_path, ignored, files, &mut quota);
