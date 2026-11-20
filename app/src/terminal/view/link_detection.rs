@@ -23,6 +23,7 @@ cfg_if::cfg_if! {
         use unicode_width::UnicodeWidthChar;
         use warp_util::path::CleanPathResult;
         use warp_util::path::LineAndColumnArg;
+        use warpui::AppContext;
     }
 }
 
@@ -517,8 +518,8 @@ impl super::TerminalView {
                     .link_at_range(url, RespectObfuscatedSecrets::No);
                 ctx.open_url(&uri);
             }
-            GridHighlightedLink::Hyperlink { uri, .. } => {
-                self.open_hyperlink_uri(uri, ctx);
+            GridHighlightedLink::Hyperlink { link, uri } => {
+                self.open_grid_hyperlink(link, uri, ctx);
             }
         };
     }
@@ -561,6 +562,68 @@ impl super::TerminalView {
 // where we can spawn a local tty.
 #[cfg(feature = "local_fs")]
 impl super::TerminalView {
+    /// Returns the local working directory that relative paths at `position` resolve against: the
+    /// current working directory for the alt screen, or the hovered block's pwd for the block
+    /// list. Returns `None` for remote sessions.
+    fn local_pwd_at<T>(&self, position: &WithinModel<T>, ctx: &AppContext) -> Option<String> {
+        match position {
+            WithinModel::AltScreen(_) => self.pwd_if_local(ctx),
+            WithinModel::BlockList(inner) => self
+                .model
+                .lock()
+                .block_list()
+                .block_at(inner.block_index)
+                .filter(|block| !self.is_block_considered_remote(block.session_id(), None, ctx))
+                .and_then(|block| block.pwd().map(String::from)),
+        }
+    }
+
+    fn active_shell_launch_data(&self, ctx: &AppContext) -> Option<ShellLaunchData> {
+        self.active_block_session_id()
+            .and_then(|active_session_id| self.sessions.as_ref(ctx).get(active_session_id))
+            .and_then(|active_session| active_session.launch_data().cloned())
+    }
+
+    /// Resolves an OSC 8 hyperlink URI to an existing local file, along with any `:line:col`
+    /// suffix. Handles `file://` URIs as well as bare absolute, `~`-prefixed, and relative paths,
+    /// which TUIs such as Claude Code emit for files under their working directory.
+    pub(super) fn local_file_for_hyperlink_uri(
+        &self,
+        link: &WithinModel<Link>,
+        uri: &str,
+        ctx: &AppContext,
+    ) -> Option<(PathBuf, Option<LineAndColumnArg>)> {
+        let working_directory = self.local_pwd_at(link, ctx)?;
+        Self::resolve_hyperlink_uri(
+            uri,
+            working_directory,
+            self.active_shell_launch_data(ctx).as_ref(),
+        )
+    }
+
+    fn resolve_hyperlink_uri(
+        uri: &str,
+        working_directory: String,
+        shell_launch_data: Option<&ShellLaunchData>,
+    ) -> Option<(PathBuf, Option<LineAndColumnArg>)> {
+        // Anything other than a `file://` URI is tried as a bare path, since a path with a
+        // `:line` suffix such as `package.json:3` also parses as a URL with a `package.json`
+        // scheme. Only existing files resolve, so real URLs fall through untouched.
+        let path = match url::Url::parse(uri) {
+            Ok(url) if url.scheme() == "file" => {
+                url.to_file_path().ok()?.to_string_lossy().into_owned()
+            }
+            _ => shellexpand::tilde(uri).into_owned(),
+        };
+        let clean_path = CleanPathResult::with_line_and_column_number(&path);
+        let absolute_path = absolute_path_if_valid(
+            &clean_path,
+            ShellPathType::ShellNative(working_directory),
+            shell_launch_data,
+        )?;
+        Some((absolute_path, clean_path.line_and_column_num))
+    }
+
     /// Scans the terminal model at the given position to see if it is
     /// contained within a path that should be linkified.
     fn scan_for_file_path(
@@ -569,29 +632,13 @@ impl super::TerminalView {
         from_editor: TerminalEditor,
         ctx: &mut ViewContext<Self>,
     ) {
-        // For AltScreen we scan for relative path with the current working directory.
-        // For BlockList we scan for relative path with the pwd of the hovered block.
-        let pwd_to_scan_for = match position {
-            WithinModel::AltScreen(_) => self.pwd_if_local(ctx),
-            WithinModel::BlockList(inner) => self
-                .model
-                .lock()
-                .block_list()
-                .block_at(inner.block_index)
-                .filter(|block| !self.is_block_considered_remote(block.session_id(), None, ctx)) // Don't scan for file links if the block is on remote sessions
-                .and_then(|block| block.pwd().map(String::from)),
-        };
-
-        match pwd_to_scan_for {
+        match self.local_pwd_at(&position, ctx) {
             // Check if we are hovering on any file path. Don't scan for file path
             // if user is hovering from an editor like vim or nano.
             Some(path) if matches!(from_editor, TerminalEditor::No) => {
                 let possible_paths = self.model.lock().possible_file_paths_at_point(position);
                 let max_columns = self.size_info.columns;
-                let shell_launch_data = self
-                    .active_block_session_id()
-                    .and_then(|active_session_id| self.sessions.as_ref(ctx).get(active_session_id))
-                    .and_then(|active_session| active_session.launch_data().cloned());
+                let shell_launch_data = self.active_shell_launch_data(ctx);
 
                 // Using the thread builder instead of ctx.spawn here so that the previous
                 // scanning job will be dropped once there is a new scanning job created.

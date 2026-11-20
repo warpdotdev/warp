@@ -29,12 +29,13 @@ use crate::settings::EnforceMinimumContrast;
 use crate::terminal::blockgrid_renderer::GridRenderParams;
 use crate::terminal::find::TerminalFindModel;
 use crate::terminal::grid_renderer::CellGlyphCache;
+use crate::terminal::links::should_directly_open_link;
 use crate::terminal::meta_shortcuts::handle_keystroke_despite_composing;
 use crate::terminal::model::SecretHandle;
 use crate::terminal::model::escape_sequences::{
     KeystrokeWithDetails, ToEscapeSequence, maybe_kitty_keyboard_escape_sequence,
 };
-use crate::terminal::model::grid::grid_handler::{Link, TermMode};
+use crate::terminal::model::grid::grid_handler::{ContainsPoint as _, Link, TermMode};
 use crate::terminal::model::grid::{Dimensions, RespectDisplayedOutput};
 use crate::terminal::model::index::Point;
 use crate::terminal::model::mouse::{MouseAction, MouseButton, MouseState};
@@ -282,7 +283,7 @@ impl AltScreenElement {
                 selection_type,
                 position: local_position,
             }));
-        } else {
+        } else if !self.opens_link_directly(&mouse_state, point) {
             ctx.dispatch_typed_action(TerminalAction::MaybeClearAltSelect);
             ctx.dispatch_typed_action(TerminalAction::AltMouseAction(mouse_state.set_point(point)));
         }
@@ -405,7 +406,9 @@ impl AltScreenElement {
             ctx.dispatch_typed_action(TerminalAction::AltSelect(SelectAction::End));
         }
 
-        if !should_intercept_mouse(&self.model.lock(), mouse_state.modifiers().shift, app) {
+        if !should_intercept_mouse(&self.model.lock(), mouse_state.modifiers().shift, app)
+            && !self.opens_link_directly(&mouse_state, point)
+        {
             ctx.dispatch_typed_action(TerminalAction::AltMouseAction(mouse_state.set_point(point)));
         }
 
@@ -506,6 +509,16 @@ impl AltScreenElement {
             .max(0.)
             .min(total_height as f32 - 1.) as usize;
         Point::new(row, column)
+    }
+
+    /// Whether this click opens the highlighted link at `point` in Warp. Such clicks are not
+    /// reported to a mouse-reporting app, which would otherwise open the link a second time.
+    fn opens_link_directly(&self, mouse_state: &MouseState, point: Point) -> bool {
+        should_directly_open_link(mouse_state.modifiers())
+            && self
+                .highlighted_url
+                .as_ref()
+                .is_some_and(|link| link.contains(point))
     }
 
     /// Renders our own selection.
