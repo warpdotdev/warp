@@ -9,7 +9,8 @@ use crate::ai::agent::base_user_query::warp_client_origin;
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
     AIAgentActionResult, AIAgentActionResultType, AIAgentAttachment, AIAgentContext, AIAgentInput,
-    BaseUserQuery, RunningCommand, TransferShellCommandControlToUserResult, UserQueryMode,
+    BaseUserQuery, RequestFileEditsResult, RunningCommand, TransferShellCommandControlToUserResult,
+    UserQueryMode,
 };
 use crate::terminal::model::block::BlockId;
 
@@ -206,6 +207,49 @@ fn transfer_control_finished_result_converts_to_tool_call_result_input() {
         }
         other => panic!("Expected tool-call-result input, got {other:?}"),
     }
+}
+
+#[test]
+fn refine_rejection_keeps_tool_call_paired() {
+    let input = super::convert_input(vec![
+        AIAgentInput::ActionResult {
+            result: AIAgentActionResult {
+                id: "file_edits_call".to_string().into(),
+                task_id: TaskId::new("task".to_string()),
+                result: AIAgentActionResultType::RequestFileEdits(
+                    RequestFileEditsResult::Cancelled,
+                ),
+            },
+            context: Arc::new([]),
+        },
+        user_query_input("continue after cancellation", None, HashMap::new()),
+    ])
+    .expect("action result and query should convert");
+
+    let Some(api::request::input::Type::UserInputs(user_inputs)) = input.r#type else {
+        panic!("Expected user-inputs request");
+    };
+    assert_eq!(user_inputs.inputs.len(), 2);
+
+    let Some(api::request::input::user_inputs::user_input::Input::ToolCallResult(result)) =
+        user_inputs.inputs[0].input.as_ref()
+    else {
+        panic!("Expected tool-call-result input");
+    };
+    assert_eq!(result.tool_call_id, "file_edits_call");
+    let Some(api::request::input::tool_call_result::Result::ApplyFileDiffs(file_diffs)) =
+        result.result.as_ref()
+    else {
+        panic!("Expected cancelled file-edits result");
+    };
+    assert_eq!(file_diffs.result, None);
+
+    let Some(api::request::input::user_inputs::user_input::Input::UserQuery(query)) =
+        user_inputs.inputs[1].input.as_ref()
+    else {
+        panic!("Expected user-query input");
+    };
+    assert_eq!(query.query, "continue after cancellation");
 }
 
 fn user_query_input(
