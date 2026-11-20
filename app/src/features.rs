@@ -173,8 +173,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::BlocklistMarkdownTableRendering,
         #[cfg(feature = "blocklist_markdown_images")]
         FeatureFlag::BlocklistMarkdownImages,
-        #[cfg(feature = "markdown_mermaid")]
-        FeatureFlag::MarkdownMermaid,
         #[cfg(feature = "editable_markdown_mermaid")]
         FeatureFlag::EditableMarkdownMermaid,
         #[cfg(feature = "image_as_context")]

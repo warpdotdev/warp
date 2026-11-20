@@ -4,7 +4,7 @@
 
 See `specs/GH549/PRODUCT.md` for the full user-facing behavior.
 
-Today the notebook editor unconditionally renders Mermaid-labeled code blocks as diagrams when `FeatureFlag::MarkdownMermaid` is enabled and the interaction state is `Selectable` or `Editable` (governed by `NotebooksEditorModel::render_mermaid_diagrams_in_state`). The new behavior requires every Mermaid block to default to Raw (code-block view) and let the user opt in to diagram rendering per block via an explicit toggle, matching the existing Raw/Rendered segmented control used in the markdown file viewer.
+Today the notebook editor unconditionally renders Mermaid-labeled code blocks as diagrams when the interaction state is `Selectable` or `Editable` (governed by `NotebooksEditorModel::render_mermaid_diagrams_in_state`). The new behavior requires every Mermaid block to default to Raw (code-block view) and let the user opt in to diagram rendering per block via an explicit toggle, matching the existing Raw/Rendered segmented control used in the markdown file viewer.
 
 Relevant files:
 - `crates/editor/src/render/element/mod.rs (880-895)` — `renderable_blocks` match arm for `BlockItem::RunnableCodeBlock` fetches the `runnable_command` via `parent.runnable_command_at(start_offset, ctx)` and passes it to `RenderableRunnableCommand::new` (which calls `render_block_footer`). The `BlockItem::MermaidDiagram` arm does **not** fetch the command, so no footer is rendered — this is the root cause of the toggle disappearing in Rendered mode.
@@ -20,7 +20,7 @@ Relevant files:
 - `app/src/view_components/markdown_toggle_view.rs` — `MarkdownToggleView` wraps `SegmentedControl<MarkdownDisplayMode>` and emits `MarkdownToggleEvent::ModeSelected`; already used by `FileNotebookView`.
 - `app/src/notebooks/file/mod.rs (78-81)` — `MarkdownDisplayMode` enum (`Rendered` / `Raw`).
 
-Current layout-time flow (Mermaid language tag, `FeatureFlag::MarkdownMermaid` enabled):
+Current layout-time flow (Mermaid language tag):
 1. `text.rs` classifies the block as `CodeBlockType::Mermaid`.
 2. `edit.rs` sees `render_mermaid_diagrams == true` and routes based on `AssetCache` state: `Loaded` → `MermaidDiagram`, `Loading` → `MermaidCodeFallback` with pending asset, `FailedToLoad` → `MermaidCodeFallback`.
 3. `RenderableMermaidDiagram` shows "Rendering Mermaid diagram…" while loading, then SVG.
