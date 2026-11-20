@@ -470,6 +470,23 @@ fn spawn_daemon_process() -> Result<()> {
 }
 
 fn spawn_daemon_command(program: &PathBuf) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    if let Some(set_disclaim) = spawn_macos::set_disclaim_fn() {
+        let subcommand = warp_cli::terminal_server_subcommand();
+        let status = spawn_macos::spawn_disclaimed_and_wait(
+            program,
+            &[
+                std::ffi::OsStr::new(&subcommand),
+                std::ffi::OsStr::new("--daemon"),
+            ],
+            set_disclaim,
+        )
+        .context("Failed to spawn terminal daemon")?;
+        if !status.success() {
+            bail!("terminal daemon launcher exited with {status}");
+        }
+        return Ok(());
+    }
     let mut command = command::blocking::Command::new(program);
     command
         .arg(warp_cli::terminal_server_subcommand())
@@ -522,6 +539,10 @@ impl PtyHandle for DaemonPtyHandle {
         self.client.shared.kill_session(self.session_id)
     }
 }
+
+#[cfg(target_os = "macos")]
+#[path = "daemon_spawn_macos.rs"]
+mod spawn_macos;
 
 #[cfg(test)]
 #[path = "daemon_client_tests.rs"]
