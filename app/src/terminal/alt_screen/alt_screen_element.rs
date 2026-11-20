@@ -29,6 +29,7 @@ use crate::settings::EnforceMinimumContrast;
 use crate::terminal::blockgrid_renderer::GridRenderParams;
 use crate::terminal::find::TerminalFindModel;
 use crate::terminal::grid_renderer::CellGlyphCache;
+use crate::terminal::links::should_directly_open_link;
 use crate::terminal::meta_shortcuts::handle_keystroke_despite_composing;
 use crate::terminal::model::SecretHandle;
 use crate::terminal::model::escape_sequences::{
@@ -320,6 +321,7 @@ impl AltScreenElement {
     fn mouse_moved(
         &self,
         local_position: Vector2F,
+        cmd: bool,
         is_synthetic: bool,
         app: &AppContext,
         ctx: &mut EventContext,
@@ -329,12 +331,7 @@ impl AltScreenElement {
         }
 
         let point = self.coord_to_point(local_position);
-
-        // If SGR_MOUSE is set -- we consider user to be in an editor like vim or nano.
-        let from_editor = match self.model.lock().is_term_mode_set(TermMode::SGR_MOUSE) {
-            true => TerminalEditor::Yes,
-            false => TerminalEditor::No,
-        };
+        let from_editor = self.hover_editor_state(cmd);
 
         let grid_point = WithinModel::AltScreen(Point {
             col: point.col,
@@ -366,6 +363,44 @@ impl AltScreenElement {
                 MouseState::new(MouseButton::Move, MouseAction::Pressed, Default::default());
             ctx.dispatch_typed_action(TerminalAction::AltMouseAction(mouse_state.set_point(point)));
         }
+
+        // Allow the event to continue propagating.
+        false
+    }
+
+    /// If SGR_MOUSE is set, we consider the user to be in an editor like vim or nano, which owns
+    /// plain hovers, so file paths are only linkified while the link modifier is held. Hover events
+    /// carry `cmd` but not `ctrl`, so this applies where the link modifier is `cmd`.
+    fn hover_editor_state(&self, cmd: bool) -> TerminalEditor {
+        let link_modifier_held = should_directly_open_link(&ModifiersState {
+            cmd,
+            ..Default::default()
+        });
+        match self.model.lock().is_term_mode_set(TermMode::SGR_MOUSE) && !link_modifier_held {
+            true => TerminalEditor::Yes,
+            false => TerminalEditor::No,
+        }
+    }
+
+    /// Re-runs link detection under the mouse when `cmd` is pressed or released, so a hovered file
+    /// path in a mouse-reporting app is linkified without moving the mouse.
+    fn link_modifier_changed(
+        &self,
+        local_position: Vector2F,
+        cmd: bool,
+        ctx: &mut EventContext,
+    ) -> bool {
+        if self.active_session_state != ActiveSessionState::Active
+            || !self.model.lock().is_term_mode_set(TermMode::SGR_MOUSE)
+        {
+            return false;
+        }
+
+        let point = self.coord_to_point(local_position);
+        ctx.dispatch_typed_action(TerminalAction::MaybeLinkHover {
+            position: Some(WithinModel::AltScreen(point)),
+            from_editor: self.hover_editor_state(cmd),
+        });
 
         // Allow the event to continue propagating.
         false
@@ -933,14 +968,22 @@ impl Element for AltScreenElement {
             ),
             Event::MouseMoved {
                 position,
+                cmd,
                 is_synthetic,
                 ..
             } => {
                 if in_bounds {
-                    self.mouse_moved(to_local(*position), *is_synthetic, app, ctx)
+                    self.mouse_moved(to_local(*position), *cmd, *is_synthetic, app, ctx)
                 } else {
                     self.mouse_out(ctx)
                 }
+            }
+            Event::ModifierStateChanged {
+                mouse_position,
+                modifiers,
+                key_code: Some(KeyCode::SuperLeft | KeyCode::SuperRight),
+            } if in_bounds => {
+                self.link_modifier_changed(to_local(*mouse_position), modifiers.cmd, ctx)
             }
             Event::MiddleMouseDown { position, .. } if in_bounds => {
                 self.middle_mouse_down(to_local(*position), ctx)

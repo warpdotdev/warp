@@ -1369,7 +1369,7 @@ struct FindLinkArg {
     from_editor: TerminalEditor,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TerminalEditor {
     Yes,
     No,
@@ -2623,6 +2623,7 @@ pub struct TerminalView {
     open_rich_content_link_tool_tip: Option<RichContentLinkTooltipInfo>,
 
     last_hover_fragment_boundary: Option<WithinModel<FragmentBoundary>>,
+    last_hover_from_editor: TerminalEditor,
 
     bootstrap_start: Option<Instant>,
     is_login_shell_bootstrapped: bool,
@@ -4413,6 +4414,7 @@ impl TerminalView {
             find_link_tx,
             highlighted_link: HighlightedLinkOption::default(),
             last_hover_fragment_boundary: None,
+            last_hover_from_editor: TerminalEditor::No,
             bootstrap_start: None,
             is_login_shell_bootstrapped: false,
             awaiting_pending_command_completion: false,
