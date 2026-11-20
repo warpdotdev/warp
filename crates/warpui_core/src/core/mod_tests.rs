@@ -1764,6 +1764,228 @@ fn test_dispatch_keystroke_typed_action() -> Result<()> {
     })
 }
 
+/// A keystroke the user has explicitly rebound to an action must trigger that action even when a
+/// view deeper in the responder chain has a default binding for the same keystroke.
+#[test]
+fn test_dispatch_keystroke_prefers_customized_binding_over_default_in_focused_child() -> Result<()>
+{
+    struct View {
+        keymap_context: keymap::Context,
+        handled_actions: Vec<String>,
+    }
+
+    impl Entity for View {
+        type Event = ();
+    }
+
+    impl super::View for View {
+        fn render(&self, _: &AppContext) -> Box<dyn Element> {
+            Empty::new().finish()
+        }
+
+        fn ui_name() -> &'static str {
+            "View"
+        }
+
+        fn keymap_context(&self, _: &AppContext) -> keymap::Context {
+            self.keymap_context.clone()
+        }
+    }
+
+    #[derive(Debug)]
+    struct Action(String);
+
+    impl TypedActionView for View {
+        type Action = Action;
+
+        fn handle_action(&mut self, action: &Action, _: &mut ViewContext<Self>) {
+            self.handled_actions.push(action.0.clone());
+        }
+    }
+
+    impl View {
+        fn new(context: &'static str) -> Self {
+            let mut keymap_context = keymap::Context::default();
+            keymap_context.set.insert(context);
+            View {
+                keymap_context,
+                handled_actions: vec![],
+            }
+        }
+    }
+
+    App::test((), |mut app| async move {
+        let (window_id, parent) =
+            app.add_window(WindowStyle::NotStealFocus, |_| View::new("parent"));
+        let child = app.add_typed_action_view(window_id, |_| View::new("child"));
+        let responder_chain = [parent.id(), child.id()];
+        let keystroke = Keystroke::parse("shift-alt-left")?;
+        let handled_actions = |app: &App, view: &ViewHandle<View>| {
+            view.read(app, |view, _| view.handled_actions.clone())
+        };
+
+        app.update(|ctx| {
+            ctx.register_fixed_bindings([keymap::FixedBinding::new(
+                "shift-alt-left",
+                Action("child-default".into()),
+                id!("child"),
+            )]);
+            ctx.register_editable_bindings([
+                keymap::EditableBinding::new(
+                    "parent:resize",
+                    "Resize",
+                    Action("parent-resize".into()),
+                )
+                .with_context_predicate(id!("parent"))
+                .with_key_binding("cmd-ctrl-left"),
+                keymap::EditableBinding::new(
+                    "child:select",
+                    "Select",
+                    Action("child-select".into()),
+                )
+                .with_context_predicate(id!("child"))
+                .with_key_binding("cmd-ctrl-right"),
+            ]);
+        });
+
+        // By default the focused child consumes the keystroke.
+        assert!(app.dispatch_keystroke(window_id, &responder_chain, &keystroke, false)?);
+        assert_eq!(handled_actions(&app, &child), ["child-default"]);
+        assert!(handled_actions(&app, &parent).is_empty());
+
+        // Once the user rebinds the parent's action to that keystroke, their binding wins over
+        // the child's default.
+        app.update(|ctx| {
+            ctx.set_custom_trigger(
+                "parent:resize".into(),
+                keymap::Trigger::Keystrokes(vec![keystroke.clone()]),
+            )
+        });
+        assert!(app.dispatch_keystroke(window_id, &responder_chain, &keystroke, false)?);
+        assert_eq!(handled_actions(&app, &parent), ["parent-resize"]);
+        assert_eq!(handled_actions(&app, &child), ["child-default"]);
+
+        // Between two customized bindings, the deeper view still takes precedence.
+        app.update(|ctx| {
+            ctx.set_custom_trigger(
+                "child:select".into(),
+                keymap::Trigger::Keystrokes(vec![keystroke.clone()]),
+            )
+        });
+        assert!(app.dispatch_keystroke(window_id, &responder_chain, &keystroke, false)?);
+        assert_eq!(
+            handled_actions(&app, &child),
+            ["child-default", "child-select"]
+        );
+        assert_eq!(handled_actions(&app, &parent), ["parent-resize"]);
+
+        // Resetting both bindings restores the default precedence.
+        app.update(|ctx| {
+            ctx.remove_custom_trigger("parent:resize");
+            ctx.remove_custom_trigger("child:select");
+        });
+        assert!(app.dispatch_keystroke(window_id, &responder_chain, &keystroke, false)?);
+        assert_eq!(
+            handled_actions(&app, &child),
+            ["child-default", "child-select", "child-default"]
+        );
+        assert_eq!(handled_actions(&app, &parent), ["parent-resize"]);
+        Ok(())
+    })
+}
+
+/// A customized multi-keystroke chord must win even when its first keystroke is also a default
+/// binding of a view deeper in the responder chain.
+#[test]
+fn test_dispatch_keystroke_prefers_customized_chord_over_default_in_focused_child() -> Result<()> {
+    struct View {
+        keymap_context: keymap::Context,
+        handled_actions: Vec<String>,
+    }
+
+    impl Entity for View {
+        type Event = ();
+    }
+
+    impl super::View for View {
+        fn render(&self, _: &AppContext) -> Box<dyn Element> {
+            Empty::new().finish()
+        }
+
+        fn ui_name() -> &'static str {
+            "View"
+        }
+
+        fn keymap_context(&self, _: &AppContext) -> keymap::Context {
+            self.keymap_context.clone()
+        }
+    }
+
+    #[derive(Debug)]
+    struct Action(String);
+
+    impl TypedActionView for View {
+        type Action = Action;
+
+        fn handle_action(&mut self, action: &Action, _: &mut ViewContext<Self>) {
+            self.handled_actions.push(action.0.clone());
+        }
+    }
+
+    impl View {
+        fn new(context: &'static str) -> Self {
+            let mut keymap_context = keymap::Context::default();
+            keymap_context.set.insert(context);
+            View {
+                keymap_context,
+                handled_actions: vec![],
+            }
+        }
+    }
+
+    App::test((), |mut app| async move {
+        let (window_id, parent) =
+            app.add_window(WindowStyle::NotStealFocus, |_| View::new("parent"));
+        let child = app.add_typed_action_view(window_id, |_| View::new("child"));
+        let responder_chain = [parent.id(), child.id()];
+        let first = Keystroke::parse("shift-left")?;
+        let second = Keystroke::parse("ctrl-x")?;
+        let handled_actions = |app: &App, view: &ViewHandle<View>| {
+            view.read(app, |view, _| view.handled_actions.clone())
+        };
+
+        app.update(|ctx| {
+            ctx.register_fixed_bindings([keymap::FixedBinding::new(
+                "shift-left",
+                Action("child-default".into()),
+                id!("child"),
+            )]);
+            ctx.register_editable_bindings([keymap::EditableBinding::new(
+                "parent:resize",
+                "Resize",
+                Action("parent-resize".into()),
+            )
+            .with_context_predicate(id!("parent"))
+            .with_key_binding("cmd-ctrl-left")]);
+            ctx.set_custom_trigger(
+                "parent:resize".into(),
+                keymap::Trigger::Keystrokes(vec![first.clone(), second.clone()]),
+            );
+        });
+
+        // The first keystroke of the chord is held pending rather than reaching the child.
+        assert!(app.dispatch_keystroke(window_id, &responder_chain, &first, false)?);
+        assert!(handled_actions(&app, &child).is_empty());
+        assert!(handled_actions(&app, &parent).is_empty());
+
+        // Completing the chord triggers the customized action.
+        assert!(app.dispatch_keystroke(window_id, &responder_chain, &second, false)?);
+        assert_eq!(handled_actions(&app, &parent), ["parent-resize"]);
+        assert!(handled_actions(&app, &child).is_empty());
+        Ok(())
+    })
+}
+
 #[test]
 fn test_dispatch_custom_action_triggers_typed_action() -> Result<()> {
     struct View {

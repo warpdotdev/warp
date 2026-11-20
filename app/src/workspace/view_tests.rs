@@ -1348,6 +1348,85 @@ fn test_markdown_toggle_shortcut_switches_between_raw_and_rendered_panes() {
     });
 }
 
+/// Regression test for warpdotdev/warp#4990: a "Move divider" shortcut the user rebinds to a key
+/// that the focused input editor binds by default must still resize the pane instead of being
+/// consumed by the editor. The issue used `shift-alt-left` (select previous word on macOS); this
+/// test uses `shift-left` (select previous character), which the editor binds on every platform.
+#[test]
+fn test_custom_resize_pane_shortcut_is_not_shadowed_by_input_editor_binding() {
+    use warpui::keymap::{Keystroke, Trigger};
+
+    use crate::settings::import::model::ImportedConfigModel;
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        app.add_singleton_model(ImportedConfigModel::new);
+        app.update(crate::editor::init);
+        app.update(crate::pane_group::init);
+        let workspace = mock_workspace(&mut app);
+        let window_id = app.read(|ctx| workspace.window_id(ctx));
+
+        // Split the tab so there is a divider to move, then type into the focused pane's input.
+        let pane_group = workspace.read(&app, |workspace, _| {
+            workspace.active_tab_pane_group().clone()
+        });
+        pane_group.update(&mut app, |pane_group, ctx| {
+            pane_group.add_terminal_pane(Direction::Right, None, ctx);
+        });
+        let terminal_view = workspace.update(&mut app, |workspace, ctx| {
+            workspace
+                .active_session_view(ctx)
+                .expect("the split pane should have an active session")
+        });
+        let editor = terminal_view.read(&app, |terminal, ctx| {
+            terminal.input().as_ref(ctx).editor().clone()
+        });
+        editor.update(&mut app, |editor, ctx| {
+            editor.user_insert("hello world", ctx)
+        });
+
+        let resize_count: std::rc::Rc<std::cell::RefCell<usize>> = Default::default();
+        let count = resize_count.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&pane_group, move |_, event, _| {
+                if matches!(event, crate::pane_group::Event::AppStateChanged) {
+                    *count.borrow_mut() += 1;
+                }
+            });
+        });
+
+        let keystroke = Keystroke::parse("shift-left").unwrap();
+        app.update(|ctx| {
+            ctx.set_custom_trigger(
+                "pane_group:resize_left".to_owned(),
+                Trigger::Keystrokes(vec![keystroke.clone()]),
+            );
+        });
+
+        // Route the keystroke the way a real key press is: through the input editor and its
+        // ancestors, so the editor's own `shift-left` binding competes with the rebound one.
+        let responder_chain = app.read(|ctx| ctx.view_ancestors(window_id, editor.id()));
+        assert!(responder_chain.contains(&pane_group.id()));
+        let handled = app
+            .dispatch_keystroke(window_id, &responder_chain, &keystroke, false)
+            .unwrap();
+
+        assert!(handled);
+        assert_eq!(
+            *resize_count.borrow(),
+            1,
+            "the rebound shortcut should resize the pane"
+        );
+        editor.read(&app, |editor, ctx| {
+            assert_eq!(
+                editor.selected_text(ctx),
+                "",
+                "the input editor should not consume the rebound shortcut"
+            );
+        });
+    });
+}
+
 /// Regression test for the raw-code toggle: the notebook-viewer target used to
 /// drop the `CodeSource` outright, so the raw view always started at line 1.
 #[cfg(feature = "local_fs")]
