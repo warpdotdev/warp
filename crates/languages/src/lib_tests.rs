@@ -95,3 +95,11 @@ fn markdown_extensions_resolve_to_markdown() {
         );
     }
 }
+
+/// `.sol` should resolve to the Solidity language so the editor applies syntax highlighting.
+#[test]
+fn sol_extension_resolves_to_solidity() {
+    let path = StandardizedPath::try_new("/tmp/Token.sol").expect("test path should be absolute");
+    let language = language_by_filename(&path).expect("`.sol` files should resolve to a language");
+    assert_eq!(language.display_name(), "Solidity");
+}
