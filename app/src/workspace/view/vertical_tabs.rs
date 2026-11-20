@@ -1058,7 +1058,7 @@ fn normalize_summary_text(text: &str) -> Option<String> {
 /// pill prefix in Summary mode. Mirrors the status sources used by `render_detail_status_pill`
 /// in the detail sidecar — CLI agent sessions with rich status, Warp Agent conversations, or
 /// ambient agent sessions. Returns `None` for plain terminals or conversations without status.
-fn summary_conversation_status_for_terminal(
+pub(super) fn summary_conversation_status_for_terminal(
     terminal_view: &TerminalView,
     app: &AppContext,
 ) -> Option<ConversationStatus> {
