@@ -157,12 +157,13 @@ jobs:
             dmg_name_suffix: x86_64
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ needs.prepare_release.outputs.release_branch }}
 
       - uses: ./.github/actions/prepare_environment
         with:
           target_os: macos
           is_self_hosted: false
-          ref: ${{ needs.prepare_release.outputs.release_branch }}
           install_release_deps: true
           install_channel_config: true
 
@@ -286,12 +287,13 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ needs.prepare_release.outputs.release_branch }}
 
       - uses: ./.github/actions/prepare_environment
         with:
           target_os: macos
           is_self_hosted: false
-          ref: ${{ needs.prepare_release.outputs.release_branch }}
           install_release_deps: true
           install_channel_config: true
 
@@ -453,12 +455,13 @@ jobs:
           - arch: x86_64
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ needs.prepare_release.outputs.release_branch }}
 
       - uses: ./.github/actions/prepare_environment
         with:
           target_os: macos
           is_self_hosted: false
-          ref: ${{ needs.prepare_release.outputs.release_branch }}
           install_release_deps: true
           install_channel_config: true
 
@@ -536,12 +539,13 @@ jobs:
           - arch: x86_64
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ needs.prepare_release.outputs.release_branch }}
 
       - uses: ./.github/actions/prepare_environment
         with:
           target_os: macos
           is_self_hosted: false
-          ref: ${{ needs.prepare_release.outputs.release_branch }}
           install_release_deps: true
           install_channel_config: true
 
@@ -647,12 +651,13 @@ jobs:
           - arch: x86_64
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ needs.prepare_release.outputs.release_branch }}
 
       - uses: ./.github/actions/prepare_environment
         with:
           target_os: macos
           is_self_hosted: false
-          ref: ${{ needs.prepare_release.outputs.release_branch }}
           install_release_deps: true
           install_channel_config: true
 
@@ -730,12 +735,13 @@ jobs:
           - arch: x86_64
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ needs.prepare_release.outputs.release_branch }}
 
       - uses: ./.github/actions/prepare_environment
         with:
           target_os: macos
           is_self_hosted: false
-          ref: ${{ needs.prepare_release.outputs.release_branch }}
           install_release_deps: true
           install_channel_config: true
 
@@ -854,12 +860,13 @@ jobs:
             runner: namespace-profile-ubuntu-20-04-arm
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ needs.prepare_release.outputs.release_branch }}
 
       - uses: ./.github/actions/prepare_environment
         with:
           target_os: linux
           is_self_hosted: false
-          ref: ${{ needs.prepare_release.outputs.release_branch }}
           install_release_deps: true
           install_channel_config: true
 
@@ -941,12 +948,13 @@ jobs:
             runner: namespace-profile-ubuntu-20-04-arm
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ needs.prepare_release.outputs.release_branch }}
 
       - uses: ./.github/actions/prepare_environment
         with:
           target_os: linux
           is_self_hosted: false
-          ref: ${{ needs.prepare_release.outputs.release_branch }}
           install_release_deps: true
           install_channel_config: true
 
@@ -1065,12 +1073,13 @@ jobs:
       APPIMAGE_EXTRACT_AND_RUN: "1"
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ needs.prepare_release.outputs.release_branch }}
 
       - uses: ./.github/actions/prepare_environment
         with:
           target_os: linux
           is_self_hosted: false
-          ref: ${{ needs.prepare_release.outputs.release_branch }}
           install_release_deps: true
           install_channel_config: true
 
@@ -1229,12 +1238,13 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ needs.prepare_release.outputs.release_branch }}
 
       - uses: ./.github/actions/prepare_environment
         with:
           target_os: linux
           is_self_hosted: false
-          ref: ${{ needs.prepare_release.outputs.release_branch }}
           install_release_deps: true
           install_channel_config: true
 
@@ -1310,12 +1320,13 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ needs.prepare_release.outputs.release_branch }}
 
       - uses: ./.github/actions/prepare_environment
         with:
           target_os: linux
           is_self_hosted: false
-          ref: ${{ needs.prepare_release.outputs.release_branch }}
           install_release_deps: true
           install_channel_config: true
 
@@ -1509,12 +1520,13 @@ jobs:
       APPIMAGE_EXTRACT_AND_RUN: "1"
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ needs.prepare_release.outputs.release_branch }}
 
       - uses: ./.github/actions/prepare_environment
         with:
           target_os: linux
           is_self_hosted: false
-          ref: ${{ needs.prepare_release.outputs.release_branch }}
           install_release_deps: true
           install_channel_config: true
 
@@ -1601,12 +1613,13 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ needs.prepare_release.outputs.release_branch }}
 
       - uses: ./.github/actions/prepare_environment
         with:
           target_os: linux
           is_self_hosted: false
-          ref: ${{ needs.prepare_release.outputs.release_branch }}
           install_release_deps: true
           install_channel_config: true
 
@@ -1955,12 +1968,13 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ needs.prepare_release.outputs.release_branch }}
 
       - uses: ./.github/actions/prepare_environment
         with:
           target_os: wasm
           is_self_hosted: false
-          ref: ${{ needs.prepare_release.outputs.release_branch }}
           install_channel_config: true
 
       - name: Get channel configuration
@@ -2080,13 +2094,14 @@ jobs:
             runner: windows-arm-latest-large
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ needs.prepare_release.outputs.release_branch }}
 
       - uses: ./.github/actions/prepare_environment
         with:
           target_os: windows
           cache_key: tui-${{ matrix.arch }}
           is_self_hosted: false
-          ref: ${{ needs.prepare_release.outputs.release_branch }}
           install_release_deps: true
           install_channel_config: true
 
@@ -2156,13 +2171,14 @@ jobs:
       TRUSTED_SIGNING_CERT_PROFILE: warpterminal
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ needs.prepare_release.outputs.release_branch }}
 
       - uses: ./.github/actions/prepare_environment
         with:
           target_os: windows
           cache_key: tui-${{ matrix.arch }}
           is_self_hosted: false
-          ref: ${{ needs.prepare_release.outputs.release_branch }}
           install_release_deps: true
           install_channel_config: true
 
@@ -2304,13 +2320,14 @@ jobs:
           #   runner: windows-arm-latest-large
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ needs.prepare_release.outputs.release_branch }}
 
       - uses: ./.github/actions/prepare_environment
         with:
           target_os: windows
           cache_key: cli-${{ matrix.arch }}
           is_self_hosted: false
-          ref: ${{ needs.prepare_release.outputs.release_branch }}
           install_release_deps: true
           install_channel_config: true
 
@@ -2386,13 +2403,14 @@ jobs:
       TRUSTED_SIGNING_CERT_PROFILE: warpterminal
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ needs.prepare_release.outputs.release_branch }}
 
       - uses: ./.github/actions/prepare_environment
         with:
           target_os: windows
           cache_key: cli-${{ matrix.arch }}
           is_self_hosted: false
-          ref: ${{ needs.prepare_release.outputs.release_branch }}
           install_release_deps: true
           install_channel_config: true
 
@@ -2570,13 +2588,14 @@ jobs:
             runner: windows-arm-latest-large
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ needs.prepare_release.outputs.release_branch }}
 
       - uses: ./.github/actions/prepare_environment
         with:
           target_os: windows
           cache_key: ${{ matrix.arch }}
           is_self_hosted: false
-          ref: ${{ needs.prepare_release.outputs.release_branch }}
           install_release_deps: true
           install_channel_config: true
 
@@ -2644,13 +2663,14 @@ jobs:
       TRUSTED_SIGNING_CERT_PROFILE: warpterminal
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ needs.prepare_release.outputs.release_branch }}
 
       - uses: ./.github/actions/prepare_environment
         with:
           target_os: windows
           cache_key: ${{ matrix.arch }}
           is_self_hosted: false
-          ref: ${{ needs.prepare_release.outputs.release_branch }}
           install_release_deps: true
           install_channel_config: true
 
