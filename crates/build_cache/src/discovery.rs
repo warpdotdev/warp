@@ -3,6 +3,7 @@
 //! Repositories are scanned in cache-key order. Each repository root is emitted before marked
 //! descendants selected by a sorted depth-first walk, so scan limits always retain the same roots.
 use std::collections::BTreeSet;
+use std::mem;
 use std::path::{Component, Path, PathBuf};
 
 use sha2::{Digest, Sha256};
@@ -80,6 +81,8 @@ pub(super) struct CandidateKey {
 pub(super) struct CacheCandidate {
     pub key: CandidateKey,
     pub source: RepositoryCacheSource,
+    /// Checkout root of the repository containing `source.cwd`.
+    pub repository_root: PathBuf,
     pub relative_cache_dir: PathBuf,
     pub stable_child_id: Option<String>,
 }
@@ -242,6 +245,7 @@ fn root_candidate(key: RepoCacheKey, source: RepositoryCacheSource) -> CacheCand
             repo_key: key,
             normalized_relative_path: None,
         },
+        repository_root: source.cwd.clone(),
         source,
         stable_child_id: None,
     }
@@ -254,8 +258,9 @@ fn child_candidate(
     normalized_relative_path: PathBuf,
 ) -> CacheCandidate {
     let stable_child_id = stable_child_id(&normalized_relative_path);
-    source.cwd = cwd;
+    let repository_root = mem::replace(&mut source.cwd, cwd);
     CacheCandidate {
+        repository_root,
         relative_cache_dir: PathBuf::from("repos")
             .join(key.as_str())
             .join("nested")
