@@ -2462,7 +2462,8 @@ impl OrchestrationEventStreamer {
         let config = AgentEventDriverConfig::retry_forever(filter.clone(), cursor);
         let source = ServerApiAgentEventSource::new(server_api);
         let hydrator = self.message_hydrator_for_run_id(&self_run_id);
-        let hydrate_new_messages = self.owns_turn_lifecycle(conversation_id, ctx);
+        let hydrate_new_messages = self.owns_turn_lifecycle(conversation_id, ctx)
+            && !self.server_api.uses_session_agent_messages(&self_run_id);
 
         let handle = ctx.spawn(
             async move {

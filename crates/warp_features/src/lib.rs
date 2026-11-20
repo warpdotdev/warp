@@ -875,6 +875,8 @@ pub enum FeatureFlag {
     NamedAgents,
     /// Loads server-owned execution settings for paired cloud agent launches.
     CloudAgentExecutionConfig,
+    /// Delivers cloud agent messages through typed shared-session wakes.
+    SessionAgentMessages,
     /// Enables on-demand Factory repository checkouts and their credential scope.
     FactoryDeferredRepositories,
     /// Gates the driver behavior that writes GitHub credentials to disk
