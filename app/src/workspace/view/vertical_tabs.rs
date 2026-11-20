@@ -1852,6 +1852,9 @@ fn render_space_switcher(
                 .unwrap_or(sub_text);
             let mouse_state = chip_mouse_states.entry(space.id).or_default().clone();
             let is_being_renamed = space_being_renamed == Some(space.id);
+            let is_drop_target = workspace
+                .space_chip_drop
+                .is_some_and(|(target, _)| target == space.id);
             let space_id = space.id;
             let chip = Hoverable::new(mouse_state, move |hover_state| {
                 let dot = ConstrainedBox::new(UiIcon::Ellipse.to_warpui_icon(dot_fill).finish())
@@ -1873,12 +1876,12 @@ fn render_space_switcher(
                 };
                 let background = if is_active {
                     internal_colors::fg_overlay_3(theme)
-                } else if hover_state.is_hovered() {
+                } else if hover_state.is_hovered() || is_drop_target {
                     internal_colors::fg_overlay_2(theme)
                 } else {
                     ThemeFill::Solid(ColorU::transparent_black())
                 };
-                Container::new(
+                let mut container = Container::new(
                     Flex::row()
                         .with_cross_axis_alignment(CrossAxisAlignment::Center)
                         .with_spacing(SPACE_CHIP_DOT_GAP)
@@ -1892,8 +1895,12 @@ fn render_space_switcher(
                         .with_right(SPACE_CHIP_HORIZONTAL_PADDING),
                 )
                 .with_background(background)
-                .with_corner_radius(CornerRadius::with_all(CONTROL_BAR_BUTTON_RADIUS))
-                .finish()
+                .with_corner_radius(CornerRadius::with_all(CONTROL_BAR_BUTTON_RADIUS));
+                if is_drop_target {
+                    container = container
+                        .with_foreground_border(Border::all(1.).with_border_fill(theme.accent()));
+                }
+                container.finish()
             });
             // While renaming, clicks belong to the editor.
             let chip = if is_being_renamed {

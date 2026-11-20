@@ -121,6 +121,7 @@ use warpui::{
     UpdateModel, UpdateView, View, ViewAsRef, ViewContext, ViewHandle, WeakViewHandle, WindowId,
 };
 
+use self::spaces::SpaceChipDrop;
 use self::vertical_tabs::telemetry::{VerticalTabsDisplayOption, VerticalTabsTelemetryEvent};
 use self::vertical_tabs::{
     SummaryPaneKind, SummaryPaneKindIcons, VERTICAL_TABS_SETTINGS_BUTTON_POSITION_ID,
@@ -1069,6 +1070,8 @@ pub struct Workspace {
     stashed_spaces: HashMap<SpaceId, StashedSpace>,
     /// Turns scroll events over the vertical tabs panel into space switches.
     space_swipe_detector: SwipeDetector,
+    /// The switcher chip a dragged tab or group is over, and what dropping there moves.
+    space_chip_drop: Option<(SpaceId, SpaceChipDrop)>,
     /// Per-group hover state for the horizontal tab bar.
     horizontal_tab_group_mouse_states: RefCell<HashMap<TabGroupId, HorizontalTabGroupMouseStates>>,
     tab_rename_editor: ViewHandle<EditorView>,
@@ -3485,6 +3488,7 @@ impl Workspace {
             spaces: vec![initial_space],
             stashed_spaces: HashMap::new(),
             space_swipe_detector: SwipeDetector::default(),
+            space_chip_drop: None,
             horizontal_tab_group_mouse_states: RefCell::default(),
             tab_rename_editor: Self::tab_rename_editor(ctx),
             pane_rename_editor: Self::pane_rename_editor(ctx),
@@ -25002,6 +25006,7 @@ impl TypedActionView for Workspace {
             }
             DropGroup => {
                 send_telemetry_from_ctx!(TelemetryEvent::DragAndDropTabGroup, ctx);
+                self.drop_on_space_chip(ctx);
                 ctx.notify();
             }
             OpenWarpDrive => {
@@ -25437,6 +25442,9 @@ impl TypedActionView for Workspace {
                     }
                 }
                 send_telemetry_from_ctx!(TelemetryEvent::DragAndDropTab, ctx);
+                if !is_cross_window {
+                    self.drop_on_space_chip(ctx);
+                }
                 if is_cross_window {
                     let drop_result =
                         CrossWindowTabDrag::handle(ctx).update(ctx, |drag, ctx| drag.on_drop(ctx));
@@ -29007,6 +29015,15 @@ impl Workspace {
             return;
         }
 
+        let dragged_tab = &self.tabs[current_index];
+        if self.update_space_chip_drop(
+            dragged_tab.draggable_state.dragging_mouse_position(),
+            SpaceChipDrop::Tab(dragged_tab.pane_group.id()),
+            ctx,
+        ) {
+            return;
+        }
+
         // A window whose other spaces still have tabs must not travel with its last visible tab,
         // so that drag detaches the tab into a preview window like a multi-tab drag.
         let source_is_single_tab = self.tabs.len() == 1 && !self.hidden_spaces_have_tabs();
@@ -29643,6 +29660,9 @@ impl Workspace {
         cursor_position: Vector2F,
         ctx: &mut ViewContext<Self>,
     ) {
+        if self.update_space_chip_drop(Some(cursor_position), SpaceChipDrop::Group(group_id), ctx) {
+            return;
+        }
         let Some((first, last)) = group_member_index_range(&self.tabs, group_id) else {
             return;
         };

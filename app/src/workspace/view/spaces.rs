@@ -25,6 +25,14 @@ use crate::workspace::space::{Space, SpaceId, StashedSpace};
 use crate::workspace::swipe_detector::SwipeDirection;
 use crate::workspace::tab_group::{TabGroup, TabGroupId};
 
+/// What a drag over a space switcher chip moves into that space when dropped.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum SpaceChipDrop {
+    /// The tab with this pane group.
+    Tab(EntityId),
+    Group(TabGroupId),
+}
+
 /// What a "Move to space" sidecar item moves.
 #[derive(Clone, Copy)]
 enum MoveToSpaceSource {
@@ -374,6 +382,66 @@ impl Workspace {
             }
         }
         self.spaces.swap(index, target);
+        ctx.notify();
+    }
+
+    /// The switcher chip under `cursor`, unless it is the active space's. Chip positions outlive
+    /// the panel, so this is `None` while the panel isn't shown.
+    fn space_chip_at(&self, cursor: Vector2F, ctx: &ViewContext<Self>) -> Option<SpaceId> {
+        if !FeatureFlag::Spaces.is_enabled()
+            || !uses_vertical_tabs(ctx)
+            || !self.vertical_tabs_panel_open
+        {
+            return None;
+        }
+        self.spaces
+            .iter()
+            .filter(|space| space.id != self.active_space)
+            .find(|space| {
+                ctx.element_position_by_id(space_chip_position_id(space.id))
+                    .is_some_and(|rect| rect.contains_point(cursor))
+            })
+            .map(|space| space.id)
+    }
+
+    /// Highlights the switcher chip under the cursor of a tab or group drag, as the space `source`
+    /// moves to when dropped. Returns whether the cursor is over such a chip, in which case the
+    /// drag shouldn't also reorder tabs.
+    pub(super) fn update_space_chip_drop(
+        &mut self,
+        cursor: Option<Vector2F>,
+        source: SpaceChipDrop,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        let target = cursor
+            .and_then(|cursor| self.space_chip_at(cursor, ctx))
+            .map(|space_id| (space_id, source));
+        if target != self.space_chip_drop {
+            self.space_chip_drop = target;
+            ctx.notify();
+        }
+        target.is_some()
+    }
+
+    /// Moves a tab or group dropped on a switcher chip to that space, like "Move to space".
+    pub(super) fn drop_on_space_chip(&mut self, ctx: &mut ViewContext<Self>) {
+        let Some((space_id, source)) = self.space_chip_drop.take() else {
+            return;
+        };
+        match source {
+            SpaceChipDrop::Tab(pane_group_id) => {
+                if let Some(index) = self
+                    .tabs
+                    .iter()
+                    .position(|tab| tab.pane_group.id() == pane_group_id)
+                {
+                    self.move_tab_to_space(index, Some(space_id), ctx);
+                }
+            }
+            SpaceChipDrop::Group(group_id) => {
+                self.move_tab_group_to_space(group_id, Some(space_id), ctx)
+            }
+        }
         ctx.notify();
     }
 

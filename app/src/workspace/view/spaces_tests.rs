@@ -23,7 +23,7 @@ use crate::workspace::tab_group::{TabGroup, TabGroupId};
 use crate::workspace::tab_settings::TabSettings;
 use crate::workspace::util::PaneViewLocator;
 use crate::workspace::view::Workspace;
-use crate::workspace::view::spaces::space_chip_drag_index;
+use crate::workspace::view::spaces::{SpaceChipDrop, space_chip_drag_index};
 use crate::workspace::view::tests::{initialize_app, mock_workspace, restored_workspace};
 use crate::workspace::view::vertical_tabs::space_chip_position_id;
 
@@ -1558,6 +1558,149 @@ fn test_space_chip_click_double_click_and_right_click_still_work() {
                 workspace.current_workspace_state.space_being_renamed(),
                 Some(second_space)
             );
+        });
+    });
+}
+
+/// Presses the left button at `from` and drags to `to` without releasing.
+fn press_and_drag(app: &mut App, window_id: WindowId, from: Vector2F, to: Vector2F) {
+    const STEPS: u16 = 12;
+    send_mouse_event(
+        app,
+        window_id,
+        Event::LeftMouseDown {
+            position: from,
+            modifiers: Default::default(),
+            click_count: 1,
+            is_first_mouse: false,
+        },
+    );
+    for step in 1..=STEPS {
+        let position = from + (to - from) * (f32::from(step) / f32::from(STEPS));
+        send_mouse_event(
+            app,
+            window_id,
+            Event::LeftMouseDragged {
+                position,
+                modifiers: Default::default(),
+            },
+        );
+    }
+}
+
+fn release_mouse(app: &mut App, window_id: WindowId, position: Vector2F) {
+    send_mouse_event(
+        app,
+        window_id,
+        Event::LeftMouseUp {
+            position,
+            modifiers: Default::default(),
+        },
+    );
+}
+
+#[test]
+fn test_dropping_a_tab_on_a_space_chip_moves_it_to_that_space() {
+    let _vertical_tabs_guard = FeatureFlag::VerticalTabs.override_enabled(true);
+    let _grouped_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+    let _spaces_guard = FeatureFlag::Spaces.override_enabled(true);
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        let (window_id, first_space, second_space, tab_ids) =
+            workspace.update(&mut app, |workspace, ctx| {
+                let first_space = workspace.active_space;
+                workspace.handle_action(&WorkspaceAction::NewSpace, ctx);
+                let second_space = workspace.active_space;
+                workspace.handle_action(&WorkspaceAction::SwitchToSpace(1), ctx);
+                workspace.add_terminal_tab(false, ctx);
+                workspace.add_terminal_tab(false, ctx);
+                workspace.activate_tab(0, ctx);
+                (
+                    ctx.window_id(),
+                    first_space,
+                    second_space,
+                    live_tab_ids(workspace),
+                )
+            });
+        let second_space_tabs =
+            workspace.read(&app, |workspace, _| tab_ids_in(workspace, second_space));
+        open_vertical_tabs_panel(&mut app, &workspace);
+
+        let row = element_rect(&app, window_id, &tab_position_id(1)).center();
+        let chip = chip_rect(&app, window_id, second_space).center();
+        press_and_drag(&mut app, window_id, row, chip);
+        workspace.read(&app, |workspace, _| {
+            assert_eq!(
+                workspace.space_chip_drop,
+                Some((second_space, SpaceChipDrop::Tab(tab_ids[1])))
+            );
+        });
+        release_mouse(&mut app, window_id, chip);
+
+        workspace.read(&app, |workspace, _| {
+            assert_eq!(workspace.space_chip_drop, None);
+            assert_eq!(workspace.active_space, first_space);
+            assert_eq!(live_tab_ids(workspace), vec![tab_ids[0], tab_ids[2]]);
+            assert_eq!(workspace.active_tab_pane_group().id(), tab_ids[0]);
+            let mut expected = second_space_tabs.clone();
+            expected.push(tab_ids[1]);
+            assert_eq!(tab_ids_in(workspace, second_space), expected);
+        });
+
+        // The active space's own chip isn't a drop target: the drag reorders as usual.
+        let row = element_rect(&app, window_id, &tab_position_id(0)).center();
+        let own_chip = chip_rect(&app, window_id, first_space).center();
+        press_and_drag(&mut app, window_id, row, own_chip);
+        workspace.read(&app, |workspace, _| {
+            assert_eq!(workspace.space_chip_drop, None);
+        });
+        release_mouse(&mut app, window_id, own_chip);
+        workspace.read(&app, |workspace, _| {
+            assert_eq!(live_tab_ids(workspace), vec![tab_ids[2], tab_ids[0]]);
+        });
+    });
+}
+
+#[test]
+fn test_dropping_a_tab_group_on_a_space_chip_moves_the_group() {
+    let _vertical_tabs_guard = FeatureFlag::VerticalTabs.override_enabled(true);
+    let _grouped_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+    let _spaces_guard = FeatureFlag::Spaces.override_enabled(true);
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        let (window_id, second_space, group_id, grouped_tab) =
+            workspace.update(&mut app, |workspace, ctx| {
+                workspace.handle_action(&WorkspaceAction::NewSpace, ctx);
+                let second_space = workspace.active_space;
+                workspace.handle_action(&WorkspaceAction::SwitchToSpace(1), ctx);
+                workspace.add_terminal_tab(false, ctx);
+                workspace.handle_action(&WorkspaceAction::NewTabGroupFromTab(1), ctx);
+                let grouped_tab = workspace.tabs[1].pane_group.id();
+                let group_id = workspace.tabs[1].group_id.expect("tab was grouped");
+                (ctx.window_id(), second_space, group_id, grouped_tab)
+            });
+        open_vertical_tabs_panel(&mut app, &workspace);
+
+        // A group's only member drags the whole group.
+        let row = element_rect(&app, window_id, &tab_position_id(1)).center();
+        let chip = chip_rect(&app, window_id, second_space).center();
+        press_and_drag(&mut app, window_id, row, chip);
+        workspace.read(&app, |workspace, _| {
+            assert_eq!(
+                workspace.space_chip_drop,
+                Some((second_space, SpaceChipDrop::Group(group_id)))
+            );
+        });
+        release_mouse(&mut app, window_id, chip);
+
+        workspace.read(&app, |workspace, _| {
+            assert!(!workspace.tab_groups.contains_key(&group_id));
+            assert!(tab_ids_in(workspace, second_space).contains(&grouped_tab));
+            assert!(workspace.all_tab_groups().any(|group| group.id == group_id));
         });
     });
 }
