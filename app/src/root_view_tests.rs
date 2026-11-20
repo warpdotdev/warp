@@ -659,3 +659,92 @@ fn onboarding_slides_skip_content_deep_link_terminal() {
         });
     });
 }
+
+#[cfg(all(feature = "local_tty", unix))]
+mod persistent_sessions {
+    use crate::app_state::{
+        AppState, LeafContents, LeafSnapshot, PaneNodeSnapshot, TabSnapshot, TerminalPaneSnapshot,
+        WindowSnapshot,
+    };
+    use crate::root_view::persistent_sessions_to_keep;
+    use crate::tab::SelectedTabColor;
+    use crate::terminal::local_tty::server::PersistentSessionId;
+
+    const PANE_UUID: [u8; 16] = [7; 16];
+
+    fn snapshot_with_terminal() -> AppState {
+        AppState {
+            windows: vec![WindowSnapshot {
+                tabs: vec![TabSnapshot {
+                    custom_title: None,
+                    default_directory_color: None,
+                    selected_color: SelectedTabColor::default(),
+                    root: PaneNodeSnapshot::Leaf(LeafSnapshot {
+                        is_focused: true,
+                        custom_vertical_tabs_title: None,
+                        contents: LeafContents::Terminal(TerminalPaneSnapshot {
+                            uuid: PANE_UUID.to_vec(),
+                            cwd: None,
+                            is_active: true,
+                            is_read_only: false,
+                            shell_launch_data: None,
+                            input_config: None,
+                            llm_model_override: None,
+                            active_profile_id: None,
+                            conversation_ids_to_restore: vec![],
+                            active_conversation_id: None,
+                        }),
+                    }),
+                    left_panel: None,
+                    right_panel: None,
+                    group_id: None,
+                    pinned: false,
+                }],
+                active_tab_index: 0,
+                team_uid: None,
+                bounds: None,
+                quake_mode: false,
+                universal_search_width: None,
+                warp_ai_width: None,
+                voltron_width: None,
+                warp_drive_index_width: None,
+                left_panel_open: false,
+                vertical_tabs_panel_open: false,
+                fullscreen_state: Default::default(),
+                left_panel_width: None,
+                right_panel_width: None,
+                agent_management_filters: None,
+                tab_groups: vec![],
+            }],
+            active_window_index: Some(0),
+            block_lists: Default::default(),
+            running_mcp_servers: Default::default(),
+        }
+    }
+
+    #[test]
+    fn nothing_is_pruned_without_a_restored_snapshot() {
+        assert_eq!(persistent_sessions_to_keep(None, true), None);
+        assert_eq!(persistent_sessions_to_keep(None, false), None);
+    }
+
+    #[test]
+    fn restored_terminal_panes_are_kept_when_persisting() {
+        let app_state = snapshot_with_terminal();
+
+        assert_eq!(
+            persistent_sessions_to_keep(Some(&app_state), true),
+            Some(vec![PersistentSessionId(PANE_UUID)])
+        );
+    }
+
+    #[test]
+    fn every_session_is_pruned_when_not_persisting() {
+        let app_state = snapshot_with_terminal();
+
+        assert_eq!(
+            persistent_sessions_to_keep(Some(&app_state), false),
+            Some(vec![])
+        );
+    }
+}

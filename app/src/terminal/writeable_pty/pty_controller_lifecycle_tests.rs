@@ -265,3 +265,81 @@ fn rejected_queued_in_band_start_is_cancelled_without_writing_bytes() {
         drop(model_events_tx);
     });
 }
+
+fn controller_for_test(
+    app: &mut App,
+) -> (
+    ModelHandle<PtyController<TestEventLoopSender>>,
+    TestEventLoopSender,
+    async_channel::Sender<crate::terminal::event::Event>,
+) {
+    let model = terminal_model();
+    let (model_events_tx, model_events_rx) = async_channel::unbounded();
+    let (_executor_command_tx, executor_command_rx) = async_channel::unbounded();
+    let sessions = app.add_model(|_| Sessions::new_for_test());
+    let model_events =
+        app.add_model(|ctx| ModelEventDispatcher::new(model_events_rx, sessions.clone(), ctx));
+    let line_editor_status =
+        app.add_model(|ctx| LineEditorStatus::new(model_events.clone(), sessions.clone(), ctx));
+    let sender = TestEventLoopSender::default();
+    let controller = app.add_model(|ctx| {
+        PtyController::new(
+            sender.clone(),
+            model_events,
+            line_editor_status,
+            sessions,
+            executor_command_rx,
+            model.clone(),
+            ctx,
+        )
+    });
+    (controller, sender, model_events_tx)
+}
+
+fn bash_session(id: u64) -> SessionInfo {
+    SessionInfo::new_for_test()
+        .with_id(SessionId::from(id))
+        .with_shell_type(ShellType::Bash)
+}
+
+#[test]
+fn skip_bootstrap_write_skips_only_one_init_shell_for_its_session() {
+    App::test((), |mut app| async move {
+        let (controller, sender, model_events_tx) = controller_for_test(&mut app);
+        let session_info = bash_session(4242);
+
+        controller.update(&mut app, |controller, ctx| {
+            controller.skip_bootstrap_write_for(SessionId::from(4242));
+            controller.initialize_shell(&session_info, ctx);
+        });
+        assert!(sender.messages.lock().is_empty());
+
+        controller.update(&mut app, |controller, ctx| {
+            controller.initialize_shell(&session_info, ctx);
+        });
+        assert!(!sender.messages.lock().is_empty());
+
+        drop(model_events_tx);
+    });
+}
+
+#[test]
+fn skip_bootstrap_write_is_cleared_by_another_session() {
+    App::test((), |mut app| async move {
+        let (controller, sender, model_events_tx) = controller_for_test(&mut app);
+
+        controller.update(&mut app, |controller, ctx| {
+            controller.skip_bootstrap_write_for(SessionId::from(4242));
+            controller.initialize_shell(&bash_session(7), ctx);
+        });
+        let writes_for_other_session = sender.messages.lock().len();
+        assert!(writes_for_other_session > 0);
+
+        controller.update(&mut app, |controller, ctx| {
+            controller.initialize_shell(&bash_session(4242), ctx);
+        });
+        assert!(sender.messages.lock().len() > writes_for_other_session);
+
+        drop(model_events_tx);
+    });
+}

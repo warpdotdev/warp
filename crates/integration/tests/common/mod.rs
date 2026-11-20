@@ -43,6 +43,7 @@ pub fn run_integration_test(name: &str) -> Result<(), String> {
         keep_going = match Command::new(env!("CARGO_BIN_EXE_integration"))
             .arg(name)
             .env_clear()
+            .env("WARP_TERMINAL_DAEMON_IDLE_SECS", "1")
             .envs(inherited_envs)
             .env("WARP_INTEGRATION", "1")
             .stdout(Stdio::inherit())

@@ -251,6 +251,21 @@ impl TerminalPane {
             window_id,
             view.model.lock().shared_session_status().clone(),
         )
+        .with_persists_after_quit(self.persists_after_quit(app))
+    }
+
+    #[cfg(all(feature = "local_tty", unix))]
+    fn persists_after_quit(&self, app: &AppContext) -> bool {
+        use crate::terminal::local_tty::spawner::PtySpawner;
+
+        app.has_singleton_model::<PtySpawner>()
+            && uuid::Uuid::from_slice(&self.uuid)
+                .is_ok_and(|uuid| PtySpawner::as_ref(app).is_persistent_session_backed(uuid.into()))
+    }
+
+    #[cfg(not(all(feature = "local_tty", unix)))]
+    fn persists_after_quit(&self, _app: &AppContext) -> bool {
+        false
     }
 
     pub fn terminal_pane_id(&self) -> TerminalPaneId {
