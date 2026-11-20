@@ -21,6 +21,7 @@ use crate::tab::SelectedTabColor;
 use crate::terminal::ShellLaunchData;
 use crate::themes::theme::AnsiColorIdentifier;
 use crate::workspace::WorkspaceRegistry;
+use crate::workspace::space::SpaceId;
 use crate::workspace::tab_group::TabGroupId;
 use crate::workspace::view::left_panel::ToolPanelView;
 
@@ -43,7 +44,9 @@ pub struct PersistedAgentManagementFilters {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct WindowSnapshot {
+    /// Tabs of every space. Pinned tabs come first, so the list is a valid tab order on its own.
     pub tabs: Vec<TabSnapshot>,
+    /// Index in `tabs` of the active tab of the active space.
     pub active_tab_index: usize,
     pub team_uid: Option<ServerId>,
     pub bounds: Option<RectF>,
@@ -61,6 +64,20 @@ pub struct WindowSnapshot {
     /// Tab groups defined in this window. Group order is implicit from
     /// member tabs' positions, so no explicit ordering is persisted.
     pub tab_groups: Vec<TabGroupSnapshot>,
+    /// Spaces of this window, in switcher order. Empty when the window was saved without the
+    /// Spaces feature.
+    pub spaces: Vec<SpaceSnapshot>,
+    /// The space that was shown when the window was saved.
+    pub active_space: Option<SpaceId>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SpaceSnapshot {
+    pub id: SpaceId,
+    pub name: Option<String>,
+    pub color: SelectedTabColor,
+    /// Index of the space's active tab among the space's own tabs in `WindowSnapshot::tabs`.
+    pub active_tab_index: usize,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -84,6 +101,8 @@ pub struct TabSnapshot {
     pub group_id: Option<TabGroupId>,
     /// True when this tab is pinned to the front of the tab list.
     pub pinned: bool,
+    /// Space this tab belongs to, if any.
+    pub space_id: Option<SpaceId>,
 }
 
 impl TabSnapshot {

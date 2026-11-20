@@ -9,6 +9,7 @@ use warpui::{EntityId, SingletonEntity, ViewContext};
 
 use super::vertical_tabs::space_display_name;
 use super::{Workspace, group_member_indices};
+use crate::app_state::{SpaceSnapshot, TabGroupSnapshot, TabSnapshot, WindowSnapshot};
 use crate::appearance::Appearance;
 use crate::menu::{MenuItem, MenuItemFields};
 use crate::tab::{
@@ -42,17 +43,20 @@ impl MoveToSpaceSource {
 }
 
 impl Workspace {
-    /// All tabs in the window: the active space's first, then hidden spaces' in display order.
-    pub(crate) fn all_tabs(&self) -> impl Iterator<Item = (SpaceId, &TabData)> {
-        let active_space = self.active_space;
-        let active = self.tabs.iter().map(move |tab| (active_space, tab));
-        let hidden = self.spaces.iter().flat_map(|space| {
-            self.stashed_spaces
-                .get(&space.id)
-                .into_iter()
-                .flat_map(|stash| stash.tabs.iter().map(|tab| (space.id, tab)))
-        });
-        active.chain(hidden)
+    /// All tabs in the window in switcher order, each with its space and its index in that space.
+    pub(crate) fn all_tabs(&self) -> impl Iterator<Item = (SpaceId, usize, &TabData)> {
+        self.spaces.iter().flat_map(|space| {
+            let tabs = if space.id == self.active_space {
+                self.tabs.as_slice()
+            } else {
+                self.stashed_spaces
+                    .get(&space.id)
+                    .map_or(&[][..], |stash| stash.tabs.as_slice())
+            };
+            tabs.iter()
+                .enumerate()
+                .map(|(index, tab)| (space.id, index, tab))
+        })
     }
 
     /// All tab groups in the window, across every space.
@@ -576,6 +580,138 @@ impl Workspace {
                 .into_item(),
         );
         menu_items
+    }
+
+    /// Puts the tabs saved by `snapshot` in their persisted order and snapshots the spaces.
+    /// `saved_tabs` are `all_tabs` minus the tabs left out of the snapshot. Pinned tabs of every
+    /// space come first, so a restore that ignores spaces still gets pinned tabs at the front,
+    /// while each space keeps its own tab order. Returns the ordered tabs, the index among them of
+    /// the window's active tab, and the spaces (none while the feature is off).
+    pub(super) fn order_snapshot_tabs(
+        &self,
+        saved_tabs: Vec<(SpaceId, usize, TabSnapshot)>,
+        tab_groups: &[TabGroupSnapshot],
+    ) -> (Vec<TabSnapshot>, usize, Vec<SpaceSnapshot>) {
+        let is_pinned = |tab: &TabSnapshot| {
+            tab.pinned
+                || tab.group_id.is_some_and(|group_id| {
+                    tab_groups
+                        .iter()
+                        .any(|group| group.id == group_id && group.pinned)
+                })
+        };
+        let (pinned, unpinned): (Vec<_>, Vec<_>) = saved_tabs
+            .into_iter()
+            .partition(|(_, _, tab)| is_pinned(tab));
+        let (origins, tabs): (Vec<(SpaceId, usize)>, Vec<TabSnapshot>) = pinned
+            .into_iter()
+            .chain(unpinned)
+            .map(|(space_id, tab_index, tab)| ((space_id, tab_index), tab))
+            .unzip();
+
+        // Where a space's active tab ended up: its index in `tabs` and among the space's own saved
+        // tabs. An active tab left out of the snapshot hands over to the next saved tab.
+        let saved_active_tab = |space_id: SpaceId, active_tab_index: usize| {
+            let space_tabs = origins
+                .iter()
+                .positions(|(tab_space, _)| *tab_space == space_id)
+                .collect_vec();
+            let index_in_space = origins
+                .iter()
+                .filter(|(tab_space, tab_index)| {
+                    *tab_space == space_id && *tab_index < active_tab_index
+                })
+                .count()
+                .min(space_tabs.len().checked_sub(1)?);
+            Some((space_tabs[index_in_space], index_in_space))
+        };
+
+        let active_tab_index = saved_active_tab(self.active_space, self.active_tab_index)
+            .map_or(0, |(index, _)| index);
+        let spaces = if FeatureFlag::Spaces.is_enabled() {
+            self.spaces
+                .iter()
+                .map(|space| {
+                    let space_active_tab_index = if space.id == self.active_space {
+                        self.active_tab_index
+                    } else {
+                        self.stashed_spaces
+                            .get(&space.id)
+                            .map_or(0, |stash| stash.active_tab_index)
+                    };
+                    SpaceSnapshot {
+                        id: space.id,
+                        name: space.name.clone(),
+                        color: space.color,
+                        active_tab_index: saved_active_tab(space.id, space_active_tab_index)
+                            .map_or(0, |(_, index_in_space)| index_in_space),
+                    }
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        (tabs, active_tab_index, spaces)
+    }
+
+    /// Moves the tabs just restored from `window_snapshot`, which are all live and in snapshot
+    /// order, into the snapshot's spaces, and returns the live index of the tab to activate.
+    /// Returns `None` and leaves every tab in the window's single space when the feature is off or
+    /// the snapshot has no spaces. A tab whose space is unknown joins the first space. If the saved
+    /// active space has no tabs, the nearest space with tabs is shown instead, as when the active
+    /// space loses its last tab.
+    pub(super) fn restore_spaces(&mut self, window_snapshot: &WindowSnapshot) -> Option<usize> {
+        if !FeatureFlag::Spaces.is_enabled() || window_snapshot.spaces.is_empty() {
+            return None;
+        }
+        self.spaces = window_snapshot
+            .spaces
+            .iter()
+            .map(|space| Space {
+                id: space.id,
+                name: space.name.clone(),
+                color: space.color,
+            })
+            .collect();
+        let first_space = self.spaces[0].id;
+        let resolve_space = |space_id: Option<SpaceId>| {
+            space_id
+                .filter(|space_id| self.spaces.iter().any(|space| space.id == *space_id))
+                .unwrap_or(first_space)
+        };
+        self.active_space = resolve_space(window_snapshot.active_space);
+        // Parallel to `self.tabs`, which stays in snapshot order as tabs are taken out below.
+        let mut tab_spaces = (0..self.tabs.len())
+            .map(|index| {
+                resolve_space(window_snapshot.tabs.get(index).and_then(|tab| tab.space_id))
+            })
+            .collect_vec();
+
+        let mut stashes = HashMap::new();
+        for saved_space in &window_snapshot.spaces {
+            let indices: HashSet<usize> = tab_spaces
+                .iter()
+                .positions(|space_id| *space_id == saved_space.id)
+                .collect();
+            if indices.is_empty() {
+                continue;
+            }
+            tab_spaces.retain(|space_id| *space_id != saved_space.id);
+            let mut stash = self.take_live_tabs(&indices);
+            stash.active_tab_index = saved_space.active_tab_index.min(stash.tabs.len() - 1);
+            stashes.insert(saved_space.id, stash);
+        }
+        self.replace_live_tabs(stashes.remove(&self.active_space).unwrap_or_default());
+        self.stashed_spaces = stashes;
+
+        if self.tabs.is_empty()
+            && let Some(space_id) = self.nearest_non_empty_space()
+        {
+            let incoming = self.stashed_spaces.remove(&space_id).unwrap_or_default();
+            self.replace_live_tabs(incoming);
+            self.active_space = space_id;
+        }
+        Some(self.active_tab_index)
     }
 
     /// Removes the tab of an exited pane group from a hidden space. Hidden tabs aren't in

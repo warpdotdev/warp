@@ -59,9 +59,10 @@ use super::model::{
     self, AI_DOCUMENT_PANE_KIND, AI_FACT_PANE_KIND, ActiveMCPServer, CODE_PANE_KIND,
     CurrentUserInformation, ENV_VAR_COLLECTION_PANE_KIND, EXECUTION_PROFILE_EDITOR_PANE_KIND,
     MCP_SERVER_PANE_KIND, MCPEnvironmentVariables, NOTEBOOK_PANE_KIND, NewActiveMCPServer, NewApp,
-    NewCommand, NewServerExperiment, NewTab, NewTabGroup, NewTeam, NewWindow, NewWorkspace,
-    NewWorkspaceMetadata, NewWorkspaceTeam, Project, SETTINGS_PANE_KIND, TERMINAL_PANE_KIND, Tab,
-    TabGroup, WORKFLOW_PANE_KIND, Window, WorkspaceMetadata as WorkspaceMetadataModel,
+    NewCommand, NewServerExperiment, NewSpace, NewTab, NewTabGroup, NewTeam, NewWindow,
+    NewWorkspace, NewWorkspaceMetadata, NewWorkspaceTeam, Project, SETTINGS_PANE_KIND, Space,
+    TERMINAL_PANE_KIND, Tab, TabGroup, WORKFLOW_PANE_KIND, Window,
+    WorkspaceMetadata as WorkspaceMetadataModel,
 };
 use super::{
     BlockCompleted, FinishedCommandMetadata, ModelEvent, PersistedData, PersistedDataScope,
@@ -76,8 +77,8 @@ use crate::app_state::{
     AIFactPaneSnapshot, AmbientAgentPaneSnapshot, AppState, BranchSnapshot, CodePaneSnapShot,
     CodePaneTabSnapshot, CodeReviewPaneSnapshot, EnvVarCollectionPaneSnapshot, LeafContents,
     LeafSnapshot, LeftPanelSnapshot, NotebookPaneSnapshot, PaneFlex, PaneNodeSnapshot,
-    RightPanelSnapshot, SettingsPaneSnapshot, SplitDirection, TabGroupSnapshot, TabSnapshot,
-    TerminalPaneSnapshot, WindowSnapshot, WorkflowPaneSnapshot,
+    RightPanelSnapshot, SettingsPaneSnapshot, SpaceSnapshot, SplitDirection, TabGroupSnapshot,
+    TabSnapshot, TerminalPaneSnapshot, WindowSnapshot, WorkflowPaneSnapshot,
 };
 use crate::auth::UserUid;
 use crate::auth::auth_manager::PersistedCurrentUserInformation;
@@ -108,6 +109,7 @@ use crate::terminal::ShellLaunchData;
 use crate::terminal::history::PersistedCommand;
 use crate::themes::theme::AnsiColorIdentifier;
 use crate::workflows::WorkflowId;
+use crate::workspace::space::SpaceId;
 use crate::workspace::tab_group::TabGroupId;
 use crate::workspaces::team::Team as TeamMetadata;
 use crate::workspaces::user_profiles::{UserProfileWithUID, user_profile_from_persistence};
@@ -935,6 +937,7 @@ fn save_app_state(conn: &mut SqliteConnection, app_state: &AppState) -> Result<(
         diesel::delete(schema::pane_nodes::dsl::pane_nodes).execute(conn)?;
         diesel::delete(schema::tabs::dsl::tabs).execute(conn)?;
         diesel::delete(schema::tab_groups::dsl::tab_groups).execute(conn)?;
+        diesel::delete(schema::spaces::dsl::spaces).execute(conn)?;
         diesel::delete(schema::windows::dsl::windows).execute(conn)?;
         diesel::delete(schema::active_mcp_servers::dsl::active_mcp_servers).execute(conn)?;
         diesel::delete(schema::panels::dsl::panels).execute(conn)?;
@@ -985,6 +988,15 @@ fn save_app_state(conn: &mut SqliteConnection, app_state: &AppState) -> Result<(
                     .as_ref()
                     .and_then(|f| serde_json::to_string(f).ok()),
                 team_uid: window.team_uid.map(Into::into),
+                active_space_index: window
+                    .active_space
+                    .and_then(|active_space| {
+                        window
+                            .spaces
+                            .iter()
+                            .position(|space| space.id == active_space)
+                    })
+                    .and_then(|index| index.try_into().ok()),
             };
             diesel::insert_into(schema::windows::dsl::windows)
                 .values(new_window)
@@ -1039,6 +1051,38 @@ fn save_app_state(conn: &mut SqliteConnection, app_state: &AppState) -> Result<(
                 }
             }
 
+            // Like tab groups, spaces are inserted before the tabs that reference them.
+            let mut space_row_ids: HashMap<SpaceId, i32> = HashMap::new();
+            if !window.spaces.is_empty() {
+                let new_spaces: Vec<NewSpace> = window
+                    .spaces
+                    .iter()
+                    .enumerate()
+                    .map(|(position, space)| NewSpace {
+                        window_id,
+                        name: space.name.clone(),
+                        color: match space.color {
+                            SelectedTabColor::Unset => None,
+                            _ => serde_yaml::to_string(&space.color).ok(),
+                        },
+                        position: position.try_into().unwrap_or(i32::MAX),
+                        active_tab_index: space.active_tab_index.try_into().unwrap_or(0),
+                    })
+                    .collect();
+                diesel::insert_into(schema::spaces::dsl::spaces)
+                    .values(new_spaces)
+                    .execute(conn)?;
+
+                let inserted_ids: Vec<i32> = schema::spaces::dsl::spaces
+                    .filter(schema::spaces::columns::window_id.eq(window_id))
+                    .select(schema::spaces::columns::id)
+                    .order(schema::spaces::columns::id.asc())
+                    .load(conn)?;
+                for (space, row_id) in window.spaces.iter().zip(inserted_ids.iter()) {
+                    space_row_ids.insert(space.id, *row_id);
+                }
+            }
+
             let tabs: Vec<NewTab> = window
                 .tabs
                 .iter()
@@ -1056,6 +1100,9 @@ fn save_app_state(conn: &mut SqliteConnection, app_state: &AppState) -> Result<(
                         .group_id
                         .and_then(|group_id| tab_group_row_ids.get(&group_id).copied()),
                     pinned: tab.pinned,
+                    space_id: tab
+                        .space_id
+                        .and_then(|space_id| space_row_ids.get(&space_id).copied()),
                 })
                 .collect();
 
@@ -2544,13 +2591,22 @@ fn read_sqlite_data(
             .load::<TabGroup>(conn)?
             .grouped_by(&db_windows);
 
+        let db_spaces = Space::belonging_to(&db_windows)
+            .order_by((
+                schema::spaces::columns::position.asc(),
+                schema::spaces::columns::id.asc(),
+            ))
+            .load::<Space>(conn)?
+            .grouped_by(&db_windows);
+
         let saved_windows: Vec<_> = db_windows
             .into_iter()
             .enumerate()
             .zip(db_tabs)
             .zip(db_tab_groups)
+            .zip(db_spaces)
             .map(
-                |(((idx, window), tabs_for_window), tab_groups_for_window)| {
+                |((((idx, window), tabs_for_window), tab_groups_for_window), spaces_for_window)| {
                     // Mint a fresh `TabGroupId` per row and build a `row id -> TabGroupId`
                     // map so tabs can be reattached to their group below.
                     let mut tab_group_id_by_row_id: HashMap<i32, TabGroupId> = HashMap::new();
@@ -2571,6 +2627,30 @@ fn read_sqlite_data(
                             pinned: group.pinned,
                         });
                     }
+                    // Space ids are minted fresh too, like tab group ids.
+                    let mut space_id_by_row_id: HashMap<i32, SpaceId> = HashMap::new();
+                    let space_snapshots: Vec<SpaceSnapshot> = spaces_for_window
+                        .into_iter()
+                        .map(|space| {
+                            let space_id = SpaceId::new();
+                            space_id_by_row_id.insert(space.id, space_id);
+                            SpaceSnapshot {
+                                id: space_id,
+                                name: space.name,
+                                color: space
+                                    .color
+                                    .as_deref()
+                                    .and_then(|s| serde_yaml::from_str::<SelectedTabColor>(s).ok())
+                                    .unwrap_or_default(),
+                                active_tab_index: space.active_tab_index.try_into().unwrap_or(0),
+                            }
+                        })
+                        .collect();
+                    let active_space = window
+                        .active_space_index
+                        .and_then(|index| usize::try_from(index).ok())
+                        .and_then(|index| space_snapshots.get(index))
+                        .map(|space| space.id);
                     let saved_tabs: Vec<_> = tabs_for_window
                         .into_iter()
                         .filter_map(|tab| {
@@ -2610,6 +2690,9 @@ fn read_sqlite_data(
                                 right_panel,
                                 group_id,
                                 pinned: tab.pinned,
+                                space_id: tab
+                                    .space_id
+                                    .and_then(|row_id| space_id_by_row_id.get(&row_id).copied()),
                             })
                         })
                         .collect();
@@ -2705,6 +2788,8 @@ fn read_sqlite_data(
                             .agent_management_filters
                             .and_then(|s| serde_json::from_str(&s).ok()),
                         tab_groups: tab_groups_snapshots,
+                        spaces: space_snapshots,
+                        active_space,
                     }
                 },
             )

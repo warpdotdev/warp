@@ -4189,6 +4189,9 @@ impl Workspace {
                             );
                         }
                     });
+                let active_tab_index = self
+                    .restore_spaces(&window_snapshot)
+                    .unwrap_or(active_tab_index);
 
                 if self.tab_count() == 0 {
                     if self.should_trigger_get_started_onboarding(ctx) {
@@ -11926,7 +11929,6 @@ impl Workspace {
             .platform_window(window_id)
             .map(|window| window.fullscreen_state())
             .unwrap_or_default();
-        let active_tab_index = self.active_tab_index();
         let drag_model = CrossWindowTabDrag::as_ref(app);
         // Use the placeholder-aware getter so we don't skip an unrelated
         // tab at a stale `source_tab_index` after a put-back handoff has
@@ -11952,13 +11954,12 @@ impl Workspace {
         } else {
             None
         };
-        // Until spaces are persisted, hidden spaces' tabs are saved after the active space's so
-        // that no tab is lost on restart and `active_tab_index` stays valid.
-        let tabs: Vec<TabSnapshot> = self
+        let tabs: Vec<(SpaceId, usize, TabSnapshot)> = self
             .all_tabs()
-            .enumerate()
-            .filter(|(tab_index, _)| Some(*tab_index) != transferred_tab_index)
-            .map(|(_, (_, tab))| {
+            .filter(|(space_id, tab_index, _)| {
+                *space_id != self.active_space || Some(*tab_index) != transferred_tab_index
+            })
+            .map(|(space_id, tab_index, tab)| {
                 let pane_group_view = &tab.pane_group;
                 let resizable_data = ResizableData::handle(app);
                 let modal_sizes = resizable_data.as_ref(app).get_all_handles(window_id);
@@ -11983,7 +11984,7 @@ impl Workspace {
                     self.compute_left_panel_snapshot(pane_group_view, left_panel_width, app);
                 let right_panel =
                     self.compute_right_panel_snapshot(pane_group_view, right_panel_width, app);
-                TabSnapshot {
+                let tab_snapshot = TabSnapshot {
                     root,
                     custom_title: pane_group.custom_title(app),
                     default_directory_color: tab.default_directory_color,
@@ -11998,9 +11999,11 @@ impl Workspace {
                     // Only persist pinned state when the Pinned Tabs feature is
                     // enabled.
                     pinned: FeatureFlag::PinnedTabs.is_enabled() && tab.pinned,
-                }
+                    space_id: FeatureFlag::Spaces.is_enabled().then_some(space_id),
+                };
+                (space_id, tab_index, tab_snapshot)
             })
-            .filter(|tab| {
+            .filter(|(_, _, tab)| {
                 // Filter out any tab that contains a single, read-only session.
                 !matches!(
                     tab.root,
@@ -12019,7 +12022,7 @@ impl Workspace {
         // This is a safety net and ensures empty groups are not saved/restored.
         let tab_groups: Vec<TabGroupSnapshot> = if FeatureFlag::GroupedTabs.is_enabled() {
             let referenced_group_ids: HashSet<TabGroupId> =
-                tabs.iter().filter_map(|tab| tab.group_id).collect();
+                tabs.iter().filter_map(|(_, _, tab)| tab.group_id).collect();
             self.all_tab_groups()
                 .filter(|group| referenced_group_ids.contains(&group.id))
                 .map(|group| TabGroupSnapshot {
@@ -12033,6 +12036,7 @@ impl Workspace {
         } else {
             Vec::new()
         };
+        let (tabs, active_tab_index, spaces) = self.order_snapshot_tabs(tabs, &tab_groups);
 
         let resizable_data = ResizableData::handle(app);
         let modal_sizes = resizable_data.as_ref(app).get_all_handles(window_id);
@@ -12102,6 +12106,10 @@ impl Workspace {
             right_panel_width,
             agent_management_filters,
             tab_groups,
+            spaces,
+            active_space: FeatureFlag::Spaces
+                .is_enabled()
+                .then_some(self.active_space),
         }
     }
 

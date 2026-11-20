@@ -491,7 +491,7 @@ fn test_open_new_window_for_team_same_team_is_noop() {
     });
 }
 
-fn restored_workspace(
+pub(crate) fn restored_workspace(
     app: &mut App,
     window_snapshot: crate::app_state::WindowSnapshot,
 ) -> ViewHandle<Workspace> {

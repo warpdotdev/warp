@@ -1,15 +1,15 @@
 use warp_core::features::FeatureFlag;
-use warpui::{App, EntityId, SingletonEntity as _, TypedActionView as _};
+use warpui::{App, AppContext, EntityId, SingletonEntity as _, TypedActionView as _, ViewContext};
 
 use crate::appearance::Appearance;
 use crate::menu::MenuItem;
-use crate::tab::SelectedTabColor;
+use crate::tab::{SelectedTabColor, TabData};
 use crate::ui_components::color_dot::TAB_COLOR_OPTIONS;
 use crate::workspace::WorkspaceAction;
 use crate::workspace::space::SpaceId;
 use crate::workspace::tab_group::{TabGroup, TabGroupId};
 use crate::workspace::view::Workspace;
-use crate::workspace::view::tests::{initialize_app, mock_workspace};
+use crate::workspace::view::tests::{initialize_app, mock_workspace, restored_workspace};
 
 #[test]
 fn test_switch_space_restores_each_spaces_active_tab() {
@@ -82,7 +82,7 @@ fn test_new_tab_lands_in_active_space() {
             let tabs_in = |space| {
                 workspace
                     .all_tabs()
-                    .filter(|(tab_space, _)| *tab_space == space)
+                    .filter(|(tab_space, ..)| *tab_space == space)
                     .count()
             };
             assert_eq!(tabs_in(first_space), 1);
@@ -207,8 +207,8 @@ fn live_tab_ids(workspace: &Workspace) -> Vec<EntityId> {
 fn tab_ids_in(workspace: &Workspace, space: SpaceId) -> Vec<EntityId> {
     workspace
         .all_tabs()
-        .filter(|(tab_space, _)| *tab_space == space)
-        .map(|(_, tab)| tab.pane_group.id())
+        .filter(|(tab_space, ..)| *tab_space == space)
+        .map(|(.., tab)| tab.pane_group.id())
         .collect()
 }
 
@@ -691,6 +691,175 @@ fn test_space_management_actions_are_noops_with_flag_disabled() {
             workspace.handle_action(&WorkspaceAction::DeleteActiveSpace, ctx);
             assert_eq!(workspace.spaces.len(), 1);
             assert_eq!(live_tab_ids(workspace), tabs);
+        });
+    });
+}
+
+fn set_active_tab_title(workspace: &Workspace, title: &str, ctx: &mut ViewContext<Workspace>) {
+    workspace
+        .active_tab_pane_group()
+        .update(ctx, |pane_group, ctx| pane_group.set_title(title, ctx));
+}
+
+fn add_titled_tab(workspace: &mut Workspace, title: &str, ctx: &mut ViewContext<Workspace>) {
+    workspace.add_terminal_tab(false, ctx);
+    set_active_tab_title(workspace, title, ctx);
+}
+
+fn tab_title(tab: &TabData, ctx: &AppContext) -> String {
+    tab.pane_group
+        .as_ref(ctx)
+        .custom_title(ctx)
+        .unwrap_or_default()
+}
+
+fn live_tab_titles(workspace: &Workspace, ctx: &AppContext) -> Vec<String> {
+    workspace
+        .tabs
+        .iter()
+        .map(|tab| tab_title(tab, ctx))
+        .collect()
+}
+
+fn tab_titles_in(workspace: &Workspace, space: SpaceId, ctx: &AppContext) -> Vec<String> {
+    workspace
+        .all_tabs()
+        .filter(|(tab_space, ..)| *tab_space == space)
+        .map(|(.., tab)| tab_title(tab, ctx))
+        .collect()
+}
+
+#[test]
+fn test_restore_puts_tabs_of_unknown_spaces_in_first_space() {
+    let _spaces_guard = FeatureFlag::Spaces.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        let mut snapshot = workspace.update(&mut app, |workspace, ctx| {
+            set_active_tab_title(workspace, "first", ctx);
+            workspace.handle_action(&WorkspaceAction::NewSpace, ctx);
+            set_active_tab_title(workspace, "second", ctx);
+            add_titled_tab(workspace, "orphan", ctx);
+            add_titled_tab(workspace, "legacy", ctx);
+            workspace.snapshot(ctx.window_id(), false, ctx)
+        });
+        for tab in &mut snapshot.tabs {
+            match tab.custom_title.as_deref() {
+                // Points at a space that wasn't saved.
+                Some("orphan") => tab.space_id = Some(SpaceId::new()),
+                // Saved before spaces existed.
+                Some("legacy") => tab.space_id = None,
+                _ => {}
+            }
+        }
+
+        let restored = restored_workspace(&mut app, snapshot);
+        restored.read(&app, |workspace, ctx| {
+            assert_eq!(workspace.spaces.len(), 2);
+            assert_eq!(workspace.active_space, workspace.spaces[1].id);
+            assert_eq!(
+                tab_titles_in(workspace, workspace.spaces[0].id, ctx),
+                ["first", "orphan", "legacy"]
+            );
+            assert_eq!(live_tab_titles(workspace, ctx), ["second"]);
+        });
+    });
+}
+
+#[test]
+fn test_restore_with_spaces_disabled_loads_every_tab_in_one_list() {
+    let _pinned_tabs_guard = FeatureFlag::PinnedTabs.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let spaces_enabled = FeatureFlag::Spaces.override_enabled(true);
+        let workspace = mock_workspace(&mut app);
+        let snapshot = workspace.update(&mut app, |workspace, ctx| {
+            set_active_tab_title(workspace, "first", ctx);
+            workspace.handle_action(&WorkspaceAction::NewSpace, ctx);
+            set_active_tab_title(workspace, "second", ctx);
+            add_titled_tab(workspace, "pinned", ctx);
+            workspace.handle_action(&WorkspaceAction::PinTab(1), ctx);
+            assert_eq!(live_tab_titles(workspace, ctx), ["pinned", "second"]);
+            workspace.activate_tab(1, ctx);
+            workspace.snapshot(ctx.window_id(), false, ctx)
+        });
+        drop(spaces_enabled);
+        let _spaces_disabled = FeatureFlag::Spaces.override_enabled(false);
+
+        let restored = restored_workspace(&mut app, snapshot);
+        restored.read(&app, |workspace, ctx| {
+            assert_eq!(workspace.spaces.len(), 1);
+            // The hidden space's pinned tab still lands in the pinned region at the front.
+            assert_eq!(
+                live_tab_titles(workspace, ctx),
+                ["pinned", "first", "second"]
+            );
+            assert!(workspace.tabs[0].pinned);
+            assert_eq!(
+                tab_title(&workspace.tabs[workspace.active_tab_index()], ctx),
+                "second"
+            );
+        });
+    });
+}
+
+#[test]
+fn test_restore_without_space_data_keeps_every_tab_in_one_space() {
+    let _spaces_guard = FeatureFlag::Spaces.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        let mut snapshot = workspace.update(&mut app, |workspace, ctx| {
+            set_active_tab_title(workspace, "first", ctx);
+            workspace.handle_action(&WorkspaceAction::NewSpace, ctx);
+            set_active_tab_title(workspace, "second", ctx);
+            workspace.snapshot(ctx.window_id(), false, ctx)
+        });
+        // As saved before spaces existed.
+        snapshot.spaces.clear();
+        snapshot.active_space = None;
+        for tab in &mut snapshot.tabs {
+            tab.space_id = None;
+        }
+
+        let restored = restored_workspace(&mut app, snapshot);
+        restored.read(&app, |workspace, ctx| {
+            assert_eq!(workspace.spaces.len(), 1);
+            assert_eq!(live_tab_titles(workspace, ctx), ["first", "second"]);
+            assert_eq!(workspace.active_tab_index(), 1);
+        });
+    });
+}
+
+#[test]
+fn test_restore_shows_nearest_space_with_tabs_when_active_space_has_none() {
+    let _spaces_guard = FeatureFlag::Spaces.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        let mut snapshot = workspace.update(&mut app, |workspace, ctx| {
+            set_active_tab_title(workspace, "first", ctx);
+            workspace.handle_action(&WorkspaceAction::NewSpace, ctx);
+            workspace.snapshot(ctx.window_id(), false, ctx)
+        });
+        // The active space's only tab isn't saved, as happens to read-only shared sessions.
+        let active_space = snapshot.active_space;
+        snapshot.tabs.retain(|tab| tab.space_id != active_space);
+        snapshot.active_tab_index = 0;
+
+        let restored = restored_workspace(&mut app, snapshot);
+        restored.read(&app, |workspace, ctx| {
+            assert_eq!(workspace.spaces.len(), 2);
+            assert_eq!(workspace.active_space, workspace.spaces[0].id);
+            assert_eq!(live_tab_titles(workspace, ctx), ["first"]);
         });
     });
 }

@@ -6,10 +6,12 @@ use ai::workspace::WorkspaceMetadata;
 use chrono::{Local, Utc};
 use cloud_object_persistence::to_cloud_object_permissions;
 use diesel::connection::SimpleConnection;
+use itertools::Itertools;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::Vector2F;
 use warp_core::features::FeatureFlag;
 use warp_graphql::scalars::time::ServerTimestamp;
+use warpui::{App, AppContext, TypedActionView as _};
 
 use super::{
     app_database_file_path, database_file_path_for_current_scope, database_file_path_for_scope,
@@ -18,7 +20,7 @@ use super::{
 };
 use crate::app_state::{
     AppState, CodePaneSnapShot, CodePaneTabSnapshot, LeafContents, LeafSnapshot, PaneNodeSnapshot,
-    TabGroupSnapshot, TabSnapshot, TerminalPaneSnapshot, WindowSnapshot,
+    SpaceSnapshot, TabGroupSnapshot, TabSnapshot, TerminalPaneSnapshot, WindowSnapshot,
 };
 use crate::auth::UserUid;
 use crate::cloud_object::{CloudObjectPermissions, Owner};
@@ -34,7 +36,11 @@ use crate::terminal::ShellLaunchData;
 use crate::terminal::model::block::SerializedBlock;
 use crate::terminal::model::session::SessionId;
 use crate::themes::theme::AnsiColorIdentifier;
-use crate::workspace::tab_group::TabGroupId;
+use crate::workspace::WorkspaceAction;
+use crate::workspace::space::{Space, SpaceId};
+use crate::workspace::tab_group::{TabGroup, TabGroupId};
+use crate::workspace::view::Workspace as WorkspaceView;
+use crate::workspace::view::tests::{initialize_app, mock_workspace, restored_workspace};
 use crate::workspaces::team::{MembershipRole, Team, TeamMember};
 use crate::workspaces::user_profiles::UserProfileWithUID;
 use crate::workspaces::workspace::Workspace;
@@ -402,6 +408,7 @@ fn test_terminal_window_snapshot(vertical_tabs_panel_open: bool) -> WindowSnapsh
             right_panel: None,
             group_id: None,
             pinned: false,
+            space_id: None,
         }],
         active_tab_index: 0,
         team_uid: None,
@@ -418,6 +425,8 @@ fn test_terminal_window_snapshot(vertical_tabs_panel_open: bool) -> WindowSnapsh
         right_panel_width: None,
         agent_management_filters: None,
         tab_groups: vec![],
+        spaces: vec![],
+        active_space: None,
     }
 }
 
@@ -517,6 +526,7 @@ fn test_sqlite_round_trips_custom_vertical_tabs_title() {
                 right_panel: None,
                 group_id: None,
                 pinned: false,
+                space_id: None,
             }],
             active_tab_index: 0,
             team_uid: None,
@@ -533,6 +543,8 @@ fn test_sqlite_round_trips_custom_vertical_tabs_title() {
             right_panel_width: None,
             agent_management_filters: None,
             tab_groups: vec![],
+            spaces: vec![],
+            active_space: None,
         }],
         active_window_index: Some(0),
         block_lists: Default::default(),
@@ -596,6 +608,7 @@ fn test_sqlite_round_trips_code_pane_with_multiple_tabs() {
                 right_panel: None,
                 group_id: None,
                 pinned: false,
+                space_id: None,
             }],
             active_tab_index: 0,
             team_uid: None,
@@ -612,6 +625,8 @@ fn test_sqlite_round_trips_code_pane_with_multiple_tabs() {
             right_panel_width: None,
             agent_management_filters: None,
             tab_groups: vec![],
+            spaces: vec![],
+            active_space: None,
         }],
         active_window_index: Some(0),
         block_lists: Default::default(),
@@ -683,6 +698,7 @@ fn test_sqlite_round_trips_tab_groups() {
         right_panel: None,
         group_id: Some(group_id),
         pinned: false,
+        space_id: None,
     };
     let tab_outside_group = TabSnapshot {
         custom_title: None,
@@ -711,6 +727,7 @@ fn test_sqlite_round_trips_tab_groups() {
         right_panel: None,
         group_id: None,
         pinned: false,
+        space_id: None,
     };
 
     let app_state = AppState {
@@ -737,6 +754,8 @@ fn test_sqlite_round_trips_tab_groups() {
                 collapsed: true,
                 pinned: false,
             }],
+            spaces: vec![],
+            active_space: None,
         }],
         active_window_index: Some(0),
         block_lists: Default::default(),
@@ -807,6 +826,7 @@ fn test_sqlite_round_trips_pinned_state() {
         right_panel: None,
         group_id: None,
         pinned: true,
+        space_id: None,
     };
     let unpinned_tab = TabSnapshot {
         custom_title: None,
@@ -835,6 +855,7 @@ fn test_sqlite_round_trips_pinned_state() {
         right_panel: None,
         group_id: Some(unpinned_group_id),
         pinned: false,
+        space_id: None,
     };
     let tab_in_pinned_group = TabSnapshot {
         custom_title: None,
@@ -863,6 +884,7 @@ fn test_sqlite_round_trips_pinned_state() {
         right_panel: None,
         group_id: Some(pinned_group_id),
         pinned: false,
+        space_id: None,
     };
 
     let app_state = AppState {
@@ -898,6 +920,8 @@ fn test_sqlite_round_trips_pinned_state() {
                     pinned: false,
                 },
             ],
+            spaces: vec![],
+            active_space: None,
         }],
         active_window_index: Some(0),
         block_lists: Default::default(),
@@ -935,6 +959,269 @@ fn test_sqlite_round_trips_pinned_state() {
         .expect("unpinned group should restore");
     assert!(restored_pinned_group.pinned);
     assert!(!restored_loose_group.pinned);
+}
+
+fn terminal_tab_in_space(uuid: u8, space_id: Option<SpaceId>, pinned: bool) -> TabSnapshot {
+    TabSnapshot {
+        custom_title: None,
+        root: PaneNodeSnapshot::Leaf(LeafSnapshot {
+            is_focused: true,
+            custom_vertical_tabs_title: None,
+            contents: LeafContents::Terminal(TerminalPaneSnapshot {
+                uuid: vec![uuid],
+                cwd: Some("/tmp".to_string()),
+                shell_launch_data: Some(ShellLaunchData::Executable {
+                    executable_path: PathBuf::from("/bin/zsh"),
+                    shell_type: crate::terminal::shell::ShellType::Zsh,
+                }),
+                is_active: true,
+                is_read_only: false,
+                input_config: None,
+                llm_model_override: None,
+                active_profile_id: None,
+                conversation_ids_to_restore: vec![],
+                active_conversation_id: None,
+            }),
+        }),
+        default_directory_color: None,
+        selected_color: SelectedTabColor::default(),
+        left_panel: None,
+        right_panel: None,
+        group_id: None,
+        pinned,
+        space_id,
+    }
+}
+
+/// Verifies that spaces (order, names, colors, active tabs), each tab's space, and the window's
+/// active space round-trip. Space ids are minted fresh on restore, so tabs are matched to spaces
+/// by position.
+#[test]
+fn test_sqlite_round_trips_spaces() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let mut conn = setup_database(&database_path).expect("database should initialize");
+
+    let work = SpaceId::new();
+    let scratch = SpaceId::new();
+    let infra = SpaceId::new();
+    let mut window_with_spaces = test_terminal_window_snapshot(false);
+    window_with_spaces.tabs = vec![
+        terminal_tab_in_space(10, Some(work), true),
+        terminal_tab_in_space(11, Some(work), false),
+        terminal_tab_in_space(12, Some(infra), false),
+        // Points at a space that isn't saved.
+        terminal_tab_in_space(13, Some(SpaceId::new()), false),
+    ];
+    window_with_spaces.active_tab_index = 2;
+    window_with_spaces.spaces = vec![
+        SpaceSnapshot {
+            id: work,
+            name: Some("Work".to_string()),
+            color: SelectedTabColor::Color(AnsiColorIdentifier::Blue),
+            active_tab_index: 1,
+        },
+        SpaceSnapshot {
+            id: scratch,
+            name: None,
+            color: SelectedTabColor::Cleared,
+            active_tab_index: 0,
+        },
+        SpaceSnapshot {
+            id: infra,
+            name: Some("Infra".to_string()),
+            color: SelectedTabColor::Color(AnsiColorIdentifier::Green),
+            active_tab_index: 0,
+        },
+    ];
+    window_with_spaces.active_space = Some(infra);
+
+    let app_state = AppState {
+        windows: vec![window_with_spaces, test_terminal_window_snapshot(true)],
+        active_window_index: Some(0),
+        block_lists: Default::default(),
+        running_mcp_servers: Default::default(),
+    };
+
+    save_app_state(&mut conn, &app_state).expect("app state should save");
+
+    let restored = read_sqlite_data(&mut conn, None, PersistedDataScope::Full)
+        .expect("app state should load")
+        .app_state
+        .expect("app state should be present for the full scope");
+
+    assert_eq!(restored.windows.len(), 2);
+    let restored_window = &restored.windows[0];
+    let spaces = &restored_window.spaces;
+    assert_eq!(
+        spaces
+            .iter()
+            .map(|space| (space.name.as_deref(), space.color, space.active_tab_index))
+            .collect_vec(),
+        vec![
+            (
+                Some("Work"),
+                SelectedTabColor::Color(AnsiColorIdentifier::Blue),
+                1
+            ),
+            (None, SelectedTabColor::Cleared, 0),
+            (
+                Some("Infra"),
+                SelectedTabColor::Color(AnsiColorIdentifier::Green),
+                0
+            ),
+        ]
+    );
+    assert_eq!(restored_window.active_space, Some(spaces[2].id));
+    assert_eq!(restored_window.active_tab_index, 2);
+    assert_eq!(
+        restored_window
+            .tabs
+            .iter()
+            .map(|tab| tab.space_id)
+            .collect_vec(),
+        vec![
+            Some(spaces[0].id),
+            Some(spaces[0].id),
+            Some(spaces[2].id),
+            None
+        ]
+    );
+    assert!(restored_window.tabs[0].pinned);
+
+    // A window saved without spaces comes back without them.
+    let window_without_spaces = &restored.windows[1];
+    assert!(window_without_spaces.spaces.is_empty());
+    assert_eq!(window_without_spaces.active_space, None);
+    assert_eq!(window_without_spaces.tabs[0].space_id, None);
+}
+
+/// Verifies that a workspace's spaces survive a full restart: workspace snapshot, SQLite, and
+/// restore into a new workspace.
+#[test]
+fn test_spaces_round_trip_from_workspace_through_sqlite() {
+    let _spaces_guard = FeatureFlag::Spaces.override_enabled(true);
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+    let _pinned_tabs_guard = FeatureFlag::PinnedTabs.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        let snapshot = workspace.update(&mut app, |workspace, ctx| {
+            // "Work": a pinned tab, then a group of two whose last tab is active.
+            workspace.add_terminal_tab(false, ctx);
+            workspace.add_terminal_tab(false, ctx);
+            for (tab, title) in workspace.tabs.iter().zip(["pinned", "api", "worker"]) {
+                tab.pane_group
+                    .update(ctx, |pane_group, ctx| pane_group.set_title(title, ctx));
+            }
+            workspace.tabs[0].pinned = true;
+            let group = TabGroup {
+                name: Some("Backend".to_string()),
+                ..TabGroup::new()
+            };
+            workspace.tabs[1].group_id = Some(group.id);
+            workspace.tabs[2].group_id = Some(group.id);
+            workspace.tab_groups.insert(group.id, group);
+            workspace.activate_tab(2, ctx);
+            workspace.spaces[0].name = Some("Work".to_string());
+            workspace.spaces[0].color = SelectedTabColor::Color(AnsiColorIdentifier::Blue);
+
+            // An empty space in the middle.
+            workspace.spaces.push(Space {
+                name: Some("Scratch".to_string()),
+                color: SelectedTabColor::Cleared,
+                ..Space::new()
+            });
+
+            // "Infra" is the active space when the window is saved.
+            workspace.handle_action(&WorkspaceAction::NewSpace, ctx);
+            workspace.add_terminal_tab(false, ctx);
+            for (tab, title) in workspace.tabs.iter().zip(["infra-1", "infra-2"]) {
+                tab.pane_group
+                    .update(ctx, |pane_group, ctx| pane_group.set_title(title, ctx));
+            }
+            workspace.activate_tab(0, ctx);
+            workspace.spaces[2].name = Some("Infra".to_string());
+            workspace.spaces[2].color = SelectedTabColor::Color(AnsiColorIdentifier::Green);
+
+            workspace.snapshot(ctx.window_id(), false, ctx)
+        });
+
+        let tempdir = tempfile::tempdir().expect("tempdir should be created");
+        let mut conn = setup_database(&tempdir.path().join("warp.sqlite"))
+            .expect("database should initialize");
+        let app_state = AppState {
+            windows: vec![snapshot],
+            active_window_index: Some(0),
+            block_lists: Default::default(),
+            running_mcp_servers: Default::default(),
+        };
+        save_app_state(&mut conn, &app_state).expect("app state should save");
+        let mut restored_state = read_sqlite_data(&mut conn, None, PersistedDataScope::Full)
+            .expect("app state should load")
+            .app_state
+            .expect("app state should be present for the full scope");
+
+        let restored = restored_workspace(&mut app, restored_state.windows.remove(0));
+        restored.update(&mut app, |workspace, ctx| {
+            let titles = |workspace: &WorkspaceView, ctx: &AppContext| {
+                workspace
+                    .tabs
+                    .iter()
+                    .map(|tab| {
+                        tab.pane_group
+                            .as_ref(ctx)
+                            .custom_title(ctx)
+                            .unwrap_or_default()
+                    })
+                    .collect_vec()
+            };
+            assert_eq!(
+                workspace
+                    .spaces
+                    .iter()
+                    .map(|space| (space.name.as_deref(), space.color))
+                    .collect_vec(),
+                vec![
+                    (
+                        Some("Work"),
+                        SelectedTabColor::Color(AnsiColorIdentifier::Blue)
+                    ),
+                    (Some("Scratch"), SelectedTabColor::Cleared),
+                    (
+                        Some("Infra"),
+                        SelectedTabColor::Color(AnsiColorIdentifier::Green)
+                    ),
+                ]
+            );
+            assert_eq!(workspace.active_space, workspace.spaces[2].id);
+            assert_eq!(titles(workspace, ctx), ["infra-1", "infra-2"]);
+            assert_eq!(workspace.active_tab_index(), 0);
+            let scratch = workspace.spaces[1].id;
+            assert_eq!(
+                workspace
+                    .all_tabs()
+                    .filter(|(space, ..)| *space == scratch)
+                    .count(),
+                0
+            );
+
+            workspace.switch_space(workspace.spaces[0].id, ctx);
+            assert_eq!(titles(workspace, ctx), ["pinned", "api", "worker"]);
+            assert_eq!(workspace.active_tab_index(), 2);
+            assert!(workspace.tabs[0].pinned);
+            let group_id = workspace.tabs[1]
+                .group_id
+                .expect("the hidden space's group should restore");
+            assert_eq!(workspace.tabs[2].group_id, Some(group_id));
+            assert_eq!(
+                workspace.tab_groups[&group_id].name.as_deref(),
+                Some("Backend")
+            );
+        });
+    });
 }
 
 fn assert_encode_then_decode_preserves_original_path(original_path: PathBuf) {
