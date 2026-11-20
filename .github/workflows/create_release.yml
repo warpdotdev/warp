@@ -2966,7 +2966,7 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.public_github_app_auth.outputs.token }}
           INTERNAL_GH_TOKEN: ${{ steps.github_app_auth.outputs.token }}
-        uses: warpdotdev/oz-agent-action@ccb5247d8faee3d0a4b70b8a776727c8f52e2355 # main
+        uses: warpdotdev/oz-agent-action@8025b8045e60b8733022456300c304a2ed8a3764 # main
         with:
           prompt: |
             Generate a changelog draft for the ${{ inputs.channel }} channel, release tag ${{ needs.prepare_release.outputs.release_tag }}.
