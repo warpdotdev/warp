@@ -24204,6 +24204,11 @@ impl TypedActionView for Workspace {
                     WarpA11yRole::UserAction,
                 ))
             }
+            // Fired on every scroll event / pointer move over the panel; announcing them
+            // would flood screen readers with debug text.
+            WorkspaceAction::SwipeSpaces { .. } | WorkspaceAction::DragSpace { .. } => {
+                ActionAccessibilityContent::Empty
+            }
             _ => ActionAccessibilityContent::from_debug(),
         }
     }
