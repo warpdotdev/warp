@@ -245,6 +245,14 @@ pub enum WorkspaceAction {
     PinActiveTabGroup,
     /// Unpins the active tab's group.
     UnpinActiveTabGroup,
+    /// Switches to the space at the given 1-based position. No-op if it doesn't exist.
+    SwitchToSpace(usize),
+    /// Switches to the next space, without wrapping.
+    NextSpace,
+    /// Switches to the previous space, without wrapping.
+    PrevSpace,
+    /// Creates a new space after the existing ones and switches to it.
+    NewSpace,
     AddDefaultTab,
     AddTerminalTab {
         hide_homepage: bool,
@@ -982,6 +990,10 @@ impl WorkspaceAction {
             | UnpinTabGroup(_)
             | PinActiveTabGroup
             | UnpinActiveTabGroup
+            | SwitchToSpace(_)
+            | NextSpace
+            | PrevSpace
+            | NewSpace
             | ToggleTabColor { .. }
             | ToggleTabGroupColor { .. }
             | AddDefaultTab

@@ -16,6 +16,7 @@ pub(crate) mod onboarding;
 pub(crate) mod openwarp_launch_modal;
 pub(crate) mod orchestration_launch_modal;
 pub(crate) mod right_panel;
+mod spaces;
 mod startup_directory;
 mod tab_grouping;
 #[cfg(test)]
@@ -504,6 +505,7 @@ use crate::workspace::cross_window_tab_drag::{
 use crate::workspace::header_toolbar_editor::{HeaderToolbarEditorEvent, HeaderToolbarEditorModal};
 use crate::workspace::header_toolbar_item::HeaderToolbarItemKind;
 use crate::workspace::one_time_modal_model::OneTimeModalModel;
+use crate::workspace::space::{self, SpaceId, StashedSpace};
 use crate::workspace::sync_inputs::SyncedInputState;
 use crate::workspace::tab_group::{TabGroup, TabGroupId};
 use crate::workspace::tab_settings::TabCloseButtonPosition;
@@ -1057,6 +1059,13 @@ pub struct Workspace {
     traffic_light_mouse_states: TrafficLightMouseStates,
     /// Tab groups in this workspace, keyed by id.
     pub(crate) tab_groups: HashMap<TabGroupId, TabGroup>,
+    /// Spaces in this window, in display order. Never empty.
+    pub(crate) spaces: Vec<space::Space>,
+    /// The space whose tabs are held in the live tab fields (`tabs`, `active_tab_index`,
+    /// `tab_mru_order`, `tab_groups`).
+    pub(crate) active_space: SpaceId,
+    /// Tab state of non-active spaces. A space without an entry has no tabs.
+    stashed_spaces: HashMap<SpaceId, StashedSpace>,
     /// Per-group hover state for the horizontal tab bar.
     horizontal_tab_group_mouse_states: RefCell<HashMap<TabGroupId, HorizontalTabGroupMouseStates>>,
     tab_rename_editor: ViewHandle<EditorView>,
@@ -3449,6 +3458,7 @@ impl Workspace {
             },
         );
 
+        let initial_space = space::Space::new();
         let mut ws = Self {
             tabs: Vec::new(),
             active_tab_index: 0,
@@ -3457,6 +3467,9 @@ impl Workspace {
             tab_bar_hover_state: Default::default(),
             traffic_light_mouse_states: Default::default(),
             tab_groups: HashMap::new(),
+            active_space: initial_space.id,
+            spaces: vec![initial_space],
+            stashed_spaces: HashMap::new(),
             horizontal_tab_group_mouse_states: RefCell::default(),
             tab_rename_editor: Self::tab_rename_editor(ctx),
             pane_rename_editor: Self::pane_rename_editor(ctx),
@@ -11903,11 +11916,14 @@ impl Workspace {
         } else {
             None
         };
+        // Until spaces are persisted, hidden spaces' tabs are saved after the active space's so
+        // that no tab is lost on restart and `active_tab_index` stays valid.
         let tabs: Vec<TabSnapshot> = self
-            .tab_views()
+            .all_tabs()
             .enumerate()
             .filter(|(tab_index, _)| Some(*tab_index) != transferred_tab_index)
-            .map(|(tab_index, pane_group_view)| {
+            .map(|(_, (_, tab))| {
+                let pane_group_view = &tab.pane_group;
                 let resizable_data = ResizableData::handle(app);
                 let modal_sizes = resizable_data.as_ref(app).get_all_handles(window_id);
 
@@ -11934,26 +11950,18 @@ impl Workspace {
                 TabSnapshot {
                     root,
                     custom_title: pane_group.custom_title(app),
-                    default_directory_color: self
-                        .tabs
-                        .get(tab_index)
-                        .and_then(|tab| tab.default_directory_color),
-                    selected_color: self
-                        .tabs
-                        .get(tab_index)
-                        .map(|tab| tab.selected_color)
-                        .unwrap_or_default(),
+                    default_directory_color: tab.default_directory_color,
+                    selected_color: tab.selected_color,
                     left_panel,
                     right_panel,
                     group_id: if FeatureFlag::GroupedTabs.is_enabled() {
-                        self.tabs.get(tab_index).and_then(|tab| tab.group_id)
+                        tab.group_id
                     } else {
                         None
                     },
                     // Only persist pinned state when the Pinned Tabs feature is
                     // enabled.
-                    pinned: FeatureFlag::PinnedTabs.is_enabled()
-                        && self.tabs.get(tab_index).is_some_and(|tab| tab.pinned),
+                    pinned: FeatureFlag::PinnedTabs.is_enabled() && tab.pinned,
                 }
             })
             .filter(|tab| {
@@ -11976,8 +11984,7 @@ impl Workspace {
         let tab_groups: Vec<TabGroupSnapshot> = if FeatureFlag::GroupedTabs.is_enabled() {
             let referenced_group_ids: HashSet<TabGroupId> =
                 tabs.iter().filter_map(|tab| tab.group_id).collect();
-            self.tab_groups
-                .values()
+            self.all_tab_groups()
                 .filter(|group| referenced_group_ids.contains(&group.id))
                 .map(|group| TabGroupSnapshot {
                     id: group.id,
@@ -16344,6 +16351,8 @@ impl Workspace {
 
                 if let Some(tab_index) = tab {
                     self.close_tab(tab_index, true, *add_to_undo_stack, ctx);
+                } else {
+                    self.remove_stashed_tab(pane_group.id(), ctx);
                 }
             }
             pane_group::Event::PaneTitleUpdated => {
@@ -24344,6 +24353,10 @@ impl TypedActionView for Workspace {
                     self.unpin_tab_group(group_id, ctx);
                 }
             }
+            SwitchToSpace(number) => self.switch_to_space_number(*number, ctx),
+            NextSpace => self.switch_to_adjacent_space(1, ctx),
+            PrevSpace => self.switch_to_adjacent_space(-1, ctx),
+            NewSpace => self.create_and_switch_to_new_space(ctx),
             AddDefaultTab => {
                 let effective_mode = AISettings::as_ref(ctx).default_session_mode(ctx);
                 match effective_mode {

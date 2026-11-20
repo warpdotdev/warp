@@ -896,6 +896,9 @@ pub enum FeatureFlag {
     /// Gates the Grouped Tabs feature.
     GroupedTabs,
 
+    /// Gates Spaces: switchable, named sets of tabs within a window.
+    Spaces,
+
     /// Gates the Pinned Tabs feature, which lets users pin individual tabs
     /// and whole tab groups so they stay at the front of the tab list and
     /// are protected from reordering.
@@ -1101,6 +1104,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::GitMirrorCache,
     FeatureFlag::AgentPromptSteering,
     FeatureFlag::CwdScopedCloudSkills,
+    FeatureFlag::Spaces,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).

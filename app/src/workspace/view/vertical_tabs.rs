@@ -25,7 +25,7 @@ use warpui::elements::{
     OffsetPositioning, Padding, ParentAnchor, ParentElement, ParentOffsetBounds,
     PositionedElementAnchor, PositionedElementOffsetBounds, Radius, Resizable,
     ResizableStateHandle, SavePosition, ScrollTarget, ScrollToPositionMode, ScrollbarWidth,
-    Shrinkable, Stack, Text, resizable_state_handle,
+    Shrinkable, Stack, Text, Wrap, resizable_state_handle,
 };
 use warpui::fonts::{Properties, Weight};
 use warpui::platform::Cursor;
@@ -73,6 +73,7 @@ use crate::util::color::Opacity;
 use crate::workspace::action::{NewSessionMenuAnchor, WorkspaceAction};
 use crate::workspace::cross_window_tab_drag::CrossWindowTabDrag;
 use crate::workspace::hoa_onboarding::HoaOnboardingStep;
+use crate::workspace::space::{Space, SpaceId};
 use crate::workspace::sync_inputs::SyncedInputState;
 use crate::workspace::tab_group::{TabGroup, TabGroupId};
 use crate::workspace::tab_settings::{
@@ -729,6 +730,9 @@ pub(super) struct VerticalTabsPanelState {
     show_diff_stats_mouse_state: MouseStateHandle,
     show_details_on_hover_mouse_state: MouseStateHandle,
     panel_right_click_mouse_state: MouseStateHandle,
+    /// Hover states for the space switcher chips, keyed by `SpaceId`.
+    space_chip_mouse_states: RefCell<HashMap<SpaceId, MouseStateHandle>>,
+    new_space_button_mouse_state: MouseStateHandle,
     pub(super) show_settings_popup: bool,
 }
 
@@ -767,6 +771,8 @@ impl Default for VerticalTabsPanelState {
             show_diff_stats_mouse_state: Default::default(),
             show_details_on_hover_mouse_state: Default::default(),
             panel_right_click_mouse_state: Default::default(),
+            space_chip_mouse_states: RefCell::default(),
+            new_space_button_mouse_state: Default::default(),
             show_settings_popup: false,
         }
     }
@@ -1269,6 +1275,13 @@ const CONTROL_BAR_SPACING: f32 = 4.;
 const SEARCH_ICON_SIZE: f32 = 12.;
 const SEARCH_BAR_HEIGHT: f32 = 24.;
 const CONTROL_BAR_BUTTON_RADIUS: Radius = Radius::Pixels(4.);
+const SPACE_CHIP_FONT_SIZE: f32 = 12.;
+const SPACE_CHIP_DOT_SIZE: f32 = 8.;
+const SPACE_CHIP_DOT_GAP: f32 = 4.;
+const SPACE_CHIP_VERTICAL_PADDING: f32 = 2.;
+const SPACE_CHIP_HORIZONTAL_PADDING: f32 = 6.;
+const NEW_SPACE_BUTTON_PADDING: f32 = 3.;
+const SPACE_SWITCHER_VERTICAL_PADDING: f32 = 6.;
 const SPLIT_BUTTON_HEIGHT: f32 = SEARCH_BAR_HEIGHT;
 pub(super) const VERTICAL_TABS_ADD_TAB_POSITION_ID: &str = "vertical_tabs_add_tab_button";
 pub(super) const VERTICAL_TABS_SETTINGS_BUTTON_POSITION_ID: &str = "vertical_tabs_settings_button";
@@ -1688,7 +1701,7 @@ fn render_vertical_tabs_panel(
     .with_overlayed_scrollbar()
     .finish();
 
-    let panel_content = Flex::column()
+    let mut panel_column = Flex::column()
         .with_main_axis_size(MainAxisSize::Max)
         .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
         .with_child(render_control_bar(
@@ -1697,8 +1710,11 @@ fn render_vertical_tabs_panel(
             &workspace.vertical_tabs_search_input,
             app,
         ))
-        .with_child(Shrinkable::new(1., scrollable_groups).finish())
-        .finish();
+        .with_child(Shrinkable::new(1., scrollable_groups).finish());
+    if FeatureFlag::Spaces.is_enabled() {
+        panel_column.add_child(render_space_switcher(state, workspace, appearance));
+    }
+    let panel_content = panel_column.finish();
 
     // Catch-all drop target so a pane dragged into any gap not covered by a
     // row, group-header, or member target (between groups, below the last tab)
@@ -1761,6 +1777,122 @@ fn render_vertical_tabs_panel(
             (MIN_PANEL_WIDTH, max_width.max(MIN_PANEL_WIDTH))
         }))
         .finish()
+}
+
+/// Name shown for a space; unnamed spaces use a placeholder based on their 1-based `position`.
+fn space_display_name(space: &Space, position: usize) -> String {
+    space
+        .name
+        .clone()
+        .unwrap_or_else(|| format!("Space {position}"))
+}
+
+/// Row of space chips (plus a `+` to create one) pinned to the bottom of the panel.
+fn render_space_switcher(
+    state: &VerticalTabsPanelState,
+    workspace: &Workspace,
+    appearance: &Appearance,
+) -> Box<dyn Element> {
+    let theme = appearance.theme();
+    let sub_text = theme.sub_text_color(theme.background());
+    let main_text = theme.main_text_color(theme.background());
+
+    let mut chip_mouse_states = state.space_chip_mouse_states.borrow_mut();
+    let mut chips: Vec<Box<dyn Element>> = workspace
+        .spaces
+        .iter()
+        .enumerate()
+        .map(|(index, space)| {
+            let position = index + 1;
+            let is_active = space.id == workspace.active_space;
+            let label = space_display_name(space, position);
+            let dot_fill: ThemeFill = space
+                .color
+                .resolve(None)
+                .map(|c| c.to_ansi_color(&theme.terminal_colors().normal).into())
+                .unwrap_or(sub_text);
+            let mouse_state = chip_mouse_states.entry(space.id).or_default().clone();
+            Hoverable::new(mouse_state, move |hover_state| {
+                let dot = ConstrainedBox::new(UiIcon::Ellipse.to_warpui_icon(dot_fill).finish())
+                    .with_width(SPACE_CHIP_DOT_SIZE)
+                    .with_height(SPACE_CHIP_DOT_SIZE)
+                    .finish();
+                let text =
+                    Text::new_inline(label, appearance.ui_font_family(), SPACE_CHIP_FONT_SIZE)
+                        .with_color(if is_active { main_text } else { sub_text }.into())
+                        .finish();
+                let background = if is_active {
+                    internal_colors::fg_overlay_3(theme)
+                } else if hover_state.is_hovered() {
+                    internal_colors::fg_overlay_2(theme)
+                } else {
+                    ThemeFill::Solid(ColorU::transparent_black())
+                };
+                Container::new(
+                    Flex::row()
+                        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                        .with_spacing(SPACE_CHIP_DOT_GAP)
+                        .with_child(dot)
+                        .with_child(text)
+                        .finish(),
+                )
+                .with_padding(
+                    Padding::uniform(SPACE_CHIP_VERTICAL_PADDING)
+                        .with_left(SPACE_CHIP_HORIZONTAL_PADDING)
+                        .with_right(SPACE_CHIP_HORIZONTAL_PADDING),
+                )
+                .with_background(background)
+                .with_corner_radius(CornerRadius::with_all(CONTROL_BAR_BUTTON_RADIUS))
+                .finish()
+            })
+            .with_cursor(Cursor::PointingHand)
+            .on_click(move |ctx, _, _| {
+                ctx.dispatch_typed_action(WorkspaceAction::SwitchToSpace(position));
+            })
+            .finish()
+        })
+        .collect();
+
+    let new_space_button = Hoverable::new(
+        state.new_space_button_mouse_state.clone(),
+        move |hover_state| {
+            let icon = ConstrainedBox::new(UiIcon::Plus.to_warpui_icon(sub_text).finish())
+                .with_width(SPACE_CHIP_FONT_SIZE)
+                .with_height(SPACE_CHIP_FONT_SIZE)
+                .finish();
+            let background = if hover_state.is_hovered() {
+                internal_colors::fg_overlay_2(theme)
+            } else {
+                ThemeFill::Solid(ColorU::transparent_black())
+            };
+            Container::new(icon)
+                .with_uniform_padding(NEW_SPACE_BUTTON_PADDING)
+                .with_background(background)
+                .with_corner_radius(CornerRadius::with_all(CONTROL_BAR_BUTTON_RADIUS))
+                .finish()
+        },
+    )
+    .with_cursor(Cursor::PointingHand)
+    .on_click(|ctx, _, _| {
+        ctx.dispatch_typed_action(WorkspaceAction::NewSpace);
+    })
+    .finish();
+    chips.push(new_space_button);
+
+    Container::new(
+        Wrap::row()
+            .with_spacing(CONTROL_BAR_SPACING)
+            .with_run_spacing(CONTROL_BAR_SPACING)
+            .with_children(chips)
+            .finish(),
+    )
+    .with_padding(
+        Padding::uniform(SPACE_SWITCHER_VERTICAL_PADDING)
+            .with_left(GROUP_HORIZONTAL_PADDING)
+            .with_right(GROUP_HORIZONTAL_PADDING),
+    )
+    .with_border(Border::top(1.).with_border_fill(internal_colors::fg_overlay_2(theme)))
+    .finish()
 }
 
 fn render_groups(
