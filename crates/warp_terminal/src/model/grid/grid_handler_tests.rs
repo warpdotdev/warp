@@ -2622,6 +2622,74 @@ fn test_full_grid_clear_resize_narrower_then_scroll_does_not_panic() {
 }
 
 #[test]
+fn keyboard_mode_stack_allocates_on_first_push() {
+    let mut grid = GridHandler::new_for_test(1, 1);
+
+    assert_eq!(grid.ansi_handler_state.keyboard_mode_stack.capacity(), 0);
+    assert_eq!(
+        grid.ansi_handler_state.keyboard_mode_stack.max_len(),
+        KEYBOARD_MODE_STACK_MAX_DEPTH
+    );
+
+    grid.push_keyboard_mode(KeyboardModes::DISAMBIGUATE_ESC_CODES);
+
+    assert!(grid.ansi_handler_state.keyboard_mode_stack.capacity() > 0);
+}
+
+#[test]
+fn keyboard_mode_stack_pop_restores_previous_mode() {
+    let mut grid = GridHandler::new_for_test(1, 1);
+    grid.push_keyboard_mode(KeyboardModes::DISAMBIGUATE_ESC_CODES);
+    grid.push_keyboard_mode(KeyboardModes::REPORT_EVENT_TYPES);
+
+    grid.pop_keyboard_modes(1);
+
+    assert_eq!(
+        grid.ansi_handler_state.keyboard_mode,
+        KeyboardModes::DISAMBIGUATE_ESC_CODES
+    );
+    assert!(grid.is_mode_set(TermMode::KEYBOARD_DISAMBIGUATE_ESCAPE));
+    assert!(!grid.is_mode_set(TermMode::KEYBOARD_REPORT_EVENT_TYPES));
+}
+
+#[test]
+fn keyboard_mode_stack_remains_bounded_at_max_depth() {
+    let mut grid = GridHandler::new_for_test(1, 1);
+    for _ in 0..KEYBOARD_MODE_STACK_MAX_DEPTH {
+        grid.push_keyboard_mode(KeyboardModes::DISAMBIGUATE_ESC_CODES);
+    }
+    grid.push_keyboard_mode(KeyboardModes::REPORT_EVENT_TYPES);
+
+    grid.pop_keyboard_modes(KEYBOARD_MODE_STACK_MAX_DEPTH as u16);
+
+    assert_eq!(
+        grid.ansi_handler_state.keyboard_mode,
+        KeyboardModes::NO_MODE
+    );
+    assert!(!grid.is_mode_set(TermMode::KEYBOARD_PROTOCOL));
+}
+
+#[test]
+fn reset_keyboard_mode_state_releases_reserved_capacity() {
+    let mut grid = GridHandler::new_for_test(1, 1);
+    grid.push_keyboard_mode(KeyboardModes::DISAMBIGUATE_ESC_CODES);
+    assert!(grid.ansi_handler_state.keyboard_mode_stack.capacity() > 0);
+
+    grid.reset_keyboard_mode_state();
+
+    assert_eq!(grid.ansi_handler_state.keyboard_mode_stack.capacity(), 0);
+    assert_eq!(
+        grid.ansi_handler_state.keyboard_mode_stack.max_len(),
+        KEYBOARD_MODE_STACK_MAX_DEPTH
+    );
+    assert_eq!(
+        grid.ansi_handler_state.keyboard_mode,
+        KeyboardModes::NO_MODE
+    );
+    assert!(!grid.is_mode_set(TermMode::KEYBOARD_PROTOCOL));
+}
+
+#[test]
 fn test_full_grid_clear_shrink_cols_does_not_orphan_wide_char_at_boundary() {
     let old_cols = 6;
     let new_cols = 5;

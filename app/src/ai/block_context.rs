@@ -67,14 +67,18 @@ impl BlockContext {
     pub fn from_completed_block(
         block_completed: &UserBlockCompleted,
         model: &FairMutex<TerminalModel>,
-    ) -> Box<Self> {
+    ) -> Option<Box<Self>> {
+        let index = {
+            let model = model.lock();
+            block_completed.current_index(model.block_list())?
+        };
         let serialized_block = block_completed.serialized_block.get_with(|compute| {
             let model = model.lock();
             compute(model.block_list())
         });
-        Box::new(Self {
+        Some(Box::new(Self {
             id: serialized_block.id.clone(),
-            index: block_completed.index,
+            index,
             command: block_completed
                 .command_with_obfuscated_secrets
                 .get_with(|compute| {
@@ -109,7 +113,7 @@ impl BlockContext {
             git_branch: serialized_block.git_head.clone(),
             os: TargetOS::current().and_then(|os| os.name()),
             session_id: serialized_block.session_id.map(|sid| sid.as_u64()),
-        })
+        }))
     }
 }
 
