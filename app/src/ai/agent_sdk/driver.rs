@@ -5466,6 +5466,8 @@ fn typed_secret_entries(secret: &ManagedSecretValue) -> Vec<(&'static str, &str)
         // is never injected into the terminal session.
         ManagedSecretValue::DockerRegistry { .. } => vec![],
         ManagedSecretValue::AwsEcrCredential { .. } => vec![],
+        // Only the execution's credential proxy may use this credential.
+        ManagedSecretValue::HttpBearer { .. } => vec![],
     }
 }
 
