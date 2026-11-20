@@ -9,7 +9,9 @@ use crate::parsers::ParsedToken;
 
 /// Generates top-level completion results based on the fragment of text that is entered into the
 /// buffer. We use the following algorithm to generate suggestions, which is also the same as ZSH:
-/// 1) If the fragment is clearly a path prefix (./, .., etc), _only_ suggest files.
+/// 1) If the fragment is clearly a path prefix (./, .., etc), _only_ suggest files. The one
+///    exception is a top-level command named exactly `.` or `..` (e.g. the `.` builtin or a `..`
+///    alias), which is suggested before the files.
 /// 2) If the fragment starts with a `$`, _only_ suggest environment variables.
 /// 3) Otherwise, suggest all top-level executables the user can run. If the shell has
 ///    "autocd" enabled (cd'ing into a directory without specifying the `cd` command) also suggest
@@ -34,6 +36,24 @@ pub async fn complete(
             }
             None => Default::default(),
         };
+    }
+
+    // `.` and `..` are path prefixes too (the current and parent directories), so suggest paths
+    // instead of prefix-matching top-level commands, which would otherwise suggest (and, with
+    // autocd, select) an alias like `...`. A command named exactly `.` or `..` is still suggested
+    // first so that accepting the top suggestion keeps what was typed.
+    let fragment = parsed_token.as_str();
+    if matches!(fragment, "." | "..") {
+        let exact_commands = sorted_top_level_commands(fragment, matcher, context)
+            .into_iter()
+            .filter(|matched_suggestion| matched_suggestion.suggestion.display == fragment);
+        let paths = match context.path_completion_context() {
+            Some(path_completion_context) => {
+                sorted_paths_relative_to(parsed_token, matcher, path_completion_context).await
+            }
+            None => Default::default(),
+        };
+        return exact_commands.chain(paths).collect();
     }
 
     // The buffer starts with a `$`, suggest environment variables.
