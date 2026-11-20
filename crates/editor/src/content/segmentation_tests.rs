@@ -1,7 +1,6 @@
 use itertools::Itertools;
 use markdown_parser::parse_markdown;
 use string_offset::CharOffset;
-use warp_core::features::FeatureFlag;
 use warpui_core::App;
 use warpui_core::text::TextBuffer;
 use warpui_core::text::point::Point;
@@ -59,7 +58,6 @@ fn test_forward_iteration() {
 #[test]
 fn test_table_word_boundaries_include_full_cell_text() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::MarkdownTables.override_enabled(true);
         let (buffer, _selection) = Buffer::mock_from_markdown(
             "| Hello | Value |\n| --- | --- |\n| World | Cell |\n",
             None,

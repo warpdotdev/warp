@@ -1,10 +1,12 @@
-use markdown_parser::{CodeBlockText, FormattedImage, FormattedText, FormattedTextLine};
+use markdown_parser::{
+    CodeBlockText, FormattedImage, FormattedText, FormattedTextLine, TableAlignment,
+};
 
 use super::*;
 
-/// Convert a notebook, asserting it parses successfully (GFM tables off).
+/// Convert a notebook, asserting it parses successfully.
 fn convert(json: &str) -> FormattedText {
-    ipynb_to_formatted_text(json, false).expect("should convert")
+    ipynb_to_formatted_text(json).expect("should convert")
 }
 
 /// All code blocks in the formatted text, in order.
@@ -51,6 +53,32 @@ fn test_markdown_and_code_cells() {
     assert_eq!(blocks.len(), 1);
     assert_eq!(blocks[0].lang, "python");
     assert_eq!(blocks[0].code, "print('hi')");
+}
+
+#[test]
+fn test_markdown_cell_gfm_table() {
+    let json = r#"{
+        "nbformat": 4,
+        "cells": [
+            {"cell_type": "markdown", "source": "| Name | Age |\n| --- | ---: |\n| Alice | 30 |\n"}
+        ]
+    }"#;
+
+    let ft = convert(json);
+    let tables: Vec<_> = ft
+        .lines
+        .iter()
+        .filter_map(|line| match line {
+            FormattedTextLine::Table(table) => Some(table),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(tables.len(), 1);
+    assert_eq!(tables[0].to_internal_format(), "Name\tAge\nAlice\t30\n");
+    assert_eq!(
+        tables[0].alignments,
+        vec![TableAlignment::Left, TableAlignment::Right]
+    );
 }
 
 #[test]
@@ -308,14 +336,14 @@ fn test_empty_notebook_is_ok() {
 
 #[test]
 fn test_malformed_json_is_error() {
-    let result = ipynb_to_formatted_text("{ not valid json", false);
+    let result = ipynb_to_formatted_text("{ not valid json");
     assert!(matches!(result, Err(IpynbError::Parse(_))));
 }
 
 #[test]
 fn test_non_v4_notebook_is_error() {
     let json = r#"{"nbformat": 3, "cells": []}"#;
-    let result = ipynb_to_formatted_text(json, false);
+    let result = ipynb_to_formatted_text(json);
     assert!(matches!(
         result,
         Err(IpynbError::UnsupportedFormat { nbformat: Some(3) })
@@ -327,7 +355,7 @@ fn test_missing_nbformat_is_error() {
     // Arbitrary JSON that lacks an nbformat field must not render as a blank
     // notebook; it should error so the caller falls back to raw content.
     let json = r#"{"some": "json", "cells": []}"#;
-    let result = ipynb_to_formatted_text(json, false);
+    let result = ipynb_to_formatted_text(json);
     assert!(matches!(
         result,
         Err(IpynbError::UnsupportedFormat { nbformat: None })
@@ -341,7 +369,7 @@ fn test_missing_cells_is_error() {
     // back to raw content. An explicit `"cells": []` remains a valid empty
     // notebook (see `test_empty_notebook_is_ok`).
     let json = r#"{"nbformat": 4}"#;
-    let result = ipynb_to_formatted_text(json, false);
+    let result = ipynb_to_formatted_text(json);
     assert!(matches!(result, Err(IpynbError::Parse(_))));
 }
 

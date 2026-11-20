@@ -165,8 +165,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::McpServer,
         #[cfg(feature = "mcp_debugging_ids")]
         FeatureFlag::McpDebuggingIds,
-        #[cfg(feature = "markdown_tables")]
-        FeatureFlag::MarkdownTables,
         #[cfg(feature = "jupyter_notebook_rendering")]
         FeatureFlag::JupyterNotebookRendering,
         #[cfg(feature = "blocklist_markdown_table_rendering")]
