@@ -13,7 +13,7 @@ use remote_server::proto::RipgrepSearchSuccess;
 use remote_server::protocol::RequestId;
 use string_offset::ByteOffset;
 use warp_errors::report_error;
-use warp_ripgrep::search::{Match as RipgrepMatch, Submatch};
+use warp_ripgrep::search::{Match as RipgrepMatch, SearchEvent, Submatch};
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warp_util::remote_path::RemotePath;
 use warp_util::standardized_path::StandardizedPath;
@@ -26,6 +26,7 @@ use crate::workspace::view::global_search::{GlobalSearchMatch, SearchConfig};
 const START_BATCH_AFTER_COUNT: usize = 50;
 const MAX_BATCH_SIZE: usize = 512;
 const MAX_BATCH_AGE_MS: u64 = 4000;
+pub(super) const MAX_STORED_LINE_TEXT_BYTES: usize = 4096;
 
 /// Client-requested cap on remote matches per host. The daemon clamps this
 /// to its own server-side cap; both bound the single-frame response size.
@@ -40,7 +41,7 @@ struct ActiveSearch {
     local_source_failed: bool,
     remote_source_failures: usize,
     total_match_count: usize,
-    /// True when any remote source hit the server-side match cap.
+    /// True when any source omitted results because it reached a limit.
     capped: bool,
 }
 
@@ -234,10 +235,7 @@ impl GlobalSearch {
                 )
                 .await;
                 match result {
-                    Ok(match_count) => Some(SourceResult {
-                        match_count,
-                        capped: false,
-                    }),
+                    Ok(result) => Some(result),
                     Err(err) => {
                         report_error!(
                             err.context("GlobalSearch: warp_ripgrep CLI search failed or aborted")
@@ -410,7 +408,7 @@ impl GlobalSearch {
         ignore_case: bool,
         multiline: bool,
         spawner: ModelSpawner<GlobalSearch>,
-    ) -> Result<usize> {
+    ) -> Result<SourceResult> {
         let roots_display: Vec<_> = roots.iter().map(|r| r.display().to_string()).collect();
         log::info!(
             "GlobalSearch: starting warp_ripgrep CLI search with pattern={pattern}, roots={:?}",
@@ -423,11 +421,19 @@ impl GlobalSearch {
         futures::pin_mut!(stream);
 
         let mut total_match_count: usize = 0;
+        let mut capped = false;
         let mut num_unbatched_emitted: usize = 0;
         let mut batch: Vec<GlobalSearchMatch> = Vec::new();
         let mut last_batch_flush_at = Instant::now();
 
-        while let Some(raw_match) = stream.next().await {
+        while let Some(event) = stream.next().await {
+            let raw_match = match event {
+                SearchEvent::Match(raw_match) => raw_match,
+                SearchEvent::LimitReached => {
+                    capped = true;
+                    continue;
+                }
+            };
             // Expand each submatch into its own result row (matching
             // the old per-submatch behavior). Each row gets the line
             // text trimmed up to that particular submatch.
@@ -464,7 +470,10 @@ impl GlobalSearch {
             flush_batch(&spawner, search_id, &mut batch).await;
         }
 
-        Ok(total_match_count)
+        Ok(SourceResult {
+            match_count: total_match_count,
+            capped,
+        })
     }
 
     fn local_match_to_global(m: RipgrepMatch) -> GlobalSearchMatch {
@@ -542,7 +551,7 @@ impl GlobalSearch {
             leading_trimmed_bytes += ch.len_utf8();
         }
 
-        let trimmed_line = original_line[leading_trimmed_bytes.as_usize()..].to_string();
+        let trimmed_line = &original_line[leading_trimmed_bytes.as_usize()..];
 
         let submatches = if let Some(sub) = submatch {
             vec![Submatch {
@@ -552,14 +561,72 @@ impl GlobalSearch {
         } else {
             Vec::new()
         };
+        let (line_text, submatches) =
+            Self::truncate_line_text_for_storage(trimmed_line, &submatches);
 
         GlobalSearchMatch {
             location,
             line_number,
             column_num,
-            line_text: trimmed_line,
+            line_text,
             submatches,
         }
+    }
+
+    pub(super) fn truncate_line_text_for_storage(
+        line_text: &str,
+        submatches: &[Submatch],
+    ) -> (String, Vec<Submatch>) {
+        if line_text.len() <= MAX_STORED_LINE_TEXT_BYTES {
+            return (line_text.to_owned(), submatches.to_vec());
+        }
+
+        let anchor = submatches
+            .first()
+            .map(|submatch| submatch.byte_start.as_usize())
+            .unwrap_or(0)
+            .min(line_text.len());
+        let ellipsis_bytes = '…'.len_utf8();
+        let window_bytes = MAX_STORED_LINE_TEXT_BYTES - 2 * ellipsis_bytes;
+        let half_window = window_bytes / 2;
+        let raw_start = anchor.saturating_sub(half_window);
+        let raw_end = (raw_start + window_bytes).min(line_text.len());
+        let window_start = (raw_start..=line_text.len())
+            .find(|&index| line_text.is_char_boundary(index))
+            .unwrap_or(line_text.len());
+        let window_end = (0..=raw_end)
+            .rev()
+            .find(|&index| line_text.is_char_boundary(index))
+            .unwrap_or(0);
+
+        let prefix_ellipsis = window_start > 0;
+        let suffix_ellipsis = window_end < line_text.len();
+        let capacity = window_end - window_start
+            + usize::from(prefix_ellipsis) * ellipsis_bytes
+            + usize::from(suffix_ellipsis) * ellipsis_bytes;
+        let mut truncated = String::with_capacity(capacity);
+        if prefix_ellipsis {
+            truncated.push('…');
+        }
+        truncated.push_str(&line_text[window_start..window_end]);
+        if suffix_ellipsis {
+            truncated.push('…');
+        }
+
+        let prefix_offset_bytes = if prefix_ellipsis { ellipsis_bytes } else { 0 };
+        let truncated_submatches = submatches
+            .iter()
+            .filter_map(|submatch| {
+                let start = submatch.byte_start.as_usize().max(window_start);
+                let end = submatch.byte_end.as_usize().min(window_end);
+                (start < end).then(|| Submatch {
+                    byte_start: ByteOffset::from(start - window_start + prefix_offset_bytes),
+                    byte_end: ByteOffset::from(end - window_start + prefix_offset_bytes),
+                })
+            })
+            .collect();
+
+        (truncated, truncated_submatches)
     }
 }
 

@@ -1,9 +1,10 @@
 use std::path::PathBuf;
 
 use string_offset::ByteOffset;
-use warp_ripgrep::search::{Match as RipgrepMatch, Submatch};
+use warp_ripgrep::search::{Match as RipgrepMatch, SearchEvent, Submatch};
+use warpui::App;
 
-use super::ripgrep_match_to_proto;
+use super::{collect_search_events, ripgrep_match_to_proto};
 
 fn submatch(start: usize, end: usize) -> Submatch {
     Submatch {
@@ -46,4 +47,24 @@ fn ripgrep_match_to_proto_preserves_late_submatch_and_full_line() {
     assert_eq!(proto.line_text, line);
     assert_eq!(proto.submatches[0].byte_start, 8_000);
     assert_eq!(proto.submatches[0].byte_end, 8_006);
+}
+
+#[test]
+fn heap_limit_event_marks_remote_results_as_capped() {
+    App::test((), |_app| async move {
+        let stream = futures::stream::iter([
+            SearchEvent::LimitReached,
+            SearchEvent::Match(RipgrepMatch {
+                file_path: PathBuf::from("/repo/result.rs"),
+                line_number: 1,
+                line_text: "match".to_string(),
+                submatches: vec![submatch(0, 5)],
+            }),
+        ]);
+
+        let success = collect_search_events(stream, 10).await;
+
+        assert!(success.capped);
+        assert_eq!(success.matches.len(), 1);
+    });
 }
