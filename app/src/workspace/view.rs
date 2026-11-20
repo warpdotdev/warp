@@ -6599,6 +6599,38 @@ impl Workspace {
             })
     }
 
+    /// Opens a file relative to the tab owning `pane_group_id` without changing the active tab.
+    /// Does nothing if that tab no longer exists.
+    #[cfg(feature = "local_fs")]
+    pub fn open_file_with_target_in_tab(
+        &mut self,
+        pane_group_id: EntityId,
+        path: PathBuf,
+        target: FileTarget,
+        line_col: Option<LineAndColumnArg>,
+        code_source: CodeSource,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some(tab_index) = self
+            .tab_views()
+            .position(|pane_group| pane_group.id() == pane_group_id)
+        else {
+            log::warn!("Target tab for opening file no longer exists");
+            return;
+        };
+
+        // Placement helpers resolve their target via the active tab, so point them at the
+        // requested tab for the duration of the open.
+        let original_index = self.active_tab_index;
+        let original_tab_count = self.tab_count();
+        self.active_tab_index = tab_index;
+        self.open_file_with_target(path, target, line_col, code_source, ctx);
+        // A new tab (EditorLayout::NewTab) legitimately becomes active and shifts indices.
+        if self.tab_count() == original_tab_count {
+            self.active_tab_index = original_index;
+        }
+    }
+
     #[cfg(not(feature = "local_fs"))]
     pub fn open_file_with_target(
         &mut self,
