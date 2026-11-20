@@ -8,7 +8,6 @@ use warpui::{AppContext, SingletonEntity};
 
 use super::llms::{LLMInfo, LLMPreferences};
 use crate::auth::AuthStateProvider;
-use crate::pricing::PricingInfoModel;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
 impl From<&LLMInfo> for OnboardingModelInfo {
@@ -56,10 +55,4 @@ pub fn current_onboarding_auth_state(ctx: &AppContext) -> OnboardingAuthState {
     } else {
         OnboardingAuthState::FreeUser
     }
-}
-
-pub fn onboarding_pricing_promotion_message(ctx: &AppContext) -> Option<String> {
-    PricingInfoModel::as_ref(ctx)
-        .promotion_message()
-        .map(str::to_owned)
 }
