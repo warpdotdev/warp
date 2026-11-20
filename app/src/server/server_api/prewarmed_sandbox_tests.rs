@@ -606,36 +606,6 @@ fn an_assignment_without_hook_sources_decodes_with_none() {
     assert_eq!(assignment_hook_sources(fixture), 1);
 }
 
-/// A server that predates Factory experiments on the execution configuration sends no
-/// `experimentalJson`; the assignment still decodes, with no experiment values.
-#[test]
-fn an_assignment_without_experiment_values_decodes_with_none() {
-    let experiment_values = |fixture: serde_json::Value| {
-        let event: PrewarmedSandboxControlEvent = serde_json::from_value(fixture).unwrap();
-        let PrewarmedSandboxControlEvent::Assignment {
-            execution_config, ..
-        } = event
-        else {
-            panic!("expected assignment event");
-        };
-        execution_config.experimental_json
-    };
-    let mut fixture: serde_json::Value =
-        serde_json::from_str(include_str!("testdata/prewarmed_assignment_fresh_run.json")).unwrap();
-    assert_eq!(experiment_values(fixture.clone()), None);
-    fixture["execution_config"]
-        .as_object_mut()
-        .unwrap()
-        .remove("experimentalJson");
-    assert_eq!(experiment_values(fixture.clone()), None);
-    fixture["execution_config"]["experimentalJson"] =
-        serde_json::json!(r#"{"skillsListingDeltas":true}"#);
-    assert_eq!(
-        experiment_values(fixture).as_deref(),
-        Some(r#"{"skillsListingDeltas":true}"#)
-    );
-}
-
 #[test]
 fn assignment_debug_omits_run_credentials_and_embedded_config_values() {
     let mut event: PrewarmedSandboxControlEvent =

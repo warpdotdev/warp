@@ -130,8 +130,7 @@ fn execution_bootstrap_response() -> Value {
                         "idleOnCompleteSeconds": null,
                         "idleOnFailSeconds": null,
                         "snapshotDisabled": false,
-                        "agentHookSources": [],
-                        "experimentalJson": null
+                        "agentHookSources": []
                     },
                     "attachments": [{
                         "fileId": "file-one",

@@ -719,8 +719,6 @@ fn build_execution_task_and_options(
         sources: execution_config::agent_hook_sources(config.agent_hook_sources)?,
         surface: driver::hooks::run_surface_for(true),
     };
-    let experimental = execution_config::experimental(config.experimental_json.as_deref());
-    log_factory_experimental_config(experimental.as_ref());
     let mut factory_skill_dirs = execution_config::factory_skill_dirs(config.factory_skill_dirs)?;
     let factory_definition_sha = execution_config::factory_definition_sha(config.factory_branch)?;
     let definition_skill_dirs = factory_skill_dirs.clone();
@@ -742,7 +740,7 @@ fn build_execution_task_and_options(
         use_factory_repositories,
         github_credential_mode: GitHubCredentialMode::Legacy,
         credential_store_owner: None,
-        experimental,
+        experimental: None,
         parent_run_id: config.parent_run_id.map(|id| id.into_inner()),
         should_share: FeatureFlag::AgentSharedSessions.is_enabled(),
         idle_on_complete,

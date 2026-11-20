@@ -1597,25 +1597,20 @@ fn split_loading_env_loads_all_global_loads_subset() {
 /// global skill is present, and no skill is registered more than once.
 #[test]
 fn overlap_repo_in_env_and_global_loads_all_skills_without_duplicates() {
-    load_overlap_repo_as_env_and_global(false, false);
+    load_overlap_repo_as_env_and_global(false);
 }
 
 /// With cwd scoping, the overlapping repository's skills follow the cwd while the selected
 /// global skill stays listed from everywhere, still without duplicates.
 #[test]
 fn overlap_repo_in_env_and_global_scopes_repo_skills_and_keeps_selection() {
-    load_overlap_repo_as_env_and_global(true, false);
+    load_overlap_repo_as_env_and_global(true);
 }
 
-#[test]
-fn skill_delta_experiment_scopes_repo_skills_and_keeps_global_selection() {
-    load_overlap_repo_as_env_and_global(false, true);
-}
-
-fn load_overlap_repo_as_env_and_global(flag_enabled: bool, skill_deltas: bool) {
+fn load_overlap_repo_as_env_and_global(cwd_scoped: bool) {
     App::test((), |mut app| async move {
         let _flag =
-            warp_core::features::FeatureFlag::CwdScopedCloudSkills.override_enabled(flag_enabled);
+            warp_core::features::FeatureFlag::CwdScopedCloudSkills.override_enabled(cwd_scoped);
         initialize_app_for_terminal_view(&mut app);
 
         let temp = TempDir::new().unwrap();
@@ -1661,12 +1656,7 @@ fn load_overlap_repo_as_env_and_global(flag_enabled: bool, skill_deltas: bool) {
         let driver_handle = app.add_model(|ctx| {
             let terminal_driver =
                 super::terminal::TerminalDriver::create_from_existing_view(terminal_view, ctx);
-            let mut driver = AgentDriver::new_for_test(working_dir.clone(), terminal_driver, ctx);
-            driver.experimental = Some(serde_json::Map::from_iter([(
-                "skillsListingDeltas".into(),
-                serde_json::Value::Bool(skill_deltas),
-            )]));
-            driver
+            AgentDriver::new_for_test(working_dir.clone(), terminal_driver, ctx)
         });
 
         // The same repo is listed in both env repos and global repos.
@@ -1717,7 +1707,7 @@ fn load_overlap_repo_as_env_and_global(flag_enabled: bool, skill_deltas: bool) {
             skills.iter().map(|skill| skill.name.as_str()).collect()
         }
 
-        if flag_enabled || skill_deltas {
+        if cwd_scoped {
             // Without a live cwd the harness root stands in; the repository is a child of it, so
             // only the home-tier global selection is listed.
             let at_root = skills_for(None);

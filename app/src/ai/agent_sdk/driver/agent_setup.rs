@@ -562,9 +562,9 @@ pub(crate) async fn read_environment_skills(
 
 /// Registers environment skills under the run's listing mode.
 ///
-/// With cwd scoping enabled, listings use the ordinary ancestor-directory scoping and the harness
-/// working directory stands in for the cwd until the terminal publishes one; otherwise every
-/// environment skill is listed regardless of cwd.
+/// With `CwdScopedCloudSkills` enabled, listings use the ordinary ancestor-directory scoping and
+/// the harness working directory stands in for the cwd until the terminal publishes one; otherwise
+/// every environment skill is listed regardless of cwd.
 pub(crate) async fn register_environment_skills(
     foreground: &ModelSpawner<AgentDriver>,
     skills: Vec<ParsedSkill>,
@@ -572,7 +572,7 @@ pub(crate) async fn register_environment_skills(
     if let Err(err) = foreground
         .spawn(move |me, ctx| {
             SkillManager::handle(ctx).update(ctx, |manager, _| {
-                if me.cwd_scoped_cloud_skills_enabled() {
+                if FeatureFlag::CwdScopedCloudSkills.is_enabled() {
                     manager.set_cloud_working_dir(me.harness_working_dir.clone());
                 } else if !skills.is_empty() {
                     // The unscoped listing exists to surface environment skills from every cwd;
@@ -656,8 +656,8 @@ pub(crate) async fn read_global_skills(
 /// Registers global skills under the run's listing mode.
 ///
 /// Global skill repositories are unregistered sibling clones, so their skills are never cwd
-/// ancestors. With cwd scoping enabled they are registered at home precedence so the selection stays
-/// listed from every cwd; otherwise they rely on the unscoped cloud listing.
+/// ancestors. With `CwdScopedCloudSkills` enabled they are registered at home precedence so the
+/// selection stays listed from every cwd; otherwise they rely on the unscoped cloud listing.
 pub(crate) async fn register_global_skills(
     foreground: &ModelSpawner<AgentDriver>,
     mut skills: Vec<ParsedSkill>,
@@ -666,9 +666,9 @@ pub(crate) async fn register_global_skills(
         return;
     }
     let add_result = foreground
-        .spawn(move |me, ctx| {
+        .spawn(move |_, ctx| {
             SkillManager::handle(ctx).update(ctx, |manager, _| {
-                if me.cwd_scoped_cloud_skills_enabled() {
+                if FeatureFlag::CwdScopedCloudSkills.is_enabled() {
                     for skill in &mut skills {
                         skill.scope = SkillScope::Home;
                     }
