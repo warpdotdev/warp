@@ -916,6 +916,21 @@ struct SaveAppStateNodeTraversal<'a> {
 // Does so in a transaction so we're never in a partial state.
 fn save_app_state(conn: &mut SqliteConnection, app_state: &AppState) -> Result<()> {
     conn.transaction::<(), Error, _>(|conn| {
+        // A snapshot taken before a restored pane's shell has attached (e.g. a `save_app`
+        // triggered by window focus/resize during startup) reports no live cwd. Remember the
+        // cwd already on disk for each pane, keyed by uuid, so such a snapshot can fall back to
+        // it below instead of overwriting a known-good value with NULL.
+        let previous_terminal_cwds: HashMap<Vec<u8>, String> =
+            schema::terminal_panes::dsl::terminal_panes
+                .select((
+                    schema::terminal_panes::columns::uuid,
+                    schema::terminal_panes::columns::cwd,
+                ))
+                .load::<(Vec<u8>, Option<String>)>(conn)?
+                .into_iter()
+                .filter_map(|(uuid, cwd)| cwd.map(|cwd| (uuid, cwd)))
+                .collect();
+
         // Remove old app state
         diesel::delete(schema::app::dsl::app).execute(conn)?;
         diesel::delete(schema::terminal_panes::dsl::terminal_panes).execute(conn)?;
@@ -1153,7 +1168,7 @@ fn save_app_state(conn: &mut SqliteConnection, app_state: &AppState) -> Result<(
                             }
                         }
                         PaneNodeSnapshot::Leaf(pane) => {
-                            save_pane_state(conn, pane_node_id, pane)?;
+                            save_pane_state(conn, pane_node_id, pane, &previous_terminal_cwds)?;
                         }
                     }
                 }
@@ -1187,11 +1202,13 @@ fn save_app_state(conn: &mut SqliteConnection, app_state: &AppState) -> Result<(
 }
 
 /// Saves the state of an individual pane, after the corresponding `pane_nodes` entry
-/// has been written.
+/// has been written. `previous_terminal_cwds` is the cwd on disk before this save, keyed by
+/// pane uuid, used to avoid overwriting a known-good terminal cwd with NULL.
 fn save_pane_state(
     conn: &mut SqliteConnection,
     id: i32,
     snapshot: &LeafSnapshot,
+    previous_terminal_cwds: &HashMap<Vec<u8>, String>,
 ) -> Result<(), Error> {
     // The pane_leaves row must be inserted first to satisfy foreign key constraints on the
     // kind-specific tables.
@@ -1251,7 +1268,10 @@ fn save_pane_state(
             let terminal = model::NewTerminalPane {
                 id,
                 uuid: terminal_snapshot.uuid.clone(),
-                cwd: terminal_snapshot.cwd.clone(),
+                cwd: terminal_snapshot
+                    .cwd
+                    .clone()
+                    .or_else(|| previous_terminal_cwds.get(&terminal_snapshot.uuid).cloned()),
                 is_active: terminal_snapshot.is_active,
                 shell_launch_data: terminal_snapshot
                     .shell_launch_data
