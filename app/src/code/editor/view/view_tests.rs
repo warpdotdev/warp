@@ -87,3 +87,59 @@ fn test_interaction_state_prevents_editing() {
         assert_eq!(text.as_str(), "abc");
     });
 }
+
+// Regression coverage for lazily-created sub-views: constructing a `CodeEditorView` (as happens
+// for every historical code block restored into an AI conversation) should not eagerly build the
+// diff nav bar or go-to-line dialog, since most instances never use them. See APP-5770.
+#[test]
+fn test_nav_bar_not_created_until_diff_nav_toggled_on() {
+    App::test((), |mut app| async move {
+        let (_window, editor_view) = initialize_editor(&mut app);
+
+        let nav_bar_exists_initially =
+            editor_view.update(&mut app, |view, _ctx| view.nav_bar.is_some());
+        assert!(
+            !nav_bar_exists_initially,
+            "nav bar should not be created until diff navigation is toggled on"
+        );
+
+        editor_view.update(&mut app, |view, ctx| {
+            view.handle_action(&CodeEditorViewAction::ToggleDiffNav(None), ctx);
+        });
+
+        let nav_bar_exists_after_toggle =
+            editor_view.update(&mut app, |view, _ctx| view.nav_bar.is_some());
+        assert!(
+            nav_bar_exists_after_toggle,
+            "nav bar should be created once diff navigation is toggled on"
+        );
+    });
+}
+
+#[test]
+fn test_goto_line_dialog_not_created_until_shown() {
+    App::test((), |mut app| async move {
+        let (_window, editor_view) = initialize_editor(&mut app);
+
+        let dialog_exists_initially =
+            editor_view.update(&mut app, |view, _ctx| view.goto_line_dialog.is_some());
+        assert!(
+            !dialog_exists_initially,
+            "go-to-line dialog should not be created until it is shown"
+        );
+
+        editor_view.update(&mut app, |view, ctx| {
+            view.handle_action(&CodeEditorViewAction::ShowGoToLine, ctx);
+        });
+
+        let dialog_open_after_show = editor_view.update(&mut app, |view, ctx| {
+            view.goto_line_dialog
+                .as_ref()
+                .is_some_and(|dialog| dialog.as_ref(ctx).is_open())
+        });
+        assert!(
+            dialog_open_after_show,
+            "go-to-line dialog should be created and open once shown"
+        );
+    });
+}
