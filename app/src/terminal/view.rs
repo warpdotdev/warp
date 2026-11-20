@@ -19500,10 +19500,11 @@ impl TerminalView {
                     .lock()
                     .link_at_range(url, RespectObfuscatedSecrets::No);
                 ctx.notify();
-                ctx.open_url(&uri);
+                self.open_url_link(&uri, ctx);
             }
             GridHighlightedLink::Hyperlink { link, uri } if link.contains(position) => {
-                self.open_hyperlink_uri(uri, ctx);
+                let uri = uri.clone();
+                self.open_hyperlink_uri(&uri, ctx);
             }
             _ => (),
         }
@@ -19516,12 +19517,12 @@ impl TerminalView {
 
     /// Open an OSC 8 hyperlink URI. The URI comes from untrusted terminal
     /// output, so it is only opened if it parses as a URL.
-    fn open_hyperlink_uri(&self, uri: &str, ctx: &mut ViewContext<Self>) {
+    fn open_hyperlink_uri(&mut self, uri: &str, ctx: &mut ViewContext<Self>) {
         if url::Url::parse(uri).is_err() {
             return;
         }
         ctx.notify();
-        ctx.open_url(uri);
+        self.open_url_link(uri, ctx);
     }
 
     fn middle_click_on_grid(
