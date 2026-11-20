@@ -451,6 +451,22 @@ pub trait CoreEditorModel: Entity {
         self.validate(ctx);
     }
 
+    /// Extends the selection to the start of the buffer.
+    fn select_to_buffer_start(&mut self, ctx: &mut ModelContext<Self::T>) {
+        self.selection_model().update(ctx, |selection, ctx| {
+            selection.extend_selection(TextDirection::Backwards, TextUnit::BufferBoundary, ctx);
+        });
+        self.validate(ctx);
+    }
+
+    /// Extends the selection to the end of the buffer.
+    fn select_to_buffer_end(&mut self, ctx: &mut ModelContext<Self::T>) {
+        self.selection_model().update(ctx, |selection, ctx| {
+            selection.extend_selection(TextDirection::Forwards, TextUnit::BufferBoundary, ctx);
+        });
+        self.validate(ctx);
+    }
+
     /// Extends the selection to the start of the paragraph that the cursor is on.
     fn select_to_paragraph_start(&mut self, ctx: &mut ModelContext<Self::T>) {
         self.selection_model().update(ctx, |selection, ctx| {
