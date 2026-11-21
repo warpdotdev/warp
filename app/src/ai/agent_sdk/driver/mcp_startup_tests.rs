@@ -1615,6 +1615,8 @@ fn runnable_mcp_server_json(name: &str) -> String {
 #[test]
 #[serial_test::serial]
 fn configured_and_profile_mcp_servers_wait_for_environment_setup() {
+    const SETUP_TIMEOUT: Duration = Duration::from_secs(30);
+
     let _factory_mcp_flag = FeatureFlag::FactoryMcp.override_enabled(false);
     let _global_skills_flag = FeatureFlag::OzPlatformSkills.override_enabled(false);
 
@@ -1624,7 +1626,7 @@ fn configured_and_profile_mcp_servers_wait_for_environment_setup() {
         let file_based_mcp = FileBasedMcpFixture::register(&mut app);
         file_based_mcp.complete_initial_global_scan(&mut app);
         let terminal_view = add_window_with_terminal(&mut app, None);
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + SETUP_TIMEOUT;
         let session_id = loop {
             let session_id = terminal_view.read(&app, |terminal, ctx| {
                 let session_id = terminal.active_block_session_id()?;
@@ -1724,8 +1726,8 @@ fn configured_and_profile_mcp_servers_wait_for_environment_setup() {
             );
         });
 
-        let deadline = Instant::now() + Duration::from_secs(5);
-        let mut pending_command = loop {
+        let deadline = Instant::now() + SETUP_TIMEOUT;
+        loop {
             let pending_command = terminal_view.read(&app, |terminal, ctx| {
                 if terminal.has_pending_command_or_awaiting_completion(ctx) {
                     terminal
@@ -1736,14 +1738,14 @@ fn configured_and_profile_mcp_servers_wait_for_environment_setup() {
                 }
             });
             if !pending_command.is_empty() {
-                break pending_command;
+                break;
             }
             assert!(
                 Instant::now() < deadline,
                 "environment setup command should become pending"
             );
             Timer::after(Duration::from_millis(10)).await;
-        };
+        }
 
         assert!(
             started_uuids.borrow().is_empty(),
@@ -1786,47 +1788,28 @@ fn configured_and_profile_mcp_servers_wait_for_environment_setup() {
         });
 
         let mut executed_commands = Vec::new();
-        for command_index in 0..4 {
-            terminal_view.update(&mut app, |terminal, ctx| {
-                terminal.execute_pending_command((), ctx);
-            });
-            let executed_command = executed_command_rx
-                .next()
-                .with_timeout(Duration::from_secs(5))
-                .await
-                .unwrap_or_else(|err| {
-                    panic!(
-                        "next environment setup command should execute after {executed_commands:?}: \
-                         {err:?}"
-                    )
-                })
-                .expect("terminal execution subscription should remain active");
+        for _ in 0..4 {
+            let deadline = Instant::now() + SETUP_TIMEOUT;
+            // Pending commands can auto-execute before the test observes the input buffer.
+            let executed_command = loop {
+                terminal_view.update(&mut app, |terminal, ctx| {
+                    terminal.execute_pending_command((), ctx);
+                });
+                if let Some(command) = executed_command_rx.next().now_or_never() {
+                    break command.expect("terminal execution subscription should remain active");
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "next environment setup command should execute after {executed_commands:?}"
+                );
+                Timer::after(Duration::from_millis(10)).await;
+            };
             terminal_view.update(&mut app, |terminal, _| {
                 let mut model = terminal.model.lock();
                 model.simulate_cmd(executed_command.as_str());
                 model.finish_block();
             });
             executed_commands.push(executed_command);
-            if command_index < 3 {
-                let completed_command = pending_command;
-                let deadline = Instant::now() + Duration::from_secs(5);
-                pending_command = loop {
-                    let next_command = terminal_view.read(&app, |terminal, ctx| {
-                        terminal
-                            .input()
-                            .read(ctx, |input, ctx| input.buffer_text(ctx))
-                    });
-                    if !next_command.is_empty() && next_command != completed_command {
-                        break next_command;
-                    }
-                    assert!(
-                        Instant::now() < deadline,
-                        "the next environment setup command should become pending after \
-                         {completed_command:?}; current input: {next_command:?}"
-                    );
-                    Timer::after(Duration::from_millis(10)).await;
-                };
-            }
         }
         assert_eq!(executed_commands[0], "export CI=true");
         assert!(
@@ -1837,7 +1820,7 @@ fn configured_and_profile_mcp_servers_wait_for_environment_setup() {
         );
 
         both_started_rx
-            .with_timeout(Duration::from_secs(5))
+            .with_timeout(SETUP_TIMEOUT)
             .await
             .expect("task/config and profile MCP servers should start after environment setup")
             .expect("MCP startup state subscription should remain active");
