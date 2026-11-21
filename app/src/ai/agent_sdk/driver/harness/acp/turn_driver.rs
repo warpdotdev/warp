@@ -413,6 +413,8 @@ pub(super) struct TurnDriver {
     /// this is cleared.
     pub suppressed_startup_message: Option<String>,
     pub prompt_text: String,
+    pub initial_inbox_ready: Option<async_channel::Receiver<()>>,
+    pub skip_initial_prompt: bool,
     /// Task attachments downloaded before the run started, sent with the initial prompt.
     pub initial_attachments: Vec<DownloadedAttachment>,
     pub attachments: Arc<AttachmentResolver>,
@@ -444,7 +446,37 @@ impl TurnDriver {
     /// an internal error), which is what the task status follows; the block's exit code remains
     /// the agent's own.
     pub(super) async fn run(mut self, mapper: &mut AcpTurnMapper) {
-        let mut turn_result = self.run_turn(mapper, PromptInput::Initial).await;
+        let inbox_ready = if let Some(ready) = self.initial_inbox_ready.take() {
+            // Completing the startup stream before the inbox resolves can trigger an idle exit.
+            select! {
+                result = ready.recv().fuse() => result.is_ok(),
+                _ = recv_or_pending(self.cancels.as_ref()).fuse() => false,
+            }
+        } else {
+            true
+        };
+        let mut turn_result = if !inbox_ready {
+            self.finish_turn(
+                self.turn.stream_id.clone(),
+                stream_finished_for(StopReason::Cancelled),
+            )
+            .await;
+            Ok(TurnOutcome::Cancelled)
+        } else if self.skip_initial_prompt {
+            if self.pending_follow_ups().is_empty() {
+                self.finish_turn(
+                    self.turn.stream_id.clone(),
+                    stream_finished_for(StopReason::EndTurn),
+                )
+                .await;
+                Ok(TurnOutcome::Stopped(StopReason::EndTurn))
+            } else {
+                self.run_turn(mapper, PromptInput::FollowUps { interrupted: false })
+                    .await
+            }
+        } else {
+            self.run_turn(mapper, PromptInput::Initial).await
+        };
 
         log::info!("ACP turn finished; accepting follow-ups until the driver ends the run");
         loop {
@@ -550,7 +582,8 @@ impl TurnDriver {
         &mut self,
         mapper: &mut AcpTurnMapper,
         input: PromptInput,
-    ) -> Result<Vec<ContentBlock>> {
+    ) -> Result<(Vec<ContentBlock>, Vec<async_channel::Sender<()>>)> {
+        let mut accepted = Vec::new();
         let (mut content, mut interrupted) = match input {
             PromptInput::Initial => (
                 self.attachments
@@ -567,6 +600,9 @@ impl TurnDriver {
         let mut prepared = 0;
         while let Some(QueuedFollowUp { prompt, row, .. }) = self.next_batch_follow_up(prepared) {
             prepared += 1;
+            if let Some(receipt) = prompt.accepted {
+                accepted.push(receipt);
+            }
             if let Some(row) = row {
                 self.host.hide_queued_prompt(row).await;
             }
@@ -585,7 +621,7 @@ impl TurnDriver {
                     .await,
             );
         }
-        Ok(content)
+        Ok((content, accepted))
     }
 
     /// Runs one prompt turn to completion and finishes its last request stream.
@@ -612,7 +648,7 @@ impl TurnDriver {
             }
         };
         let turn_result = match prepared {
-            Ok(Some(prompt)) => self.prompt(mapper, prompt).await,
+            Ok(Some((prompt, accepted))) => self.prompt(mapper, prompt, accepted).await,
             Ok(None) => Ok(TurnOutcome::Cancelled),
             Err(error) => Err(error),
         };
@@ -711,6 +747,7 @@ impl TurnDriver {
         &mut self,
         mapper: &mut AcpTurnMapper,
         prompt: Vec<ContentBlock>,
+        accepted: Vec<async_channel::Sender<()>>,
     ) -> Result<TurnOutcome> {
         let connection = self.connection.clone();
         self.host.on_prompt_submitted().await;
@@ -769,6 +806,11 @@ impl TurnDriver {
                     break;
                 }
                 Wake::Response((arrival, response)) => {
+                    if response.is_ok() {
+                        for receipt in &accepted {
+                            let _ = receipt.try_send(());
+                        }
+                    }
                     while let Ok(notification) = self.notifications.try_recv() {
                         self.handle_notification(mapper, notification).await?;
                     }
@@ -1061,6 +1103,9 @@ impl TurnDriver {
         mapper: &mut AcpTurnMapper,
         steer: QueuedFollowUp,
     ) -> Result<()> {
+        if let Some(receipt) = &steer.prompt.accepted {
+            let _ = receipt.try_send(());
+        }
         if let Some(row) = steer.row {
             self.host.hide_queued_prompt(row).await;
         }
