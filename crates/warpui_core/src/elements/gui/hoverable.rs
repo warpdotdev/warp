@@ -718,24 +718,21 @@ impl Element for Hoverable {
 
                 // The double-clicked handler takes precendence. However, we should still fall back to the single-click handler
                 // on a double-click if there's no double-click handler set.
-                if matches!(click_count, Some(2)) && self.double_click_handler.is_some() {
-                    let handler = self
-                        .double_click_handler
-                        .as_mut()
-                        .expect("handler should exist");
+                if matches!(click_count, Some(2))
+                    && let Some(handler) = self.double_click_handler.as_mut()
+                {
                     handler(ctx, app, *position);
                     ctx.notify();
                     return true;
-                } else if click_count.is_some() && self.click_handler.is_some() {
-                    let handler = self.click_handler.as_mut().expect("handler should exist");
+                } else if click_count.is_some()
+                    && let Some(handler) = self.click_handler.as_mut()
+                {
                     handler(ctx, app, *position);
                     ctx.notify();
                     return true;
-                } else if click_count.is_some() && self.click_with_modifiers_handler.is_some() {
-                    let handler = self
-                        .click_with_modifiers_handler
-                        .as_mut()
-                        .expect("handler should exist");
+                } else if click_count.is_some()
+                    && let Some(handler) = self.click_with_modifiers_handler.as_mut()
+                {
                     handler(ctx, app, *position, *modifiers);
                     ctx.notify();
                     return true;
