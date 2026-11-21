@@ -35,6 +35,46 @@ fn native_key_code_to_key_code(native_key_code: u16) -> Option<KeyCode> {
     }
 }
 
+/// Builds the [`Keystroke`] for a key-down event with the given native (virtual) key
+/// code and modifier state.
+///
+/// `translated_key` is the character the OS produced for this key under the *active*
+/// keyboard layout / input source (`-[NSEvent charactersIgnoringModifiers]`), e.g.
+/// `"з"` for the physical `P` key when a Ukrainian input source is selected.
+///
+/// When a chord modifier (ctrl/alt/cmd) is held, the keystroke's key is instead
+/// resolved from the physical key code through the US-QWERTY layout (see
+/// [`KeyCode::us_qwerty_char`]), so that keybindings such as `cmd-p`, `ctrl-r` or
+/// `cmd-,` fire regardless of the active input source (warp issue #341). Without a
+/// chord modifier the translated character is used as-is, so plain text input and
+/// IMEs (CJK, Korean, etc.) are unaffected.
+fn keystroke_for_key_down(
+    native_key_code: u16,
+    ctrl: bool,
+    alt: bool,
+    shift: bool,
+    cmd: bool,
+    translated_key: &str,
+) -> Keystroke {
+    let is_chord = ctrl || alt || cmd;
+    let key = if is_chord {
+        scancode_to_physicalkey(u32::from(native_key_code))
+            .us_qwerty_char(shift)
+            .map(|c| c.to_string())
+            .unwrap_or_else(|| translated_key.to_string())
+    } else {
+        translated_key.to_string()
+    };
+    Keystroke {
+        ctrl,
+        alt,
+        shift,
+        cmd,
+        meta: false, /* handled separately */
+        key,
+    }
+}
+
 /// # Safety
 /// This code is only unsafe since it requires interfacing with platform code.
 /// Creates an event from a native event, taking in the current window_height and whether this is
@@ -62,6 +102,11 @@ pub unsafe fn from_native(
             NSEventType::KeyDown => {
                 let native_modifiers = native_event.modifierFlags();
 
+                let ctrl = native_modifiers.contains(NSEventModifierFlags::Control);
+                let alt = native_modifiers.contains(NSEventModifierFlags::Option);
+                let shift = native_modifiers.contains(NSEventModifierFlags::Shift);
+                let cmd = native_modifiers.contains(NSEventModifierFlags::Command);
+
                 // Get the base character for this key without any modifiers (including Shift)
                 // using UCKeyTranslate via the platform's keyCodeToChar function.
                 // For example, Shift+1 on a US keyboard gives '!' as the key, but
@@ -78,20 +123,24 @@ pub unsafe fn from_native(
                     .to_str()
                     .ok()?;
 
-                let unmodified_chars = if let Some(first_char) = unmodified_chars.chars().next() {
+                // The layout-translated character for this key, with function-key Unicode
+                // values (arrows, enter, F-keys, ...) mapped to their key names. On non-US
+                // input sources this is NOT the US character for the physical key (e.g.
+                // "з" for the physical P key on a Ukrainian layout).
+                let translated_key = if let Some(first_char) = unmodified_chars.chars().next() {
                     unicode_char_to_key(first_char as u16).unwrap_or(unmodified_chars)
                 } else {
                     return None;
                 };
 
-                let keystroke = Keystroke {
-                    ctrl: native_modifiers.contains(NSEventModifierFlags::Control),
-                    alt: native_modifiers.contains(NSEventModifierFlags::Option),
-                    shift: native_modifiers.contains(NSEventModifierFlags::Shift),
-                    cmd: native_modifiers.contains(NSEventModifierFlags::Command),
-                    meta: false, /* handled separately */
-                    key: unmodified_chars.into(),
-                };
+                let keystroke = keystroke_for_key_down(
+                    native_event.keyCode(),
+                    ctrl,
+                    alt,
+                    shift,
+                    cmd,
+                    translated_key,
+                );
 
                 let characters = native_event.characters();
                 let chars = match characters.as_deref() {
@@ -253,3 +302,7 @@ pub unsafe fn from_native(
         }
     }
 }
+
+#[cfg(test)]
+#[path = "event_tests.rs"]
+mod tests;

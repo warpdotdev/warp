@@ -527,3 +527,230 @@ pub enum KeyCode {
     /// General-purpose function key.
     F35,
 }
+
+/// Applies `shift` to an ASCII letter, producing its uppercase form.
+fn shifted_letter(lowercase: char, shift: bool) -> char {
+    if shift {
+        lowercase.to_ascii_uppercase()
+    } else {
+        lowercase
+    }
+}
+
+impl KeyCode {
+    /// Returns the character this physical key produces on a standard US-QWERTY (ANSI)
+    /// layout, with `shift` applied, or `None` if the key does not produce a printable
+    /// character on that layout (modifiers, named keys, numpad keys, etc.).
+    ///
+    /// Keybindings ([`crate::keymap::Keystroke`]) are expressed in terms of US-layout
+    /// characters, but the OS reports key events using the *currently active* keyboard
+    /// layout / input source. On non-US layouts (Cyrillic, AZERTY, Dvorak, CJK IMEs,
+    /// ...) the character translated for a given physical key differs from the US one
+    /// (e.g. the physical `P` key yields `з` on a Ukrainian layout), which used to make
+    /// chord shortcuts such as `cmd-p` or `ctrl-r` stop matching (warp issue #341).
+    ///
+    /// Resolving a keystroke through this mapping when a chord modifier
+    /// (ctrl/alt/cmd) is held makes keybindings layout-independent, matching the
+    /// `event.code`-based keybinding resolution used by VS Code, Chromium, JetBrains,
+    /// etc. Plain (unmodified) keys must keep using the layout-translated character so
+    /// that text input and IMEs keep working.
+    ///
+    /// Keys that only produce named keystrokes (Enter, arrows, F-keys, ...) return
+    /// `None` here; those keys are layout-stable and are handled via the named-key
+    /// path by callers.
+    pub fn us_qwerty_char(&self, shift: bool) -> Option<char> {
+        use KeyCode::*;
+        Some(match self {
+            KeyA => shifted_letter('a', shift),
+            KeyB => shifted_letter('b', shift),
+            KeyC => shifted_letter('c', shift),
+            KeyD => shifted_letter('d', shift),
+            KeyE => shifted_letter('e', shift),
+            KeyF => shifted_letter('f', shift),
+            KeyG => shifted_letter('g', shift),
+            KeyH => shifted_letter('h', shift),
+            KeyI => shifted_letter('i', shift),
+            KeyJ => shifted_letter('j', shift),
+            KeyK => shifted_letter('k', shift),
+            KeyL => shifted_letter('l', shift),
+            KeyM => shifted_letter('m', shift),
+            KeyN => shifted_letter('n', shift),
+            KeyO => shifted_letter('o', shift),
+            KeyP => shifted_letter('p', shift),
+            KeyQ => shifted_letter('q', shift),
+            KeyR => shifted_letter('r', shift),
+            KeyS => shifted_letter('s', shift),
+            KeyT => shifted_letter('t', shift),
+            KeyU => shifted_letter('u', shift),
+            KeyV => shifted_letter('v', shift),
+            KeyW => shifted_letter('w', shift),
+            KeyX => shifted_letter('x', shift),
+            KeyY => shifted_letter('y', shift),
+            KeyZ => shifted_letter('z', shift),
+            Digit1 => {
+                if shift {
+                    '!'
+                } else {
+                    '1'
+                }
+            }
+            Digit2 => {
+                if shift {
+                    '@'
+                } else {
+                    '2'
+                }
+            }
+            Digit3 => {
+                if shift {
+                    '#'
+                } else {
+                    '3'
+                }
+            }
+            Digit4 => {
+                if shift {
+                    '$'
+                } else {
+                    '4'
+                }
+            }
+            Digit5 => {
+                if shift {
+                    '%'
+                } else {
+                    '5'
+                }
+            }
+            Digit6 => {
+                if shift {
+                    '^'
+                } else {
+                    '6'
+                }
+            }
+            Digit7 => {
+                if shift {
+                    '&'
+                } else {
+                    '7'
+                }
+            }
+            Digit8 => {
+                if shift {
+                    '*'
+                } else {
+                    '8'
+                }
+            }
+            Digit9 => {
+                if shift {
+                    '('
+                } else {
+                    '9'
+                }
+            }
+            Digit0 => {
+                if shift {
+                    ')'
+                } else {
+                    '0'
+                }
+            }
+            Minus => {
+                if shift {
+                    '_'
+                } else {
+                    '-'
+                }
+            }
+            Equal => {
+                if shift {
+                    '+'
+                } else {
+                    '='
+                }
+            }
+            BracketLeft => {
+                if shift {
+                    '{'
+                } else {
+                    '['
+                }
+            }
+            BracketRight => {
+                if shift {
+                    '}'
+                } else {
+                    ']'
+                }
+            }
+            Backslash => {
+                if shift {
+                    '|'
+                } else {
+                    '\\'
+                }
+            }
+            Semicolon => {
+                if shift {
+                    ':'
+                } else {
+                    ';'
+                }
+            }
+            Quote => {
+                if shift {
+                    '"'
+                } else {
+                    '\''
+                }
+            }
+            Comma => {
+                if shift {
+                    '<'
+                } else {
+                    ','
+                }
+            }
+            Period => {
+                if shift {
+                    '>'
+                } else {
+                    '.'
+                }
+            }
+            Slash => {
+                if shift {
+                    '?'
+                } else {
+                    '/'
+                }
+            }
+            Backquote => {
+                if shift {
+                    '~'
+                } else {
+                    '`'
+                }
+            }
+            Space => ' ',
+            _ => return None,
+        })
+    }
+}
+
+impl PhysicalKey {
+    /// Convenience wrapper around [`KeyCode::us_qwerty_char`]; returns `None` for
+    /// [`PhysicalKey::Unidentified`] keys.
+    pub fn us_qwerty_char(&self, shift: bool) -> Option<char> {
+        match self {
+            PhysicalKey::Code(code) => code.us_qwerty_char(shift),
+            PhysicalKey::Unidentified(_) => None,
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "keyboard_tests.rs"]
+mod tests;
