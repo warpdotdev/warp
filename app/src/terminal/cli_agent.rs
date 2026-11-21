@@ -1,7 +1,8 @@
 //! CLI agent detection and configuration.
 //!
 //! This module provides types for detecting and working with CLI-based AI agents
-//! like Claude Code, Gemini CLI, Codex, Amp, Droid, OpenCode, Grok Build, and Muse Code.
+//! like Claude Code, Gemini CLI, Codex, Amp, Droid, OpenCode, Grok Build, Muse Code,
+//! and MiniMax Code.
 
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -157,6 +158,15 @@ const MUSE_COLOR: ColorU = ColorU {
     a: 255,
 };
 
+/// MiniMax Code brand blue (#16A9F3), the start colour of the official
+/// minimax.io "Code" gradient (#16A9F3 -> #75D9F0).
+const MINIMAX_COLOR: ColorU = ColorU {
+    r: 22,
+    g: 169,
+    b: 243,
+    a: 255,
+};
+
 /// Represents a CLI agent (e.g., Claude Code, Gemini CLI, Codex, Amp, Droid, OpenCode, Copilot, Pi, Auggie, Cursor, Goose, Hermes, Mistral Vibe, Grok Build, Kiro CLI, Muse Code)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Sequence, Serialize, Deserialize)]
 pub enum CLIAgent {
@@ -178,6 +188,7 @@ pub enum CLIAgent {
     Grok,
     Kiro,
     Muse,
+    MiniMax,
     /// Warp's own headless TUI.
     WarpTui,
     /// Represents an unknown/custom CLI agent matched by user-configured regex patterns.
@@ -206,6 +217,7 @@ impl CLIAgent {
             CLIAgent::Grok => "Grok",
             CLIAgent::Kiro => "Kiro",
             CLIAgent::Muse => "Muse",
+            CLIAgent::MiniMax => "MiniMax",
             CLIAgent::WarpTui => "WarpTui",
             CLIAgent::Unknown => "Unknown",
         }
@@ -240,6 +252,7 @@ impl CLIAgent {
             CLIAgent::Grok => &["grok"],
             CLIAgent::Kiro => &["kiro-cli", "kiro"],
             CLIAgent::Muse => &["muse"],
+            CLIAgent::MiniMax => &["mcode"],
             CLIAgent::Unknown => &[],
         }
     }
@@ -298,6 +311,7 @@ impl CLIAgent {
             CLIAgent::Grok => "Grok Build",
             CLIAgent::Kiro => "Kiro CLI",
             CLIAgent::Muse => "Muse Code",
+            CLIAgent::MiniMax => "MiniMax Code",
             CLIAgent::WarpTui => "Warp TUI",
             CLIAgent::Unknown => "CLI Agent",
         }
@@ -327,6 +341,7 @@ impl CLIAgent {
             CLIAgent::Grok => Some(Icon::GrokLogo),
             CLIAgent::Kiro => Some(Icon::KiroLogo),
             CLIAgent::Muse => Some(Icon::MuseLogo),
+            CLIAgent::MiniMax => Some(Icon::MiniMaxLogo),
             CLIAgent::WarpTui => Some(Icon::Warp),
             CLIAgent::Unknown => None,
         }
@@ -367,6 +382,7 @@ impl CLIAgent {
                 SkillProvider::Claude,
                 SkillProvider::Codex,
             ],
+            CLIAgent::MiniMax => &[SkillProvider::Agents],
             CLIAgent::WarpTui => &[],
             CLIAgent::Unknown => &[],
         }
@@ -397,6 +413,7 @@ impl CLIAgent {
                 | CLIAgent::Grok
                 | CLIAgent::Kiro
                 | CLIAgent::Muse
+                | CLIAgent::MiniMax
         )
     }
 
@@ -426,6 +443,7 @@ impl CLIAgent {
             CLIAgent::Grok => Some(GROK_COLOR),
             CLIAgent::Kiro => Some(KIRO_PURPLE),
             CLIAgent::Muse => Some(MUSE_COLOR),
+            CLIAgent::MiniMax => Some(MINIMAX_COLOR),
             CLIAgent::WarpTui => Some(ColorU::black()),
             CLIAgent::Unknown => None,
         }

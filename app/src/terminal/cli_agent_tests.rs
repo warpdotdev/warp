@@ -271,6 +271,7 @@ fn test_detect_known_agents() {
                 ("omp", CLIAgent::OhMyPi),
                 ("grok", CLIAgent::Grok),
                 ("muse", CLIAgent::Muse),
+                ("mcode", CLIAgent::MiniMax),
                 ("warp", CLIAgent::WarpTui),
                 ("warp-dev", CLIAgent::WarpTui),
                 ("./script/run-tui", CLIAgent::WarpTui),
@@ -302,6 +303,11 @@ fn test_detect_with_arguments() {
                 Some(CLIAgent::Muse),
             );
             assert_eq!(CLIAgent::detect("npx muse", None, None, ctx), None);
+            assert_eq!(
+                CLIAgent::detect(r#"mcode exec "ping""#, None, None, ctx),
+                Some(CLIAgent::MiniMax),
+            );
+            assert_eq!(CLIAgent::detect("npx mcode", None, None, ctx), None);
         });
     });
 }
@@ -439,6 +445,19 @@ fn test_muse_public_configuration() {
             SkillProvider::Claude,
             SkillProvider::Codex,
         ]
+    );
+}
+
+#[test]
+fn test_minimax_public_configuration() {
+    assert_eq!(CLIAgent::MiniMax.command_prefix(), "mcode");
+    assert_eq!(CLIAgent::MiniMax.display_name(), "MiniMax Code");
+    assert!(CLIAgent::MiniMax.supports_bash_mode());
+    assert_eq!(CLIAgent::MiniMax.skill_command_prefix(), "/");
+    assert_eq!(CLIAgent::MiniMax.icon(), Some(Icon::MiniMaxLogo));
+    assert_eq!(
+        CLIAgent::MiniMax.supported_skill_providers(),
+        &[SkillProvider::Agents]
     );
 }
 
