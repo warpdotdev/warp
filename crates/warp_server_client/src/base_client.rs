@@ -514,6 +514,7 @@ impl BaseClient {
 
     /// Wraps an eventsource stream so IAP challenges notify the application without changing the
     /// original stream result or reconnecting it.
+    #[allow(clippy::result_large_err)]
     pub fn wrap_eventsource_with_iap_detection(
         &self,
         stream: http_client::EventSourceStream,
