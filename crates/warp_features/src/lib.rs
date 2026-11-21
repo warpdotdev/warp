@@ -1021,6 +1021,10 @@ pub enum FeatureFlag {
     /// Refreshes the short-lived proxy credentials of managed MCP servers during an agent run,
     /// before they expire and on first use after they have expired.
     ManagedMcpCredentialRefresh,
+
+    /// Renders right-to-left scripts (e.g. Arabic, Hebrew) in terminal output in visual order with
+    /// contextual shaping, instead of drawing each cell's glyph in logical order.
+    RtlTerminalText,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -1101,6 +1105,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::GitMirrorCache,
     FeatureFlag::AgentPromptSteering,
     FeatureFlag::CwdScopedCloudSkills,
+    FeatureFlag::RtlTerminalText,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).
