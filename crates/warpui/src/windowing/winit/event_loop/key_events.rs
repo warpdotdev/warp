@@ -89,6 +89,22 @@ pub fn convert_keyboard_input_event(
 
     let shift = window_state.modifiers.shift_key();
 
+    // Chord shortcuts (any of ctrl/alt/cmd held) are resolved from the physical key via
+    // the US-QWERTY layout rather than the layout-translated logical character, so that
+    // bindings like `ctrl-c`, `cmd-p` or `cmd-,` fire regardless of the active keyboard
+    // layout / IME input source (Cyrillic, Korean, AZERTY, QWERTZ, ...). This is the same
+    // `event.code`-based approach used by VS Code, JetBrains, and Chromium.
+    // Issues #341 and #9036.
+    //
+    // Right-Alt is excluded on Windows because Windows reports AltGr as Ctrl+Alt; without
+    // this guard, AltGr-produced characters (e.g. `€` on a German layout) would be
+    // rewritten into a spurious chord and the typed character would be swallowed.
+    let is_chord = window_state.modifiers.control_key()
+        || window_state.modifiers.super_key()
+        || window_state.modifiers.alt_key();
+    #[cfg(windows)]
+    let is_chord = is_chord && !window_state.right_alt_pressed;
+
     let logical_key = match &input.logical_key {
         // When keystrokes with ctrl-alt are pressed on Windows, `input.logical_key` is
         // Unidentified.
@@ -100,26 +116,7 @@ pub fn convert_keyboard_input_event(
         {
             input.key_without_modifiers()
         }
-        // On Windows, non-Latin keyboard layouts (Cyrillic, Greek, Arabic, etc.) translate
-        // the physical key to a non-ASCII character even when Ctrl/Cmd is held. That makes
-        // bindings like `ctrl-c` / `ctrl-v` fail to match. Fall back to the US-QWERTY
-        // position so chord shortcuts work regardless of the active layout — same approach
-        // used by VS Code, JetBrains, and Chromium. Issue #9036.
-        //
-        // Right-Alt is excluded because Windows reports AltGr as Ctrl+Alt; without this
-        // guard, AltGr-produced characters (e.g. `€` on a German layout) would be rewritten
-        // into a spurious chord and the typed character would be swallowed.
-        #[cfg(windows)]
-        Key::Character(c)
-            if (window_state.modifiers.control_key() || window_state.modifiers.super_key())
-                && !window_state.right_alt_pressed
-                && !c.is_ascii() =>
-        {
-            us_qwerty_fallback_for_chord(&input.physical_key, shift)
-                .map(|s| Key::Character(s.into()))
-                .unwrap_or_else(|| input.logical_key.clone())
-        }
-        _ => input.logical_key,
+        _ => resolve_logical_key(&input.logical_key, &input.physical_key, is_chord, shift),
     };
     let input_key = get_input_key(&logical_key, shift);
 
@@ -191,6 +188,25 @@ fn text_with_modifiers(
             CONTROL_CHARACTER_MAP.get(character.as_str()).copied()
         }
         (_, key) => key.to_text(),
+    }
+}
+
+/// Resolves the [`Key`] to use for a key event. When `is_chord` is true (a ctrl/alt/cmd
+/// modifier is held) and the physical key produces a character on the US-QWERTY layout,
+/// that character is used instead of the layout-translated `logical_key`, so chord
+/// shortcuts match keybindings regardless of the active keyboard layout / input source
+/// (warp issue #341). Named keys and unmapped physical keys fall back to `logical_key`.
+fn resolve_logical_key(
+    logical_key: &Key,
+    physical_key: &winit::keyboard::PhysicalKey,
+    is_chord: bool,
+    shift: bool,
+) -> Key {
+    match logical_key {
+        Key::Character(_) if is_chord => us_qwerty_fallback_for_chord(physical_key, shift)
+            .map(|c| Key::Character(c.to_string().into()))
+            .unwrap_or_else(|| logical_key.clone()),
+        _ => logical_key.clone(),
     }
 }
 
@@ -271,96 +287,88 @@ fn convert_key(key: Key) -> Option<Cow<'static, str>> {
     Some(Cow::Borrowed(value))
 }
 
-/// Maps a winit `PhysicalKey` to the US-QWERTY character it would produce. Used on Windows
-/// to recover layout-independent chord shortcuts (e.g. `ctrl-c`) when a non-Latin keyboard
-/// layout has translated the logical key to a non-ASCII character.
+/// Maps a winit `PhysicalKey` to the character it produces on a US-QWERTY (ANSI) layout,
+/// with `shift` applied. Used to recover layout-independent chord shortcuts (e.g.
+/// `ctrl-c`, `cmd-p`) when the active keyboard layout / IME input source has translated
+/// the logical key to a different character (Cyrillic, Korean, AZERTY, QWERTZ, ...).
 ///
-/// Returns `None` for keys outside the standard letter/digit/punctuation set (function keys,
-/// modifiers, navigation keys, etc.), since those either aren't typically used in chord
-/// bindings as character keys or are already handled via `NamedKey` in `convert_key`.
-#[cfg_attr(not(windows), allow(dead_code))]
+/// Returns `None` for keys outside the standard letter/digit/punctuation set (function
+/// keys, modifiers, navigation keys, etc.), since those either aren't typically used in
+/// chord bindings as character keys or are already handled via `NamedKey` in
+/// `convert_key`.
+///
+/// The mapping itself lives in [`warpui_core::platform::keyboard::KeyCode::us_qwerty_char`]
+/// so that all platforms (winit-based and the custom macOS AppKit path) share a single
+/// table.
 fn us_qwerty_fallback_for_chord(
     physical_key: &winit::keyboard::PhysicalKey,
     shift: bool,
-) -> Option<&'static str> {
-    use winit::keyboard::{KeyCode, PhysicalKey};
+) -> Option<char> {
+    use winit::keyboard::PhysicalKey;
     let PhysicalKey::Code(code) = physical_key else {
         return None;
     };
-    // Letters always return lowercase here; `get_input_key` applies the uppercase
-    // transform downstream when shift is held. Digit/punctuation keys must return
-    // the shifted US-QWERTY symbol up front because `get_input_key` passes
-    // non-letter characters through unchanged, so bindings like `ctrl-shift-}`
-    // would otherwise see `ctrl-shift-]` on non-Latin layouts.
-    Some(match (code, shift) {
-        (KeyCode::KeyA, _) => "a",
-        (KeyCode::KeyB, _) => "b",
-        (KeyCode::KeyC, _) => "c",
-        (KeyCode::KeyD, _) => "d",
-        (KeyCode::KeyE, _) => "e",
-        (KeyCode::KeyF, _) => "f",
-        (KeyCode::KeyG, _) => "g",
-        (KeyCode::KeyH, _) => "h",
-        (KeyCode::KeyI, _) => "i",
-        (KeyCode::KeyJ, _) => "j",
-        (KeyCode::KeyK, _) => "k",
-        (KeyCode::KeyL, _) => "l",
-        (KeyCode::KeyM, _) => "m",
-        (KeyCode::KeyN, _) => "n",
-        (KeyCode::KeyO, _) => "o",
-        (KeyCode::KeyP, _) => "p",
-        (KeyCode::KeyQ, _) => "q",
-        (KeyCode::KeyR, _) => "r",
-        (KeyCode::KeyS, _) => "s",
-        (KeyCode::KeyT, _) => "t",
-        (KeyCode::KeyU, _) => "u",
-        (KeyCode::KeyV, _) => "v",
-        (KeyCode::KeyW, _) => "w",
-        (KeyCode::KeyX, _) => "x",
-        (KeyCode::KeyY, _) => "y",
-        (KeyCode::KeyZ, _) => "z",
-        (KeyCode::Digit1, true) => "!",
-        (KeyCode::Digit1, false) => "1",
-        (KeyCode::Digit2, true) => "@",
-        (KeyCode::Digit2, false) => "2",
-        (KeyCode::Digit3, true) => "#",
-        (KeyCode::Digit3, false) => "3",
-        (KeyCode::Digit4, true) => "$",
-        (KeyCode::Digit4, false) => "4",
-        (KeyCode::Digit5, true) => "%",
-        (KeyCode::Digit5, false) => "5",
-        (KeyCode::Digit6, true) => "^",
-        (KeyCode::Digit6, false) => "6",
-        (KeyCode::Digit7, true) => "&",
-        (KeyCode::Digit7, false) => "7",
-        (KeyCode::Digit8, true) => "*",
-        (KeyCode::Digit8, false) => "8",
-        (KeyCode::Digit9, true) => "(",
-        (KeyCode::Digit9, false) => "9",
-        (KeyCode::Digit0, true) => ")",
-        (KeyCode::Digit0, false) => "0",
-        (KeyCode::Minus, true) => "_",
-        (KeyCode::Minus, false) => "-",
-        (KeyCode::Equal, true) => "+",
-        (KeyCode::Equal, false) => "=",
-        (KeyCode::BracketLeft, true) => "{",
-        (KeyCode::BracketLeft, false) => "[",
-        (KeyCode::BracketRight, true) => "}",
-        (KeyCode::BracketRight, false) => "]",
-        (KeyCode::Backslash, true) => "|",
-        (KeyCode::Backslash, false) => "\\",
-        (KeyCode::Semicolon, true) => ":",
-        (KeyCode::Semicolon, false) => ";",
-        (KeyCode::Quote, true) => "\"",
-        (KeyCode::Quote, false) => "'",
-        (KeyCode::Comma, true) => "<",
-        (KeyCode::Comma, false) => ",",
-        (KeyCode::Period, true) => ">",
-        (KeyCode::Period, false) => ".",
-        (KeyCode::Slash, true) => "?",
-        (KeyCode::Slash, false) => "/",
-        (KeyCode::Backquote, true) => "~",
-        (KeyCode::Backquote, false) => "`",
+    core_key_code(*code)?.us_qwerty_char(shift)
+}
+
+/// Converts a winit [`winit::keyboard::KeyCode`] to warpui_core's platform-independent
+/// [`warpui_core::platform::keyboard::KeyCode`] for the keys that can produce a
+/// US-QWERTY character (letters, digits, punctuation, space). Returns `None` for all
+/// other keys.
+fn core_key_code(
+    code: winit::keyboard::KeyCode,
+) -> Option<warpui_core::platform::keyboard::KeyCode> {
+    use warpui_core::platform::keyboard::KeyCode as Core;
+    use winit::keyboard::KeyCode as Winit;
+    Some(match code {
+        Winit::KeyA => Core::KeyA,
+        Winit::KeyB => Core::KeyB,
+        Winit::KeyC => Core::KeyC,
+        Winit::KeyD => Core::KeyD,
+        Winit::KeyE => Core::KeyE,
+        Winit::KeyF => Core::KeyF,
+        Winit::KeyG => Core::KeyG,
+        Winit::KeyH => Core::KeyH,
+        Winit::KeyI => Core::KeyI,
+        Winit::KeyJ => Core::KeyJ,
+        Winit::KeyK => Core::KeyK,
+        Winit::KeyL => Core::KeyL,
+        Winit::KeyM => Core::KeyM,
+        Winit::KeyN => Core::KeyN,
+        Winit::KeyO => Core::KeyO,
+        Winit::KeyP => Core::KeyP,
+        Winit::KeyQ => Core::KeyQ,
+        Winit::KeyR => Core::KeyR,
+        Winit::KeyS => Core::KeyS,
+        Winit::KeyT => Core::KeyT,
+        Winit::KeyU => Core::KeyU,
+        Winit::KeyV => Core::KeyV,
+        Winit::KeyW => Core::KeyW,
+        Winit::KeyX => Core::KeyX,
+        Winit::KeyY => Core::KeyY,
+        Winit::KeyZ => Core::KeyZ,
+        Winit::Digit0 => Core::Digit0,
+        Winit::Digit1 => Core::Digit1,
+        Winit::Digit2 => Core::Digit2,
+        Winit::Digit3 => Core::Digit3,
+        Winit::Digit4 => Core::Digit4,
+        Winit::Digit5 => Core::Digit5,
+        Winit::Digit6 => Core::Digit6,
+        Winit::Digit7 => Core::Digit7,
+        Winit::Digit8 => Core::Digit8,
+        Winit::Digit9 => Core::Digit9,
+        Winit::Minus => Core::Minus,
+        Winit::Equal => Core::Equal,
+        Winit::BracketLeft => Core::BracketLeft,
+        Winit::BracketRight => Core::BracketRight,
+        Winit::Backslash => Core::Backslash,
+        Winit::Semicolon => Core::Semicolon,
+        Winit::Quote => Core::Quote,
+        Winit::Comma => Core::Comma,
+        Winit::Period => Core::Period,
+        Winit::Slash => Core::Slash,
+        Winit::Backquote => Core::Backquote,
+        Winit::Space => Core::Space,
         _ => return None,
     })
 }
