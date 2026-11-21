@@ -15,6 +15,7 @@ use super::super::mcp_projection::{KnownMcpServer, KnownMcpServers};
 use super::super::protocol::SessionUpdate;
 use super::{AcpTurnMapper, TurnEvent};
 use crate::ai::agent::BaseUserQuery;
+use crate::ai::mcp::builtin::{COMPUTER_USE_MCP_INSTALLATION_UUID, COMPUTER_USE_MCP_SERVER_NAME};
 
 fn update(value: serde_json::Value) -> SessionUpdate {
     serde_json::from_value(value).expect("fixture should deserialize")
@@ -740,6 +741,99 @@ fn pi_direct_and_proxy_mcp_calls_resolve_to_the_same_call() {
         let args = mcp.args.expect("args");
         assert!(args.fields.contains_key("message"), "{name}: {args:?}");
         assert!(!args.fields.contains_key("args"), "{name}: {args:?}");
+    }
+}
+
+/// Computer use calls carry the built-in server's name and installation id, which is what
+/// transcript viewers recognize them by, and their screenshots never reach the result as base64.
+#[test]
+fn computer_use_calls_are_identified_and_keep_screenshots_out_of_the_result_text() {
+    const SCREENSHOT: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk";
+    let claude = (
+        json!({
+            "title": "mcp__warp-computer-use__click",
+            "kind": "other",
+            "rawInput": { "x": 10, "y": 20 }
+        }),
+        json!({
+            "content": [
+                { "type": "content", "content": { "type": "text", "text": "Left click at (10, 20)." } },
+                { "type": "content", "content": { "type": "image", "data": SCREENSHOT, "mimeType": "image/png" } }
+            ]
+        }),
+    );
+    let codex = (
+        json!({
+            "title": "mcp.warp-computer-use.click",
+            "kind": "execute",
+            "rawInput": { "server": "warp-computer-use", "tool": "click", "arguments": { "x": 10, "y": 20 } }
+        }),
+        json!({
+            "rawOutput": {
+                "result": {
+                    "content": [
+                        { "type": "text", "text": "Left click at (10, 20)." },
+                        { "type": "image", "data": SCREENSHOT, "mimeType": "image/png" }
+                    ]
+                },
+                "error": null
+            }
+        }),
+    );
+    for (harness, (call, finish)) in [("claude", claude), ("codex", codex)] {
+        let mut mapper = mapper_with_servers(vec![KnownMcpServer {
+            name: COMPUTER_USE_MCP_SERVER_NAME.to_owned(),
+            installation_id: COMPUTER_USE_MCP_INSTALLATION_UUID,
+            warp_id: None,
+        }]);
+        let mut announce = json!({
+            "sessionUpdate": "tool_call",
+            "toolCallId": "cu-1",
+            "status": "in_progress"
+        });
+        announce
+            .as_object_mut()
+            .unwrap()
+            .extend(call.as_object().unwrap().clone());
+        let announced = mapper.map_update(update(announce));
+        let Tool::CallMcpTool(mcp) = announced_tool(&announced[0]).1 else {
+            panic!("expected CallMcpTool for {harness}");
+        };
+        assert_eq!(mcp.name, "click", "{harness}");
+        assert_eq!(
+            mcp.server_id,
+            COMPUTER_USE_MCP_INSTALLATION_UUID.to_string(),
+            "{harness}"
+        );
+        assert_eq!(
+            mcp.server_identity,
+            Some(McpServerIdentity {
+                display_name: "warp-computer-use".to_owned(),
+                ..Default::default()
+            }),
+            "{harness}"
+        );
+        assert!(
+            mcp.args.expect("args").fields.contains_key("x"),
+            "{harness}"
+        );
+
+        let mut done = json!({
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "cu-1",
+            "status": "completed"
+        });
+        done.as_object_mut()
+            .unwrap()
+            .extend(finish.as_object().unwrap().clone());
+        let finished = mapper.map_update(update(done));
+        let (_, result) = reported_result(&finished[1]);
+        let text = mcp_result_text(&result);
+        assert!(
+            text.starts_with("Left click at (10, 20)."),
+            "{harness}: {text}"
+        );
+        assert!(!text.contains(SCREENSHOT), "{harness}: {text}");
     }
 }
 

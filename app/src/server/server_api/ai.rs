@@ -31,6 +31,7 @@ use warp_graphql::mutations::confirm_file_artifact_upload::{
 };
 use warp_graphql::mutations::create_agent_task::{
     CreateAgentTask, CreateAgentTaskInput, CreateAgentTaskResult, CreateAgentTaskVariables,
+    CreateLocalAgentTask, CreateLocalAgentTaskResult, LocalAgentTaskOutput,
 };
 use warp_graphql::mutations::create_file_artifact_upload_target::{
     CreateFileArtifactUploadTarget, CreateFileArtifactUploadTargetInput,
@@ -467,11 +468,22 @@ pub struct AgentMessageHeader {
 pub struct AgentRunEvent {
     #[serde(flatten)]
     pub kind: AgentRunEventKind,
+    /// The run this event belongs to, including the notified run for `WaitedOn`.
     pub run_id: String,
+    /// Event-specific payload, defined by `kind`; never a subscription or routing key.
     pub ref_id: Option<String>,
     pub execution_id: Option<String>,
     pub occurred_at: String,
     pub sequence: i64,
+}
+
+impl AgentRunEvent {
+    pub fn waited_on_by(&self, recipient_run_id: &str) -> Option<&str> {
+        if self.kind != AgentRunEventKind::WaitedOn || self.run_id != recipient_run_id {
+            return None;
+        }
+        self.ref_id.as_deref().filter(|waiter| !waiter.is_empty())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -492,9 +504,14 @@ pub enum AgentRunEventKind {
     Cancelled {
         reason: Option<String>,
     },
+    /// A message arrived for this run; `ref_id` is the message ID.
     NewMessage,
+    /// This run started a child; `ref_id` is the child run ID.
     ChildAgentStarted,
+    /// This run linked a session; `ref_id` is the session UUID.
     RunSessionLinked,
+    /// The event's run is being waited on; `ref_id` identifies the waiter.
+    WaitedOn,
     LegacyStarted,
     LegacyIdle,
     LegacyRestarted,
@@ -512,6 +529,7 @@ impl AgentRunEventKind {
             Self::Errored { .. } => Some(LifecycleEventType::Errored),
             Self::Blocked { .. } => Some(LifecycleEventType::Blocked),
             Self::Cancelled { .. } => Some(LifecycleEventType::Cancelled),
+            Self::WaitedOn => Some(LifecycleEventType::Waiting),
             Self::NewMessage | Self::ChildAgentStarted | Self::RunSessionLinked | Self::Unknown => {
                 None
             }
@@ -546,6 +564,8 @@ impl<'de> serde::Deserialize<'de> for AgentRunEventKind {
             ChildAgentStarted,
             #[serde(rename = "run_session_linked")]
             RunSessionLinked,
+            #[serde(rename = "run_waited_on")]
+            WaitedOn,
             #[serde(rename = "run_started")]
             LegacyStarted,
             #[serde(rename = "run_idle")]
@@ -616,6 +636,7 @@ impl<'de> serde::Deserialize<'de> for AgentRunEventKind {
             WireEventType::NewMessage => Self::NewMessage,
             WireEventType::ChildAgentStarted => Self::ChildAgentStarted,
             WireEventType::RunSessionLinked => Self::RunSessionLinked,
+            WireEventType::WaitedOn => Self::WaitedOn,
             WireEventType::LegacyStarted => Self::LegacyStarted,
             WireEventType::LegacyIdle => Self::LegacyIdle,
             WireEventType::LegacyRestarted => Self::LegacyRestarted,
@@ -666,6 +687,7 @@ impl serde::Serialize for AgentRunEventKind {
             Self::NewMessage => "new_message",
             Self::ChildAgentStarted => "child_agent_started",
             Self::RunSessionLinked => "run_session_linked",
+            Self::WaitedOn => "run_waited_on",
             Self::LegacyStarted => "run_started",
             Self::LegacyIdle => "run_idle",
             Self::LegacyRestarted => "run_restarted",
@@ -1288,6 +1310,10 @@ pub struct ListRunPreviewsResponse {
 #[derive(Debug, serde::Deserialize)]
 pub struct RunPreview {
     pub port: u16,
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub url: Option<String>,
 }
 
 impl<'de> serde::Deserialize<'de> for ListRunsResponse {
@@ -1649,6 +1675,13 @@ pub trait AIClient: 'static + Send + Sync {
         metadata: HashMap<String, String>,
         team_scope: RequestTeamScope,
     ) -> anyhow::Result<AmbientAgentTaskId, anyhow::Error>;
+
+    async fn create_local_agent_task(
+        &self,
+        prompt: String,
+        config: AgentConfigSnapshot,
+        team_scope: RequestTeamScope,
+    ) -> anyhow::Result<LocalAgentTaskOutput>;
 
     /// Updates a run's server-side record. Every argument is independently optional; omitted
     /// fields are left untouched rather than cleared.
@@ -2877,6 +2910,7 @@ impl AIClient for ServerApi {
 
         let variables = CreateAgentTaskVariables {
             input: CreateAgentTaskInput {
+                local_github_contract_version: None,
                 prompt,
                 environment_uid: environment_uid.map(|uid| uid.into()),
                 parent_run_id: parent_run_id.map(|run_id| run_id.into()),
@@ -2903,6 +2937,35 @@ impl AIClient for ServerApi {
                 Err(anyhow!(get_user_facing_error_message(e)))
             }
             CreateAgentTaskResult::Unknown => Err(anyhow!("failed to create agent task")),
+        }
+    }
+
+    async fn create_local_agent_task(
+        &self,
+        prompt: String,
+        config: AgentConfigSnapshot,
+        team_scope: RequestTeamScope,
+    ) -> anyhow::Result<LocalAgentTaskOutput> {
+        let variables = CreateAgentTaskVariables {
+            input: CreateAgentTaskInput {
+                local_github_contract_version: Some(1),
+                prompt,
+                environment_uid: config.environment_id.clone().map(Into::into),
+                parent_run_id: None,
+                agent_config_snapshot: Some(serde_json::to_string(&config)?),
+                metadata: None,
+            },
+            request_context: get_request_context(),
+        };
+        let response = self
+            .send_graphql_request_for_team(CreateLocalAgentTask::build(variables), team_scope)
+            .await?;
+        match response.create_agent_task {
+            CreateLocalAgentTaskResult::CreateAgentTaskOutput(output) => Ok(output),
+            CreateLocalAgentTaskResult::UserFacingError(error) => {
+                Err(anyhow!(get_user_facing_error_message(error)))
+            }
+            CreateLocalAgentTaskResult::Unknown => Err(anyhow!("Unknown local task response")),
         }
     }
 

@@ -598,6 +598,7 @@ fn lifecycle_event_detail_from_type(
         LifecycleEventType::InProgress => {
             Some(api::agent_event::lifecycle_event::Detail::InProgress(()))
         }
+        LifecycleEventType::Waiting => Some(api::agent_event::lifecycle_event::Detail::Waiting(())),
         LifecycleEventType::Succeeded => {
             Some(api::agent_event::lifecycle_event::Detail::Succeeded(()))
         }
@@ -634,7 +635,7 @@ fn lifecycle_event_detail_from_type(
                 error_message: detail_payload.error_message.clone().unwrap_or_default(),
             },
         )),
-        LifecycleEventType::Unspecified | LifecycleEventType::Waiting => None,
+        LifecycleEventType::Unspecified => None,
     }
 }
 
@@ -645,6 +646,9 @@ pub(super) fn lifecycle_event_type_from_proto(
     match lifecycle_event.detail.as_ref() {
         Some(api::agent_event::lifecycle_event::Detail::InProgress(_)) => {
             api::LifecycleEventType::InProgress
+        }
+        Some(api::agent_event::lifecycle_event::Detail::Waiting(_)) => {
+            api::LifecycleEventType::Waiting
         }
         Some(api::agent_event::lifecycle_event::Detail::Succeeded(_)) => {
             api::LifecycleEventType::Succeeded
@@ -671,9 +675,7 @@ pub(super) fn lifecycle_event_type_from_proto(
         Some(api::agent_event::lifecycle_event::Detail::Errored(_)) => {
             api::LifecycleEventType::Errored
         }
-        Some(api::agent_event::lifecycle_event::Detail::Waiting(_)) | None => {
-            api::LifecycleEventType::Unspecified
-        }
+        None => api::LifecycleEventType::Unspecified,
     }
 }
 

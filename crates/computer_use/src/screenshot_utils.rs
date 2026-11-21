@@ -83,26 +83,7 @@ pub fn crop_to_region(
     img.crop_imm(x, y, width, height)
 }
 
-/// Returns the scaling factor to apply to a screenshot to meet the size constraints.
-///
-/// The scale factor is chosen to ensure that:
-/// 1. The longer edge is at most `max_long_edge_px` pixels (if specified)
-/// 2. The total number of pixels is at most `max_total_px` (if specified)
-/// 3. The scale factor is at most 1.0 (no upscaling)
-///
-/// This must stay in sync with the server-side logic in logic/ai/computer_use/utils.go.
+/// Returns the scaling factor to apply to a screenshot to meet the size constraints in `params`.
 pub fn get_scale_factor(width: u32, height: u32, params: ScreenshotParams) -> f64 {
-    let long_edge = width.max(height);
-    let total_pixels = width * height;
-
-    let long_edge_scale = params
-        .max_long_edge_px
-        .map(|max| max as f64 / long_edge as f64)
-        .unwrap_or(1.0);
-    let total_pixels_scale = params
-        .max_total_px
-        .map(|max| (max as f64 / total_pixels as f64).sqrt())
-        .unwrap_or(1.0);
-
-    long_edge_scale.min(total_pixels_scale).min(1.0)
+    crate::screenshot_scale_factor(width, height, params.max_long_edge_px, params.max_total_px)
 }

@@ -29,8 +29,12 @@ use std::any::Any;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 
-use ai::agent::action_result::{InsertReviewCommentsResult, RequestCommandOutputResult};
+use ai::agent::action_result::{
+    InsertReviewCommentsResult, RequestCommandOutputResult, RunAgentsResult,
+};
+use ai::hooks::{PermissionDecision, PermissionFloors, WarpPermissionResult};
 pub use ask_user_question::AskUserQuestionExecutor;
 use call_mcp_tool::CallMCPToolExecutor;
 pub(crate) use call_mcp_tool::coerce_integer_args;
@@ -43,6 +47,7 @@ use futures::AsyncReadExt;
 use futures::FutureExt;
 use futures::future::BoxFuture;
 use grep::GrepExecutor;
+use instant::Instant;
 #[cfg(feature = "local_fs")]
 use mime_guess::from_path;
 use parking_lot::FairMutex;
@@ -94,6 +99,8 @@ use crate::ai::agent::{
 };
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::action_model::recording_controller::RecordingController;
+use crate::ai::blocklist::hooks::pre_tool::{self, PendingDispatch, PreToolLookup};
+use crate::ai::blocklist::hooks::tool_result;
 use crate::ai::blocklist::telemetry::send_run_agents_completed_telemetry;
 use crate::ai::get_relevant_files::controller::GetRelevantFilesController;
 #[cfg(feature = "local_fs")]
@@ -209,17 +216,14 @@ where
     }
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum NotExecutedReason {
     NotReady,
     NeedsConfirmation,
     WaitingOnSharer,
-}
-
-impl NotExecutedReason {
-    pub fn needs_confirmation(&self) -> bool {
-        matches!(self, Self::NeedsConfirmation)
-    }
+    /// A pre-tool hook is still deciding. The action is re-queued and retried when the verdict
+    /// arrives.
+    WaitingOnHooks,
 }
 
 /// Result type for `BlocklistAIActionExecutor::try_to_execute_action`.
@@ -239,6 +243,9 @@ struct AsyncExecutingAction {
     /// The conversation this action belongs to so cancellation and follow-up scheduling remain
     /// scoped even when several conversations have async actions in flight.
     conversation_id: AIConversationId,
+    /// When the executor started the action, after every check and confirmation, so hooks can
+    /// be told how long the tool itself ran.
+    started: Instant,
 }
 
 impl AsyncExecutingAction {
@@ -286,6 +293,9 @@ pub struct BlocklistAIActionExecutor {
     /// Reference to the terminal model for checking session sharing state.
     terminal_model: Arc<FairMutex<TerminalModel>>,
     team_context_resolver: TeamContextResolver,
+    /// The session actions run in, used to describe their working directory to hooks.
+    active_session: ModelHandle<ActiveSession>,
+    terminal_view_id: EntityId,
 }
 
 impl BlocklistAIActionExecutor {
@@ -349,6 +359,7 @@ impl BlocklistAIActionExecutor {
         let run_agents_executor = ctx.add_model(|_| {
             RunAgentsExecutor::new(
                 start_agent_executor.clone(),
+                active_session.clone(),
                 terminal_view_id,
                 team_context_resolver_for_run_agents,
             )
@@ -380,6 +391,8 @@ impl BlocklistAIActionExecutor {
             async_executing_actions: Default::default(),
             terminal_model,
             team_context_resolver,
+            active_session,
+            terminal_view_id,
             read_skill_executor,
             fetch_conversation_executor,
             start_agent_executor,
@@ -421,6 +434,10 @@ impl BlocklistAIActionExecutor {
 
     pub fn shell_command_executor(&self) -> &ModelHandle<ShellCommandExecutor> {
         &self.shell_command_executor
+    }
+
+    pub(super) fn active_session(&self) -> &ModelHandle<ActiveSession> {
+        &self.active_session
     }
 
     pub fn request_file_edits_executor(&self) -> &ModelHandle<RequestFileEditsExecutor> {
@@ -611,19 +628,83 @@ impl BlocklistAIActionExecutor {
             };
         }
 
+        let hook_effects = match pre_tool::begin_or_lookup(
+            &action,
+            conversation_id,
+            is_user_initiated,
+            &self.active_session,
+            ctx,
+        ) {
+            PreToolLookup::Inactive => None,
+            PreToolLookup::Pending { dispatch } => {
+                if let Some(dispatch) = dispatch {
+                    self.spawn_hook_dispatch(dispatch, ctx);
+                }
+                return TryExecuteResult::NotExecuted {
+                    reason: NotExecutedReason::WaitingOnHooks,
+                    action: Box::new(action),
+                };
+            }
+            PreToolLookup::Resolved(merged) => Some(merged),
+        };
+
         let input = ExecuteActionInput {
             action: &action,
             conversation_id,
         };
         let can_auto_execute = self.should_autoexecute(input, ctx);
         let is_agent_autonomous = AppExecutionMode::as_ref(ctx).is_autonomous();
+        let is_autonomous_shell_exception =
+            is_agent_autonomous && action.action.is_request_command_output();
+
+        // A hook denial ends the action here and a hook's request for confirmation holds it;
+        // execution falls through to the checks below, which are what the policy started from.
+        if let Some(merged) = hook_effects {
+            let floors = self.permission_floors(input, can_auto_execute, ctx);
+            let decision = pre_tool::decide(
+                &merged,
+                WarpPermissionResult {
+                    can_auto_execute,
+                    is_user_initiated,
+                    is_autonomous_shell_exception,
+                },
+                floors,
+                &action,
+                conversation_id,
+                ctx,
+            );
+            match decision {
+                PermissionDecision::Deny { reason, .. } => {
+                    // Run-agents telemetry counts a hook denial as a declined launch.
+                    send_run_agents_completed_telemetry(
+                        conversation_id,
+                        &action.action,
+                        &AIAgentActionResultType::RunAgents(RunAgentsResult::Denied {
+                            reason: reason.text.clone(),
+                        }),
+                        ctx,
+                    );
+                    let result = AIAgentActionResultType::DeniedByHook {
+                        reason: reason.text,
+                    };
+                    self.finish_sync(action, result, conversation_id, ctx);
+                    return TryExecuteResult::ExecutedSync;
+                }
+                PermissionDecision::RequireConfirmation { .. } => {
+                    return TryExecuteResult::NotExecuted {
+                        action: Box::new(action),
+                        reason: NotExecutedReason::NeedsConfirmation,
+                    };
+                }
+                PermissionDecision::Execute => {}
+            }
+        }
 
         // The agent cannot auto execute and either:
         // - the agent is interactive, OR
         // - the agent is autonomous and the action was not requesting command output
-        let needs_confirmation = !(is_user_initiated
-            || can_auto_execute
-            || (is_agent_autonomous && action.action.is_request_command_output()));
+        let needs_confirmation =
+            !(is_user_initiated || can_auto_execute || is_autonomous_shell_exception);
         if needs_confirmation {
             return TryExecuteResult::NotExecuted {
                 action: Box::new(action),
@@ -632,26 +713,12 @@ impl BlocklistAIActionExecutor {
         } else if !is_user_initiated && !can_auto_execute && is_agent_autonomous {
             // It must be the case that the autonomous agent is requesting a denylisted command.
             if let AIAgentActionType::RequestCommandOutput { command, .. } = &action.action {
-                let action_id = action.id.clone();
                 let result = AIAgentActionResultType::RequestCommandOutput(
                     RequestCommandOutputResult::Denylisted {
                         command: command.clone(),
                     },
                 );
-
-                ctx.emit(BlocklistAIActionExecutorEvent::ExecutingAction {
-                    action_id: action_id.clone(),
-                });
-                ctx.emit(BlocklistAIActionExecutorEvent::FinishedAction {
-                    result: Arc::new(AIAgentActionResult {
-                        id: action_id,
-                        task_id: action.task_id.clone(),
-                        result,
-                    }),
-                    conversation_id,
-                    cancellation_reason: None,
-                });
-
+                self.finish_sync(action, result, conversation_id, ctx);
                 return TryExecuteResult::ExecutedSync;
             }
         }
@@ -813,6 +880,7 @@ impl BlocklistAIActionExecutor {
                     AsyncExecutingAction {
                         action: action_clone,
                         conversation_id,
+                        started: Instant::now(),
                     },
                 );
                 ctx.emit(BlocklistAIActionExecutorEvent::ExecutingAction {
@@ -823,6 +891,15 @@ impl BlocklistAIActionExecutor {
                         return;
                     };
                     let result = on_complete(result, ctx);
+                    tool_result::observe_terminal_result(
+                        &running.action,
+                        &result,
+                        None,
+                        Some(running.started.elapsed()),
+                        running.conversation_id,
+                        &me.active_session,
+                        ctx,
+                    );
                     ctx.emit(BlocklistAIActionExecutorEvent::FinishedAction {
                         result: Arc::new(AIAgentActionResult {
                             id: action_id,
@@ -836,21 +913,55 @@ impl BlocklistAIActionExecutor {
                 TryExecuteResult::ExecutedAsync
             }
             AnyActionExecution::Sync(action_result) => {
-                ctx.emit(BlocklistAIActionExecutorEvent::ExecutingAction {
-                    action_id: action_id.clone(),
-                });
-                ctx.emit(BlocklistAIActionExecutorEvent::FinishedAction {
-                    result: Arc::new(AIAgentActionResult {
-                        id: action_id,
-                        task_id: action.task_id,
-                        result: action_result,
-                    }),
-                    conversation_id,
-                    cancellation_reason: None,
-                });
+                self.finish_sync(action_clone, action_result, conversation_id, ctx);
                 TryExecuteResult::ExecutedSync
             }
         }
+    }
+
+    /// Reports a result that is already known, with no asynchronous work to wait for.
+    fn finish_sync(
+        &mut self,
+        action: AIAgentAction,
+        result: AIAgentActionResultType,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        tool_result::observe_terminal_result(
+            &action,
+            &result,
+            None,
+            Some(Duration::ZERO),
+            conversation_id,
+            &self.active_session,
+            ctx,
+        );
+        ctx.emit(BlocklistAIActionExecutorEvent::ExecutingAction {
+            action_id: action.id.clone(),
+        });
+        ctx.emit(BlocklistAIActionExecutorEvent::FinishedAction {
+            result: Arc::new(AIAgentActionResult {
+                id: action.id,
+                task_id: action.task_id,
+                result,
+            }),
+            conversation_id,
+            cancellation_reason: None,
+        });
+    }
+
+    /// Runs a pre-tool hook dispatch in the background and announces the verdict when it lands.
+    fn spawn_hook_dispatch(&self, dispatch: PendingDispatch, ctx: &mut ModelContext<Self>) {
+        let PendingDispatch { ticket, future } = dispatch;
+        ctx.spawn(future, move |_, outcome, ctx| {
+            if let Some(resumption) = pre_tool::on_resolved(&ticket, outcome, ctx) {
+                ctx.emit(BlocklistAIActionExecutorEvent::HookVerdictResolved {
+                    action_id: ticket.action_id,
+                    conversation_id: resumption.conversation_id,
+                    is_user_initiated: resumption.is_user_initiated,
+                });
+            }
+        });
     }
 
     pub fn can_autoexecute_action(
@@ -920,6 +1031,15 @@ impl BlocklistAIActionExecutor {
                 &result,
                 ctx,
             );
+            tool_result::observe_terminal_result(
+                &running.action,
+                &result,
+                reason,
+                Some(running.started.elapsed()),
+                running.conversation_id,
+                &self.active_session,
+                ctx,
+            );
             ctx.emit(BlocklistAIActionExecutorEvent::FinishedAction {
                 result: Arc::new(AIAgentActionResult {
                     id: running.action.id.clone(),
@@ -970,6 +1090,25 @@ impl BlocklistAIActionExecutor {
         for action_id in action_ids {
             self.cancel_running_async_action(&action_id, reason, ctx);
         }
+    }
+
+    /// The facts behind Warp's own permission answer for `input` that no hook may loosen.
+    fn permission_floors(
+        &self,
+        input: ExecuteActionInput,
+        can_auto_execute: bool,
+        ctx: &ModelContext<Self>,
+    ) -> PermissionFloors {
+        let scope = (self.team_context_resolver)(ctx);
+        pre_tool::permission_floors(
+            &input.action.action,
+            &input.conversation_id,
+            can_auto_execute,
+            &self.active_session,
+            self.terminal_view_id,
+            &scope,
+            ctx,
+        )
     }
 
     fn should_autoexecute(&self, input: ExecuteActionInput, ctx: &mut ModelContext<Self>) -> bool {
@@ -1092,6 +1231,15 @@ pub enum BlocklistAIActionExecutorEvent {
         conversation_id: AIConversationId,
         /// The reason for cancellation, if this action was cancelled.
         cancellation_reason: Option<CancellationReason>,
+    },
+
+    /// Emitted when a pre-tool hook verdict for a queued action has arrived, so the action can be
+    /// tried again.
+    HookVerdictResolved {
+        action_id: AIAgentActionId,
+        conversation_id: AIConversationId,
+        /// Whether the user had already approved the action before the verdict was requested.
+        is_user_initiated: bool,
     },
 
     InitProject(AIAgentActionId),

@@ -83,7 +83,9 @@ use self::turn_driver::{
 };
 use super::super::terminal::{CommandHandle, TerminalDriver};
 use super::super::{AgentDriver, AgentDriverError, HarnessSetupStage};
-use super::claude_code::prepare_claude_environment_config;
+use super::claude_code::{
+    default_claude_sessions_to_manual_permission_mode, prepare_claude_environment_config,
+};
 use super::codex::{prepare_codex_environment_config, publish_skills_for_codex};
 use super::gemini::{prepare_gemini_environment_config, publish_skills_for_gemini};
 use super::harness_persistence::{
@@ -106,6 +108,7 @@ use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupS
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::ambient_agents::task::HarnessModelConfig;
 use crate::ai::attachment_utils::{DownloadedAttachment, attachments_download_dir};
+use crate::ai::blocklist::local_agent_task_sync_model::LocalAgentTaskSyncModel;
 use crate::ai::blocklist::{
     BlocklistAIController, BlocklistAIHistoryModel, ExternalHarnessCancel, ExternalHarnessPrompt,
     ExternalHarnessTurn, QueuedQueryId, ResponseStreamId,
@@ -198,14 +201,17 @@ impl AcpHarness {
         third_party_harness_model_config: Option<&HarnessModelConfig>,
     ) -> Result<()> {
         match self.harness {
-            Harness::Claude => prepare_claude_environment_config(
-                workspace_root,
-                harness_working_dir,
-                resolved_env_vars,
-                skill_dirs,
-                factory_repository_contract,
-                HarnessSupportSkills::Bundled,
-            ),
+            Harness::Claude => {
+                prepare_claude_environment_config(
+                    workspace_root,
+                    harness_working_dir,
+                    resolved_env_vars,
+                    skill_dirs,
+                    factory_repository_contract,
+                    HarnessSupportSkills::Bundled,
+                )?;
+                default_claude_sessions_to_manual_permission_mode()
+            }
             // MCP servers are handed to the agent in `session/new` and the model is selected
             // through the session's config options, so neither is written into `config.toml`.
             Harness::Codex => {
@@ -214,7 +220,7 @@ impl AcpHarness {
                     system_prompt,
                     resolved_env_vars,
                     resolved_secrets,
-                    &HashMap::new(),
+                    &ResolvedMCPServers::default(),
                     None,
                 )?;
                 publish_skills_for_codex(
@@ -595,7 +601,7 @@ impl AcpHarnessRunner {
                 {
                     return AgentDriverError::HarnessAuthCheckFailed {
                         harness: self.harness.to_string(),
-                        detail: rpc_error.message.clone(),
+                        detail: rpc_error.detail(),
                     };
                 }
                 let reason = format!("{error:#}");
@@ -1081,6 +1087,7 @@ impl HarnessRunner for AcpHarnessRunner {
             foreground: foreground.clone(),
             terminal_driver: self.terminal_driver.clone(),
             run_id,
+            task_id: self.task_id,
             conversation_id: local_conversation_id,
         });
         let turn = match setup_events
@@ -1333,11 +1340,28 @@ struct DriverTurnHost {
     foreground: ModelSpawner<AgentDriver>,
     terminal_driver: ModelHandle<TerminalDriver>,
     run_id: Option<String>,
+    task_id: Option<AmbientAgentTaskId>,
     conversation_id: AIConversationId,
 }
 
 #[async_trait]
 impl TurnHost for DriverTurnHost {
+    async fn on_prompt_submitted(&self) {
+        let Some(task_id) = self.task_id else {
+            return;
+        };
+        if let Err(error) = self
+            .foreground
+            .spawn(move |_, ctx| {
+                LocalAgentTaskSyncModel::handle(ctx)
+                    .update(ctx, |model, ctx| model.on_prompt_submitted(task_id, ctx));
+            })
+            .await
+        {
+            log::warn!("Could not enqueue progress for task {task_id}: {error}");
+        }
+    }
+
     /// `initiator` names the shared-session participant whose prompt opens the stream; `None`
     /// keeps the previous one, as the streams a tool round trip chains together all answer the
     /// same prompt.

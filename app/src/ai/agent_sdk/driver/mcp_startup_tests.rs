@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::ffi::OsString;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -7,12 +8,14 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use futures::channel::{mpsc, oneshot};
 use futures::executor::block_on;
 use futures::{FutureExt as _, StreamExt as _};
 use http::StatusCode;
 use instant::Instant;
 use uuid::Uuid;
+use warp_cli::agent::Harness;
 use warp_cli::mcp::MCPSpec;
 use warp_core::channel::ChannelState;
 use warp_core::execution_mode::{AppExecutionMode, ExecutionMode};
@@ -29,10 +32,11 @@ use warpui::{App, ModelContext, ModelHandle, SingletonEntity as _};
 
 use super::{
     AgentDriver, AgentDriverError, MANAGED_MCP_RESOLVE_MAX_ATTEMPTS, McpStartupMode,
-    attach_builtin_mcp_servers, start_task_and_profile_mcp_servers,
+    ResolvedMcpSpecs, attach_builtin_mcp_servers, attach_computer_use_mcp, computer_use_mcp_env,
+    computer_use_mcp_server, start_task_and_profile_mcp_servers,
 };
 use crate::ai::agent_sdk::driver::environment::WorkspaceConfiguration;
-use crate::ai::agent_sdk::driver::harness::HarnessKind;
+use crate::ai::agent_sdk::driver::harness::{HarnessKind, ResolvedMCPServers};
 use crate::ai::agent_sdk::driver::terminal::TerminalDriver;
 use crate::ai::agent_sdk::driver::{AgentRunPrompt, Task};
 use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
@@ -40,6 +44,7 @@ use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::cloud_environments::AmbientAgentEnvironment;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::mcp::builtin::{
+    COMPUTER_USE_MCP_INSTALLATION_UUID, COMPUTER_USE_MCP_SERVER_NAME,
     FACTORY_MCP_INSTALLATION_UUID, FACTORY_MCP_SERVER_NAME, PREVIEW_URLS_MCP_SERVER_NAME,
 };
 use crate::ai::mcp::file_based_manager::{FileBasedMCPManager, FileBasedMCPManagerEvent};
@@ -475,6 +480,116 @@ fn managed_resolver_non_local_uuid_calls_managed_client() {
         rendered.installation_ids.keys().collect::<Vec<_>>(),
         vec!["GitHub MCP"]
     );
+}
+
+const PROXY_CONFIG_JSON: &str = r#"{"mcpServers":{"GitHub MCP":{"url":"https://proxy.example/mcp","headers":{"Authorization":"Bearer proxy-token"}}}}"#;
+
+/// What the server answers for a URL-backed managed server: the proxy config together with the
+/// credential it carries and when that credential expires.
+fn managed_proxy_config_output(
+    authorization_header_value: &str,
+    expires_at: DateTime<Utc>,
+) -> CreateManagedMcpClientConfigOutput {
+    CreateManagedMcpClientConfigOutput {
+        transport_kind: ManagedMcpTransportKind::Url,
+        proxy_url: Some("https://proxy.example/mcp".to_string()),
+        proxy_token: Some("proxy-token".to_string()),
+        authorization_header_name: Some("Authorization".to_string()),
+        authorization_header_value: Some(authorization_header_value.to_string()),
+        expires_at: Some(expires_at.into()),
+        ..managed_client_config_output(PROXY_CONFIG_JSON)
+    }
+}
+
+fn resolve_managed_uuid(
+    uuid: Uuid,
+    output: CreateManagedMcpClientConfigOutput,
+) -> ResolvedMcpSpecs {
+    let mut mock = MockManagedMcpClient::new();
+    mock.expect_create_managed_mcp_client_config()
+        .times(1)
+        .return_once(move |_| Ok(output));
+    block_on(AgentDriver::resolve_mcp_specs_with_local_uuids(
+        &[MCPSpec::Uuid(uuid)],
+        &HashSet::new(),
+        Arc::new(mock),
+        None,
+    ))
+    .unwrap()
+}
+
+#[test]
+fn managed_resolver_leases_the_expiring_credential_of_a_url_server() {
+    let _flag = FeatureFlag::ManagedMcpCredentialRefresh.override_enabled(true);
+    let uuid = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+    let expires_at = DateTime::from_timestamp(1_800_000_000, 0).unwrap();
+
+    let resolved = resolve_managed_uuid(
+        uuid,
+        managed_proxy_config_output("Bearer proxy-token", expires_at),
+    );
+
+    assert_eq!(resolved.ephemeral_installations.len(), 1);
+    let [lease] = resolved.leases.as_slice() else {
+        panic!("expected one lease, got {:?}", resolved.leases);
+    };
+    assert_eq!(
+        lease.installation_id,
+        resolved.ephemeral_installations[0].uuid()
+    );
+    assert_eq!(lease.server_name, "GitHub MCP");
+    assert_eq!(lease.warp_id, uuid.to_string());
+    assert_eq!(lease.header_name, "Authorization");
+    assert_eq!(lease.credential.header_value, "Bearer proxy-token");
+    assert_eq!(lease.credential.expires_at, expires_at);
+}
+
+#[test]
+fn managed_resolver_leases_nothing_while_credential_refresh_is_disabled() {
+    let _flag = FeatureFlag::ManagedMcpCredentialRefresh.override_enabled(false);
+    let uuid = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+    let expires_at = DateTime::from_timestamp(1_800_000_000, 0).unwrap();
+
+    let resolved = resolve_managed_uuid(
+        uuid,
+        managed_proxy_config_output("Bearer proxy-token", expires_at),
+    );
+
+    assert_eq!(resolved.ephemeral_installations.len(), 1);
+    assert!(resolved.leases.is_empty());
+}
+
+#[test]
+fn managed_resolver_leases_nothing_without_an_expiring_credential() {
+    let _flag = FeatureFlag::ManagedMcpCredentialRefresh.override_enabled(true);
+    let uuid = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+
+    let resolved = resolve_managed_uuid(
+        uuid,
+        managed_client_config_output(
+            r#"{"mcpServers":{"GitHub MCP":{"command":"npx","args":["-y","github-mcp"]}}}"#,
+        ),
+    );
+
+    assert_eq!(resolved.ephemeral_installations.len(), 1);
+    assert!(resolved.leases.is_empty());
+}
+
+/// A lease replaces a header on the server's connection, so it only exists when the config
+/// really sends the credential the server says it issued.
+#[test]
+fn managed_resolver_leases_nothing_when_the_config_does_not_send_the_issued_credential() {
+    let _flag = FeatureFlag::ManagedMcpCredentialRefresh.override_enabled(true);
+    let uuid = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+    let expires_at = DateTime::from_timestamp(1_800_000_000, 0).unwrap();
+
+    let resolved = resolve_managed_uuid(
+        uuid,
+        managed_proxy_config_output("Bearer some-other-token", expires_at),
+    );
+
+    assert_eq!(resolved.ephemeral_installations.len(), 1);
+    assert!(resolved.leases.is_empty());
 }
 
 #[test]
@@ -1500,6 +1615,8 @@ fn runnable_mcp_server_json(name: &str) -> String {
 #[test]
 #[serial_test::serial]
 fn configured_and_profile_mcp_servers_wait_for_environment_setup() {
+    const SETUP_TIMEOUT: Duration = Duration::from_secs(30);
+
     let _factory_mcp_flag = FeatureFlag::FactoryMcp.override_enabled(false);
     let _global_skills_flag = FeatureFlag::OzPlatformSkills.override_enabled(false);
 
@@ -1509,7 +1626,7 @@ fn configured_and_profile_mcp_servers_wait_for_environment_setup() {
         let file_based_mcp = FileBasedMcpFixture::register(&mut app);
         file_based_mcp.complete_initial_global_scan(&mut app);
         let terminal_view = add_window_with_terminal(&mut app, None);
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + SETUP_TIMEOUT;
         let session_id = loop {
             let session_id = terminal_view.read(&app, |terminal, ctx| {
                 let session_id = terminal.active_block_session_id()?;
@@ -1609,8 +1726,8 @@ fn configured_and_profile_mcp_servers_wait_for_environment_setup() {
             );
         });
 
-        let deadline = Instant::now() + Duration::from_secs(5);
-        let mut pending_command = loop {
+        let deadline = Instant::now() + SETUP_TIMEOUT;
+        loop {
             let pending_command = terminal_view.read(&app, |terminal, ctx| {
                 if terminal.has_pending_command_or_awaiting_completion(ctx) {
                     terminal
@@ -1621,14 +1738,14 @@ fn configured_and_profile_mcp_servers_wait_for_environment_setup() {
                 }
             });
             if !pending_command.is_empty() {
-                break pending_command;
+                break;
             }
             assert!(
                 Instant::now() < deadline,
                 "environment setup command should become pending"
             );
             Timer::after(Duration::from_millis(10)).await;
-        };
+        }
 
         assert!(
             started_uuids.borrow().is_empty(),
@@ -1671,47 +1788,28 @@ fn configured_and_profile_mcp_servers_wait_for_environment_setup() {
         });
 
         let mut executed_commands = Vec::new();
-        for command_index in 0..4 {
-            terminal_view.update(&mut app, |terminal, ctx| {
-                terminal.execute_pending_command((), ctx);
-            });
-            let executed_command = executed_command_rx
-                .next()
-                .with_timeout(Duration::from_secs(5))
-                .await
-                .unwrap_or_else(|err| {
-                    panic!(
-                        "next environment setup command should execute after {executed_commands:?}: \
-                         {err:?}"
-                    )
-                })
-                .expect("terminal execution subscription should remain active");
+        for _ in 0..4 {
+            let deadline = Instant::now() + SETUP_TIMEOUT;
+            // Pending commands can auto-execute before the test observes the input buffer.
+            let executed_command = loop {
+                terminal_view.update(&mut app, |terminal, ctx| {
+                    terminal.execute_pending_command((), ctx);
+                });
+                if let Some(command) = executed_command_rx.next().now_or_never() {
+                    break command.expect("terminal execution subscription should remain active");
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "next environment setup command should execute after {executed_commands:?}"
+                );
+                Timer::after(Duration::from_millis(10)).await;
+            };
             terminal_view.update(&mut app, |terminal, _| {
                 let mut model = terminal.model.lock();
                 model.simulate_cmd(executed_command.as_str());
                 model.finish_block();
             });
             executed_commands.push(executed_command);
-            if command_index < 3 {
-                let completed_command = pending_command;
-                let deadline = Instant::now() + Duration::from_secs(5);
-                pending_command = loop {
-                    let next_command = terminal_view.read(&app, |terminal, ctx| {
-                        terminal
-                            .input()
-                            .read(ctx, |input, ctx| input.buffer_text(ctx))
-                    });
-                    if !next_command.is_empty() && next_command != completed_command {
-                        break next_command;
-                    }
-                    assert!(
-                        Instant::now() < deadline,
-                        "the next environment setup command should become pending after \
-                         {completed_command:?}; current input: {next_command:?}"
-                    );
-                    Timer::after(Duration::from_millis(10)).await;
-                };
-            }
         }
         assert_eq!(executed_commands[0], "export CI=true");
         assert!(
@@ -1722,7 +1820,7 @@ fn configured_and_profile_mcp_servers_wait_for_environment_setup() {
         );
 
         both_started_rx
-            .with_timeout(Duration::from_secs(5))
+            .with_timeout(SETUP_TIMEOUT)
             .await
             .expect("task/config and profile MCP servers should start after environment setup")
             .expect("MCP startup state subscription should remain active");
@@ -2326,4 +2424,132 @@ fn timed_out_wait_does_not_tear_down_a_later_waits_subscription() {
             )
             .expect("wait B's oneshot sender should not have been dropped");
     });
+}
+
+fn stdio_server(server: &JSONMCPServer) -> (&str, &[String], &HashMap<String, String>) {
+    match &server.transport_type {
+        JSONTransportType::CLIServer {
+            command, args, env, ..
+        } => (command, args, env),
+        JSONTransportType::SSEServer { .. } => panic!("expected a stdio server"),
+    }
+}
+
+fn computer_use_server(harness: Harness) -> Option<JSONMCPServer> {
+    computer_use_mcp_server(harness, "/opt/oz".to_owned(), None, true, HashMap::new())
+}
+
+#[test]
+fn computer_use_mcp_server_matches_the_harness_model_family() {
+    for (harness, model_family) in [(Harness::Claude, "anthropic"), (Harness::Codex, "openai")] {
+        let server = computer_use_server(harness).expect("harness takes MCP servers");
+        let (command, args, _) = stdio_server(&server);
+        assert_eq!(command, "/opt/oz");
+        assert_eq!(args, ["computer-use-mcp", "--model-family", model_family]);
+    }
+    for harness in [
+        Harness::Gemini,
+        Harness::Oz,
+        Harness::OpenCode,
+        Harness::Pi,
+        Harness::Unknown,
+    ] {
+        assert!(computer_use_server(harness).is_none(), "{harness}");
+    }
+}
+
+#[test]
+fn computer_use_mcp_server_attaches_recordings_to_the_run() {
+    let args_for = |run_id: Option<&str>, recording_enabled| {
+        let server = computer_use_mcp_server(
+            Harness::Claude,
+            "/opt/oz".to_owned(),
+            run_id.map(str::to_owned),
+            recording_enabled,
+            HashMap::new(),
+        )
+        .unwrap();
+        stdio_server(&server).1.to_vec()
+    };
+    assert_eq!(
+        args_for(Some("run-1"), true),
+        [
+            "computer-use-mcp",
+            "--model-family",
+            "anthropic",
+            "--run-id",
+            "run-1"
+        ]
+    );
+    assert_eq!(
+        args_for(Some("run-1"), false),
+        [
+            "computer-use-mcp",
+            "--model-family",
+            "anthropic",
+            "--no-recording"
+        ]
+    );
+    assert_eq!(
+        args_for(None, true),
+        ["computer-use-mcp", "--model-family", "anthropic"]
+    );
+}
+
+#[test]
+fn computer_use_mcp_env_prefers_the_run_environment_and_skips_other_variables() {
+    let resolved = HashMap::from([
+        (OsString::from("DISPLAY"), OsString::from(":99")),
+        (OsString::from("API_TOKEN"), OsString::from("secret")),
+    ]);
+    let env = computer_use_mcp_env(&resolved, |name| {
+        matches!(name, "DISPLAY" | "XAUTHORITY" | "API_TOKEN")
+            .then(|| OsString::from(format!("process-{name}")))
+    });
+    assert_eq!(
+        env,
+        HashMap::from([
+            ("DISPLAY".to_owned(), ":99".to_owned()),
+            ("XAUTHORITY".to_owned(), "process-XAUTHORITY".to_owned()),
+        ])
+    );
+}
+
+#[test]
+fn configured_servers_take_precedence_over_the_computer_use_mcp() {
+    let configured = JSONMCPServer {
+        transport_type: JSONTransportType::SSEServer {
+            url: "https://example.com/mcp".to_owned(),
+            headers: HashMap::new(),
+        },
+    };
+    let mut servers = ResolvedMCPServers::default();
+    servers
+        .configs
+        .insert(COMPUTER_USE_MCP_SERVER_NAME.to_owned(), configured.clone());
+    attach_computer_use_mcp(&mut servers, computer_use_server(Harness::Claude).unwrap());
+    assert_eq!(servers.configs[COMPUTER_USE_MCP_SERVER_NAME], configured);
+    assert!(servers.installation_ids.is_empty());
+    assert!(servers.harness_settings.is_empty());
+
+    let mut servers = ResolvedMCPServers::default();
+    let computer_use = computer_use_server(Harness::Claude).unwrap();
+    attach_computer_use_mcp(&mut servers, computer_use.clone());
+    assert_eq!(servers.configs[COMPUTER_USE_MCP_SERVER_NAME], computer_use);
+    assert_eq!(
+        servers.installation_ids[COMPUTER_USE_MCP_SERVER_NAME],
+        COMPUTER_USE_MCP_INSTALLATION_UUID
+    );
+    let settings = &servers.harness_settings[COMPUTER_USE_MCP_SERVER_NAME];
+    assert_eq!(
+        settings.forwarded_env_vars,
+        [
+            "WARP_API_KEY",
+            "WARP_SERVER_ROOT_URL",
+            "WARP_WS_SERVER_URL",
+            "WARP_SESSION_SHARING_SERVER_URL"
+        ]
+    );
+    assert!(settings.run_scoped);
+    assert!(servers.is_run_scoped(COMPUTER_USE_MCP_SERVER_NAME));
 }

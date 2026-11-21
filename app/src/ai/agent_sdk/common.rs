@@ -204,6 +204,21 @@ pub(super) fn validate_agent_mode_base_model_id_for_scope(
     ))
 }
 
+/// Validates a cloud execution's Oz model against the catalog of the team that owns the run.
+/// Personal runs keep validating against the user's default team.
+pub(super) fn validate_execution_model_id(
+    model_id: &str,
+    team_scope: &HeadlessTeamScope,
+    ctx: &AppContext,
+) -> anyhow::Result<LLMId> {
+    match team_scope {
+        HeadlessTeamScope::Team(_) => {
+            validate_agent_mode_base_model_id_for_scope(model_id, team_scope, ctx)
+        }
+        HeadlessTeamScope::Personal => validate_agent_mode_base_model_id(model_id, ctx),
+    }
+}
+
 fn current_user_uid(ctx: &AppContext) -> anyhow::Result<UserUid> {
     AuthStateProvider::as_ref(ctx)
         .get()

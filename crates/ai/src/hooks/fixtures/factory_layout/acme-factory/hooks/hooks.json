@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "hooks": {
+    "beforeShellExecution": [
+      { "command": "hooks/record_shell.sh" }
+    ]
+  }
+}

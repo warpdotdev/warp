@@ -242,6 +242,7 @@ pub(super) fn convert_input(
                 context,
                 runtime_skill,
                 attachments_dir,
+                resolved_prompt: _,
             } => {
                 return Ok(api::request::Input {
                     context: Some(convert_context(context.as_ref())),
@@ -764,6 +765,11 @@ impl TryFrom<AIAgentActionResult> for api::request::input::user_inputs::user_inp
             }
             AIAgentActionResultType::WaitForEvents(wait_for_events_result) => {
                 Some(wait_for_events_result.try_into()?)
+            }
+            AIAgentActionResultType::DeniedByHook { reason } => {
+                Some(api::request::input::tool_call_result::Result::DeniedByHook(
+                    api::DeniedByHook { reason },
+                ))
             }
         };
         Ok(

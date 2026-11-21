@@ -303,6 +303,45 @@ fn only_factory_definition_levels_hold_reference_files() {
 }
 
 #[test]
+fn worker_references_load_at_agent_level_with_definition_relative_labels() {
+    let reference_file = "workers/foreman/skills/shared.yaml";
+    let fixture = Fixture::new(&[(
+        reference_file,
+        "source: acme/shared\ninclude: [shared, missing]\n",
+    )]);
+    let configured_dirs = vec![PathBuf::from("workers/foreman/skills")];
+    let resolved_dirs = resolve_skills_dirs(&fixture.root, configured_dirs.clone());
+    assert_eq!(
+        definition_level(&resolved_dirs[0]),
+        Some(Some("foreman".to_owned()))
+    );
+    let discovery = SkillReferenceDiscovery {
+        root: fixture.root.join("out"),
+        levels: discover(&resolved_dirs, &resolved_dirs, GITHUB),
+        configured_dirs,
+        resolved_dirs,
+    };
+    let checkout = fixture.root.join("source");
+    write_skill(&checkout.join(".agents/skills/shared"));
+    let source = &discovery.levels[0].files[0].1.as_ref().unwrap().source;
+    let checkouts = HashMap::from([(identity(source), Ok((checkout, None)))]);
+    let (skill_dirs, report) = materialize(&discovery, &checkouts);
+    let [file] = report.references.as_slice() else {
+        panic!("{report:?}");
+    };
+    assert_eq!(file.level, ReferenceLevel::Agent);
+    assert_eq!(file.agent.as_deref(), Some("foreman"));
+    assert_eq!(file.reference_file, reference_file);
+    assert_eq!(loaded(file), [".agents/skills/shared"]);
+    assert_eq!(unresolved(file), [("missing", UnresolvedReason::NoMatch)]);
+    assert_eq!(read_skills(&skill_dirs[1])[0].name, "shared");
+    assert_eq!(
+        report.timeline_payload()["references"][0]["reference_file"],
+        reference_file
+    );
+}
+
+#[test]
 fn levels_and_files_apply_in_order_and_earlier_names_win() {
     let star = "include: [\"*\"]\n";
     let fixture = Fixture::new(&[

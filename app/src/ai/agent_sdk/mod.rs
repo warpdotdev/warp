@@ -29,7 +29,7 @@ use warp_cli::environment::{EnvironmentCommand, ImageCommand};
 use warp_cli::federate::FederateCommand;
 use warp_cli::harness_support::{HarnessSupportCommand, ReportArtifactCommand, TaskStatus};
 use warp_cli::integration::IntegrationCommand;
-use warp_cli::mcp::MCPCommand;
+use warp_cli::mcp::{MCPCommand, MCPSpec};
 use warp_cli::memory_store::{MemoryCommand, MemoryStoreCommand};
 use warp_cli::model::ModelCommand;
 use warp_cli::provider::ProviderCommand;
@@ -59,6 +59,7 @@ use crate::ai::agent::api::convert_conversation::{
 };
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent_sdk::driver::harness::{HarnessKind, harness_kind};
+use crate::ai::agent_sdk::driver::mcp_startup::harness_takes_computer_use_config;
 use crate::ai::agent_sdk::driver::{AgentDriverOptions, AgentRunPrompt, Task};
 use crate::ai::agent_sdk::mcp_config::build_mcp_servers_from_specs;
 use crate::ai::agent_sdk::setup_observability::{
@@ -681,10 +682,11 @@ fn build_execution_task_and_options(
     );
     let selected_harness = execution_config::harness(&config.harness)?;
     let model = if selected_harness == Harness::Oz {
+        let team_scope = execution_config::team_scope(config.team_id.as_ref())?;
         config
             .model_id
             .as_deref()
-            .map(|id| common::validate_agent_mode_base_model_id(id, ctx))
+            .map(|id| common::validate_execution_model_id(id, &team_scope, ctx))
             .transpose()?
     } else {
         None
@@ -713,7 +715,12 @@ fn build_execution_task_and_options(
         anyhow::bail!("An execution that skips its initial turn requires an idle window");
     }
     let providers = execution_config::providers(config.providers);
+    let hooks = driver::hooks::RunHooks {
+        sources: execution_config::agent_hook_sources(config.agent_hook_sources)?,
+        surface: driver::hooks::run_surface_for(true),
+    };
     let mut factory_skill_dirs = execution_config::factory_skill_dirs(config.factory_skill_dirs)?;
+    let factory_definition_sha = execution_config::factory_definition_sha(config.factory_branch)?;
     let definition_skill_dirs = factory_skill_dirs.clone();
     merge_skill_dirs(&mut factory_skill_dirs, skill_discovery_dirs);
     let task = Task {
@@ -756,12 +763,16 @@ fn build_execution_task_and_options(
             )?;
             workspace.factory_skill_dirs = Some(factory_skill_dirs);
             workspace.definition_skill_dirs = Some(definition_skill_dirs);
+            workspace.factory_definition_sha = factory_definition_sha;
             workspace
         },
-        computer_use_config: (selected_harness == Harness::Oz).then(|| {
+        computer_use_config: harness_takes_computer_use_config(selected_harness).then(|| {
             (
                 config.computer_use_enabled,
-                config.computer_use_model_id.map(Into::into),
+                config
+                    .computer_use_model_id
+                    .filter(|_| selected_harness == Harness::Oz)
+                    .map(Into::into),
             )
         }),
         selected_harness,
@@ -783,6 +794,7 @@ fn build_execution_task_and_options(
         mcp_startup_timeout: args
             .and_then(|args| args.mcp_startup_timeout)
             .map(Into::into),
+        hooks,
     };
     Ok((
         options,
@@ -790,6 +802,22 @@ fn build_execution_task_and_options(
         config.conversation_id.map(|id| id.into_inner()),
         providers,
     ))
+}
+
+/// Records whether a run carries Factory experiment values, without their contents.
+fn log_factory_experimental_config(
+    experimental: Option<&serde_json::Map<String, serde_json::Value>>,
+) {
+    match experimental {
+        Some(values) => warp_core::safe_info!(
+            safe: ("factory_experimental_config state=read_uninterpreted key_count={}", values.len()),
+            full: ("factory_experimental_config state=read_uninterpreted key_count={}", values.len())
+        ),
+        None => warp_core::safe_info!(
+            safe: ("factory_experimental_config state=absent key_count=0"),
+            full: ("factory_experimental_config state=absent key_count=0")
+        ),
+    }
 }
 
 fn reconcile_task_harness(
@@ -1631,6 +1659,7 @@ impl AgentDriverRunner {
                     skip_initial_turn: args.skip_initial_turn,
                     strict_mcp_startup: args.strict_mcp_startup,
                     mcp_startup_timeout: args.mcp_startup_timeout.map(|duration| duration.into()),
+                    hooks: Default::default(),
                 };
 
                 Ok((
@@ -1678,7 +1707,7 @@ impl AgentDriverRunner {
                     .ok_or(AgentDriverError::InvalidRuntimeState)?,
             };
 
-            Self::initialize_new_task(
+            task.mcp_specs = Self::initialize_new_task(
                 foreground,
                 server_api,
                 prompt_for_task_creation,
@@ -1716,47 +1745,51 @@ impl AgentDriverRunner {
         merged_config: AgentConfigSnapshot,
         team_scope: HeadlessTeamScope,
         driver_options: &mut AgentDriverOptions,
-    ) -> Result<(), AgentDriverError> {
+    ) -> Result<Vec<MCPSpec>, AgentDriverError> {
         let request_team_scope = RequestTeamScope::from_scope(&team_scope);
         driver_options.team_scope = Some(team_scope);
-        let environment = merged_config.environment_id.clone();
-        let task_config = if merged_config.is_empty() {
-            None
-        } else {
-            let mut config = merged_config;
-            // We don't set a worker, since this is a local run.
-            config.worker_host = None;
-            Some(config)
-        };
-
-        let task_id = match server_api
-            .create_agent_task(
-                prompt,
-                environment,
-                None,
-                task_config,
-                HashMap::new(),
-                request_team_scope,
-            )
+        let mut config = merged_config;
+        config.worker_host = None;
+        let output = server_api
+            .create_local_agent_task(prompt, config, request_team_scope)
             .await
-            .context("Failed to create task")
-        {
-            Ok(id) => {
-                log::info!("Created task: {id}");
-                Some(id)
-            }
-            Err(e) => {
-                report_error!(e);
-                // Continue without a task_id rather than failing entirely
-                None
-            }
-        };
-
-        // Set the task ID on the ServerApi so it's sent with all subsequent requests.
-        Self::set_ambient_agent_task_id(foreground, task_id).await?;
-        driver_options.task_id = task_id;
-
-        Ok(())
+            .context("Failed to negotiate local task configuration")
+            .map_err(AgentDriverError::ConfigBuildFailed)?;
+        let task_id = output
+            .task_id
+            .into_inner()
+            .parse::<AmbientAgentTaskId>()
+            .map_err(|error| AgentDriverError::ConfigBuildFailed(error.into()))?;
+        let mode = output.github_credential_mode.ok_or_else(|| {
+            AgentDriverError::ConfigBuildFailed(anyhow::anyhow!(
+                "Local GitHub policy is missing; upgrade the server"
+            ))
+        })?;
+        if mode != GitHubCredentialMode::Legacy {
+            return Err(AgentDriverError::ConfigBuildFailed(anyhow::anyhow!(
+                "Local runs require existing Git authentication; upgrade the server"
+            )));
+        }
+        let servers = output
+            .mcp_servers
+            .context("Local MCP configuration is missing")
+            .and_then(|json| {
+                serde_json::from_str::<Option<serde_json::Map<String, serde_json::Value>>>(&json)
+                    .map_err(Into::into)
+            })
+            .map_err(AgentDriverError::ConfigBuildFailed)?
+            .unwrap_or_default();
+        let specs = config_file::mcp_specs_from_mcp_servers(&servers)
+            .map_err(AgentDriverError::ConfigBuildFailed)?;
+        Self::set_ambient_agent_task_id(foreground, Some(task_id)).await?;
+        driver_options.task_id = Some(task_id);
+        driver_options.github_credential_mode = mode;
+        if servers.values().any(|server| {
+            server.get("warp_id").and_then(serde_json::Value::as_str) == Some("github")
+        }) {
+            driver_options.strict_mcp_startup = true;
+        }
+        Ok(specs)
     }
 
     /// Downloads regular and handoff attachments independently before the run begins.
@@ -1991,16 +2024,7 @@ impl AgentDriverRunner {
             Ok(None) => (None, None, None, None, Vec::new(), None, None),
             Err(err) => return Err(AgentDriverError::TaskMetadataFetchFailed(err)),
         };
-        match experimental.as_ref() {
-            Some(values) => warp_core::safe_info!(
-                safe: ("factory_experimental_config state=read_uninterpreted key_count={}", values.len()),
-                full: ("factory_experimental_config state=read_uninterpreted key_count={}", values.len())
-            ),
-            None => warp_core::safe_info!(
-                safe: ("factory_experimental_config state=absent key_count=0"),
-                full: ("factory_experimental_config state=absent key_count=0")
-            ),
-        }
+        log_factory_experimental_config(experimental.as_ref());
 
         // Validate the requested `--harness` against the task's harness setting. This avoids the
         // extra conversation-metadata roundtrip that would otherwise be needed downstream when the
@@ -2317,7 +2341,7 @@ fn launch_command(
     let cli_name = warp_cli::binary_name().unwrap_or_else(|| "warp".to_string());
     authenticate_then_execute(
         global_options.api_key.clone(),
-        &format!("You are not logged in - please log in with `{cli_name} login` to continue."),
+        &format!("Please log in again with `{cli_name} login` to continue."),
         ctx,
         move |ctx| dispatch_command(ctx, command.clone(), global_options.clone()),
     )
@@ -2335,20 +2359,27 @@ pub fn authenticate_then_execute(
     let auth_state = AuthStateProvider::handle(ctx).as_ref(ctx).get();
     let Some(authentication) = command_authentication(pending_api_key, auth_state.is_logged_in())
     else {
-        return Err(anyhow::anyhow!("{}", login_hint));
+        return Err(anyhow::anyhow!("You are not logged in. {}", login_hint));
     };
 
     // On staging the warp-server is fronted by IAP, so establish an IAP token
     // before *any* warp-server request.
     let iap = IapManager::handle(ctx);
     if !iap.as_ref(ctx).is_enabled() || iap.as_ref(ctx).has_valid_token() {
-        authenticate_and_execute(ctx, parent_span, authentication, execute);
+        authenticate_and_execute(
+            ctx,
+            parent_span,
+            authentication,
+            login_hint.to_owned(),
+            execute,
+        );
         return Ok(());
     }
 
     let mut execute = Some(execute);
     let mut handled = false;
     let parent_span_for_iap = parent_span.clone();
+    let login_hint = login_hint.to_owned();
     ctx.subscribe_to_model(&iap, move |_, event, ctx| {
         let _guard = parent_span_for_iap.enter();
         if handled {
@@ -2364,6 +2395,7 @@ pub fn authenticate_then_execute(
                         ctx,
                         parent_span.clone(),
                         authentication.clone(),
+                        login_hint.clone(),
                         execute,
                     );
                 }
@@ -2391,10 +2423,9 @@ fn authenticate_and_execute(
     ctx: &mut AppContext,
     parent_span: tracing::Span,
     authentication: CommandAuthentication,
+    login_hint: String,
     execute: impl FnOnce(&mut AppContext) -> anyhow::Result<()> + 'static,
 ) {
-    let cli_name = warp_cli::binary_name().unwrap_or_else(|| "warp".to_string());
-
     // Subscribe to auth events and wait for validation before running the command.
     let mut execute_once = Some(execute);
     let mut dispatched = false;
@@ -2419,7 +2450,7 @@ fn authenticate_and_execute(
                 let message = if auth_state.is_api_key_authenticated() {
                     "Your API key is invalid. Please provide a valid key via '--api-key' or the WARP_API_KEY environment variable.".to_string()
                 } else {
-                    format!("Your credentials are invalid. Please log in again with `{cli_name} login`.")
+                    format!("Your credentials are invalid. {} If it appears that you are already logged in, log out and log in again.", login_hint)
                 };
                 report_fatal_error(anyhow::anyhow!(message), ctx);
             }
@@ -2619,6 +2650,9 @@ fn command_to_telemetry_event(command: &CliCommand) -> CliTelemetryEvent {
                 }
             }
             HarnessSupportCommand::NotifyUser(_) => CliTelemetryEvent::HarnessSupportNotifyUser,
+            HarnessSupportCommand::WaitForEvents(_) => {
+                CliTelemetryEvent::HarnessSupportWaitForEvents
+            }
             HarnessSupportCommand::FinishTask(finish_args) => {
                 CliTelemetryEvent::HarnessSupportFinishTask {
                     success: finish_args.status == TaskStatus::Success,

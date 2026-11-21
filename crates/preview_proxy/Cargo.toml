@@ -16,3 +16,4 @@ log.workspace = true
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "sync", "time"] }
 tokio-util.workspace = true
 tower.workspace = true
+uuid.workspace = true

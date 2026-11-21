@@ -46,7 +46,7 @@ impl TryFrom<UploadArtifactArgs> for FileArtifactUploadRequest {
             path: value.path,
             run_id,
             conversation_id: value.conversation_id.map(ServerConversationToken::new),
-            title: None,
+            title: value.title,
             description: value.description,
         })
     }

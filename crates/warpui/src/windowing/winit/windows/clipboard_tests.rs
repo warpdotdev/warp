@@ -12,8 +12,10 @@ mod clipboard_tests {
         WindowsClipboard::new().ok()
     }
 
+    // The OS clipboard is shared, so keep native clipboard scenarios in one test to prevent races
+    // under both nextest and libtest.
     #[test]
-    fn test_clipboard_round_trip() {
+    fn test_clipboard_content() {
         let mut clipboard = match create_test_clipboard() {
             Some(clipboard) => clipboard,
             None => {
@@ -34,17 +36,6 @@ mod clipboard_tests {
         if !read_content.plain_text.is_empty() {
             assert_eq!(read_content.plain_text, test_content.plain_text);
         }
-    }
-
-    #[test]
-    fn test_html_content_handling() {
-        let mut clipboard = match create_test_clipboard() {
-            Some(clipboard) => clipboard,
-            None => {
-                eprintln!("Skipping test - no clipboard available (headless environment)");
-                return;
-            }
-        };
 
         let test_content = ClipboardContent {
             plain_text: "Test text".to_string(),
@@ -64,28 +55,12 @@ mod clipboard_tests {
         if !read_content.is_empty() {
             assert!(!read_content.plain_text.is_empty());
         }
-    }
-
-    #[test]
-    fn test_empty_content_handling() {
-        let mut clipboard = match create_test_clipboard() {
-            Some(clipboard) => clipboard,
-            None => {
-                eprintln!("Skipping test - no clipboard available (headless environment)");
-                return;
-            }
-        };
 
         let empty_content = ClipboardContent::plain_text("".to_string());
 
         // Writing empty content should not panic
         clipboard.write(empty_content);
 
-        // Reading should return valid ClipboardContent (may be empty or have previous content)
-        let read_content = clipboard.read();
-
-        // Should always return a valid ClipboardContent struct
-        // Test that the structure itself is valid, not the content
-        assert!(matches!(read_content.images, None | Some(_)));
+        clipboard.read();
     }
 }
