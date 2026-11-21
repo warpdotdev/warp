@@ -21,6 +21,9 @@ use super::{
 };
 use crate::refreshable_headers::{RefreshableHeaders, RejectionHandler};
 
+// HTTP client setup can exceed five seconds under parallel macOS CI load.
+const HTTP_TEST_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// Build a `ServerCapabilities` with selected capability flags toggled on.
 /// Each `Some(default)` mirrors how rmcp deserializes a capability the
 /// server advertised with no inner flags set.
@@ -466,7 +469,7 @@ async fn start_http_server_with_refreshable_headers(
         )
         .expect("test logger");
     tokio::time::timeout(
-        Duration::from_secs(5),
+        HTTP_TEST_TIMEOUT,
         spawn_server(
             "test-server".to_string(),
             None,
@@ -769,7 +772,7 @@ async fn preflight_does_not_repeat_legacy_transport_version_fallback() {
         );
         let (url, server) = serve_http_router(app).await;
         let result = tokio::time::timeout(
-            Duration::from_secs(5),
+            HTTP_TEST_TIMEOUT,
             determine_transport("test".to_string(), &url, &HashMap::new(), None, None),
         )
         .await
@@ -918,7 +921,7 @@ async fn preflight_rejects_unknown_or_exhausted_supported_versions_without_initi
         );
         let (url, server) = serve_http_router(app).await;
         let result = tokio::time::timeout(
-            Duration::from_secs(5),
+            HTTP_TEST_TIMEOUT,
             determine_transport("test".to_string(), &url, &HashMap::new(), None, None),
         )
         .await

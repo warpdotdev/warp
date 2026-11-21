@@ -17,7 +17,17 @@ warp_errors.workspace = true
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 dirs.workspace = true
 log-panics = { version = "2.1.0", features = ["with-backtrace"] }
-zip = "2.1"
+# zip 9 defaults enable bzip2 -> libbz2-rs-sys (license bzip2-1.0.6), which cargo-deny rejects.
+zip = { version = "9.0.5", default-features = false, features = [
+    "aes-crypto",
+    "deflate",
+    "deflate64",
+    "lzma",
+    "ppmd",
+    "time",
+    "xz",
+    "zstd",
+] }
 
 # Optional crash reporting integration.
 sentry = { workspace = true, optional = true }
