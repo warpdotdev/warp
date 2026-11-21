@@ -324,6 +324,25 @@ fn muse_is_supported_via_default_listener() {
 }
 
 #[test]
+fn uta_is_supported_via_default_listener() {
+    assert!(is_agent_supported(&CLIAgent::Uta));
+    let mut handler = create_handler(&CLIAgent::Uta).expect("Uta should support OSC 777");
+
+    let stop_body = r#"{"v":1,"agent":"uta","event":"stop","session_id":"abc12345"}"#;
+    let parsed_stop = handler
+        .try_parse(Some(CLI_AGENT_NOTIFICATION_SENTINEL), stop_body, false)
+        .expect("should parse uta stop");
+    assert_eq!(parsed_stop.agent, CLIAgent::Uta);
+    assert_eq!(parsed_stop.event, CLIAgentEventType::Stop);
+    assert!(handler.handle_event(parsed_stop).is_some());
+
+    assert!(
+        handler.try_parse(None, "Turn complete", false).is_none(),
+        "Uta must not treat OSC 9 text as a stop event"
+    );
+}
+
+#[test]
 fn warp_tui_notifications_are_supported() {
     assert!(is_agent_supported(&CLIAgent::WarpTui));
     let mut handler = create_handler(&CLIAgent::WarpTui).expect("should create handler");
