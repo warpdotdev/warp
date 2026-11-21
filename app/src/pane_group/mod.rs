@@ -59,6 +59,9 @@ use crate::ai::blocklist::BlocklistAIHistoryEvent;
 use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
 use crate::ai::blocklist::history_model::CloudConversationData;
 use crate::ai::blocklist::inline_action::code_diff_view::CodeDiffView;
+use crate::ai::blocklist::orchestration_event_streamer::{
+    OrchestrationEventStreamer, OrchestrationEventStreamerEvent,
+};
 use crate::ai::blocklist::suggested_agent_mode_workflow_modal::SuggestedAgentModeWorkflowAndId;
 use crate::ai::blocklist::suggested_rule_modal::SuggestedRuleAndId;
 use crate::ai::blocklist::{BlocklistAIHistoryModel, InputConfig, SerializedBlockListItem};
@@ -175,7 +178,7 @@ use crate::workspaces::user_workspaces::{ResolvedTeamScope, UserWorkspaces};
 use crate::{cmd_or_ctrl_shift, send_telemetry_from_ctx};
 
 mod ambient_pane_restoration;
-mod child_agent;
+pub(crate) mod child_agent;
 pub(crate) use child_agent::materialization::{
     ChildPaneMaterialization, decide_child_pane_materialization,
 };
@@ -934,6 +937,8 @@ pub struct PaneGroup {
     /// run id. Re-driven from the shared `TasksUpdated` subscription until
     /// every child in the server-reported list has a local conversation.
     pending_parent_child_seeds: HashMap<AmbientAgentTaskId, PendingParentChildSeed>,
+
+    passive_child_seeding_released: bool,
 
     /// Test-only: counts `spawn_ancestor_list_fetch_if_needed` dispatches, so
     /// tests can assert that a burst of `TasksUpdated` re-drives coalesces
@@ -3146,6 +3151,19 @@ impl PaneGroup {
             me.discard_pane(*pane_id, ctx);
         });
 
+        ctx.subscribe_to_model(
+            &OrchestrationEventStreamer::handle(ctx),
+            |me, streamer, event, ctx| {
+                if let OrchestrationEventStreamerEvent::LocalChildHistoryPrepared {
+                    installation,
+                    conversation,
+                } = event
+                {
+                    me.install_local_child_history(&streamer, *installation, conversation, ctx);
+                }
+            },
+        );
+
         // Catch-up share for children that existed before the parent
         // started sharing — `inherit_share_for_local_child` only fires at
         // child-pane creation time.
@@ -3193,6 +3211,8 @@ impl PaneGroup {
             pending_ambient_agent_conversation_restorations: HashMap::new(),
             pending_child_hydrations: HashMap::new(),
             pending_parent_child_seeds: HashMap::new(),
+            passive_child_seeding_released: !FeatureFlag::RestoreLocalSubtree.is_enabled()
+                || !warp_core::execution_mode::AppExecutionMode::as_ref(ctx).is_autonomous(),
             #[cfg(test)]
             parent_child_seed_fetch_dispatch_count: 0,
             failed_viewer_child_sessions: HashMap::new(),

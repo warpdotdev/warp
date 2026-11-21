@@ -1,5 +1,6 @@
 use warp_graphql::queries::execution_config::{
-    ExecutionRepositoryRef, SessionSharingAccessLevel, SessionSharingSubjectType,
+    ExecutionRepositoryRef, FactoryBranchExecutionConfig, SessionSharingAccessLevel,
+    SessionSharingSubjectType,
 };
 
 use super::*;
@@ -130,4 +131,46 @@ fn execution_factory_skill_directories_are_relative_and_unambiguous() {
     assert!(factory_skill_dirs(vec!["one,two".into()]).is_err());
     assert!(factory_skill_dirs(vec!["../other/skills".into()]).is_err());
     assert!(factory_skill_dirs(vec!["~/skills".into()]).is_err());
+}
+
+#[test]
+fn a_repository_hook_path_stays_inside_its_repository() {
+    for valid in [".", ".cursor", "tools/hooks", "./hooks"] {
+        assert!(hook_repository_path(valid).is_ok(), "{valid}");
+    }
+    for invalid in ["", " .cursor", "../hooks", "hooks/../../x", "/etc/hooks"] {
+        assert!(hook_repository_path(invalid).is_err(), "{invalid:?}");
+    }
+}
+
+#[test]
+fn a_worker_hook_path_is_absolute() {
+    let absolute_path = std::env::current_dir()
+        .unwrap()
+        .join("acme")
+        .join("hooks")
+        .to_string_lossy()
+        .into_owned();
+    assert!(hook_worker_path(&absolute_path).is_ok());
+    for invalid in ["", "etc/hooks", "./hooks", " /etc/hooks"] {
+        assert!(hook_worker_path(invalid).is_err(), "{invalid:?}");
+    }
+}
+
+#[test]
+fn execution_factory_definition_sha_accepts_only_full_commit_ids() {
+    let branch = |sha: &str| {
+        Some(FactoryBranchExecutionConfig {
+            source_sha: sha.into(),
+        })
+    };
+    let sha = "0123456789abcdef0123456789abcdef01234567";
+    assert_eq!(factory_definition_sha(None).unwrap(), None);
+    assert_eq!(
+        factory_definition_sha(branch(sha)).unwrap().as_deref(),
+        Some(sha)
+    );
+    assert!(factory_definition_sha(branch(&sha[..12])).is_err());
+    assert!(factory_definition_sha(branch(&sha.to_uppercase())).is_err());
+    assert!(factory_definition_sha(branch(&format!("{}; rm", &sha[..36]))).is_err());
 }

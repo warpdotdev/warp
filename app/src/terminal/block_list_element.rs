@@ -1975,9 +1975,9 @@ impl BlockListElement {
         ctx: &mut EventContext,
         app: &AppContext,
     ) -> bool {
-        if self.is_terminal_selecting && self.bounds.is_some() {
-            let bounds = self.bounds.unwrap();
-
+        if self.is_terminal_selecting
+            && let Some(bounds) = self.bounds
+        {
             let snackbar_height = self
                 .snackbar_header_state()
                 .header_rect()

@@ -6,7 +6,7 @@
     "executionId": "42",
     "conversationId": null,
     "parentRunId": null,
-    "teamId": "7",
+    "teamId": "test_uid00000000000007",
     "harness": "OZ",
     "modelId": "auto",
     "reasoningLevel": null,
@@ -55,7 +55,8 @@
     "skipInitialTurn": false,
     "idleOnCompleteSeconds": null,
     "idleOnFailSeconds": null,
-    "snapshotDisabled": false
+    "snapshotDisabled": false,
+    "agentHookSources": []
   },
   "runtime_env": {
     "OZ_RUN_ID": "550e8400-e29b-41d4-a716-446655440000",

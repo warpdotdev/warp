@@ -101,16 +101,26 @@ impl Mouse {
         }
     }
 
-    pub fn button_down(&mut self, button: &MouseButton) -> Result<(), String> {
+    pub fn button_down(&mut self, button: &MouseButton, click_state: i64) -> Result<(), String> {
         let point = self.event_location()?;
         self.held_buttons.set_down(button, true);
-        self.post_event(mouse_down_event_type(button), point, button.into(), 1)
+        self.post_event(
+            mouse_down_event_type(button),
+            point,
+            button.into(),
+            click_state,
+        )
     }
 
-    pub fn button_up(&mut self, button: &MouseButton) -> Result<(), String> {
+    pub fn button_up(&mut self, button: &MouseButton, click_state: i64) -> Result<(), String> {
         let point = self.event_location()?;
         self.held_buttons.set_down(button, false);
-        self.post_event(mouse_up_event_type(button), point, button.into(), 1)
+        self.post_event(
+            mouse_up_event_type(button),
+            point,
+            button.into(),
+            click_state,
+        )
     }
 
     pub fn current_position(&mut self) -> Result<Vector2I, String> {

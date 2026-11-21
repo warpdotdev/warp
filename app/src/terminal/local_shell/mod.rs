@@ -143,6 +143,23 @@ impl LocalShellState {
         }
     }
 
+    /// Reads the interactive login shell's PATH again, separately from the cached value the other
+    /// callers share, for a caller that must see changes made to shell startup files after the
+    /// first read. The read starts when the returned future is first polled.
+    pub fn read_interactive_path_env_var_now(&self) -> BoxFuture<'static, Option<String>> {
+        let LocalShellState::Loaded(local_shell) = self else {
+            return futures::future::ready(None).boxed();
+        };
+        let shell_type = local_shell.shell_type;
+        let shell_path = local_shell.shell_path.clone();
+        async move {
+            capture_interactive_shell_env(shell_type, shell_path)
+                .await
+                .ok()
+        }
+        .boxed()
+    }
+
     /// Returns a future that will yield the PATH from an interactive login shell.
     /// This lazily triggers the capture on first call and caches the result.
     /// Use this for LSP operations that need the full interactive environment.

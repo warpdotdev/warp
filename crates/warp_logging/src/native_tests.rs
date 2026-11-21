@@ -17,7 +17,14 @@ fn zip_entry_names(zip_path: &Path) -> Vec<String> {
     let file = File::open(zip_path).unwrap();
     let mut archive = zip::ZipArchive::new(file).unwrap();
     (0..archive.len())
-        .map(|index| archive.by_index(index).unwrap().name().to_owned())
+        .map(|index| {
+            archive
+                .by_index(index)
+                .unwrap()
+                .name()
+                .unwrap()
+                .into_owned()
+        })
         .collect()
 }
 fn log_state(base_directory: &Path, frontend: LogFrontend, logfile_name: &str) -> LogState {

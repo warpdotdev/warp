@@ -116,6 +116,8 @@ pub enum PlatformErrorCode {
     InvalidRequest,
     #[cynic(rename = "NOT_AUTHORIZED")]
     NotAuthorized,
+    #[cynic(rename = "OPERATION_NOT_SUPPORTED")]
+    OperationNotSupported,
     #[cynic(rename = "RESOURCE_UNAVAILABLE")]
     ResourceUnavailable,
     #[cynic(rename = "RESOURCE_NOT_FOUND")]
@@ -139,6 +141,7 @@ impl FromStr for PlatformErrorCode {
             "internal_error" => Ok(Self::InternalError),
             "invalid_request" => Ok(Self::InvalidRequest),
             "not_authorized" => Ok(Self::NotAuthorized),
+            "operation_not_supported" => Ok(Self::OperationNotSupported),
             "resource_unavailable" => Ok(Self::ResourceUnavailable),
             "resource_not_found" => Ok(Self::ResourceNotFound),
             _ => Err(()),

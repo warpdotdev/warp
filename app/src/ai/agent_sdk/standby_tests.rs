@@ -4,6 +4,8 @@ use chrono::TimeDelta;
 use futures::channel::oneshot;
 use futures::future;
 use warp_core::features::FeatureFlag;
+use warp_graphql::ai::PlatformErrorCode;
+use warp_graphql::platform_error::PlatformErrorInfo;
 use warp_graphql::queries::execution_config::CodeForge as ConfigCodeForge;
 use warpui::App;
 
@@ -11,14 +13,35 @@ use self::support::*;
 use super::*;
 use crate::auth::AuthStateProvider;
 use crate::auth::user::{PrincipalType, User};
-use crate::server::server_api::ai::MockAIClient;
+use crate::server::server_api::ai::{MockAIClient, TaskGitCredentialsError};
 use crate::server::server_api::prewarmed_sandbox::tests::parse_configuration;
 
 #[path = "standby_test_support.rs"]
 mod support;
 
 #[test]
-fn supported_harnesses_validate_the_workspace_before_metadata_access() {
+fn unsupported_deferred_preparation_fails_before_workspace_setup() {
+    App::test((), |mut app| async move {
+        let runner = app.add_singleton_model(|_| AgentDriverRunner);
+        let foreground = runner.update(&mut app, |_, ctx| ctx.spawner());
+        let setup_events = SetupClientEventReporter::standby(
+            Arc::new(MockAIClient::new()),
+            app.background_executor(),
+        );
+        let error = prepare(&foreground, parse_configuration(), false, &setup_events)
+            .await
+            .err()
+            .expect("unsupported preparation must fail");
+        let AgentDriverError::ConfigBuildFailed(source) = error else {
+            panic!("expected unsupported preparation");
+        };
+        assert!(source.to_string().contains("deferred repositories"));
+        assert!(!app.update(|ctx| ctx.has_singleton_model::<AgentDriver>()));
+    });
+}
+
+#[test]
+fn preparation_validates_the_workspace_before_metadata_access() {
     App::test((), |mut app| async move {
         let runner = app.add_singleton_model(|_| AgentDriverRunner);
         let foreground = runner.update(&mut app, |_, ctx| ctx.spawner());
@@ -29,7 +52,7 @@ fn supported_harnesses_validate_the_workspace_before_metadata_access() {
         let mut claude = parse_configuration();
         claude.preparation.harness = "claude".into();
         claude.preparation.factory_skill_dirs = vec!["../outside".into()];
-        let error = prepare(&foreground, claude, &setup_events)
+        let error = prepare(&foreground, claude, true, &setup_events)
             .await
             .err()
             .unwrap();
@@ -44,7 +67,7 @@ fn supported_harnesses_validate_the_workspace_before_metadata_access() {
         let mut codex = parse_configuration();
         codex.preparation.harness = "codex".into();
         codex.preparation.factory_skill_dirs = vec!["../outside".into()];
-        let error = prepare(&foreground, codex, &setup_events)
+        let error = prepare(&foreground, codex, true, &setup_events)
             .await
             .err()
             .unwrap();
@@ -67,8 +90,8 @@ fn invalid_preparation_inputs_fail_before_driver_creation_or_metadata_access() {
             Arc::new(MockAIClient::new()),
             app.background_executor(),
         );
-        let mut wrong_harness = parse_configuration();
-        wrong_harness.preparation.harness = "gemini".to_string();
+        let mut unknown_harness = parse_configuration();
+        unknown_harness.preparation.harness = "not-a-harness".to_string();
         let mut escaping_skills = parse_configuration();
         escaping_skills.preparation.factory_skill_dirs = vec!["../outside".to_string()];
         let mut duplicate_repository = parse_configuration();
@@ -87,14 +110,14 @@ fn invalid_preparation_inputs_fail_before_driver_creation_or_metadata_access() {
             .deferred_repositories[0]
             .code_forge = ConfigCodeForge::Unknown;
         for config in [
-            wrong_harness,
+            unknown_harness,
             escaping_skills,
             duplicate_repository,
             invalid_mcp,
             unknown_repository,
             unknown_deferred_repository,
         ] {
-            let error = prepare(&foreground, config, &setup_events)
+            let error = prepare(&foreground, config, true, &setup_events)
                 .await
                 .err()
                 .expect("preparation should fail");
@@ -122,7 +145,7 @@ fn skill_checkout_collisions_fail_before_cloning_or_metadata_access() {
         ] {
             let mut config = parse_configuration();
             config.preparation.skills = specs.into_iter().map(str::to_owned).collect();
-            let error = prepare(&foreground, config, &setup_events)
+            let error = prepare(&foreground, config, true, &setup_events)
                 .await
                 .err()
                 .expect("preparation should fail");
@@ -169,7 +192,7 @@ fn global_skill_checkout_collisions_fail_before_cloning_or_metadata_access() {
             });
             let mut config = parse_configuration();
             config.preparation.skills = configured.into_iter().map(str::to_owned).collect();
-            let error = prepare(&foreground, config, &setup_events)
+            let error = prepare(&foreground, config, true, &setup_events)
                 .await
                 .err()
                 .expect("preparation should fail");
@@ -641,4 +664,45 @@ fn stalled_connection_times_out_without_losing_preparation() {
     )
     .unwrap();
     assert_eq!(hooks.count(Call::Install), 1);
+}
+
+#[test]
+fn config_gone_does_not_fail_a_committed_assignment() {
+    let clock = TestClock::new();
+    let hooks = Hooks::default();
+    let (connections, incoming) = async_channel::unbounded();
+    let (standby_connection, standby) = connection();
+    let (assigned_connection, assigned) = connection();
+    connections.try_send(standby_connection).unwrap();
+    connections.try_send(assigned_connection).unwrap();
+    let (gone_tx, gone_rx) = oneshot::channel();
+    let mut info = PlatformErrorInfo::new(PlatformErrorCode::OperationNotSupported, false);
+    info.http_status = Some(410);
+    info.metadata
+        .insert("reason".into(), "prewarmed_sandbox_unavailable".into());
+    let error = TaskGitCredentialsError::Platform {
+        message: "Standby configuration is unavailable".into(),
+        detail: None,
+        info: Box::new(info),
+    };
+    let result = exercise(
+        drive_with_renewal(async { Ok(7) }, incoming, &clock, &hooks, 600, async {
+            gone_rx.await.unwrap();
+            wait_after_standby_config_rejection(error.into()).await
+        }),
+        async {
+            hooks.expect(Call::Connected).await;
+            gone_tx.send(()).unwrap();
+            clock.advance(HEARTBEAT_INTERVAL.as_secs() as i64).await;
+            standby.expect_heartbeat("abc123").await;
+            standby.send(assignment("42", &clock));
+            hooks.expect(Call::Install).await;
+            hooks.expect(Call::Connected).await;
+            assigned.send(assignment("42", &clock));
+            hooks.expect(Call::Run).await;
+        },
+    );
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(hooks.count(Call::Install), 1);
+    assert_eq!(hooks.count(Call::Run), 1);
 }

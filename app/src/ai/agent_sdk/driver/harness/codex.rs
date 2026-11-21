@@ -6,17 +6,16 @@ use std::sync::{Arc, OnceLock};
 
 use anyhow::{Context, Result, anyhow};
 use async_trait::async_trait;
-use chrono::Utc;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use shell_words::quote as shell_quote;
 use tempfile::NamedTempFile;
 use uuid::Uuid;
 use warp_cli::agent::Harness;
 use warp_core::features::FeatureFlag;
 use warp_core::safe_info;
 use warp_errors::report_error;
-use warp_harness_usage::{CaptureDiagnostics, JsonlReadStatus, extract_codex};
 use warp_managed_secrets::ManagedSecretValue;
 use warpui::{ModelHandle, ModelSpawner, SingletonEntity};
 
@@ -24,27 +23,27 @@ use super::super::terminal::{CommandHandle, TerminalDriver};
 use super::super::{AgentDriver, AgentDriverError};
 use super::codex_transcript::{
     CodexResumeInfo, CodexTranscriptEnvelope, codex_sessions_root, find_session_file,
-    parse_session_meta, rehydrate_codex_transcript,
+    rehydrate_codex_transcript,
 };
+use super::codex_usage::capture_transcript_with_usage;
 use super::harness_persistence::{
     HarnessPersistence, PersistenceOutcome, save_transcript_and_block,
 };
 use super::json_utils::read_json_file_or_default;
 use super::skill_dirs_publish::HarnessSupportSkills;
 use super::transcript_persistence::{
-    CapturedTranscript, UploadedTranscriptUsage, capture_transcript_with_retry,
-    needs_capture_retry, read_jsonl_capture, upload_captured_transcript,
+    UploadedTranscriptUsage, capture_transcript_with_retry, upload_captured_transcript,
 };
-use super::usage_reporting::CaptureIdentity;
 use super::{
-    HarnessRunner, JSONMCPServer, ResolvedMCPServers, ResumePayload, SavePoint, ThirdPartyHarness,
-    install_docs_url, write_temp_file,
+    HarnessMcpSettings, HarnessRunner, ResolvedMCPServers, ResumePayload, SavePoint,
+    ThirdPartyHarness, install_docs_url, write_temp_file,
 };
+use crate::ai::agent::BaseUserQuery;
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::ambient_agents::task::HarnessModelConfig;
-use crate::ai::mcp::JSONTransportType;
+use crate::ai::mcp::{JSONMCPServer, JSONTransportType};
 use crate::server::server_api::ServerApi;
 use crate::server::server_api::harness_support::HarnessSupportClient;
 use crate::terminal::CLIAgent;
@@ -131,6 +130,7 @@ impl ThirdPartyHarness for CodexHarness {
         system_prompt: Option<&str>,
         resumption_prompt: Option<&str>,
         context: Option<&str>,
+        _prompt_attribution: Option<&BaseUserQuery>,
         workspace_root: &Path,
         harness_working_dir: &Path,
         _task_id: Option<AmbientAgentTaskId>,
@@ -150,7 +150,7 @@ impl ThirdPartyHarness for CodexHarness {
             system_prompt,
             resolved_env_vars,
             resolved_secrets,
-            &resolved_mcp_servers.configs,
+            resolved_mcp_servers,
             third_party_harness_model_config,
         )
         .map_err(|error| AgentDriverError::HarnessConfigSetupFailed {
@@ -191,6 +191,7 @@ impl ThirdPartyHarness for CodexHarness {
         let client: Arc<dyn HarnessSupportClient> = server_api;
         Ok(Box::new(CodexHarnessRunner::new(
             self.cli_agent().command_prefix(),
+            &codex_config_overrides(resolved_mcp_servers),
             &owned_prompt,
             system_prompt,
             harness_working_dir,
@@ -208,17 +209,27 @@ impl ThirdPartyHarness for CodexHarness {
 /// `--dangerously-bypass-hook-trust` allows the orchestration plugin hooks installed by
 /// Warp to run without a manual hook review in unattended driver sessions. Driver setup
 /// verifies the Codex platform plugin before launching commands with this flag.
+/// `config_overrides` are passed as `-c` options.
 /// `Some(session_id)` indicates that we want to resume that prior session. Unlike claude,
 /// codex does not support assigning a session_id to a new conversation.
-fn codex_command(cli_name: &str, session_id: Option<&Uuid>, prompt_path: &str) -> String {
+fn codex_command(
+    cli_name: &str,
+    config_overrides: &[String],
+    session_id: Option<&Uuid>,
+    prompt_path: &str,
+) -> String {
+    let overrides: String = config_overrides
+        .iter()
+        .map(|config_override| format!("-c {} ", shell_quote(config_override)))
+        .collect();
     match session_id {
         Some(session_id) => format!(
-            "{cli_name} resume --dangerously-bypass-approvals-and-sandbox {CODEX_BYPASS_HOOK_TRUST_FLAG} {session_id} \
+            "{cli_name} resume {overrides}--dangerously-bypass-approvals-and-sandbox {CODEX_BYPASS_HOOK_TRUST_FLAG} {session_id} \
              \"$(cat '{prompt_path}')\""
         ),
         None => {
             format!(
-                "{cli_name} --dangerously-bypass-approvals-and-sandbox {CODEX_BYPASS_HOOK_TRUST_FLAG} \"$(cat '{prompt_path}')\""
+                "{cli_name} {overrides}--dangerously-bypass-approvals-and-sandbox {CODEX_BYPASS_HOOK_TRUST_FLAG} \"$(cat '{prompt_path}')\""
             )
         }
     }
@@ -256,6 +267,7 @@ impl CodexHarnessRunner {
     #[allow(clippy::too_many_arguments)]
     fn new(
         cli_command: &str,
+        config_overrides: &[String],
         prompt: &str,
         _system_prompt: Option<&str>,
         harness_working_dir: &Path,
@@ -283,7 +295,12 @@ impl CodexHarnessRunner {
             None => (None, None, None),
         };
 
-        let command = codex_command(cli_command, session_id.as_ref(), &prompt_path);
+        let command = codex_command(
+            cli_command,
+            config_overrides,
+            session_id.as_ref(),
+            &prompt_path,
+        );
 
         let session_id_cell: OnceLock<Uuid> = OnceLock::new();
         if let Some(id) = session_id {
@@ -533,44 +550,6 @@ impl HarnessRunner for CodexHarnessRunner {
     }
 }
 
-pub(super) fn capture_transcript_with_usage(
-    session_id: Uuid,
-    transcript_path: &Path,
-    is_final: bool,
-    identity: Option<CaptureIdentity>,
-) -> Result<CapturedTranscript> {
-    let captured_at = Utc::now();
-    let capture = read_jsonl_capture(transcript_path)?;
-    if (is_final || identity.is_some()) && capture.diagnostics.status == JsonlReadStatus::Missing {
-        anyhow::bail!("Codex transcript disappeared before final save");
-    }
-    if capture.diagnostics.status == JsonlReadStatus::Unreadable && capture.entries.is_empty() {
-        anyhow::bail!("Codex transcript could not be read");
-    }
-    if identity.is_some() && capture.entries.is_empty() && !capture.diagnostics.is_complete() {
-        anyhow::bail!("Codex transcript has no complete readable records");
-    }
-    let metadata = parse_session_meta(capture.entries.first()).unwrap_or_default();
-    let envelope = CodexTranscriptEnvelope::new(session_id, metadata, capture.entries);
-    let transcript_body =
-        serde_json::to_vec(&envelope).context("Failed to serialize codex transcript")?;
-    let diagnostics = CaptureDiagnostics {
-        root: capture.diagnostics,
-        ..Default::default()
-    };
-    let usage_request = identity.and_then(|identity| {
-        identity.build_usage_request(
-            captured_at,
-            extract_codex(&session_id.to_string(), &envelope.entries, &diagnostics),
-        )
-    });
-    Ok(CapturedTranscript {
-        transcript_body,
-        usage_request,
-        needs_retry: needs_capture_retry(&diagnostics),
-    })
-}
-
 const CODEX_CONFIG_DIR: &str = ".codex";
 const CODEX_HOME_ENV: &str = "CODEX_HOME";
 const CODEX_AGENTS_OVERRIDE_FILE_NAME: &str = "AGENTS.override.md";
@@ -585,6 +564,7 @@ const CODEX_TRUST_LEVEL_TRUSTED: &str = "trusted";
 /// (codex `core/src/config/mod.rs`).
 const CODEX_OPENAI_BASE_URL_KEY: &str = "openai_base_url";
 const CODEX_CHECK_FOR_UPDATE_ON_STARTUP_KEY: &str = "check_for_update_on_startup";
+const CODEX_MCP_SERVERS_KEY: &str = "mcp_servers";
 const CODEX_MODEL_KEY: &str = "model";
 const CODEX_MODEL_REASONING_EFFORT_KEY: &str = "model_reasoning_effort";
 /// Target model for the `[notice.model_migrations]` table that suppresses Codex's
@@ -600,7 +580,7 @@ pub(super) fn prepare_codex_environment_config(
     system_prompt: Option<&str>,
     resolved_env_vars: &HashMap<OsString, OsString>,
     resolved_secrets: &HashMap<String, ManagedSecretValue>,
-    resolved_mcp_servers: &HashMap<String, JSONMCPServer>,
+    resolved_mcp_servers: &ResolvedMCPServers,
     third_party_harness_model_config: Option<&HarnessModelConfig>,
 ) -> Result<()> {
     let codex_dir = codex_config_dir()?;
@@ -813,6 +793,14 @@ fn resolve_openai_base_url_from_secret(
             .as_ref()
             .map(|s| s.trim().to_owned())
             .filter(|s| !s.is_empty()),
+        ManagedSecretValue::LlmProviderApiKey {
+            provider_id,
+            base_url,
+            ..
+        } if provider_id == "openai" => base_url
+            .as_ref()
+            .map(|s| s.trim().to_owned())
+            .filter(|s| !s.is_empty()),
         _ => None,
     })
 }
@@ -831,7 +819,7 @@ fn resolve_openai_base_url_from_secret(
 fn prepare_codex_config_toml(
     config_toml_path: &Path,
     working_dir: &Path,
-    resolved_mcp_servers: &HashMap<String, JSONMCPServer>,
+    resolved_mcp_servers: &ResolvedMCPServers,
     third_party_harness_model_config: Option<&HarnessModelConfig>,
     openai_base_url: Option<&str>,
 ) -> Result<()> {
@@ -857,6 +845,7 @@ fn prepare_codex_config_toml(
         set_codex_openai_base_url(&mut doc, url);
     }
     set_codex_check_for_update_on_startup(&mut doc, false);
+    disable_codex_native_orchestration(&mut doc);
     set_codex_model(&mut doc, third_party_harness_model_config);
     set_codex_model_reasoning_effort(&mut doc, third_party_harness_model_config);
 
@@ -899,6 +888,14 @@ fn set_codex_openai_base_url(doc: &mut toml_edit::DocumentMut, base_url: &str) {
 
 fn set_codex_check_for_update_on_startup(doc: &mut toml_edit::DocumentMut, enabled: bool) {
     doc[CODEX_CHECK_FOR_UPDATE_ON_STARTUP_KEY] = toml_edit::value(enabled);
+}
+
+fn disable_codex_native_orchestration(doc: &mut toml_edit::DocumentMut) {
+    // Native children bypass Oz's task tracking. Model-selected multi-agent v2 ignores the legacy
+    // feature toggle, so both the agents setting and feature overrides must be disabled.
+    doc["agents"]["enabled"] = toml_edit::value(false);
+    doc["features"]["multi_agent"] = toml_edit::value(false);
+    doc["features"]["multi_agent_v2"] = toml_edit::value(false);
 }
 
 fn set_codex_model_reasoning_effort(
@@ -1000,20 +997,23 @@ fn set_codex_project_trust_level(
     proj_tbl["trust_level"] = toml_edit::value(trust_level);
 }
 
-/// Write resolved MCP servers into `[mcp_servers.<name>]` sections in the Codex config.
-fn write_codex_mcp_servers(
-    doc: &mut toml_edit::DocumentMut,
-    servers: &HashMap<String, JSONMCPServer>,
-) {
-    if servers.is_empty() {
+/// Write resolved MCP servers into `[mcp_servers.<name>]` sections in the Codex config, except for
+/// run-scoped servers, which [`codex_config_overrides`] passes to the invocation instead.
+fn write_codex_mcp_servers(doc: &mut toml_edit::DocumentMut, resolved: &ResolvedMCPServers) {
+    let mut servers = resolved
+        .configs
+        .iter()
+        .filter(|(name, _)| !resolved.is_run_scoped(name))
+        .peekable();
+    if servers.peek().is_none() {
         return;
     }
-    if !doc.contains_table("mcp_servers") {
+    if !doc.contains_table(CODEX_MCP_SERVERS_KEY) {
         let mut tbl = toml_edit::Table::new();
         tbl.set_implicit(true);
-        doc.insert("mcp_servers", toml_edit::Item::Table(tbl));
+        doc.insert(CODEX_MCP_SERVERS_KEY, toml_edit::Item::Table(tbl));
     }
-    let mcp_tbl = doc["mcp_servers"]
+    let mcp_tbl = doc[CODEX_MCP_SERVERS_KEY]
         .as_table_mut()
         .expect("mcp_servers table inserted above");
 
@@ -1024,43 +1024,93 @@ fn write_codex_mcp_servers(
             .as_table_mut()
             .expect("mcp_servers entry is a table");
         entry.set_implicit(false);
+        set_codex_mcp_server_fields(entry, server, resolved.harness_settings.get(name));
+    }
+}
 
-        match &server.transport_type {
-            JSONTransportType::CLIServer {
-                command,
-                args,
-                env,
-                working_directory,
-            } => {
-                entry["command"] = toml_edit::value(command.as_str());
-                if !args.is_empty() {
-                    let mut arr = toml_edit::Array::new();
-                    for arg in args {
-                        arr.push(arg.as_str());
-                    }
-                    entry["args"] = toml_edit::value(arr);
-                }
-                if !env.is_empty() {
-                    let mut env_tbl = toml_edit::InlineTable::new();
-                    for (k, v) in env {
-                        env_tbl.insert(k, v.as_str().into());
-                    }
-                    entry["env"] = toml_edit::value(env_tbl);
-                }
-                if let Some(cwd) = working_directory {
-                    entry["cwd"] = toml_edit::value(cwd.as_str());
-                }
+/// Returns `-c` config overrides that give a single Codex invocation the run-scoped MCP servers,
+/// so they aren't left in config.toml after the run.
+fn codex_config_overrides(resolved: &ResolvedMCPServers) -> Vec<String> {
+    let mut overrides: Vec<_> = resolved
+        .configs
+        .iter()
+        .filter(|(name, _)| resolved.is_run_scoped(name))
+        .map(|(name, server)| {
+            let mut entry = toml_edit::InlineTable::new();
+            set_codex_mcp_server_fields(&mut entry, server, resolved.harness_settings.get(name));
+            format!("{CODEX_MCP_SERVERS_KEY}.{name}={entry}")
+        })
+        .collect();
+    overrides.sort();
+    overrides
+}
+
+/// Sets the keys of a Codex `[mcp_servers.<name>]` entry that configure `server`.
+fn set_codex_mcp_server_fields(
+    entry: &mut dyn toml_edit::TableLike,
+    server: &JSONMCPServer,
+    settings: Option<&HarnessMcpSettings>,
+) {
+    match &server.transport_type {
+        JSONTransportType::CLIServer {
+            command,
+            args,
+            env,
+            working_directory,
+        } => {
+            entry.insert("command", toml_edit::value(command.as_str()));
+            if !args.is_empty() {
+                entry.insert(
+                    "args",
+                    toml_edit::value(
+                        args.iter()
+                            .map(String::as_str)
+                            .collect::<toml_edit::Array>(),
+                    ),
+                );
             }
-            JSONTransportType::SSEServer { url, headers } => {
-                entry["url"] = toml_edit::value(url.as_str());
-                if !headers.is_empty() {
-                    let mut hdrs_tbl = toml_edit::InlineTable::new();
-                    for (k, v) in headers {
-                        hdrs_tbl.insert(k, v.as_str().into());
-                    }
-                    entry["http_headers"] = toml_edit::value(hdrs_tbl);
+            if !env.is_empty() {
+                let mut env_tbl = toml_edit::InlineTable::new();
+                for (k, v) in env {
+                    env_tbl.insert(k, v.as_str().into());
                 }
+                entry.insert("env", toml_edit::value(env_tbl));
             }
+            if let Some(cwd) = working_directory {
+                entry.insert("cwd", toml_edit::value(cwd.as_str()));
+            }
+        }
+        JSONTransportType::SSEServer { url, headers } => {
+            entry.insert("url", toml_edit::value(url.as_str()));
+            if !headers.is_empty() {
+                let mut hdrs_tbl = toml_edit::InlineTable::new();
+                for (k, v) in headers {
+                    hdrs_tbl.insert(k, v.as_str().into());
+                }
+                entry.insert("http_headers", toml_edit::value(hdrs_tbl));
+            }
+        }
+    }
+
+    if let Some(settings) = settings {
+        // Codex gives stdio MCP servers only an allowlist of its environment plus these.
+        if !settings.forwarded_env_vars.is_empty() {
+            entry.insert(
+                "env_vars",
+                toml_edit::value(
+                    settings
+                        .forwarded_env_vars
+                        .iter()
+                        .map(String::as_str)
+                        .collect::<toml_edit::Array>(),
+                ),
+            );
+        }
+        if let Some(timeout) = settings.tool_timeout {
+            entry.insert(
+                "tool_timeout_sec",
+                toml_edit::value(timeout.as_secs() as i64),
+            );
         }
     }
 }

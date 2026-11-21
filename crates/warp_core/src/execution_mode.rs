@@ -58,13 +58,32 @@ impl ExecutionMode {
 pub struct AppExecutionMode {
     mode: ExecutionMode,
     is_sandboxed: bool,
+    is_headless: bool,
 }
 
 impl AppExecutionMode {
     /// Create an `AppExecutionMode` model with the execution mode set.
-    pub fn new(mode: ExecutionMode, is_sandboxed: bool, _ctx: &mut ModelContext<Self>) -> Self {
+    pub fn new(mode: ExecutionMode, is_sandboxed: bool, ctx: &mut ModelContext<Self>) -> Self {
+        let is_headless = match mode {
+            ExecutionMode::App | ExecutionMode::Tui => false,
+            ExecutionMode::Sdk | ExecutionMode::RemoteServerDaemon => true,
+        };
+        Self::new_with_headlessness(mode, is_sandboxed, is_headless, ctx)
+    }
+
+    /// Create an `AppExecutionMode` with the launch's interactive capability set explicitly.
+    pub fn new_with_headlessness(
+        mode: ExecutionMode,
+        is_sandboxed: bool,
+        is_headless: bool,
+        _ctx: &mut ModelContext<Self>,
+    ) -> Self {
         let _ = GLOBAL_EXECUTION_MODE.set(mode);
-        Self { mode, is_sandboxed }
+        Self {
+            mode,
+            is_sandboxed,
+            is_headless,
+        }
     }
 
     /// True if running as an interactive app client.
@@ -153,6 +172,11 @@ impl AppExecutionMode {
     /// on a user machine.
     pub fn is_sandboxed(&self) -> bool {
         self.is_sandboxed
+    }
+
+    /// Whether this launch has no interactive surface where a user can respond.
+    pub fn is_headless(&self) -> bool {
+        self.is_headless
     }
 }
 

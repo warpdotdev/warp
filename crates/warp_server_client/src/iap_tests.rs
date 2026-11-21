@@ -6,6 +6,7 @@ use base64::Engine;
 use futures::executor::block_on;
 use instant::Instant;
 use warp_core::channel::{ChannelState, IapConfig};
+use warpui_core::App;
 use warpui_core::r#async::BoxFuture;
 
 use super::*;
@@ -18,6 +19,104 @@ fn jwt_with_payload(payload_json: &str) -> String {
     let header = b64.encode(br#"{"alg":"none"}"#);
     let payload = b64.encode(payload_json.as_bytes());
     format!("{header}.{payload}.signature")
+}
+
+fn test_manager() -> IapManager {
+    IapManager {
+        state: Some(Arc::new(test_state())),
+        path_resolver: Box::new(|_| panic!("unexpected IAP token fetch")),
+        managed_mint: None,
+        consecutive_failures: 0,
+        last_loaded_at: None,
+        fresh_token_rejected: false,
+        refresh_timer: None,
+        refresh_generation: 0,
+    }
+}
+
+#[test]
+fn fresh_token_rejection_waits_without_restarting_on_more_challenges() {
+    App::test((), |mut app| async move {
+        let manager = app.add_model(|_| test_manager());
+        manager.update(&mut app, |manager, ctx| {
+            manager
+                .apply_refresh_result(Ok(cached("rejected", Some(Duration::from_secs(3600)))), ctx);
+            let now = manager.last_loaded_at.unwrap();
+            manager.handle_challenge_at(now, ctx);
+            let retry = manager.refresh_timer.as_ref().unwrap().future_id();
+            manager.handle_challenge_at(now + Duration::from_secs(1), ctx);
+
+            assert!(matches!(
+                manager.state(),
+                Some(IapCredentialsState::Failed { message, .. })
+                    if message == "IAP rejected a fresh token; check audience and allowlist"
+            ));
+            assert_eq!(manager.consecutive_failures, 1);
+            assert_eq!(manager.refresh_timer.as_ref().unwrap().future_id(), retry);
+        });
+    });
+}
+
+#[test]
+fn mint_success_does_not_reset_backoff_after_iap_rejects_the_token() {
+    App::test((), |mut app| async move {
+        let manager = app.add_model(|_| test_manager());
+        manager.update(&mut app, |manager, ctx| {
+            manager.apply_refresh_result(Ok(cached("first", Some(Duration::from_secs(3600)))), ctx);
+            manager.handle_challenge_at(manager.last_loaded_at.unwrap(), ctx);
+            manager.apply_refresh_result(
+                Ok(cached("replacement", Some(Duration::from_secs(3600)))),
+                ctx,
+            );
+            manager.handle_challenge_at(manager.last_loaded_at.unwrap(), ctx);
+
+            assert_eq!(manager.consecutive_failures, 2);
+            assert!(matches!(
+                manager.state(),
+                Some(IapCredentialsState::Failed { .. })
+            ));
+        });
+    });
+}
+
+#[test]
+fn repeated_rejections_exhaust_automatic_retries() {
+    App::test((), |mut app| async move {
+        let manager = app.add_model(|_| test_manager());
+        manager.update(&mut app, |manager, ctx| {
+            manager.fresh_token_rejected = true;
+            manager.consecutive_failures = MAX_FAILURE_RETRIES;
+            manager.apply_refresh_result(
+                Ok(cached("still-rejected", Some(Duration::from_secs(3600)))),
+                ctx,
+            );
+            manager.handle_challenge_at(manager.last_loaded_at.unwrap(), ctx);
+            manager.handle_challenge_at(manager.last_loaded_at.unwrap(), ctx);
+
+            assert_eq!(manager.consecutive_failures, MAX_FAILURE_RETRIES);
+            assert!(manager.refresh_timer.is_none());
+            assert!(matches!(
+                manager.state(),
+                Some(IapCredentialsState::Failed { .. })
+            ));
+        });
+    });
+}
+
+#[test]
+fn manual_refresh_clears_the_rejection_streak() {
+    App::test((), |mut app| async move {
+        let manager = app.add_model(|_| test_manager());
+        manager.update(&mut app, |manager, ctx| {
+            manager.fresh_token_rejected = true;
+            manager.consecutive_failures = MAX_FAILURE_RETRIES;
+            manager.state.as_ref().unwrap().set_refreshing();
+            manager.start_refresh(ctx);
+
+            assert_eq!(manager.consecutive_failures, 0);
+            assert!(!manager.fresh_token_rejected);
+        });
+    });
 }
 
 fn now_unix() -> u64 {

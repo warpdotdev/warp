@@ -5,7 +5,9 @@ use chrono::TimeDelta;
 #[cfg(not(feature = "skip_login"))]
 use mockito::Matcher;
 use session_sharing_protocol::common::ParticipantId;
-use warp_graphql::queries::execution_config::{CodeForge, ExecutionRepository};
+use warp_graphql::queries::execution_config::{
+    CodeForge, ExecutionRepository, FactoryBranchExecutionConfig,
+};
 use warp_multi_agent_api as api;
 use warpui::App;
 
@@ -20,6 +22,57 @@ use crate::terminal::model::blocks::BlockHeightItem;
 use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
 
 const TASK_ID: &str = "550e8400-e29b-41d4-a716-446655440000";
+
+#[test]
+#[cfg(not(target_family = "wasm"))]
+fn assignment_without_active_exporter_removes_otlp_secret_without_starting_tracing() {
+    // Exporter initialization is process-global and cannot be undone between tests.
+    if std::env::var_os("WARP_TEST_OTLP_INACTIVE_ASSIGNMENT").is_none() {
+        let output = command::blocking::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "ai::agent_sdk::driver::prewarmed::tests::assignment_without_active_exporter_removes_otlp_secret_without_starting_tracing",
+                "--nocapture",
+            ])
+            .env("WARP_TEST_OTLP_INACTIVE_ASSIGNMENT", "1")
+            .env_remove("WARP_CLOUD_AGENT_OTLP_ENDPOINT")
+            .env_remove("WARP_CLOUD_AGENT_OTLP_TOKEN")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success() && stdout.contains("1 passed"),
+            "{stdout}{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let mut runtime_env = HashMap::from([
+            (
+                "WARP_CLOUD_AGENT_OTLP_TOKEN".into(),
+                "assigned-token".into(),
+            ),
+            (
+                "WARP_CLOUD_AGENT_OTLP_TOKEN_EXPIRES_AT".into(),
+                (Utc::now() + TimeDelta::hours(1)).to_rfc3339(),
+            ),
+            ("OZ_RUN_ID".into(), TASK_ID.into()),
+            ("WARP_API_KEY".into(), "run-key".into()),
+        ]);
+
+        app.update(|ctx| {
+            let client = ServerApiProvider::as_ref(ctx).get_managed_secrets_client();
+            crate::tracing::assign_run_credentials(&mut runtime_env, client, ctx);
+        });
+
+        assert!(!runtime_env.contains_key("WARP_CLOUD_AGENT_OTLP_TOKEN"));
+        assert!(!runtime_env.contains_key("WARP_CLOUD_AGENT_OTLP_TOKEN_EXPIRES_AT"));
+        assert_eq!(runtime_env["WARP_API_KEY"], "run-key");
+        assert!(crate::tracing::create_child_process_handoff(Path::new("unused-scope")).is_none());
+    });
+}
 
 fn server_assignment() -> ExecutionConfiguration {
     let event: PrewarmedSandboxControlEvent = serde_json::from_str(include_str!(
@@ -42,6 +95,144 @@ fn config() -> ExecutionConfiguration {
     execution_config.providers = None;
     execution_config.inference_providers = None;
     execution_config
+}
+
+#[test]
+fn runner_setup_consumes_only_the_exact_prepared_prefix() {
+    let prepared = vec!["install-tools".into(), "configure-tools".into()];
+    let mut assigned = vec![
+        "install-tools".into(),
+        "configure-tools".into(),
+        "install-tools".into(),
+    ];
+    consume_runner_setup_commands(&mut assigned, &prepared).unwrap();
+    assert_eq!(assigned, ["install-tools"]);
+    let unchanged = assigned.clone();
+    assert!(consume_runner_setup_commands(&mut assigned, &prepared).is_err());
+    assert_eq!(assigned, unchanged);
+}
+
+#[test]
+fn empty_runner_setup_preserves_environment_fallback() {
+    let mut assigned = vec!["environment-setup".into()];
+    consume_runner_setup_commands(&mut assigned, &[]).unwrap();
+    assert_eq!(assigned, ["environment-setup"]);
+}
+
+#[test]
+fn runner_assignment_defers_workspace_and_switches_harness_with_run_values() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let root = tempfile::tempdir().unwrap();
+        let terminal = add_window_with_terminal(&mut app, None);
+        let driver = app.add_model(|ctx| {
+            let terminal = terminal::TerminalDriver::create_from_existing_view(terminal, ctx);
+            let mut driver = AgentDriver::new_for_test(root.path().into(), terminal, ctx);
+            Arc::make_mut(&mut driver.resolved_env_vars).insert(
+                "WARP_VARS_FILE".into(),
+                root.path().join(".warp.vars").into_os_string(),
+            );
+            driver
+        });
+        let foreground = driver.update(&mut app, |_, ctx| ctx.spawner());
+        let events = SetupClientEventReporter::standby(
+            Arc::new(MockAIClient::new()),
+            app.background_executor(),
+        );
+        AgentDriver::prepare_resources(
+            &foreground,
+            Harness::Oz,
+            vec![warp_cli::mcp::MCPSpec::Json("invalid".into())],
+            agent_setup::GlobalSkillResolution {
+                specs: Vec::new(),
+                repos: Vec::new(),
+            },
+            &events,
+            true,
+        )
+        .await
+        .unwrap();
+        driver.read(&app, |driver, _| {
+            assert!(matches!(
+                driver.workspace,
+                Some(WorkspaceState::RunnerPrepared(_))
+            ));
+            assert!(
+                !driver
+                    .resolved_env_vars
+                    .contains_key(OsStr::new("RUN_ONLY"))
+            );
+            assert!(
+                !driver
+                    .resolved_env_vars
+                    .contains_key(OsStr::new("RUN_SECRET"))
+            );
+            assert!(
+                !driver
+                    .skill_dirs
+                    .contains(&PathBuf::from("factory/.agents/skills"))
+            );
+        });
+        let vars_path = root.path().join(".warp.vars");
+        std::fs::write(&vars_path, "RUNNER_VALUE=prepared\n").unwrap();
+        AgentDriver::read_setup_vars(&foreground, false, false)
+            .await
+            .unwrap();
+        let mut configuration = config();
+        configuration.harness = warp_graphql::ai::AgentHarness::ClaudeCode;
+        configuration.setup_commands = vec!["run-only-setup".into()];
+        configuration.factory_skill_dirs = vec!["factory/.agents/skills".into()];
+        let (mut options, _, _, _) = app.update(|ctx| {
+            build_execution_task_and_options(
+                None,
+                HarnessTransport::Acp,
+                configuration,
+                RepositoryContract {
+                    supports_deferred_repositories: true,
+                    use_factory_repositories: false,
+                },
+                root.path().into(),
+                None,
+                Vec::new(),
+                ctx,
+            )
+            .unwrap()
+        });
+        options
+            .environment_variables
+            .insert("RUN_ONLY".into(), "assigned".into());
+        options.secrets.insert(
+            "RUN_SECRET".into(),
+            warp_managed_secrets::ManagedSecretValue::raw_value("secret"),
+        );
+        options.github_credential_mode = GitHubCredentialMode::RestrictedInstallation;
+        let (terminal, config) = split_run_options(options).unwrap();
+        driver.update(&mut app, |driver, ctx| {
+            driver
+                .apply_prewarmed_run_configuration(terminal, config, ctx)
+                .unwrap();
+            driver.merge_assignment_setup_vars(&mut HashMap::new());
+            let Some(WorkspaceState::PendingRunner(workspace)) = &driver.workspace else {
+                panic!("expected run workspace");
+            };
+            assert_eq!(workspace.setup_commands, ["run-only-setup"]);
+            assert_eq!(
+                driver.resolved_env_vars[OsStr::new("RUNNER_VALUE")],
+                "prepared"
+            );
+            assert_eq!(driver.resolved_env_vars[OsStr::new("RUN_ONLY")], "assigned");
+            assert_eq!(driver.resolved_env_vars[OsStr::new("RUN_SECRET")], "secret");
+            assert_eq!(
+                driver.github_credential_mode,
+                GitHubCredentialMode::RestrictedInstallation
+            );
+            assert_eq!(driver.skill_dirs, [PathBuf::from("factory/.agents/skills")]);
+        });
+        assert_eq!(
+            std::fs::read_to_string(vars_path).unwrap(),
+            "RUNNER_VALUE=prepared\n"
+        );
+    });
 }
 
 #[test]
@@ -74,6 +265,37 @@ fn codex_pty_assignment_applies_run_environment_and_model() {
     );
 }
 
+#[test]
+fn third_party_assignment_omits_computer_use_config_without_computer_use_mcp() {
+    let _computer_use_mcp = FeatureFlag::ComputerUseMcp.override_enabled(false);
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let root = tempfile::tempdir().unwrap();
+        let mut configuration = config();
+        configuration.harness = warp_graphql::ai::AgentHarness::ClaudeCode;
+        configuration.model_id = Some("assigned-model".into());
+        configuration.computer_use_enabled = true;
+        validate_assignment(&configuration, true).unwrap();
+        let (options, ..) = app.update(|ctx| {
+            build_execution_task_and_options(
+                None,
+                HarnessTransport::Acp,
+                configuration,
+                RepositoryContract {
+                    supports_deferred_repositories: true,
+                    use_factory_repositories: true,
+                },
+                root.path().into(),
+                None,
+                Vec::new(),
+                ctx,
+            )
+            .unwrap()
+        });
+        assert_eq!(options.computer_use_config, None);
+    });
+}
+
 fn assert_third_party_assignment(
     server_harness: warp_graphql::ai::AgentHarness,
     harness: Harness,
@@ -81,6 +303,7 @@ fn assert_third_party_assignment(
     transport_name: &str,
 ) {
     let transport_name = transport_name.to_owned();
+    let _computer_use_mcp = FeatureFlag::ComputerUseMcp.override_enabled(true);
     App::test((), move |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
         let root = tempfile::tempdir().unwrap();
@@ -93,12 +316,14 @@ fn assert_third_party_assignment(
         configuration.harness = server_harness;
         configuration.model_id = Some("assigned-model".into());
         configuration.factory_skill_dirs = vec![".agents/skills".into()];
+        configuration.computer_use_enabled = true;
+        configuration.computer_use_model_id = Some("computer-use-model".into());
         let runtime_env = HashMap::from([
             ("WARP_HARNESS_TRANSPORT".into(), transport_name),
             ("WARP_API_KEY".into(), "run-key".into()),
             ("RUN_SETTING".into(), "assigned".into()),
         ]);
-        validate_assignment(&configuration).unwrap();
+        validate_assignment(&configuration, true).unwrap();
         let (mut options, task, _, _) = app.update(|ctx| {
             build_execution_task_and_options(
                 None,
@@ -124,7 +349,9 @@ fn assert_third_party_assignment(
             transport == HarnessTransport::Pty
         );
         assert_eq!(options.harness_transport, transport);
-        assert!(options.computer_use_config.is_none());
+        // Third-party harnesses get computer use through the computer use MCP server, which
+        // the harness's own model drives, so only the enablement carries over.
+        assert_eq!(options.computer_use_config, Some((true, None)));
         options.environment_variables = runtime_env;
         options.secrets.insert(
             "HARNESS_SECRET".into(),
@@ -137,6 +364,7 @@ fn assert_third_party_assignment(
                 harness,
                 configuration: prepared_configuration,
                 repositories: Vec::new(),
+                skills: Default::default(),
             }));
             driver
                 .apply_prewarmed_run_configuration(terminal_inputs, run_config, ctx)
@@ -274,13 +502,23 @@ fn installation_failures_are_reported_against_the_run_with_its_credential() {
             (ctx.spawner(), paths)
         });
         let mut unsupported = config();
-        unsupported.harness = warp_graphql::ai::AgentHarness::Gemini;
+        unsupported.deferred_repositories = Some(vec![ExecutionRepository {
+            forge: CodeForge::GitHub,
+            owner: "benchmarks".into(),
+            name: "frozen-api".into(),
+            ref_: None,
+            clone_from: None,
+            preserve_origin: false,
+            expected_sha: None,
+        }]);
+        let _unsupported = FeatureFlag::FactoryDeferredRepositories.override_enabled(false);
         let error = AgentDriver::prepare_prewarmed_assignment(
             &spawner,
             unsupported,
-            HashMap::new(),
+            HashMap::from([("WARP_GITHUB_CREDENTIAL_MODE".into(), "future_mode".into())]),
             "assigned-run-key".into(),
             Utc::now() + TimeDelta::hours(1),
+            false,
         )
         .await
         .unwrap_err();
@@ -295,22 +533,22 @@ fn installation_failures_are_reported_against_the_run_with_its_credential() {
 /// The server commits runs with cloud providers to pre-warmed sandboxes, so validation must
 /// accept them.
 #[test]
-fn prewarmed_accepts_server_assignments_and_rejects_unsupported_runs() {
+fn prewarmed_accepts_server_assignments() {
     let mut configuration = server_assignment();
     assert!(configuration.providers.is_some());
-    validate_assignment(&configuration).unwrap();
+    validate_assignment(&configuration, true).unwrap();
     configuration.skip_initial_turn = true;
-    validate_assignment(&configuration).unwrap();
+    validate_assignment(&configuration, true).unwrap();
     configuration.skip_initial_turn = false;
     configuration.conversation_id = Some("conversation".into());
-    validate_assignment(&configuration).unwrap();
+    validate_assignment(&configuration, true).unwrap();
     configuration.conversation_id = None;
     configuration.harness = warp_graphql::ai::AgentHarness::ClaudeCode;
-    validate_assignment(&configuration).unwrap();
+    validate_assignment(&configuration, true).unwrap();
     configuration.harness = warp_graphql::ai::AgentHarness::Codex;
-    validate_assignment(&configuration).unwrap();
+    validate_assignment(&configuration, true).unwrap();
     configuration.harness = warp_graphql::ai::AgentHarness::Gemini;
-    assert!(validate_assignment(&configuration).is_err());
+    validate_assignment(&configuration, true).unwrap();
 }
 
 #[test]
@@ -326,18 +564,18 @@ fn prewarmed_rejects_deferred_repositories_without_client_support() {
         expected_sha: None,
     }]);
     {
-        let _unsupported = FeatureFlag::FactoryDeferredRepositories.override_enabled(false);
-        assert!(validate_assignment(&configuration).is_err());
+        let _supported_flag = FeatureFlag::FactoryDeferredRepositories.override_enabled(true);
+        assert!(validate_assignment(&configuration, false).is_err());
     }
-    let _supported = FeatureFlag::FactoryDeferredRepositories.override_enabled(true);
-    validate_assignment(&configuration).unwrap();
+    let _disabled_flag = FeatureFlag::FactoryDeferredRepositories.override_enabled(false);
+    validate_assignment(&configuration, true).unwrap();
 }
 
 #[test]
 fn prewarmed_config_conversion_and_state_binding_preserve_run_settings() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
-        let _factory = FeatureFlag::FactoryDeferredRepositories.override_enabled(true);
+        let _factory = FeatureFlag::FactoryDeferredRepositories.override_enabled(false);
         let root = tempfile::tempdir().unwrap();
         let terminal = add_window_with_terminal(&mut app, None);
         let terminal_driver = app.update(|ctx| {
@@ -348,10 +586,22 @@ fn prewarmed_config_conversion_and_state_binding_preserve_run_settings() {
             .add_model(|ctx| AgentDriver::new_for_test(root.path().into(), terminal_driver, ctx));
         let mut configuration = config();
         configuration.profile_id = Some("run-profile".into());
+        configuration.deferred_repositories = Some(vec![ExecutionRepository {
+            forge: CodeForge::GitHub,
+            owner: "benchmarks".into(),
+            name: "frozen-api".into(),
+            ref_: None,
+            clone_from: None,
+            preserve_origin: false,
+            expected_sha: None,
+        }]);
         configuration.parent_run_id = Some("parent-run".into());
         configuration.idle_on_complete_seconds = Some(17);
         configuration.idle_on_fail_seconds = Some(23);
         configuration.factory_skill_dirs = vec![".agents/skills".into()];
+        configuration.factory_branch = Some(FactoryBranchExecutionConfig {
+            source_sha: "0123456789abcdef0123456789abcdef01234567".into(),
+        });
         configuration.snapshot_disabled = true;
         let runtime_env = HashMap::from([
             ("WARP_API_KEY".into(), "assigned-key".into()),
@@ -380,6 +630,10 @@ fn prewarmed_config_conversion_and_state_binding_preserve_run_settings() {
         });
         assert_eq!(task.profile.as_deref(), Some("run-profile"));
         assert!(matches!(task.prompt, AgentRunPrompt::ServerSide { .. }));
+        assert_eq!(
+            options.workspace.factory_definition_sha.as_deref(),
+            Some("0123456789abcdef0123456789abcdef01234567")
+        );
         options.team_scope = Some(HeadlessTeamScope::Personal);
         options.environment_variables = runtime_env;
         let deadline = Utc::now() + TimeDelta::hours(1);
@@ -407,6 +661,8 @@ fn prewarmed_config_conversion_and_state_binding_preserve_run_settings() {
             assert_eq!(policy.task_id, TASK_ID);
             assert_eq!(policy.execution_id, "42");
             assert_eq!(policy.working_dir, root.path());
+            assert!(policy.supports_deferred_repositories);
+            assert_eq!(policy.deferred.len(), 1);
             assert_eq!(driver.terminal_driver.id(), terminal_id);
             assert_eq!(driver.task_id.unwrap().to_string(), TASK_ID);
             assert_eq!(driver.parent_run_id.as_deref(), Some("parent-run"));
@@ -426,6 +682,104 @@ fn prewarmed_config_conversion_and_state_binding_preserve_run_settings() {
     });
 }
 
+/// A standby driver takes its assignment in place. Nothing before the claim loads or finalizes
+/// hooks: the standby's own preparation (`prepare_resources`, run here with no repositories, setup
+/// commands, MCP servers, or skills) loads none, the assignment's sources only reach the driver
+/// with the run configuration, and the single load happens after that, in the setup step the
+/// claimed run calls (`run_internal`).
+#[test]
+fn a_standby_loads_hooks_only_after_it_claims_a_task() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        app.update(crate::ai::blocklist::hooks::test_utils::install_test_hooks);
+        let root = tempfile::tempdir().unwrap();
+        let hooks_dir = root.path().join("worker-hooks");
+        std::fs::create_dir_all(&hooks_dir).unwrap();
+        std::fs::write(
+            hooks_dir.join("hooks.json"),
+            r#"{"version":1,"hooks":{"beforeShellExecution":[{"command":"true"}]}}"#,
+        )
+        .unwrap();
+        let terminal = add_window_with_terminal(&mut app, None);
+        let terminal_driver = app.update(|ctx| {
+            terminal::TerminalDriver::create_from_existing_view(terminal.clone(), ctx)
+        });
+        let driver = app
+            .add_model(|ctx| AgentDriver::new_for_test(root.path().into(), terminal_driver, ctx));
+        let is_finalized =
+            |app: &App| app.read(|ctx| ai::hooks::HookRegistry::as_ref(ctx).is_finalized());
+        let foreground = driver.update(&mut app, |_, ctx| ctx.spawner());
+        let setup_events =
+            crate::ai::agent_sdk::setup_observability::SetupClientEventReporter::standby(
+                std::sync::Arc::new(MockAIClient::new()),
+                app.background_executor(),
+            );
+        AgentDriver::prepare_resources(
+            &foreground,
+            warp_cli::agent::Harness::Oz,
+            Vec::new(),
+            super::agent_setup::GlobalSkillResolution {
+                specs: Vec::new(),
+                repos: Vec::new(),
+            },
+            &setup_events,
+            false,
+        )
+        .await
+        .expect("the standby prepares");
+        assert!(!is_finalized(&app), "standby preparation loads no hooks");
+
+        let mut configuration = config();
+        configuration.agent_hook_sources = serde_json::from_value(serde_json::json!([{
+            "format": "CURSOR",
+            "repository": null,
+            "path": hooks_dir.display().to_string(),
+            "level": "AGENT",
+            "strict": true,
+            "onAsk": "DENY"
+        }]))
+        .unwrap();
+        let (mut options, ..) = app.update(|ctx| {
+            build_execution_task_and_options(
+                None,
+                HarnessTransport::Pty,
+                configuration,
+                RepositoryContract {
+                    supports_deferred_repositories: true,
+                    use_factory_repositories: false,
+                },
+                root.path().into(),
+                None,
+                Vec::new(),
+                ctx,
+            )
+            .unwrap()
+        });
+        options.team_scope = Some(HeadlessTeamScope::Personal);
+        let (_, run_config) = split_run_options(options).unwrap();
+        driver.update(&mut app, |driver, ctx| {
+            driver.apply_run_configuration(run_config, ctx);
+        });
+        assert!(
+            !is_finalized(&app),
+            "taking the assignment hands the driver its sources but loads nothing"
+        );
+        driver.read(&app, |driver, _| assert_eq!(driver.hooks.sources.len(), 1));
+
+        super::agent_setup::setup_hooks_for_run(&foreground, Vec::new())
+            .await
+            .expect("the claimed run loads its hooks");
+        assert!(is_finalized(&app));
+        assert_eq!(
+            app.read(|ctx| ai::hooks::HookRegistry::as_ref(ctx)
+                .snapshot()
+                .bindings
+                .len()),
+            1
+        );
+    });
+}
+
 #[test]
 fn prewarmed_workspace_reuse_checks_setup_and_checkouts() {
     let first = environment::WorkspaceConfiguration::from_resolved(
@@ -439,6 +793,9 @@ fn prewarmed_workspace_reuse_checks_setup_and_checkouts() {
     assert!(first.same_preparation(&second));
     second.setup_commands.push("different-setup".into());
     assert!(!first.same_preparation(&second));
+    let mut branch_run = first.clone();
+    branch_run.factory_definition_sha = Some("0123456789abcdef0123456789abcdef01234567".into());
+    assert!(!first.same_preparation(&branch_run));
 }
 
 fn completed_conversation(working_dir: &Path) -> AIConversation {
@@ -541,6 +898,7 @@ fn install_resumed_configuration(
             harness: Harness::Oz,
             configuration: prepared_configuration,
             repositories: Vec::new(),
+            skills: Default::default(),
         }));
         driver
             .apply_prewarmed_run_configuration(terminal_inputs, run_config, ctx)

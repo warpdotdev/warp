@@ -58,6 +58,8 @@ mod prefix;
 #[cfg(target_os = "macos")]
 mod preview_config_migration;
 mod pricing;
+#[cfg(feature = "local_tty")]
+mod process_environment;
 mod profiling;
 mod projects;
 mod prompt;
@@ -135,6 +137,7 @@ pub mod settings_view;
 pub mod tab_configs;
 pub mod terminal;
 pub mod themes;
+use ::ai::hooks::{HookRegistry, LogOnlyMessenger, UnavailableRunner};
 use ::ai::index::DEFAULT_SYNC_REQUESTS_PER_MIN;
 #[cfg(feature = "local_fs")]
 use ::ai::index::full_source_code_embedding::SnapshotStorage;
@@ -148,6 +151,7 @@ pub use ai::agent::{AIAgentActionResultType, FileEdit, TodoOperation};
 use ai::agent_conversations_model::AgentConversationsModel;
 use ai::agent_management::AgentNotificationsModel;
 use ai::ambient_agents::scheduled::ScheduledAgentManager;
+use ai::blocklist::hooks::HookRuntime;
 use ai::blocklist::{BlocklistAIHistoryModel, BlocklistAIPermissions};
 use ai::chatgpt_subscription::ChatGPTSubscriptionModel;
 use ai::execution_profiles::editor::ExecutionProfileEditorManager;
@@ -173,7 +177,7 @@ use settings::import::model::ImportedConfigModel;
 use settings_view::pane_manager::SettingsPaneManager;
 use terminal::general_settings::GeneralSettings;
 use terminal::keys_settings::KeysSettings;
-#[cfg(all(not(target_family = "wasm"), feature = "local_tty"))]
+#[cfg(feature = "local_tty")]
 use terminal::local_shell::LocalShellState;
 pub use util::bindings::cmd_or_ctrl_shift;
 use voice::transcriber::VoiceTranscriber;
@@ -925,6 +929,8 @@ fn run_worker_command(worker: &warp_cli::WorkerCommand) -> Result<()> {
             crate::ai::agent_sdk::driver::harness::acp::run_bridge(launch_file)
         }
         #[cfg(not(target_family = "wasm"))]
+        warp_cli::WorkerCommand::ComputerUseMcp(args) => run_computer_use_mcp(args),
+        #[cfg(not(target_family = "wasm"))]
         warp_cli::WorkerCommand::RipgrepSearch {
             parent,
             ignore_case,
@@ -949,6 +955,56 @@ fn run_worker_command(worker: &warp_cli::WorkerCommand) -> Result<()> {
             panic!("Worker process not supported on WASM: {worker:?}")
         }
     }
+}
+
+/// Serves computer-use tools to an external agent harness over MCP on stdin/stdout.
+#[cfg(not(target_family = "wasm"))]
+fn run_computer_use_mcp(args: &warp_cli::computer_use_mcp::ComputerUseMcpArgs) -> Result<()> {
+    use computer_use_mcp::{
+        ComputerUseMcpConfig, ImageConstraints, KeyDialect, RecordingDestination,
+    };
+    use warp_cli::computer_use_mcp::ComputerUseModelFamily;
+
+    use crate::ai::blocklist::video_recording_enabled;
+
+    if !FeatureFlag::ComputerUseMcp.is_enabled() {
+        return Err(anyhow!(
+            "The computer use MCP server is not enabled in this build"
+        ));
+    }
+    // Stdout is the protocol channel, so log to stderr. No crash reporting, no initialize_app.
+    warp_logging::init(warp_logging::LogConfig {
+        frontend: LogFrontend::Cli,
+        log_destination: Some(LogDestination::Stderr),
+        ..Default::default()
+    })?;
+    let recording = if args.no_recording || !video_recording_enabled() {
+        None
+    } else if let Some(run_id) = &args.run_id {
+        Some(RecordingDestination::OzRun {
+            cli: std::env::current_exe().context("Failed to locate the Warp CLI")?,
+            run_id: run_id.clone(),
+        })
+    } else {
+        Some(RecordingDestination::Directory(
+            args.recordings_dir
+                .clone()
+                .unwrap_or_else(|| std::env::temp_dir().join("warp-computer-use-recordings")),
+        ))
+    };
+    let (defaults, key_dialect) = match args.model_family {
+        ComputerUseModelFamily::Anthropic => (ImageConstraints::ANTHROPIC, KeyDialect::Anthropic),
+        ComputerUseModelFamily::OpenAi => (ImageConstraints::OPENAI, KeyDialect::OpenAi),
+    };
+    computer_use_mcp::run_stdio(ComputerUseMcpConfig {
+        image_constraints: ImageConstraints {
+            max_long_edge_px: args.max_long_edge_px.unwrap_or(defaults.max_long_edge_px),
+            max_total_px: args.max_total_px.unwrap_or(defaults.max_total_px),
+        },
+        key_dialect,
+        settle_delay: std::time::Duration::from_millis(args.settle_ms),
+        recording,
+    })
 }
 
 /// Runs an integration test using the provided test driver.
@@ -977,7 +1033,7 @@ pub fn run_tui(api_key: Option<String>, mount: TuiMountFn) -> Result<()> {
 
 /// Executes a CLI command after initializing TUI-scoped settings and secure storage.
 #[cfg(feature = "tui")]
-pub fn run_tui_cli_command(execute: Box<dyn FnOnce(&mut warpui::AppContext)>) -> Result<()> {
+pub fn run_tui_cli_command(execute: Box<dyn FnOnce(&mut AppContext)>) -> Result<()> {
     run_internal(LaunchMode::Tui {
         entrypoint: TuiEntryPoint::CliCommand { execute },
     })
@@ -1014,6 +1070,8 @@ pub type TuiMountFn = Box<dyn FnOnce(&mut warpui::AppContext)>;
 /// in place of the GUI/CLI `launch()` path.
 fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
     let mut timer = IntervalTimer::new();
+    #[cfg(feature = "local_tty")]
+    let initial_process_environment = process_environment::InitialProcessEnvironment::capture();
 
     // ── Early initialization (pre-AppBuilder) ──────────────────────
     // These steps run before the platform event loop is started.
@@ -1347,12 +1405,15 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
             .detach();
 
         ctx.add_singleton_model(|ctx| {
-            AppExecutionMode::new(
+            AppExecutionMode::new_with_headlessness(
                 launch_mode.execution_mode(),
                 launch_mode.is_sandboxed(),
+                launch_mode.is_headless(),
                 ctx,
             )
         });
+        #[cfg(feature = "local_tty")]
+        ctx.add_singleton_model(move |_| initial_process_environment);
         #[cfg(feature = "crash_reporting")]
         crate::crash_reporting::set_client_type_tag(launch_mode.execution_mode().client_id());
 
@@ -1568,6 +1629,16 @@ pub(crate) fn initialize_app(
     let iap_state = ChannelState::iap_config().map(|cfg| Arc::new(IapState::new(&cfg)));
     #[cfg(target_family = "wasm")]
     let iap_state: Option<Arc<IapState>> = None;
+    #[cfg(not(target_family = "wasm"))]
+    if let Some(state) = iap_state.clone() {
+        state.set_routing_opt_in(*settings::IapRoutingSettings::as_ref(ctx).routing_enabled);
+        ctx.subscribe_to_model(
+            &settings::IapRoutingSettings::handle(ctx),
+            move |settings, _, ctx| {
+                state.set_routing_opt_in(*settings.as_ref(ctx).routing_enabled);
+            },
+        );
+    }
 
     let server_api_provider = ctx.add_singleton_model({
         let auth_state = auth_state.clone();
@@ -2315,6 +2386,11 @@ pub(crate) fn initialize_app(
     ctx.add_singleton_model(|_| ActiveAgentViewsModel::new());
     ctx.add_singleton_model(AgentNotificationsModel::new);
     ctx.add_singleton_model(BlocklistAIPermissions::new);
+    // The hook runtime reads the registry handle, so the registry is registered first.
+    ctx.add_singleton_model(|_| HookRegistry::new());
+    ctx.add_singleton_model(|ctx| {
+        HookRuntime::new(Arc::new(UnavailableRunner), Arc::new(LogOnlyMessenger), ctx)
+    });
     ctx.add_singleton_model(ai::blocklist::orchestration_events::OrchestrationEventService::new);
     ctx.add_singleton_model(
         ai::blocklist::local_agent_task_sync_model::LocalAgentTaskSyncModel::new,
@@ -2436,10 +2512,13 @@ pub(crate) fn initialize_app(
         )
     });
 
-    #[cfg(all(not(target_family = "wasm"), feature = "local_tty"))]
+    #[cfg(feature = "local_tty")]
     {
         ctx.add_singleton_model(LocalShellState::new);
         ctx.add_singleton_model(system::SystemInfo::new);
+        // Hook processes want the login shell's PATH, so the runner is installed once
+        // `LocalShellState` is available to capture it.
+        HookRuntime::install_command_runner(ctx);
     }
 
     // In a sandboxed Oz runner, mint IAP tokens by self-minting via Workload
@@ -2458,11 +2537,8 @@ pub(crate) fn initialize_app(
     // Register it after `LocalShellState`: the Manager needs to know where the gcloud
     // cli lives & thus needs PATH config set by ~/.zshrc et al.
     //
-    // Registered on all targets (including wasm) so consumers such as the
-    // shared-session viewer network — which compiles and runs on wasm — can
-    // read the singleton without panicking. On wasm `iap_state` is always
-    // `None`, making this an inert no-op: `IapManager::new` early-returns from
-    // its refresh loop and `iap_state()` yields no proxy-auth header.
+    // Keep the singleton registered on all targets for shared callers.
+    // On wasm `iap_state` is `None`, so credential refresh is inert.
     ctx.add_singleton_model(move |ctx| {
         let path_resolver = Box::new(|_ctx: &mut AppContext| {
             #[cfg(feature = "local_tty")]
@@ -2502,17 +2578,20 @@ pub(crate) fn initialize_app(
         };
     });
 
-    // CLI commands establish IAP access and refresh auth in their dispatch path so they can
-    // surface failures synchronously. Other interactive clients gate startup user authentication
-    // on IAP here, since the request itself calls the IAP-gated warp-server — except the TUI,
-    // which authenticates immediately and resolves IAP out of band (see
-    // `startup_auth_is_non_blocking`).
-    let startup_authentication = if matches!(launch_mode, LaunchMode::CommandLine { .. }) {
-        None
-    } else {
-        pending_api_key
+    let startup_authentication = match launch_mode {
+        // CLI commands establish IAP access and refresh auth in their dispatch path so they can
+        // surface failures synchronously. Other interactive clients gate startup user authentication
+        // on IAP here, since the request itself calls the IAP-gated warp-server — except the TUI,
+        // which authenticates immediately and resolves IAP out of band (see
+        // `startup_auth_is_non_blocking`).
+        LaunchMode::CommandLine { .. } => None,
+        // Login-required TUI commands subscribe before starting authentication in their dispatch path.
+        LaunchMode::Tui {
+            entrypoint: TuiEntryPoint::CliCommand { .. },
+        } => None,
+        _ => pending_api_key
             .map(StartupUserAuthentication::ApiKey)
-            .or_else(|| user_is_logged_in.then_some(StartupUserAuthentication::RefreshUser))
+            .or_else(|| user_is_logged_in.then_some(StartupUserAuthentication::RefreshUser)),
     };
     if let Some(authentication) = startup_authentication {
         authenticate_user_after_iap_access(

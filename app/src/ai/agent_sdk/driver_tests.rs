@@ -1,11 +1,14 @@
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::fs;
-use std::path::Path;
-use std::sync::Arc;
-use std::sync::atomic::Ordering;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use ai::hooks::test_util::{LatencyRunner, ScriptedRunner, test_binding, test_source_id};
+use ai::hooks::{HookBoundary, HookRegistry};
+use ai::skills::{SkillReference, SkillScope};
 use chrono::Local;
 use cloud_object_models::CodeForge;
 use command::blocking::Command as ProcessCommand;
@@ -24,10 +27,12 @@ use warp_cli::{
     SESSION_SHARING_SERVER_URL_OVERRIDE_ENV, WS_SERVER_URL_OVERRIDE_ENV,
 };
 use warp_core::channel::ChannelState;
+use warp_core::execution_mode::{AppExecutionMode, ExecutionMode};
 use warp_graphql::ai::AgentTaskState;
 use warp_graphql::platform_error::PlatformErrorMessageFormat;
 use warp_managed_secrets::ManagedSecretValue;
 use warp_multi_agent_api::response_event;
+use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warp_util::standardized_path::StandardizedPath;
 use warpui::r#async::Timer;
 use warpui::{App, SingletonEntity as _};
@@ -51,23 +56,183 @@ use crate::ai::agent::{
 };
 use crate::ai::agent_sdk::driver::environment::PrepareEnvironmentError;
 use crate::ai::agent_sdk::driver::harness::{HarnessKind, harness_kind};
+use crate::ai::agent_sdk::driver::hooks;
 use crate::ai::agent_sdk::task_env_vars;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::blocklist::hooks::test_utils::{self, TestHooks, install_test_hooks};
+use crate::ai::blocklist::hooks::{HookRuntime, RunSurface};
+use crate::ai::blocklist::local_agent_task_sync_model::LocalAgentTaskSyncModel;
 use crate::ai::blocklist::orchestration_events::{
     OrchestrationEventService, PendingEvent, PendingEventDetail,
 };
 use crate::ai::blocklist::{
-    BlocklistAIHistoryModel, QueuedQuery, QueuedQueryModel, QueuedQueryOrigin, RequestInput,
-    ResponseStream, ResponseStreamId,
+    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, QueuedQuery, QueuedQueryModel,
+    QueuedQueryOrigin, RequestInput, ResponseStream, ResponseStreamId,
 };
 use crate::ai::cloud_environments::{GithubRepo, SourceRepo};
 use crate::ai::llms::LLMId;
-use crate::ai::skills::SkillManager;
+use crate::ai::skills::{SkillDescriptor, SkillManager};
+use crate::server::server_api::ServerApiProvider;
+use crate::terminal::CLIAgent;
+use crate::terminal::cli_agent_sessions::{CLIAgentSessionsModel, CLIAgentSessionsModelEvent};
 use crate::test_util::assert_eventually;
 use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
 use crate::workspace::view::tests::initialize_app as initialize_workspace_test_app;
 
 // ── IdleTimeoutSender tests ──────────────────────────────────────────────────────
+
+#[test]
+fn sandbox_deadline_preserves_only_a_settled_latest_turn() {
+    if std::env::var_os("WARP_TEST_SANDBOX_DEADLINE").is_none() {
+        let output = ProcessCommand::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "ai::agent_sdk::driver::tests::sandbox_deadline_preserves_only_a_settled_latest_turn",
+                "--nocapture",
+            ])
+            .env("WARP_TEST_SANDBOX_DEADLINE", "1")
+            .env("WARP_ISOLATION_PLATFORM", "docker")
+            .env("WARP_WORKLOAD_TOKEN", "test-workload-token")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    for (settled, follow_up, delay_follow_up, expected_report) in [
+        (true, false, false, None),
+        (true, true, false, Some(AgentTaskState::Failed)),
+        (false, false, false, Some(AgentTaskState::Failed)),
+        (true, true, true, Some(AgentTaskState::Failed)),
+    ] {
+        App::test((), move |mut app| async move {
+            let reports = Arc::new(Mutex::new(Vec::new()));
+            let reports_for_mock = reports.clone();
+            let (release_update, wait_for_release) = std::sync::mpsc::channel();
+            let wait_for_release = Mutex::new(wait_for_release);
+            let delay_update = Arc::new(AtomicBool::new(false));
+            let delay_update_for_mock = delay_update.clone();
+            let _updates = {
+                let mut server = ChannelState::mock_server();
+                server
+                    .mock("POST", "/graphql/v2?op=UpdateAgentTask")
+                    .with_body_from_request(move |request| {
+                        let body: serde_json::Value =
+                            serde_json::from_slice(request.body().unwrap()).unwrap();
+                        reports_for_mock
+                            .lock()
+                            .unwrap()
+                            .push(body["variables"]["input"]["taskState"].clone());
+                        if delay_update_for_mock.load(Ordering::SeqCst)
+                            && body["variables"]["input"]["taskState"] == "IN_PROGRESS"
+                        {
+                            wait_for_release
+                                .lock()
+                                .unwrap()
+                                .recv_timeout(super::TASK_STATUS_FLUSH_TIMEOUT * 3)
+                                .unwrap();
+                        }
+                        json!({"data": {"updateAgentTask": {
+                            "__typename": "UpdateAgentTaskOutput",
+                            "responseContext": {"serverVersion": null}
+                        }}})
+                        .to_string()
+                        .into_bytes()
+                    })
+                    .create()
+            };
+            initialize_app_for_terminal_view(&mut app);
+            let ai_client = app.read(|ctx| ServerApiProvider::as_ref(ctx).get_ai_client());
+            let sync = LocalAgentTaskSyncModel::handle(&app);
+            let task_id: AmbientAgentTaskId = HOOK_TASK_ID.parse().unwrap();
+            let terminal = add_window_with_terminal(&mut app, None);
+            let terminal_id = terminal.id();
+            sync.update(&mut app, |model, ctx| {
+                model.register_cli_session(terminal_id, task_id, ctx);
+            });
+            if settled {
+                CLIAgentSessionsModel::handle(&app).update(&mut app, |_, ctx| {
+                    ctx.emit(CLIAgentSessionsModelEvent::StatusChanged {
+                        terminal_view_id: terminal_id,
+                        agent: CLIAgent::Claude,
+                        status: CLIAgentSessionStatus::Success,
+                        is_prompt_submit: false,
+                        session_context: Box::default(),
+                    });
+                });
+            }
+            sync.update(&mut app, |model, _| model.wait_for_idle(task_id))
+                .await;
+            reports.lock().unwrap().clear();
+            delay_update.store(delay_follow_up, Ordering::SeqCst);
+            if follow_up {
+                CLIAgentSessionsModel::handle(&app).update(&mut app, |_, ctx| {
+                    ctx.emit(CLIAgentSessionsModelEvent::StatusChanged {
+                        terminal_view_id: terminal_id,
+                        agent: CLIAgent::Claude,
+                        status: CLIAgentSessionStatus::InProgress,
+                        is_prompt_submit: true,
+                        session_context: Box::default(),
+                    });
+                });
+            }
+            let temp = TempDir::new().unwrap();
+            let driver = app.add_model(|ctx| {
+                let terminal_driver =
+                    super::terminal::TerminalDriver::create_from_existing_view(terminal, ctx);
+                AgentDriver::new_for_test(temp.path().to_path_buf(), terminal_driver, ctx)
+            });
+            let foreground = driver.update(&mut app, |_, ctx| ctx.spawner());
+            let result = AgentDriver::resolve_sandbox_deadline(
+                task_id,
+                Err(AgentDriverError::SandboxDeadlineReached {
+                    on_free_plan: false,
+                }),
+                &ai_client,
+                &foreground,
+            )
+            .await;
+            if delay_follow_up {
+                assert_eq!(
+                    sync.read(&app, |model, _| model.latest_delivered_task_state(&task_id)),
+                    Some(AgentTaskState::Succeeded)
+                );
+                assert!(matches!(
+                    result,
+                    Err(AgentDriverError::SandboxDeadlineReached { .. })
+                ));
+                release_update.send(()).unwrap();
+            }
+            AgentDriver::flush_task_status_before_exit(
+                task_id,
+                result.is_ok(),
+                &ai_client,
+                &foreground,
+            )
+            .await;
+            if let Err(error) = &result {
+                assert!(matches!(
+                    error,
+                    AgentDriverError::SandboxDeadlineReached { .. }
+                ));
+                super::report_driver_error(task_id, error, &ai_client).await;
+            }
+            assert_eq!(result.is_ok(), expected_report.is_none());
+            let mut expected = Vec::new();
+            if follow_up {
+                expected.push(json!("IN_PROGRESS"));
+            }
+            if let Some(state) = expected_report {
+                expected.push(serde_json::to_value(state).unwrap());
+            }
+            assert_eq!(*reports.lock().unwrap(), expected);
+        });
+    }
+}
 
 #[test]
 fn setup_timeout_does_not_retain_a_potentially_running_command() {
@@ -1046,6 +1211,31 @@ fn metadata_secret_collision_rejects_even_an_empty_injected_value() {
 
 #[test]
 #[serial_test::serial]
+fn llm_provider_keys_only_enter_the_environment_for_env_backed_providers() {
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("ANTHROPIC_API_KEY") };
+    let secrets = HashMap::from([
+        (
+            "GOOGLE".to_owned(),
+            ManagedSecretValue::llm_provider_api_key("google", "google-key", None),
+        ),
+        (
+            "ANTHROPIC".to_owned(),
+            ManagedSecretValue::llm_provider_api_key("anthropic", "anthropic-key", None),
+        ),
+    ]);
+
+    assert_eq!(
+        build_secret_env_vars(&secrets, &HashMap::new()).unwrap(),
+        HashMap::from([(
+            OsString::from("ANTHROPIC_API_KEY"),
+            OsString::from("anthropic-key")
+        )])
+    );
+}
+
+#[test]
+#[serial_test::serial]
 fn raw_value_only_writes_under_secret_name() {
     // TODO: Audit that the environment access only happens in single-threaded code.
     unsafe { std::env::remove_var("MY_SECRET") };
@@ -1407,7 +1597,20 @@ fn split_loading_env_loads_all_global_loads_subset() {
 /// global skill is present, and no skill is registered more than once.
 #[test]
 fn overlap_repo_in_env_and_global_loads_all_skills_without_duplicates() {
+    load_overlap_repo_as_env_and_global(false);
+}
+
+/// With cwd scoping, the overlapping repository's skills follow the cwd while the selected
+/// global skill stays listed from everywhere, still without duplicates.
+#[test]
+fn overlap_repo_in_env_and_global_scopes_repo_skills_and_keeps_selection() {
+    load_overlap_repo_as_env_and_global(true);
+}
+
+fn load_overlap_repo_as_env_and_global(cwd_scoped: bool) {
     App::test((), |mut app| async move {
+        let _flag =
+            warp_core::features::FeatureFlag::CwdScopedCloudSkills.override_enabled(cwd_scoped);
         initialize_app_for_terminal_view(&mut app);
 
         let temp = TempDir::new().unwrap();
@@ -1486,34 +1689,40 @@ fn overlap_repo_in_env_and_global_loads_all_skills_without_duplicates() {
         });
         done_rx.await.expect("loading task should complete");
 
-        let skill_names = SkillManager::handle(&app).read(&app, |manager: &SkillManager, ctx| {
-            manager
-                .get_skills_for_working_directory(None, ctx)
-                .into_iter()
-                .map(|s| s.name.clone())
-                .collect::<Vec<_>>()
-        });
+        // The test harness watches the developer's real home directory; keep only the skills
+        // this test wrote.
+        let test_root = LocalOrRemotePath::Local(working_dir.clone());
+        let skills_for = |cwd: Option<&LocalOrRemotePath>| {
+            let mut skills = SkillManager::handle(&app).read(&app, |manager, ctx| {
+                manager.get_skills_for_working_directory(cwd, ctx)
+            });
+            skills.retain(|skill| match &skill.reference {
+                SkillReference::Path(path) => path.starts_with(&test_root),
+                SkillReference::BundledSkillId(_) => false,
+            });
+            skills.sort_by(|a, b| a.name.cmp(&b.name));
+            skills
+        };
+        fn names(skills: &[SkillDescriptor]) -> Vec<&str> {
+            skills.iter().map(|skill| skill.name.as_str()).collect()
+        }
 
-        // All three skills from the repo are present (env loading wins).
-        assert!(
-            skill_names.contains(&"deploy".to_string()),
-            "'deploy' should be loaded; got: {skill_names:?}"
-        );
-        assert!(
-            skill_names.contains(&"lint".to_string()),
-            "'lint' should be loaded; got: {skill_names:?}"
-        );
-        assert!(
-            skill_names.contains(&"test-cmd".to_string()),
-            "'test-cmd' should be loaded; got: {skill_names:?}"
-        );
+        if cwd_scoped {
+            // Without a live cwd the harness root stands in; the repository is a child of it, so
+            // only the home-tier global selection is listed.
+            let at_root = skills_for(None);
+            assert_eq!(names(&at_root), ["deploy"]);
+            assert_eq!(at_root[0].scope, SkillScope::Home);
 
-        // No skill is duplicated.
-        let deploy_count = skill_names.iter().filter(|n| *n == "deploy").count();
-        assert_eq!(
-            deploy_count, 1,
-            "'deploy' should appear exactly once; got: {skill_names:?}"
-        );
+            // Inside the repository the same file is reachable as a project skill and as the
+            // selection; it is listed once.
+            let in_repo = skills_for(Some(&LocalOrRemotePath::Local(shared_repo.clone())));
+            assert_eq!(names(&in_repo), ["deploy", "lint", "test-cmd"]);
+        } else {
+            // All three skills from the repo are present regardless of cwd, and the overlapping
+            // selection does not duplicate `deploy`.
+            assert_eq!(names(&skills_for(None)), ["deploy", "lint", "test-cmd"]);
+        }
     });
 }
 
@@ -1535,6 +1744,57 @@ fn write_flat_skill(skills_dir: &Path, name: &str) {
         format!("---\nname: {name}\ndescription: Skill {name}.\n---\n\n# {name}\n"),
     )
     .unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn factory_reference_folders_remain_home_skills_across_cwd_changes() {
+    App::test((), |mut app| async move {
+        let _flag = warp_core::features::FeatureFlag::CwdScopedCloudSkills.override_enabled(true);
+        initialize_app_for_terminal_view(&mut app);
+        let temp = TempDir::new().unwrap();
+        let working_dir = dunce::canonicalize(temp.path()).unwrap();
+        let source = working_dir.join("oz-skill-sources/task/sources/repo/.agents/skills");
+        write_flat_skill(&source, "reference");
+        write_flat_skill(&source, "not-selected");
+        let generated = working_dir.join("oz-skill-sources/task/skills/0");
+        fs::create_dir_all(&generated).unwrap();
+        std::os::unix::fs::symlink(source.join("reference"), generated.join("reference")).unwrap();
+        let terminal = add_window_with_terminal(&mut app, None);
+        let driver = app.add_model(|ctx| {
+            let terminal_driver =
+                super::terminal::TerminalDriver::create_from_existing_view(terminal, ctx);
+            let mut driver = AgentDriver::new_for_test(working_dir.clone(), terminal_driver, ctx);
+            driver.skill_dirs = vec![generated.clone()];
+            driver
+        });
+        let foreground = driver.update(&mut app, |_, ctx| ctx.spawner());
+        super::agent_setup::load_skills_dirs(&foreground).await;
+        for cwd in [
+            &working_dir,
+            &working_dir.join("repo"),
+            &working_dir.join("repo/nested"),
+        ] {
+            let skills = SkillManager::handle(&app).read(&app, |manager, ctx| {
+                assert!(manager.skill_paths_by_name("not-selected").is_empty());
+                manager.get_skills_for_working_directory(
+                    Some(&LocalOrRemotePath::Local(cwd.clone())),
+                    ctx,
+                )
+            });
+            let reference = skills
+                .iter()
+                .find(|skill| skill.name == "reference")
+                .unwrap();
+            assert_eq!(reference.scope, SkillScope::Home);
+            assert_eq!(
+                reference.reference,
+                SkillReference::Path(LocalOrRemotePath::Local(
+                    generated.join("reference/SKILL.md")
+                ))
+            );
+        }
+    });
 }
 
 /// Verifies that `load_skills_dirs` reads skills from the `WARP_SKILL_DIRS` environment
@@ -1677,6 +1937,803 @@ fn warp_skill_dirs_env_relative_entries_resolve_against_working_dir() {
         assert!(
             skill_names.contains(&"env-skill-rel".to_string()),
             "'env-skill-rel' should load via a relative WARP_SKILL_DIRS entry resolved against the driver's working dir; got: {skill_names:?}"
+        );
+    });
+}
+
+#[test]
+#[serial_test::serial]
+fn skill_dirs_first_name_wins_hides_later_duplicates() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        let temp = TempDir::new().unwrap();
+        let working_dir = dunce::canonicalize(temp.path()).unwrap();
+        for (folder, description) in [("agent-skills", "Agent copy."), ("generated", "Ref copy.")] {
+            let skill_dir = working_dir.join(folder).join("shared");
+            fs::create_dir_all(&skill_dir).unwrap();
+            fs::write(
+                skill_dir.join("SKILL.md"),
+                format!("---\nname: shared\ndescription: {description}\n---\nBody\n"),
+            )
+            .unwrap();
+        }
+        write_flat_skill(&working_dir.join("generated"), "ref-only");
+
+        let terminal_view = add_window_with_terminal(&mut app, None);
+        let driver_handle = app.add_model(|ctx| {
+            let terminal_driver =
+                super::terminal::TerminalDriver::create_from_existing_view(terminal_view, ctx);
+            let mut driver = AgentDriver::new_for_test(working_dir.clone(), terminal_driver, ctx);
+            driver.skill_dirs = vec![PathBuf::from("agent-skills"), working_dir.join("generated")];
+            driver.skill_dirs_first_name_wins = true;
+            driver
+        });
+
+        let (done_tx, done_rx) = futures::channel::oneshot::channel::<()>();
+        driver_handle.update(&mut app, |_, ctx| {
+            let spawner = ctx.spawner();
+            ctx.spawn(
+                async move {
+                    super::agent_setup::load_skills_dirs(&spawner).await;
+                    let _ = done_tx.send(());
+                },
+                |_, _, _| {},
+            );
+        });
+        done_rx.await.expect("loading task should complete");
+
+        let skills = SkillManager::handle(&app).read(&app, |manager: &SkillManager, ctx| {
+            manager
+                .get_skills_for_working_directory(None, ctx)
+                .into_iter()
+                .filter(|skill| skill.name == "shared" || skill.name == "ref-only")
+                .map(|skill| (skill.name, skill.description))
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(skills.len(), 2, "{skills:?}");
+        assert!(skills.contains(&("shared".to_owned(), "Agent copy.".to_owned())));
+        assert!(skills.iter().any(|(name, _)| name == "ref-only"));
+    });
+}
+
+// ── Agent hooks ─────────────────────────────────────────────────────────────
+
+const HOOK_TASK_ID: &str = "550e8400-e29b-41d4-a716-446655440000";
+
+/// A driver on a fresh terminal whose hook runtime uses recording doubles.
+fn driver_with_hooks(
+    app: &mut App,
+    working_dir: &Path,
+) -> (
+    warpui::ModelHandle<AgentDriver>,
+    warpui::ViewHandle<crate::terminal::TerminalView>,
+    TestHooks,
+) {
+    initialize_app_for_terminal_view(app);
+    let hooks = app.update(install_test_hooks);
+    let terminal_view = add_window_with_terminal(app, None);
+    let working_dir = working_dir.to_path_buf();
+    let driver = app.add_model(|ctx| {
+        let terminal_driver =
+            super::terminal::TerminalDriver::create_from_existing_view(terminal_view.clone(), ctx);
+        let mut driver = AgentDriver::new_for_test(working_dir, terminal_driver, ctx);
+        driver.skip_initial_turn = true;
+        driver.idle_on_complete = None;
+        driver
+    });
+    (driver, terminal_view, hooks)
+}
+
+#[test]
+fn hook_setup_records_the_run_and_its_surface() {
+    App::test((), |mut app| async move {
+        let temp = TempDir::new().unwrap();
+        let (driver, _terminal, _hooks) = driver_with_hooks(&mut app, temp.path());
+        let task_id: AmbientAgentTaskId = HOOK_TASK_ID.parse().unwrap();
+
+        for surface in [RunSurface::Oz, RunSurface::CommandLine] {
+            driver.update(&mut app, |driver, ctx| {
+                driver.task_id = Some(task_id);
+                driver.parent_run_id = Some("parent-run".to_owned());
+                driver.hooks.surface = surface;
+                driver.hooks.sources = vec![worker_hook_source(temp.path())];
+                driver.prepare_hooks_for_run(ctx);
+            });
+            app.read(|ctx| {
+                let runtime = HookRuntime::as_ref(ctx);
+                let run = runtime.run_metadata().expect("the run is recorded");
+                assert_eq!(run.run_id, HOOK_TASK_ID);
+                assert_eq!(run.task_id.as_deref(), Some(HOOK_TASK_ID));
+                assert_eq!(run.parent_run_id.as_deref(), Some("parent-run"));
+                assert_eq!(runtime.run_surface(), Some(surface));
+            });
+        }
+    });
+}
+
+/// A run with no hooks records nothing on the hook runtime and keeps its messenger, so it adds no
+/// subscription and writes nothing to the run's output.
+#[test]
+fn hook_setup_does_nothing_for_a_run_with_no_hooks() {
+    App::test((), |mut app| async move {
+        let temp = TempDir::new().unwrap();
+        let (driver, _terminal, hooks) = driver_with_hooks(&mut app, temp.path());
+        driver.update(&mut app, |driver, ctx| {
+            driver.task_id = Some(HOOK_TASK_ID.parse().unwrap());
+            driver.hooks.surface = RunSurface::Oz;
+            driver.prepare_hooks_for_run(ctx);
+        });
+        app.read(|ctx| {
+            let runtime = HookRuntime::as_ref(ctx);
+            assert!(runtime.run_metadata().is_none());
+            assert!(std::ptr::addr_eq(
+                Arc::as_ptr(&runtime.messenger()),
+                Arc::as_ptr(&hooks.messenger),
+            ));
+        });
+    });
+}
+
+/// A worker-form source in `dir`, as the execution configuration would name it.
+fn worker_hook_source(dir: &Path) -> hooks::ConfiguredHookSource {
+    hooks::ConfiguredHookSource {
+        format: ai::hooks::HookFormat::Cursor,
+        location: hooks::ConfiguredHookLocation::Worker {
+            path: dir.display().to_string(),
+        },
+        kind: ai::hooks::HookSourceKind::FactoryAgent,
+        policy: ai::hooks::HookSourcePolicy::default(),
+    }
+}
+
+#[test]
+fn hook_sources_finalize_once_and_a_second_load_fails() {
+    App::test((), |mut app| async move {
+        let temp = TempDir::new().unwrap();
+        let working_dir = dunce::canonicalize(temp.path()).unwrap();
+        for dir in ["early", "late"] {
+            fs::create_dir_all(working_dir.join(dir)).unwrap();
+            fs::write(
+                working_dir.join(dir).join("hooks.json"),
+                r#"{"version":1,"hooks":{"beforeShellExecution":[{"command":"true"}]}}"#,
+            )
+            .unwrap();
+        }
+        let (driver, _terminal, _hooks) = driver_with_hooks(&mut app, &working_dir);
+
+        let loaded = driver.update(&mut app, |driver, ctx| {
+            driver.hooks.sources = vec![worker_hook_source(&working_dir.join("early"))];
+            driver.load_hook_sources_for_run(&[], ctx)
+        });
+        assert!(loaded.is_ok(), "{loaded:?}");
+        app.read(|ctx| {
+            let registry = HookRegistry::as_ref(ctx);
+            assert!(registry.is_finalized());
+            assert_eq!(registry.snapshot().bindings.len(), 1);
+        });
+
+        let _run_exit_rx = driver.update(&mut app, |driver, ctx| {
+            driver.execute_run(AgentRunPrompt::Local(String::new()), ctx)
+        });
+        app.read(|ctx| {
+            assert_eq!(
+                HookRegistry::as_ref(ctx).snapshot().bindings.len(),
+                1,
+                "the finalized source stays active"
+            );
+        });
+
+        let late = driver.update(&mut app, |driver, ctx| {
+            driver.hooks.sources = vec![worker_hook_source(&working_dir.join("late"))];
+            driver.load_hook_sources_for_run(&[], ctx)
+        });
+        assert!(
+            matches!(late, Err(AgentDriverError::InvalidRuntimeState)),
+            "{late:?}"
+        );
+        assert_eq!(
+            app.read(|ctx| HookRegistry::as_ref(ctx).snapshot().bindings.len()),
+            1,
+            "a source loaded after finalization does not activate"
+        );
+    });
+}
+
+#[test]
+fn execute_run_does_not_fire_session_start() {
+    App::test((), |mut app| async move {
+        let temp = TempDir::new().unwrap();
+        let (driver, terminal, hooks) = driver_with_hooks(&mut app, temp.path());
+        app.update(|ctx| {
+            hooks.install_bindings(
+                vec![test_binding(
+                    test_source_id("session"),
+                    HookBoundary::SessionStart,
+                    0,
+                    None,
+                )],
+                ctx,
+            );
+        });
+        let terminal_id = terminal.id();
+        BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
+            history.start_new_conversation(terminal_id, false, false, false, ctx);
+        });
+
+        let _run_exit_rx = driver.update(&mut app, |driver, ctx| {
+            driver.execute_run(AgentRunPrompt::Local(String::new()), ctx)
+        });
+        Timer::after(Duration::from_millis(50)).await;
+
+        assert_eq!(hooks.runner.invocation_count(), 0);
+    });
+}
+
+/// A driver about to send a run's server-side first prompt, with one `prompt.submit` binding
+/// installed (strict or not) and the task id set.
+fn driver_for_first_prompt(
+    app: &mut App,
+    working_dir: &Path,
+    strict: bool,
+    outcome: ai::hooks::HookProcessOutcome,
+) -> (
+    warpui::ModelHandle<AgentDriver>,
+    warpui::ViewHandle<crate::terminal::TerminalView>,
+    TestHooks,
+) {
+    let (driver, terminal, hooks) = driver_with_hooks(app, working_dir);
+    let binding = test_binding(
+        test_source_id("prompt"),
+        HookBoundary::PromptSubmit,
+        0,
+        None,
+    );
+    hooks.runner.script(binding.id.clone(), outcome);
+    app.update(|ctx| {
+        let mut active = ai::hooks::test_util::active_binding(binding, hooks.adapter.clone());
+        active.policy.strict = strict;
+        HookRegistry::handle(ctx).update(ctx, |registry, _| {
+            registry.install_snapshot_for_test(vec![active], Vec::new());
+        });
+    });
+    driver.update(app, |driver, _| {
+        driver.task_id = Some(HOOK_TASK_ID.parse().unwrap());
+        driver.skip_initial_turn = false;
+        driver.idle_on_fail = None;
+    });
+    (driver, terminal, hooks)
+}
+
+fn resolved_prompt_mock(
+    server: &mut mockito::ServerGuard,
+    status: usize,
+    body: &str,
+) -> mockito::Mock {
+    server
+        .mock("POST", "/api/v1/harness-support/resolve-prompt")
+        .with_status(status)
+        .with_body(body)
+        .expect(1)
+        .create()
+}
+
+/// How many requests went out on `terminal_id`, across its conversations.
+fn exchanges_on(app: &App, terminal_id: warpui::EntityId) -> usize {
+    BlocklistAIHistoryModel::handle(app).read(app, |history, _| {
+        history
+            .all_live_root_task_exchanges_for_terminal_surface(terminal_id)
+            .count()
+    })
+}
+
+/// The run's first prompt is fetched from the server for the prompt hooks, which see its text
+/// and the task's attachments; a hook that stops it ends the run as failed with its reason.
+#[test]
+fn a_hook_that_stops_the_first_run_prompt_ends_the_run_with_its_reason() {
+    let mut server = ChannelState::mock_server();
+    let resolved = resolved_prompt_mock(
+        &mut server,
+        200,
+        &json!({"prompt": "Fix the flaky test"}).to_string(),
+    );
+    App::test((), |mut app| async move {
+        let temp = TempDir::new().unwrap();
+        let attachments_dir = temp.path().join("attachments");
+        fs::create_dir_all(attachments_dir.join("handoff")).unwrap();
+        fs::write(attachments_dir.join("spec.md"), "spec").unwrap();
+        fs::write(attachments_dir.join("handoff").join("state.json"), "{}").unwrap();
+        let (driver, _terminal, hooks) = driver_for_first_prompt(
+            &mut app,
+            temp.path(),
+            false,
+            ScriptedRunner::deny_with("not today"),
+        );
+
+        let completion = driver.update(&mut app, |driver, ctx| {
+            driver.execute_run(
+                AgentRunPrompt::ServerSide {
+                    skill: None,
+                    attachments_dir: Some(attachments_dir.display().to_string()),
+                },
+                ctx,
+            )
+        });
+        let SDKConversationOutputStatus::Error { error } = completion.await.unwrap() else {
+            panic!("expected the run to end as failed");
+        };
+        let message = error.to_string();
+        assert!(
+            message.contains("stopped its first prompt") && message.contains("not today"),
+            "{message}"
+        );
+        let envelopes = hooks.adapter.encoded_envelopes();
+        assert_eq!(envelopes.len(), 1);
+        let ai::hooks::HookPayload::PromptSubmit {
+            text,
+            attachments,
+            provenance,
+        } = &envelopes[0].payload
+        else {
+            panic!("expected a prompt.submit payload");
+        };
+        assert_eq!(text, "Fix the flaky test");
+        assert_eq!(
+            attachments,
+            &[ai::hooks::PromptAttachment {
+                kind: ai::hooks::PromptAttachmentKind::File,
+                path: attachments_dir.join("spec.md"),
+            }],
+            "the handoff snapshot's subdirectory is not an attachment"
+        );
+        assert_eq!(*provenance, ai::hooks::PromptProvenance::User);
+    });
+    resolved.assert();
+}
+
+/// When the prompt cannot be fetched and a strict source owns a prompt hook, the run ends as
+/// failed rather than starting without the hook.
+#[test]
+fn a_first_run_prompt_that_cannot_be_fetched_fails_the_run_under_a_strict_source() {
+    let mut server = ChannelState::mock_server();
+    let resolved = resolved_prompt_mock(&mut server, 500, "boom");
+    App::test((), |mut app| async move {
+        let temp = TempDir::new().unwrap();
+        let (driver, terminal, hooks) = driver_for_first_prompt(
+            &mut app,
+            temp.path(),
+            true,
+            ScriptedRunner::exit_with(0, ""),
+        );
+
+        let completion = driver.update(&mut app, |driver, ctx| {
+            driver.execute_run(
+                AgentRunPrompt::ServerSide {
+                    skill: None,
+                    attachments_dir: None,
+                },
+                ctx,
+            )
+        });
+        let SDKConversationOutputStatus::Error { error } = completion.await.unwrap() else {
+            panic!("expected the run to end as failed");
+        };
+        assert!(
+            error.to_string().contains("could not be fetched"),
+            "{error}"
+        );
+        assert_eq!(
+            hooks.adapter.encoded_count(),
+            0,
+            "no prompt reached the hook"
+        );
+        assert_eq!(exchanges_on(&app, terminal.id()), 0, "no request went out");
+    });
+    resolved.assert();
+}
+
+/// When the prompt cannot be fetched and no strict source is involved, the run goes on without
+/// the hook and says so in a diagnostic.
+#[test]
+fn a_first_run_prompt_that_cannot_be_fetched_is_sent_without_the_hook_otherwise() {
+    let mut server = ChannelState::mock_server();
+    let resolved = resolved_prompt_mock(&mut server, 500, "boom");
+    App::test((), |mut app| async move {
+        let temp = TempDir::new().unwrap();
+        let (driver, terminal, hooks) = driver_for_first_prompt(
+            &mut app,
+            temp.path(),
+            false,
+            ScriptedRunner::deny_with("would have stopped it"),
+        );
+
+        let _completion = driver.update(&mut app, |driver, ctx| {
+            driver.execute_run(
+                AgentRunPrompt::ServerSide {
+                    skill: None,
+                    attachments_dir: None,
+                },
+                ctx,
+            )
+        });
+        let terminal_id = terminal.id();
+        test_utils::settle(&mut app, |app| exchanges_on(app, terminal_id) == 1).await;
+
+        assert_eq!(hooks.adapter.encoded_count(), 0, "the hook did not run");
+        let diagnostics = hooks.messenger.diagnostics();
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(
+            diagnostics[0].severity,
+            ai::hooks::DiagnosticSeverity::Warning
+        );
+        assert!(
+            diagnostics[0]
+                .message
+                .contains("beforeSubmitPrompt hooks did not run"),
+            "{}",
+            diagnostics[0].message
+        );
+    });
+    resolved.assert();
+}
+
+/// A turn that fails fires its `turn.stop` hooks after its status is set, and the run does not
+/// end until they are done, so a hook that records every turn's end sees the last one.
+#[test]
+fn the_run_waits_for_a_failed_turns_stop_hooks_before_it_ends() {
+    App::test((), |mut app| async move {
+        let harness = test_utils::controller_harness(&mut app);
+        let stop = test_binding(test_source_id("stop"), HookBoundary::TurnStop, 0, None);
+        app.update(|ctx| harness.hooks.install_bindings(vec![stop], ctx));
+        let hold = harness.hooks.runner.hold();
+        let (conversation_id, stream) = harness.mock_stream(&mut app);
+        let temp = TempDir::new().unwrap();
+        let driver = app.add_model(|ctx| {
+            let terminal_driver = super::terminal::TerminalDriver::create_from_existing_view(
+                harness.terminal.clone(),
+                ctx,
+            );
+            let mut driver =
+                AgentDriver::new_for_test(temp.path().to_path_buf(), terminal_driver, ctx);
+            driver.skip_initial_turn = true;
+            driver.idle_on_complete = None;
+            driver.idle_on_fail = None;
+            driver
+        });
+        let mut run_exit_rx = driver.update(&mut app, |driver, ctx| {
+            driver.execute_run(AgentRunPrompt::Local(String::new()), ctx)
+        });
+
+        stream.update(&mut app, |stream, ctx| {
+            stream.emit_response_event_for_test(test_utils::stream_init_event(), ctx);
+            stream.exhaust_recovery_budget_for_test(ctx);
+            stream.emit_error_event_for_test(
+                Arc::new(crate::server::server_api::AIApiError::UnexpectedEof),
+                ctx,
+            );
+            stream.emit_after_stream_finished_for_test(ctx);
+        });
+        assert_eq!(
+            test_utils::conversation_status(&app, conversation_id),
+            Some(ConversationStatus::Error)
+        );
+        test_utils::settle(&mut app, |_| harness.hooks.runner.invocation_count() == 1).await;
+        test_utils::let_background_work_settle(&mut app).await;
+        assert!(
+            run_exit_rx.try_recv().unwrap().is_none(),
+            "the run must not end while the stop hooks run"
+        );
+
+        hold.release();
+        let SDKConversationOutputStatus::Error { .. } = run_exit_rx.await.unwrap() else {
+            panic!("the run ends as a failure once the hooks are done");
+        };
+        let envelopes = harness.hooks.adapter.encoded_envelopes();
+        assert_eq!(envelopes.len(), 1);
+        assert!(matches!(
+            envelopes[0].payload,
+            ai::hooks::HookPayload::TurnStop {
+                status: ai::hooks::TurnStopStatus::Error,
+                ..
+            }
+        ));
+    });
+}
+
+/// Starts a run from inside a history model event. A subscription made while an entity delivers
+/// an event is placed ahead of the ones it already had, so the driver's subscription to the
+/// history model lands ahead of the controller's.
+struct RunStartedDuringEvent {
+    driver: warpui::ModelHandle<AgentDriver>,
+    run_exit: Option<oneshot::Receiver<SDKConversationOutputStatus>>,
+}
+
+impl warpui::Entity for RunStartedDuringEvent {
+    type Event = ();
+}
+
+/// Which of the driver and the controller sees a status change first is not fixed. When the
+/// driver sees it first, the controller has not recorded the turn's stop yet; the run still
+/// waits for the stop hooks.
+#[test]
+fn the_run_waits_for_a_failed_turns_stop_hooks_when_it_sees_the_status_change_first() {
+    App::test((), |mut app| async move {
+        let harness = test_utils::controller_harness(&mut app);
+        let stop = test_binding(test_source_id("stop"), HookBoundary::TurnStop, 0, None);
+        app.update(|ctx| harness.hooks.install_bindings(vec![stop], ctx));
+        let hold = harness.hooks.runner.hold();
+        let temp = TempDir::new().unwrap();
+        let driver = app.add_model(|ctx| {
+            let terminal_driver = super::terminal::TerminalDriver::create_from_existing_view(
+                harness.terminal.clone(),
+                ctx,
+            );
+            let mut driver =
+                AgentDriver::new_for_test(temp.path().to_path_buf(), terminal_driver, ctx);
+            driver.skip_initial_turn = true;
+            driver.idle_on_complete = None;
+            driver.idle_on_fail = None;
+            driver
+        });
+        let starter = app.add_model(|ctx: &mut warpui::ModelContext<RunStartedDuringEvent>| {
+            ctx.subscribe_to_model(
+                &BlocklistAIHistoryModel::handle(ctx),
+                |me, _, event, ctx| {
+                    if me.run_exit.is_none()
+                        && matches!(
+                            event,
+                            BlocklistAIHistoryEvent::StartedNewConversation { .. }
+                        )
+                    {
+                        me.run_exit = Some(me.driver.update(ctx, |driver, ctx| {
+                            driver.execute_run(AgentRunPrompt::Local(String::new()), ctx)
+                        }));
+                    }
+                },
+            );
+            RunStartedDuringEvent {
+                driver,
+                run_exit: None,
+            }
+        });
+        let (conversation_id, stream) = harness.mock_stream(&mut app);
+        let mut run_exit_rx = starter
+            .update(&mut app, |starter, _| starter.run_exit.take())
+            .expect("the run started when the conversation did");
+
+        stream.update(&mut app, |stream, ctx| {
+            stream.emit_response_event_for_test(test_utils::stream_init_event(), ctx);
+            stream.exhaust_recovery_budget_for_test(ctx);
+            stream.emit_error_event_for_test(
+                Arc::new(crate::server::server_api::AIApiError::UnexpectedEof),
+                ctx,
+            );
+            stream.emit_after_stream_finished_for_test(ctx);
+        });
+        assert_eq!(
+            test_utils::conversation_status(&app, conversation_id),
+            Some(ConversationStatus::Error)
+        );
+        test_utils::settle(&mut app, |_| harness.hooks.runner.invocation_count() == 1).await;
+        test_utils::let_background_work_settle(&mut app).await;
+        assert!(
+            run_exit_rx.try_recv().unwrap().is_none(),
+            "the run must not end while the stop hooks run"
+        );
+
+        hold.release();
+        let SDKConversationOutputStatus::Error { .. } = run_exit_rx.await.unwrap() else {
+            panic!("the run ends as a failure once the hooks are done");
+        };
+        assert_eq!(
+            harness.hooks.adapter.encoded_count(),
+            1,
+            "the turn fires one stop, not one per subscriber"
+        );
+    });
+}
+
+/// The whole path from a hook's `ask` to the end of the run: the model asks for a shell command,
+/// the pre-tool hook answers `ask` through the runner, nobody can answer it, and the hook's source
+/// is set to fail the run in that case.
+#[test]
+fn a_scripted_ask_from_a_fail_run_source_ends_the_run_with_the_hook_reason() {
+    App::test((), |mut app| async move {
+        let harness = test_utils::controller_harness(&mut app);
+        let headless_mode = app.add_model(|ctx| {
+            AppExecutionMode::new_with_headlessness(ExecutionMode::Sdk, false, true, ctx)
+        });
+        AppExecutionMode::handle(&app).update(&mut app, |mode, ctx| {
+            *mode = headless_mode.as_ref(ctx).clone();
+        });
+        let binding = test_binding(
+            test_source_id("policy"),
+            HookBoundary::ToolPre,
+            0,
+            Some("Shell"),
+        );
+        harness.hooks.runner.script(
+            binding.id.clone(),
+            ScriptedRunner::exit_with(0, r#"{"verdict":"ask","reason":"needs a human"}"#),
+        );
+        app.update(|ctx| {
+            let mut active =
+                ai::hooks::test_util::active_binding(binding, harness.hooks.adapter.clone());
+            active.policy.on_ask = ai::hooks::HookOnAsk::FailRun;
+            HookRegistry::handle(ctx).update(ctx, |registry, _| {
+                registry.install_snapshot_for_test(vec![active], Vec::new());
+            });
+        });
+        // Run the hook on a hidden child rather than the driver's visible root conversation.
+        let terminal_id = harness.terminal_id();
+        let conversation_id =
+            BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
+                let parent = history.start_new_conversation(terminal_id, false, false, false, ctx);
+                history.start_new_child_conversation(
+                    terminal_id,
+                    "child".to_owned(),
+                    parent,
+                    None,
+                    false,
+                    ctx,
+                )
+            });
+        let stream = harness.mock_request(&mut app, conversation_id);
+        let temp = TempDir::new().unwrap();
+        let driver = app.add_model(|ctx| {
+            let terminal_driver = super::terminal::TerminalDriver::create_from_existing_view(
+                harness.terminal.clone(),
+                ctx,
+            );
+            let mut driver =
+                AgentDriver::new_for_test(temp.path().to_path_buf(), terminal_driver, ctx);
+            driver.skip_initial_turn = true;
+            driver.idle_on_complete = None;
+            driver
+        });
+        let run_exit_rx = driver.update(&mut app, |driver, ctx| {
+            driver.execute_run(AgentRunPrompt::Local(String::new()), ctx)
+        });
+
+        let task_id = test_utils::root_task_id(&app, conversation_id);
+        stream.update(&mut app, |stream, ctx| {
+            stream.emit_response_event_for_test(test_utils::stream_init_event(), ctx);
+            stream.emit_response_event_for_test(
+                test_utils::create_task_with_messages(
+                    &task_id,
+                    vec![test_utils::shell_tool_call_message(
+                        &task_id,
+                        "rm -rf build",
+                    )],
+                ),
+                ctx,
+            );
+            stream.emit_response_event_for_test(test_utils::done_event(), ctx);
+            stream.emit_after_stream_finished_for_test(ctx);
+        });
+
+        // The hook runs on the background executor and the action is retried when it answers,
+        // which can take longer than `test_utils::settle` waits on a loaded machine.
+        for _ in 0..200 {
+            if test_utils::conversation_status(&app, conversation_id)
+                == Some(ConversationStatus::Error)
+            {
+                break;
+            }
+            test_utils::let_background_work_settle(&mut app).await;
+        }
+        test_utils::let_background_work_settle(&mut app).await;
+        assert_eq!(harness.hooks.runner.invocation_count(), 1);
+        assert_eq!(
+            test_utils::exchange_count(&app, conversation_id),
+            1,
+            "no request goes out after the hook ended the run"
+        );
+        assert_eq!(
+            test_utils::conversation_status(&app, conversation_id),
+            Some(ConversationStatus::Error)
+        );
+        let SDKConversationOutputStatus::Error { error } = run_exit_rx.await.unwrap() else {
+            panic!("the run must end as a failure");
+        };
+        let message = error.to_string();
+        assert!(message.contains("needs a human"), "{message}");
+        assert!(message.contains("Approval unavailable"), "{message}");
+    });
+}
+
+/// A run a hook ended (an `ask` nobody can answer, from a `fail_run` source) still waits for the
+/// failed turn's stop hooks before it exits.
+#[test]
+fn a_run_a_hook_ended_waits_for_the_turns_stop_hooks_before_it_exits() {
+    App::test((), |mut app| async move {
+        let harness = test_utils::controller_harness(&mut app);
+        let headless_mode = app.add_model(|ctx| {
+            AppExecutionMode::new_with_headlessness(ExecutionMode::Sdk, false, true, ctx)
+        });
+        AppExecutionMode::handle(&app).update(&mut app, |mode, ctx| {
+            *mode = headless_mode.as_ref(ctx).clone();
+        });
+        let runner = Arc::new(LatencyRunner::new());
+        app.update(|ctx| {
+            HookRuntime::handle(ctx).update(ctx, |runtime, _| runtime.set_runner(runner.clone()))
+        });
+        let policy = test_binding(
+            test_source_id("policy"),
+            HookBoundary::ToolPre,
+            0,
+            Some("Shell"),
+        );
+        let stop = test_binding(test_source_id("stop"), HookBoundary::TurnStop, 0, None);
+        let stop_id = stop.id.clone();
+        runner.script(
+            policy.id.clone(),
+            Duration::ZERO,
+            ScriptedRunner::exit_with(0, r#"{"verdict":"ask","reason":"needs a human"}"#),
+        );
+        runner.script(
+            stop_id.clone(),
+            Duration::from_millis(300),
+            ScriptedRunner::exit_with(0, ""),
+        );
+        app.update(|ctx| {
+            let adapter = harness.hooks.adapter.clone();
+            let mut policy = ai::hooks::test_util::active_binding(policy, adapter.clone());
+            policy.policy.on_ask = ai::hooks::HookOnAsk::FailRun;
+            let stop = ai::hooks::test_util::active_binding(stop, adapter);
+            HookRegistry::handle(ctx).update(ctx, |registry, _| {
+                registry.install_snapshot_for_test(vec![policy, stop], Vec::new());
+            });
+        });
+        let (conversation_id, stream) = harness.mock_stream(&mut app);
+        let temp = TempDir::new().unwrap();
+        let driver = app.add_model(|ctx| {
+            let terminal_driver = super::terminal::TerminalDriver::create_from_existing_view(
+                harness.terminal.clone(),
+                ctx,
+            );
+            let mut driver =
+                AgentDriver::new_for_test(temp.path().to_path_buf(), terminal_driver, ctx);
+            driver.skip_initial_turn = true;
+            driver.idle_on_complete = None;
+            driver.idle_on_fail = None;
+            driver
+        });
+        let run_exit_rx = driver.update(&mut app, |driver, ctx| {
+            driver.execute_run(AgentRunPrompt::Local(String::new()), ctx)
+        });
+
+        let task_id = test_utils::root_task_id(&app, conversation_id);
+        stream.update(&mut app, |stream, ctx| {
+            stream.emit_response_event_for_test(test_utils::stream_init_event(), ctx);
+            stream.emit_response_event_for_test(
+                test_utils::create_task_with_messages(
+                    &task_id,
+                    vec![test_utils::shell_tool_call_message(
+                        &task_id,
+                        "rm -rf build",
+                    )],
+                ),
+                ctx,
+            );
+            stream.emit_response_event_for_test(test_utils::done_event(), ctx);
+            stream.emit_after_stream_finished_for_test(ctx);
+        });
+
+        let SDKConversationOutputStatus::Error { .. } = run_exit_rx.await.unwrap() else {
+            panic!("the run must end as a failure");
+        };
+        assert_eq!(
+            test_utils::conversation_status(&app, conversation_id),
+            Some(ConversationStatus::Error)
+        );
+        assert!(
+            runner
+                .finished()
+                .iter()
+                .any(|(binding, _)| *binding == stop_id),
+            "the run ended before the turn's stop hooks finished: {:?}",
+            runner.finished()
         );
     });
 }
@@ -1959,6 +3016,63 @@ fn native_startup_queue_prevents_exit_until_pending_rows_are_removed() {
     });
 }
 
+#[test]
+fn restored_local_child_driver_status_isolation() {
+    use crate::ai::agent::conversation::AIConversation;
+
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let controller = terminal.read(&app, |view, _| view.ai_controller().clone());
+        let (parent_id, stream) =
+            conversation_with_in_progress_mock_stream(&mut app, terminal.id(), &controller);
+        let temp = TempDir::new().unwrap();
+        let driver = app.add_model(|ctx| {
+            let terminal_driver =
+                super::terminal::TerminalDriver::create_from_existing_view(terminal.clone(), ctx);
+            let mut driver =
+                AgentDriver::new_for_test(temp.path().to_path_buf(), terminal_driver, ctx);
+            driver.run_conversation_id = Some(parent_id);
+            driver.skip_initial_turn = true;
+            driver.idle_on_complete = None;
+            driver
+        });
+        let mut completion = driver.update(&mut app, |driver, ctx| {
+            driver.execute_run(AgentRunPrompt::Local(String::new()), ctx)
+        });
+        let child_id = AIConversationId::new();
+        BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
+            history.restore_conversations(
+                warpui::EntityId::new(),
+                vec![AIConversation::new_local_child_for_restoration(child_id)],
+                ctx,
+            );
+            history
+                .conversation_mut(&child_id)
+                .unwrap()
+                .update_status_with_error(
+                    ConversationStatus::Error,
+                    Some(RenderableAIError::other("child setup failed", false)),
+                    terminal.id(),
+                    ctx,
+                );
+        });
+
+        OrchestrationEventService::handle(&app).read(&app, |service, _| {
+            assert!(
+                !service.is_conversation_exiting(parent_id),
+                "child status committed the parent exit"
+            );
+        });
+        assert!(completion.try_recv().unwrap().is_none());
+        complete_mock_stream_successfully(&mut app, &stream);
+        assert_eventually!(
+            OrchestrationEventService::handle(&app).read(&app, |service, _| service
+                .is_conversation_exiting(parent_id)),
+            "bound parent status did not commit exit"
+        );
+    });
+}
 #[test]
 fn prepared_native_followup_starts_before_the_last_queued_row_allows_exit() {
     App::test((), |mut app| async move {

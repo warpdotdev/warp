@@ -8,16 +8,21 @@ use axum::response::IntoResponse;
 use axum::routing::post;
 use axum::{Json, Router};
 use cloud_object_models::{ServerSentEvents, StaticHeader, TransportType};
+use futures::FutureExt as _;
 use rmcp::model::{
     CallToolRequestParams, DiscoverResult, ErrorCode, ErrorData, Resource, ServerCapabilities, Tool,
 };
 use serde_json::{Value, json};
 
 use super::{
-    challenge_parameter_names, determine_transport, has_caller_supplied_credential,
-    is_oauth_challenge, query_resources_for, query_tools_for, should_query_resources,
-    should_query_tools, spawn_server,
+    build_client_with_headers, challenge_parameter_names, determine_transport,
+    has_caller_supplied_credential, is_oauth_challenge, query_resources_for, query_tools_for,
+    should_query_resources, should_query_tools, spawn_server,
 };
+use crate::refreshable_headers::{RefreshableHeaders, RejectionHandler};
+
+// HTTP client setup can exceed five seconds under parallel macOS CI load.
+const HTTP_TEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Build a `ServerCapabilities` with selected capability flags toggled on.
 /// Each `Some(default)` mirrors how rmcp deserializes a capability the
@@ -446,6 +451,14 @@ async fn start_http_server(
     url: String,
     headers: Vec<StaticHeader>,
 ) -> Result<super::TemplatableMCPServerInfo, rmcp::RmcpError> {
+    start_http_server_with_refreshable_headers(url, headers, None).await
+}
+
+async fn start_http_server_with_refreshable_headers(
+    url: String,
+    headers: Vec<StaticHeader>,
+    refreshable_headers: Option<RefreshableHeaders>,
+) -> Result<super::TemplatableMCPServerInfo, rmcp::RmcpError> {
     let mut logs = simple_logger::manager::LogManager::new();
     logs.register_namespace("mcp-tests", false);
     let logger = logs
@@ -456,7 +469,7 @@ async fn start_http_server(
         )
         .expect("test logger");
     tokio::time::timeout(
-        Duration::from_secs(5),
+        HTTP_TEST_TIMEOUT,
         spawn_server(
             "test-server".to_string(),
             None,
@@ -465,6 +478,7 @@ async fn start_http_server(
             TransportType::ServerSentEvents(ServerSentEvents { url, headers }),
             logger,
             None,
+            refreshable_headers,
         ),
     )
     .await
@@ -482,6 +496,10 @@ async fn assert_http_startup(
     let app = Router::new().route("/mcp", post(move |headers: HeaderMap, Json(request): Json<Value>| {
         captured.lock().expect("request capture").push(request.clone());
         async move {
+            // Mirrors Snowflake's managed MCP servers, which reject requests without a User-Agent.
+            if headers.get(http::header::USER_AGENT).is_none_or(|v| v.is_empty()) {
+                return (StatusCode::BAD_REQUEST, "Invalid or empty User-Agent header").into_response();
+            }
             if static_credential
                 && (headers.get("x-api-key").and_then(|v| v.to_str().ok()) != Some("test-key")
                     || headers.get("authorization").and_then(|v| v.to_str().ok()) != Some("Bearer test-token")) {
@@ -490,6 +508,13 @@ async fn assert_http_startup(
             let requested_version = headers.get("mcp-protocol-version")
                 .and_then(|v| v.to_str().ok())
                 .or_else(|| request["params"]["protocolVersion"].as_str());
+            if matches!(protocol, FixtureProtocol::InitializeCounteroffer)
+                && headers.get("mcp-protocol-version")
+                    .and_then(|v| v.to_str().ok())
+                    .is_some_and(|requested| requested != version)
+            {
+                return (StatusCode::BAD_REQUEST, "Unsupported protocol version").into_response();
+            }
             if matches!(protocol, FixtureProtocol::LegacyVersionError)
                 && requested_version.is_some_and(|requested| requested != version)
             {
@@ -518,6 +543,9 @@ async fn assert_http_startup(
                     }
                 }
                 "initialize" => {
+                    if matches!(protocol, FixtureProtocol::InitializeCounteroffer) {
+                        assert!(!headers.contains_key("mcp-protocol-version"));
+                    }
                     if matches!(protocol, FixtureProtocol::Discover) {
                         return StatusCode::BAD_REQUEST.into_response();
                     }
@@ -534,7 +562,10 @@ async fn assert_http_startup(
                         })
                     }
                 }
-                "notifications/initialized" => return StatusCode::ACCEPTED.into_response(),
+                "notifications/initialized" => {
+                    assert_eq!(headers.get("mcp-protocol-version").and_then(|v| v.to_str().ok()), Some(version));
+                    return StatusCode::ACCEPTED.into_response();
+                }
                 "tools/list" => {
                     if headers.get("mcp-protocol-version").and_then(|v| v.to_str().ok()) != Some(version) {
                         return StatusCode::BAD_REQUEST.into_response();
@@ -593,7 +624,10 @@ async fn assert_http_startup(
             .as_str(),
         version
     );
-    if matches!(protocol, FixtureProtocol::LegacyVersionError) {
+    if matches!(
+        protocol,
+        FixtureProtocol::LegacyVersionError | FixtureProtocol::InitializeCounteroffer
+    ) {
         let result = tokio::time::timeout(
             Duration::from_secs(5),
             info.service
@@ -695,7 +729,8 @@ async fn preflight_does_not_relax_correlation_for_other_transport_errors() {
             }),
         );
         let (url, server) = serve_http_router(app).await;
-        let result = determine_transport("test".to_string(), &url, &HashMap::new(), None).await;
+        let result =
+            determine_transport("test".to_string(), &url, &HashMap::new(), None, None).await;
         server.abort();
         assert!(matches!(
             result,
@@ -719,7 +754,7 @@ async fn preflight_does_not_repeat_legacy_transport_version_fallback() {
         let captured = requests.clone();
         let app = Router::new().route(
             "/mcp",
-            post(move |headers: HeaderMap| {
+            post(move |headers: HeaderMap, Json(request): Json<Value>| {
                 captured.fetch_add(1, Ordering::SeqCst);
                 async move {
                     (
@@ -728,6 +763,7 @@ async fn preflight_does_not_repeat_legacy_transport_version_fallback() {
                             headers
                                 .get("mcp-protocol-version")
                                 .and_then(|v| v.to_str().ok())
+                                .or_else(|| request["params"]["protocolVersion"].as_str())
                                 .expect("protocol header"),
                         )),
                     )
@@ -736,8 +772,8 @@ async fn preflight_does_not_repeat_legacy_transport_version_fallback() {
         );
         let (url, server) = serve_http_router(app).await;
         let result = tokio::time::timeout(
-            Duration::from_secs(5),
-            determine_transport("test".to_string(), &url, &HashMap::new(), None),
+            HTTP_TEST_TIMEOUT,
+            determine_transport("test".to_string(), &url, &HashMap::new(), None, None),
         )
         .await
         .expect("negotiation should terminate");
@@ -798,11 +834,11 @@ async fn http_startup_falls_back_and_propagates_sse_version_error_selection_with
 }
 
 #[tokio::test]
-async fn http_startup_passes_legacy_counteroffer_to_real_sdk_connection() {
+async fn http_startup_negotiates_june_without_early_version_headers() {
     let requests = assert_http_startup(
         FixtureProtocol::InitializeCounteroffer,
-        "2025-03-26",
-        false,
+        "2025-06-18",
+        true,
         false,
     )
     .await;
@@ -817,7 +853,7 @@ async fn http_startup_passes_legacy_counteroffer_to_real_sdk_connection() {
                 .as_str()
                 .expect("protocol version"))
             .collect::<Vec<_>>(),
-        vec!["2025-11-25", "2025-03-26"],
+        vec!["2025-11-25", "2025-06-18"],
     );
 }
 
@@ -848,7 +884,8 @@ async fn preflight_preserves_modern_rejections_and_http_auth_or_server_errors() 
             }),
         );
         let (url, server) = serve_http_router(app).await;
-        let result = determine_transport("test".to_string(), &url, &HashMap::new(), None).await;
+        let result =
+            determine_transport("test".to_string(), &url, &HashMap::new(), None, None).await;
         server.abort();
         assert!(result.is_err(), "status {status}, code {code:?}");
         assert_eq!(
@@ -884,8 +921,8 @@ async fn preflight_rejects_unknown_or_exhausted_supported_versions_without_initi
         );
         let (url, server) = serve_http_router(app).await;
         let result = tokio::time::timeout(
-            Duration::from_secs(5),
-            determine_transport("test".to_string(), &url, &HashMap::new(), None),
+            HTTP_TEST_TIMEOUT,
+            determine_transport("test".to_string(), &url, &HashMap::new(), None, None),
         )
         .await
         .expect("negotiation should terminate");
@@ -952,7 +989,7 @@ async fn preflight_rejects_uncorrelated_version_errors_without_retrying() {
         }),
     );
     let (url, server) = serve_http_router(app).await;
-    let result = determine_transport("test".to_string(), &url, &HashMap::new(), None).await;
+    let result = determine_transport("test".to_string(), &url, &HashMap::new(), None, None).await;
     server.abort();
     assert!(matches!(
         result,
@@ -983,7 +1020,7 @@ async fn preflight_routes_legacy_endpoint_not_found_to_deprecated_sse() {
         }),
     );
     let (url, server) = serve_http_router(app).await;
-    let result = determine_transport("test".to_string(), &url, &HashMap::new(), None).await;
+    let result = determine_transport("test".to_string(), &url, &HashMap::new(), None, None).await;
     server.abort();
     assert!(matches!(result, Ok(super::Transport::Sse(None))));
     assert_eq!(
@@ -1004,7 +1041,7 @@ async fn preflight_bounds_sse_body_before_complete_event_arrives() {
         }),
     );
     let (url, server) = serve_http_router(app).await;
-    let result = determine_transport("test".to_string(), &url, &HashMap::new(), None).await;
+    let result = determine_transport("test".to_string(), &url, &HashMap::new(), None, None).await;
     server.abort();
     let message = transport_error_message(result, "oversized response must be rejected");
     assert!(message.contains("exceeds 1 MiB"), "{message}");
@@ -1079,6 +1116,7 @@ async fn bare_401_with_configured_credential_reports_rejection_not_oauth() {
             // wrongly fell through, the error would be the generic
             // authentication-unsupported message instead.
             None,
+            None,
         )
         .await,
         "a rejected credential should not produce a transport",
@@ -1111,6 +1149,7 @@ async fn oauth_challenge_in_repeated_header_routes_to_oauth() {
             &url,
             &headers(&[("Authorization", "Bearer stale-token")]),
             None,
+            None,
         )
         .await,
         "no auth context means the OAuth path cannot complete",
@@ -1138,6 +1177,7 @@ async fn oauth_challenge_still_routes_to_oauth_despite_configured_credential() {
             &url,
             &headers(&[("Authorization", "Bearer stale-token")]),
             None,
+            None,
         )
         .await,
         "no auth context means the OAuth path cannot complete",
@@ -1157,7 +1197,7 @@ async fn bare_401_without_configured_credential_still_attempts_oauth() {
     let (url, _requests, server) = serve_401(&[]).await;
 
     let message = transport_error_message(
-        determine_transport("srv".to_string(), &url, &headers(&[]), None).await,
+        determine_transport("srv".to_string(), &url, &headers(&[]), None, None).await,
         "no auth context means the OAuth path cannot complete",
     );
     assert!(
@@ -1180,6 +1220,7 @@ async fn credential_header_contents_are_not_parsed_as_template_references() {
             &url,
             &headers(&[("Authorization", "Bearer literal-{{token_fragment}}")]),
             None,
+            None,
         )
         .await,
         "a rejected credential should not produce a transport",
@@ -1195,4 +1236,285 @@ async fn credential_header_contents_are_not_parsed_as_template_references() {
     assert_eq!(requests.load(Ordering::SeqCst), 1);
 
     server.abort();
+}
+
+const EXPIRED_TOKEN_CHALLENGE: &str =
+    r#"Bearer error="invalid_token", error_description="proxy_token_expired""#;
+
+/// The `Authorization` value each request to a [`serve_token_checked`] server carried, with the
+/// request's method.
+type SeenAuthorizations = Arc<Mutex<Vec<(String, String)>>>;
+
+/// Serves a minimal MCP server that answers a request without the accepted `Authorization`
+/// value the way warp-server's managed MCP proxy answers an expired token: a `401` whose
+/// challenge names the token as expired.
+async fn serve_token_checked(
+    accepted: Arc<Mutex<&'static str>>,
+) -> (String, SeenAuthorizations, tokio::task::JoinHandle<()>) {
+    let seen = SeenAuthorizations::default();
+    let captured = seen.clone();
+    let app = Router::new().route(
+        "/mcp",
+        post(move |headers: HeaderMap, Json(request): Json<Value>| {
+            let method = request["method"]
+                .as_str()
+                .expect("request method")
+                .to_owned();
+            let authorization = headers
+                .get("authorization")
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_default()
+                .to_owned();
+            let is_accepted = authorization == *accepted.lock().expect("accepted token");
+            captured
+                .lock()
+                .expect("seen authorizations")
+                .push((method.clone(), authorization));
+            async move {
+                if !is_accepted {
+                    let mut response = StatusCode::UNAUTHORIZED.into_response();
+                    response.headers_mut().insert(
+                        axum::http::header::WWW_AUTHENTICATE,
+                        axum::http::HeaderValue::from_static(EXPIRED_TOKEN_CHALLENGE),
+                    );
+                    return response;
+                }
+                let result = match method.as_str() {
+                    "server/discover" => rpc_error(&request, ErrorCode::METHOD_NOT_FOUND, None),
+                    "initialize" => json!({
+                        "jsonrpc": "2.0", "id": request["id"],
+                        "result": {
+                            "protocolVersion": "2025-11-25", "capabilities": { "tools": {} },
+                            "serverInfo": { "name": "token-checked", "version": "1.0" },
+                        },
+                    }),
+                    "notifications/initialized" => return StatusCode::ACCEPTED.into_response(),
+                    "tools/list" => json!({
+                        "jsonrpc": "2.0", "id": request["id"],
+                        "result": { "tools": [test_tool("query_metrics")] },
+                    }),
+                    "tools/call" => json!({
+                        "jsonrpc": "2.0", "id": request["id"],
+                        "result": {
+                            "content": [{ "type": "text", "text": "metrics available" }],
+                            "isError": false,
+                        },
+                    }),
+                    _ => return StatusCode::BAD_REQUEST.into_response(),
+                };
+                Json(result).into_response()
+            }
+        }),
+    );
+    let (url, server) = serve_http_router(app).await;
+    (url, seen, server)
+}
+
+async fn call_query_metrics(
+    info: &super::TemplatableMCPServerInfo,
+) -> Result<rmcp::model::CallToolResult, rmcp::ServiceError> {
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        info.service
+            .call_tool(CallToolRequestParams::new("query_metrics")),
+    )
+    .await
+    .expect("tool call should complete")
+}
+
+/// The `Authorization` values of the `tools/call` requests a server saw, in order.
+fn tool_call_authorizations(seen: &SeenAuthorizations) -> Vec<String> {
+    seen.lock()
+        .expect("seen authorizations")
+        .iter()
+        .filter(|(method, _)| method == "tools/call")
+        .map(|(_, authorization)| authorization.clone())
+        .collect()
+}
+
+/// A rejection handler that replaces the headers it is later pointed at with `replacement`, and
+/// the slot to point it with.
+fn replacing_handler(
+    replacement: &'static str,
+) -> (RejectionHandler, Arc<Mutex<Option<RefreshableHeaders>>>) {
+    let target = Arc::new(Mutex::new(None::<RefreshableHeaders>));
+    let handler_target = target.clone();
+    let handler: RejectionHandler = Arc::new(move |challenge| {
+        assert_eq!(challenge, EXPIRED_TOKEN_CHALLENGE);
+        let target = handler_target.lock().expect("handler target").clone();
+        async move {
+            target
+                .expect("handler target should be set")
+                .replace(headers(&[("Authorization", replacement)]))
+                .expect("valid replacement");
+        }
+        .boxed()
+    });
+    (handler, target)
+}
+
+fn stale_configured_authorization() -> Vec<StaticHeader> {
+    vec![StaticHeader {
+        name: "Authorization".to_string(),
+        value: "Bearer configured".to_string(),
+    }]
+}
+
+/// Replacing the headers must reach the connection that is already open: the server stops
+/// accepting the first token, and the next call still succeeds on the same session.
+#[tokio::test]
+async fn replaced_headers_are_used_on_the_open_connection() {
+    let accepted = Arc::new(Mutex::new("Bearer first"));
+    let (url, seen, server) = serve_token_checked(accepted.clone()).await;
+    let refreshable_headers =
+        RefreshableHeaders::new(headers(&[("Authorization", "Bearer first")]), None)
+            .expect("valid headers");
+
+    let info = start_http_server_with_refreshable_headers(
+        url,
+        stale_configured_authorization(),
+        Some(refreshable_headers.clone()),
+    )
+    .await
+    .expect("startup should use the refreshable header, not the configured one");
+    call_query_metrics(&info)
+        .await
+        .expect("first call should succeed");
+
+    *accepted.lock().expect("accepted token") = "Bearer second";
+    refreshable_headers
+        .replace(headers(&[("Authorization", "Bearer second")]))
+        .expect("valid replacement");
+    call_query_metrics(&info)
+        .await
+        .expect("call after replacement should succeed");
+
+    assert_eq!(
+        tool_call_authorizations(&seen),
+        vec!["Bearer first", "Bearer second"]
+    );
+    info.service.cancel().await.expect("cancel service");
+    server.abort();
+}
+
+/// A token that expires while the connection is open is rejected on the next request; the
+/// rejection handler replaces it and the same call succeeds without the caller seeing an error.
+#[tokio::test]
+async fn expired_token_is_refreshed_and_the_call_retried() {
+    let accepted = Arc::new(Mutex::new("Bearer first"));
+    let (url, seen, server) = serve_token_checked(accepted.clone()).await;
+    let (handler, target) = replacing_handler("Bearer second");
+    let refreshable_headers =
+        RefreshableHeaders::new(headers(&[("Authorization", "Bearer first")]), Some(handler))
+            .expect("valid headers");
+    *target.lock().expect("handler target") = Some(refreshable_headers.clone());
+
+    let info =
+        start_http_server_with_refreshable_headers(url, Vec::new(), Some(refreshable_headers))
+            .await
+            .expect("startup should succeed");
+
+    *accepted.lock().expect("accepted token") = "Bearer second";
+    let result = call_query_metrics(&info)
+        .await
+        .expect("call should succeed after one refresh");
+    assert_eq!(result.is_error, Some(false));
+
+    assert_eq!(
+        tool_call_authorizations(&seen),
+        vec!["Bearer first", "Bearer second"]
+    );
+    info.service.cancel().await.expect("cancel service");
+    server.abort();
+}
+
+/// A connection made after the token has already expired refreshes during the preflight rather
+/// than failing to start.
+#[tokio::test]
+async fn token_expired_before_connecting_is_refreshed_during_preflight() {
+    let (url, seen, server) = serve_token_checked(Arc::new(Mutex::new("Bearer second"))).await;
+    let (handler, target) = replacing_handler("Bearer second");
+    let refreshable_headers =
+        RefreshableHeaders::new(headers(&[("Authorization", "Bearer first")]), Some(handler))
+            .expect("valid headers");
+    *target.lock().expect("handler target") = Some(refreshable_headers.clone());
+
+    let info =
+        start_http_server_with_refreshable_headers(url, Vec::new(), Some(refreshable_headers))
+            .await
+            .expect("startup should succeed after one refresh");
+
+    let seen = seen.lock().expect("seen authorizations").clone();
+    assert_eq!(
+        seen.first(),
+        Some(&("server/discover".to_string(), "Bearer first".to_string()))
+    );
+    assert!(
+        seen[1..]
+            .iter()
+            .all(|(_, authorization)| authorization == "Bearer second"),
+        "every request after the refresh should carry the new token: {seen:?}"
+    );
+    info.service.cancel().await.expect("cancel service");
+    server.abort();
+}
+
+/// With nothing able to replace a rejected token, startup reports the credential rejection.
+#[tokio::test]
+async fn expired_token_without_a_handler_reports_the_rejection() {
+    let (url, _seen, server) = serve_token_checked(Arc::new(Mutex::new("Bearer second"))).await;
+    let refreshable_headers =
+        RefreshableHeaders::new(headers(&[("Authorization", "Bearer first")]), None)
+            .expect("valid headers");
+
+    let error =
+        start_http_server_with_refreshable_headers(url, Vec::new(), Some(refreshable_headers))
+            .await
+            .err()
+            .expect("startup should fail");
+
+    assert!(
+        error
+            .to_string()
+            .contains("rejected the configured credentials"),
+        "expected a credential-rejection error, got: {error}"
+    );
+    server.abort();
+}
+
+#[tokio::test]
+async fn http_client_sends_default_user_agent_unless_configured() {
+    let user_agents = Arc::new(Mutex::new(Vec::new()));
+    let captured = user_agents.clone();
+    let app = Router::new().route(
+        "/mcp",
+        post(move |headers: HeaderMap| {
+            captured.lock().expect("user agent capture").push(
+                headers
+                    .get(http::header::USER_AGENT)
+                    .and_then(|v| v.to_str().ok())
+                    .map(ToString::to_string),
+            );
+            async { StatusCode::OK }
+        }),
+    );
+    let (url, server) = serve_http_router(app).await;
+
+    for configured in [headers(&[]), headers(&[("User-Agent", "custom-agent/1.0")])] {
+        build_client_with_headers(&configured)
+            .expect("client should build")
+            .post(&url)
+            .send()
+            .await
+            .expect("request should succeed");
+    }
+    server.abort();
+
+    let user_agents = user_agents.lock().expect("user agent capture").clone();
+    let [Some(default), Some(configured)] = user_agents.as_slice() else {
+        panic!("expected a User-Agent on every request, got {user_agents:?}");
+    };
+    // Must stay identical to warp-server's `managedMCPOutboundUserAgent`.
+    assert_eq!(default, "Warp-MCP-Client/1.0 (+https://www.warp.dev)");
+    assert_eq!(configured, "custom-agent/1.0");
 }

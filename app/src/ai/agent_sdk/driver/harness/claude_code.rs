@@ -6,7 +6,6 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow};
 use async_trait::async_trait;
-use chrono::Utc;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -14,7 +13,6 @@ use tempfile::NamedTempFile;
 use uuid::Uuid;
 use warp_cli::agent::Harness;
 use warp_core::safe_info;
-use warp_harness_usage::extract_claude;
 use warp_managed_secrets::ManagedSecretValue;
 use warpui::{ModelHandle, ModelSpawner};
 
@@ -22,22 +20,22 @@ use super::super::terminal::{CommandHandle, TerminalDriver};
 use super::super::{AgentDriver, AgentDriverError};
 use super::claude_transcript::{
     ClaudeResumeInfo, ClaudeTranscriptEnvelope, claude_config_dir, home_dir_for_claude_config,
-    read_envelope_with_diagnostics, rehydrate_claude_transcript,
+    rehydrate_claude_transcript,
 };
+use super::claude_usage::capture_transcript_with_usage;
 use super::harness_persistence::{
     HarnessPersistence, PersistenceOutcome, save_transcript_and_block,
 };
 use super::json_utils::{read_json_file_or_default, write_json_file};
 use super::skill_dirs_publish::HarnessSupportSkills;
 use super::transcript_persistence::{
-    CapturedTranscript, UploadedTranscriptUsage, capture_transcript_with_retry,
-    needs_capture_retry, upload_captured_transcript,
+    UploadedTranscriptUsage, capture_transcript_with_retry, upload_captured_transcript,
 };
-use super::usage_reporting::CaptureIdentity;
 use super::{
     HarnessCleanupDisposition, HarnessRunner, JSONMCPServer, ResolvedMCPServers, ResumePayload,
     SavePoint, ThirdPartyHarness, cli_agent_session_status, install_docs_url, write_temp_file,
 };
+use crate::ai::agent::BaseUserQuery;
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
@@ -48,6 +46,7 @@ use crate::server::server_api::harness_support::HarnessSupportClient;
 use crate::terminal::CLIAgent;
 use crate::terminal::model::block::BlockId;
 use crate::terminal::model::session::ExecuteCommandOptions;
+use crate::terminal::shell::{ShellType, shell_quote_arg};
 mod parent_bridge;
 mod wake_driver;
 
@@ -143,6 +142,7 @@ impl ThirdPartyHarness for ClaudeHarness {
         system_prompt: Option<&str>,
         resumption_prompt: Option<&str>,
         context: Option<&str>,
+        _prompt_attribution: Option<&BaseUserQuery>,
         workspace_root: &Path,
         harness_working_dir: &Path,
         task_id: Option<AmbientAgentTaskId>,
@@ -225,16 +225,34 @@ fn claude_command(
     system_prompt_path: Option<&str>,
     mcp_config_path: Option<&str>,
     resuming: bool,
+    shell_type: ShellType,
 ) -> String {
     let flag = if resuming { "--resume" } else { "--session-id" };
     let mut cmd = format!("{cli_name} {flag} {session_id} --dangerously-skip-permissions");
     if let Some(sp_path) = system_prompt_path {
-        let _ = write!(cmd, " --append-system-prompt-file '{sp_path}'");
+        let _ = write!(
+            cmd,
+            " --append-system-prompt-file {}",
+            shell_quote_arg(sp_path, shell_type)
+        );
     }
     if let Some(mcp_path) = mcp_config_path {
-        let _ = write!(cmd, " --mcp-config '{mcp_path}'");
+        let _ = write!(
+            cmd,
+            " --mcp-config {}",
+            shell_quote_arg(mcp_path, shell_type)
+        );
     }
-    format!("{cmd} < '{prompt_path}'")
+    let prompt_path = shell_quote_arg(prompt_path, shell_type);
+    match shell_type {
+        ShellType::PowerShell => format!(
+            "& {{ $OutputEncoding = [System.Text.UTF8Encoding]::new($false); \
+             Get-Content -LiteralPath {prompt_path} -Raw -Encoding UTF8 | {cmd} }}"
+        ),
+        ShellType::Bash | ShellType::Zsh | ShellType::Fish => {
+            format!("{cmd} < {prompt_path}")
+        }
+    }
 }
 
 /// Runtime state of a [`ClaudeHarnessRunner`].
@@ -249,15 +267,14 @@ enum ClaudeRunnerState {
 }
 
 struct ClaudeHarnessRunner {
-    command: String,
     /// The CLI name used to invoke Claude Code.
     cli_name: String,
     /// Held so the temp file is cleaned up when the runner is dropped.
-    _temp_prompt_file: NamedTempFile,
+    temp_prompt_file: NamedTempFile,
     /// Held so the system prompt temp file is cleaned up when the runner is dropped.
-    _temp_system_prompt_file: Option<NamedTempFile>,
+    temp_system_prompt_file: Option<NamedTempFile>,
     /// Held so the MCP config temp file lives until the CLI exits.
-    _temp_mcp_config_file: Option<NamedTempFile>,
+    temp_mcp_config_file: Option<NamedTempFile>,
     client: Arc<dyn HarnessSupportClient>,
     server_api: Arc<ServerApi>,
     terminal_driver: ModelHandle<TerminalDriver>,
@@ -290,7 +307,6 @@ impl ClaudeHarnessRunner {
         // Write the prompt to a temp file so we can feed it via stdin redirect,
         // avoiding shell-quoting issues with complex content (e.g. skill instructions).
         let temp_file = write_temp_file("oz_prompt_", prompt, ".txt")?;
-        let prompt_path = temp_file.path().display().to_string();
 
         let (session_id, preexisting_conversation_id) = match resume {
             Some(ClaudeResumeInfo {
@@ -308,9 +324,6 @@ impl ClaudeHarnessRunner {
         let temp_system_prompt_file = system_prompt
             .map(|sp| write_temp_file("oz_system_prompt_", sp, ".txt"))
             .transpose()?;
-        let system_prompt_path = temp_system_prompt_file
-            .as_ref()
-            .map(|f| f.path().display().to_string());
 
         let temp_mcp_config_file = (!resolved_mcp_servers.is_empty())
             .then(|| {
@@ -319,9 +332,6 @@ impl ClaudeHarnessRunner {
                 write_temp_file("oz_mcp_config_", &mcp_json, ".json")
             })
             .transpose()?;
-        let mcp_config_path = temp_mcp_config_file
-            .as_ref()
-            .map(|f| f.path().display().to_string());
 
         let parent_bridge = task_id
             .map(|task_id| MessageBridge::new(task_id.to_string(), session_id))
@@ -330,18 +340,10 @@ impl ClaudeHarnessRunner {
         let client: Arc<dyn HarnessSupportClient> = server_api.clone();
 
         Ok(Self {
-            command: claude_command(
-                cli_command,
-                &session_id,
-                &prompt_path,
-                system_prompt_path.as_deref(),
-                mcp_config_path.as_deref(),
-                preexisting_conversation_id.is_some(),
-            ),
             cli_name: cli_command.to_string(),
-            _temp_prompt_file: temp_file,
-            _temp_system_prompt_file: temp_system_prompt_file,
-            _temp_mcp_config_file: temp_mcp_config_file,
+            temp_prompt_file: temp_file,
+            temp_system_prompt_file,
+            temp_mcp_config_file,
             client,
             server_api,
             terminal_driver,
@@ -495,11 +497,36 @@ impl HarnessRunner for ClaudeHarnessRunner {
             .await
             .map_err(AgentDriverError::ConfigBuildFailed)?;
 
-        let command = self.command.clone();
+        let cli_name = self.cli_name.clone();
+        let session_id = self.session_id;
+        let prompt_path = self.temp_prompt_file.path().display().to_string();
+        let system_prompt_path = self
+            .temp_system_prompt_file
+            .as_ref()
+            .map(|file| file.path().display().to_string());
+        let mcp_config_path = self
+            .temp_mcp_config_file
+            .as_ref()
+            .map(|file| file.path().display().to_string());
+        let resuming = self.preexisting_conversation_id.is_some();
         let terminal_driver = self.terminal_driver.clone();
         let command_handle = match foreground
             .spawn(move |_, ctx| {
-                terminal_driver.update(ctx, |driver, ctx| driver.execute_command(&command, ctx))
+                terminal_driver.update(ctx, |driver, ctx| {
+                    let shell_type = driver
+                        .active_session_shell_type(ctx)
+                        .unwrap_or(ShellType::Bash);
+                    let command = claude_command(
+                        &cli_name,
+                        &session_id,
+                        &prompt_path,
+                        system_prompt_path.as_deref(),
+                        mcp_config_path.as_deref(),
+                        resuming,
+                        shell_type,
+                    );
+                    driver.execute_command(&command, ctx)
+                })
             })
             .await??
             .await
@@ -680,45 +707,6 @@ async fn capture_and_upload_transcript(
     upload_captured_transcript(client, conversation_id, capture).await
 }
 
-pub(super) fn capture_transcript_with_usage(
-    session_id: Uuid,
-    harness_working_dir: &Path,
-    config_dir: &Path,
-    claude_version: Option<String>,
-    require_main_transcript: bool,
-    identity: Option<CaptureIdentity>,
-) -> Result<CapturedTranscript> {
-    let captured_at = Utc::now();
-    let (mut envelope, diagnostics) = read_envelope_with_diagnostics(
-        session_id,
-        harness_working_dir,
-        config_dir,
-        require_main_transcript || identity.is_some(),
-    )?;
-    envelope.claude_version = claude_version;
-    let transcript_body =
-        serde_json::to_vec(&envelope).context("Failed to serialize transcript envelope")?;
-    let usage_request = identity.and_then(|identity| {
-        identity.build_usage_request(
-            captured_at,
-            extract_claude(
-                &session_id.to_string(),
-                &envelope.entries,
-                envelope
-                    .subagents
-                    .iter()
-                    .map(|(id, entries)| (id.as_str(), entries.as_slice())),
-                &diagnostics,
-            ),
-        )
-    });
-    Ok(CapturedTranscript {
-        transcript_body,
-        usage_request,
-        needs_retry: needs_capture_retry(&diagnostics),
-    })
-}
-
 pub(crate) fn prepare_claude_environment_config(
     workspace_root: &Path,
     harness_working_dir: &Path,
@@ -847,9 +835,44 @@ fn prepare_claude_settings(claude_settings_path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Makes Manual (`default`) the permission mode Claude sessions start in, unless the settings
+/// already choose one.
+pub(crate) fn default_claude_sessions_to_manual_permission_mode() -> Result<()> {
+    set_manual_permission_mode_if_unset(&claude_config_dir()?.join(CLAUDE_SETTINGS_FILE_NAME))
+}
+
+fn set_manual_permission_mode_if_unset(claude_settings_path: &Path) -> Result<()> {
+    let mut settings: Map<String, Value> = read_json_file_or_default(claude_settings_path)?;
+    let Some(permissions) = settings
+        .entry(CLAUDE_PERMISSIONS_SETTING)
+        .or_insert_with(|| Value::Object(Map::new()))
+        .as_object_mut()
+    else {
+        log::warn!("Claude settings `permissions` is not an object; leaving its mode unset");
+        return Ok(());
+    };
+    if permissions.contains_key(CLAUDE_DEFAULT_MODE_SETTING) {
+        return Ok(());
+    }
+    // With no mode configured, claude-agent-acp starts a session in Auto, where Claude Code
+    // decides on tool calls itself instead of asking its client for permission.
+    permissions.insert(
+        CLAUDE_DEFAULT_MODE_SETTING.to_owned(),
+        Value::String(CLAUDE_MANUAL_PERMISSION_MODE.to_owned()),
+    );
+    write_json_file(
+        claude_settings_path,
+        &settings,
+        "Failed to serialize Claude settings",
+    )
+}
+
 const ANTHROPIC_API_KEY_ENV: &str = "ANTHROPIC_API_KEY";
 const CLAUDE_JSON_FILE_NAME: &str = ".claude.json";
 const CLAUDE_SETTINGS_FILE_NAME: &str = "settings.json";
+const CLAUDE_PERMISSIONS_SETTING: &str = "permissions";
+const CLAUDE_DEFAULT_MODE_SETTING: &str = "defaultMode";
+const CLAUDE_MANUAL_PERMISSION_MODE: &str = "default";
 const ANTHROPIC_API_KEY_SUFFIX_LEN: usize = 20;
 
 #[derive(Default, Deserialize, Serialize, Debug)]

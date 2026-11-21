@@ -122,6 +122,7 @@ impl BillingAndUsageDispatchView {
         workspace.is_none_or(|workspace| {
             let bm = &workspace.billing_metadata;
             bm.is_on_build_plan()
+                || bm.is_on_scale_plan()
                 || bm.is_on_build_max_plan()
                 || bm.is_on_build_business_plan()
                 || bm.is_enterprise_plan()

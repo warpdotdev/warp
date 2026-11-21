@@ -4,15 +4,17 @@
 //! agent→client requests are handed to a task that answers them through the installed handler,
 //! and notifications are queued for the owner to consume. Because the read loop pushes a
 //! notification before it reads the next line, every notification that precedes a response on
-//! the wire is queued by the time that response resolves. Agent requests never hold up the
-//! loop: a `session/request_permission` the handler is still deciding does not delay the
+//! the wire is queued by the time that response resolves. Notifications carry the same
+//! [`Arrival`] sequence responses do, so [`AcpConnection::request_discarding_replay`] drops
+//! exactly the ones that preceded its answer. Agent requests never hold up the loop: a
+//! `session/request_permission` the handler is still deciding does not delay the
 //! `session/update`s or the prompt response behind it, and the owner can answer it itself
 //! through [`AcpConnection::respond_pending`] or
 //! [`AcpConnection::cancel_pending_permission_requests`].
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 
 use anyhow::{Context as _, Result, anyhow};
 use futures::channel::oneshot;
@@ -30,13 +32,20 @@ use super::protocol::{METHOD_REQUEST_PERMISSION, PermissionOutcome, RequestPermi
 const JSON_RPC_VERSION: &str = "2.0";
 const METHOD_NOT_FOUND: i64 = -32601;
 const INTERNAL_ERROR: i64 = -32603;
+/// Bounds the rendered `data` so an agent that attaches a large payload (a backtrace, a whole
+/// API response) cannot flood the task status.
+const MAX_RENDERED_DATA_CHARS: usize = 1000;
 
-/// A JSON-RPC error returned to the agent for a request it made to us.
+/// A JSON-RPC error, either answered by the agent or returned to it for a request it made to us.
 #[derive(Debug, Deserialize, thiserror::Error)]
-#[error("ACP error {code}: {message}")]
+#[error("ACP error {code}: {}", self.detail())]
 pub(super) struct RpcError {
     pub code: i64,
     pub message: String,
+    /// Agents often send a generic `message` (e.g. "Internal error") and put the actual cause
+    /// here.
+    #[serde(default)]
+    pub data: Option<Value>,
 }
 
 impl RpcError {
@@ -44,6 +53,7 @@ impl RpcError {
         Self {
             code: METHOD_NOT_FOUND,
             message: format!("Method {method} not supported"),
+            data: None,
         }
     }
 
@@ -51,7 +61,25 @@ impl RpcError {
         Self {
             code: INTERNAL_ERROR,
             message: error.to_string(),
+            data: None,
         }
+    }
+
+    /// The message followed by the rendered `data`, if it adds anything.
+    pub(super) fn detail(&self) -> String {
+        let data = match &self.data {
+            None | Some(Value::Null) => return self.message.clone(),
+            Some(Value::String(data)) => data.trim().to_owned(),
+            Some(data) => data.to_string(),
+        };
+        if data.is_empty() || data == self.message {
+            return self.message.clone();
+        }
+        let mut rendered: String = data.chars().take(MAX_RENDERED_DATA_CHARS).collect();
+        if rendered.len() < data.len() {
+            rendered.push('…');
+        }
+        format!("{}: {rendered}", self.message)
     }
 }
 
@@ -64,6 +92,48 @@ pub(super) type AgentRequestHandler =
 pub(super) struct InboundNotification {
     pub method: String,
     pub params: Value,
+    arrival: Arrival,
+}
+
+/// The agent's notifications in wire order, without those discarded as a replay.
+pub(super) struct Notifications {
+    queue: async_channel::Receiver<InboundNotification>,
+    /// The latest [`Arrival`] whose notifications are discarded instead of delivered. Raised by
+    /// [`AcpConnection::request_discarding_replay`]; zero, which precedes every arrival, until
+    /// then.
+    discard_through: Arc<AtomicU64>,
+}
+
+impl Notifications {
+    /// The next notification, waiting for one to arrive. Fails once the agent has closed its
+    /// side and nothing is left to deliver.
+    pub(super) async fn recv(&self) -> Result<InboundNotification, async_channel::RecvError> {
+        loop {
+            let notification = self.queue.recv().await?;
+            if self.delivers(&notification) {
+                return Ok(notification);
+            }
+        }
+    }
+
+    /// The next notification already queued, if any.
+    pub(super) fn try_recv(&self) -> Result<InboundNotification, async_channel::TryRecvError> {
+        loop {
+            let notification = self.queue.try_recv()?;
+            if self.delivers(&notification) {
+                return Ok(notification);
+            }
+        }
+    }
+
+    /// Whether the agent has closed its side.
+    pub(super) fn is_closed(&self) -> bool {
+        self.queue.is_closed()
+    }
+
+    fn delivers(&self, notification: &InboundNotification) -> bool {
+        notification.arrival.0 > self.discard_through.load(Ordering::Acquire)
+    }
 }
 
 /// The JSON-RPC id of an agent→client request. Agents may use numbers or strings; the
@@ -96,30 +166,43 @@ struct InboundRequestEntry {
     handler: AbortHandle,
 }
 
-type PendingRequests = Arc<AsyncMutex<HashMap<i64, oneshot::Sender<Result<Value>>>>>;
+type PendingRequests = Arc<AsyncMutex<HashMap<i64, oneshot::Sender<(Arrival, Result<Value>)>>>>;
 type InboundRequests = Arc<Mutex<HashMap<InboundRequestId, InboundRequestEntry>>>;
 type BoxedWriter = Pin<Box<dyn AsyncWrite + Send>>;
 /// `None` once the connection has been closed; dropping the writer is what signals EOF to the
 /// agent.
 type SharedWriter = Arc<AsyncMutex<Option<BufWriter<BoxedWriter>>>>;
 
+/// Where a response or notification stood among the messages the agent wrote: of two, the one
+/// with the lower arrival was written first. Response futures resolve in no particular order,
+/// so this is what a caller compares when the order matters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) struct Arrival(u64);
+
+impl Arrival {
+    /// A request that never reached the agent; later than any answer.
+    pub(super) const NEVER: Self = Self(u64::MAX);
+}
+
 pub(super) struct AcpConnection {
     writer: SharedWriter,
     pending: PendingRequests,
     inbound: InboundRequests,
+    /// Shared with the connection's [`Notifications`].
+    discard_through: Arc<AtomicU64>,
     next_request_id: AtomicI64,
     _reader_task: BackgroundTask,
 }
 
 impl AcpConnection {
     /// Starts reading agent messages from `reader` and writing ours to `writer`. Notifications
-    /// are delivered on the returned receiver in wire order.
+    /// are delivered on the returned stream.
     pub(super) fn new<R, W>(
         reader: R,
         writer: W,
         handler: AgentRequestHandler,
         executor: &Arc<Background>,
-    ) -> (Self, async_channel::Receiver<InboundNotification>)
+    ) -> (Self, Notifications)
     where
         R: AsyncRead + Send + Unpin + 'static,
         W: AsyncWrite + Send + 'static,
@@ -129,6 +212,7 @@ impl AcpConnection {
         ))));
         let pending: PendingRequests = Arc::new(AsyncMutex::new(HashMap::new()));
         let inbound: InboundRequests = Arc::default();
+        let discard_through = Arc::new(AtomicU64::new(0));
         let (notification_tx, notification_rx) = async_channel::unbounded();
 
         let reader_task = executor.spawn(read_loop(
@@ -145,10 +229,14 @@ impl AcpConnection {
                 writer,
                 pending,
                 inbound,
+                discard_through: discard_through.clone(),
                 next_request_id: AtomicI64::new(1),
                 _reader_task: reader_task,
             },
-            notification_rx,
+            Notifications {
+                queue: notification_rx,
+                discard_through,
+            },
         )
     }
 
@@ -166,12 +254,38 @@ impl AcpConnection {
         self.send_request(method, params).await?.await
     }
 
+    /// Like [`Self::request`], for a request the agent answers only after replaying history as
+    /// notifications. Whether the answer is a result or an error, every notification the agent
+    /// wrote before it is discarded instead of delivered, and every one after it is kept. The
+    /// owner must not be consuming notifications while the request is in flight, or it would
+    /// take the replay before it is discarded.
+    pub(super) async fn request_discarding_replay<P: Serialize, R: DeserializeOwned + 'static>(
+        &self,
+        method: &str,
+        params: P,
+    ) -> Result<R> {
+        let (arrival, response) = self.send_sequenced_request(method, params).await?.await;
+        self.discard_through.fetch_max(arrival.0, Ordering::AcqRel);
+        response
+    }
+
     /// Flushes a request and returns a future for its response, deserialized as `R`.
     pub(super) async fn send_request<P: Serialize, R: DeserializeOwned + 'static>(
         &self,
         method: &str,
         params: P,
     ) -> Result<BoxFuture<'static, Result<R>>> {
+        let response = self.send_sequenced_request(method, params).await?;
+        Ok(Box::pin(async move { response.await.1 }))
+    }
+
+    /// Like [`Self::send_request`], with the response's [`Arrival`] alongside it. A request
+    /// the agent never answers (it closed its side first) is marked as arriving with the close.
+    pub(super) async fn send_sequenced_request<P: Serialize, R: DeserializeOwned + 'static>(
+        &self,
+        method: &str,
+        params: P,
+    ) -> Result<BoxFuture<'static, (Arrival, Result<R>)>> {
         let id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = oneshot::channel();
         self.pending.lock().await.insert(id, tx);
@@ -187,11 +301,20 @@ impl AcpConnection {
         }
         let method = method.to_owned();
         Ok(Box::pin(async move {
-            let value = rx
-                .await
-                .map_err(|_| anyhow!("ACP agent closed before responding to {method}"))??;
-            serde_json::from_value(value)
-                .with_context(|| format!("Failed to parse ACP response to {method}"))
+            let (arrival, value) = match rx.await {
+                Ok(answer) => answer,
+                Err(_) => {
+                    return (
+                        Arrival::NEVER,
+                        Err(anyhow!("ACP agent closed before responding to {method}")),
+                    );
+                }
+            };
+            let response = value.and_then(|value| {
+                serde_json::from_value(value)
+                    .with_context(|| format!("Failed to parse ACP response to {method}"))
+            });
+            (arrival, response)
         }))
     }
 
@@ -377,6 +500,7 @@ async fn read_loop<R: AsyncRead + Unpin>(
     handler: AgentRequestHandler,
 ) {
     let mut line = String::new();
+    let mut arrivals = 0;
     loop {
         line.clear();
         match reader.read_line(&mut line).await {
@@ -398,6 +522,7 @@ async fn read_loop<R: AsyncRead + Unpin>(
                 continue;
             }
         };
+        arrivals += 1;
         let id = message.get("id").filter(|id| !id.is_null()).cloned();
         let method = message
             .get("method")
@@ -425,12 +550,16 @@ async fn read_loop<R: AsyncRead + Unpin>(
                     (None, None) => Ok(Value::Null),
                 };
                 if let Some(tx) = pending.lock().await.remove(&id) {
-                    let _ = tx.send(result);
+                    let _ = tx.send((Arrival(arrivals), result));
                 }
             }
             (None, Some(method)) => {
                 if notifications
-                    .send(InboundNotification { method, params })
+                    .send(InboundNotification {
+                        method,
+                        params,
+                        arrival: Arrival(arrivals),
+                    })
                     .await
                     .is_err()
                 {
@@ -440,8 +569,14 @@ async fn read_loop<R: AsyncRead + Unpin>(
             (None, None) => log::warn!("Ignoring ACP message with neither id nor method"),
         }
     }
+    // Closed before pending requests fail, so a caller that sees a request fail on EOF also
+    // sees the notification stream closed.
+    notifications.close();
     for (_, tx) in pending.lock().await.drain() {
-        let _ = tx.send(Err(anyhow!("ACP agent closed its stdout")));
+        let _ = tx.send((
+            Arrival(arrivals),
+            Err(anyhow!("ACP agent closed its stdout")),
+        ));
     }
     // Nothing is listening for answers any more; let the handlers stop where they are.
     for (_, entry) in inbound.lock().drain() {
@@ -451,4 +586,4 @@ async fn read_loop<R: AsyncRead + Unpin>(
 
 #[cfg(test)]
 #[path = "connection_tests.rs"]
-mod tests;
+pub(super) mod tests;

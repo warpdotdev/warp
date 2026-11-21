@@ -621,7 +621,11 @@ impl BlocklistAIHistoryModel {
                 .conversations_by_id
                 .get(&conversation_id)
                 .and_then(|c| c.parent_conversation_id());
-            if current_parent != Some(parent_conversation_id) {
+            if current_parent != Some(parent_conversation_id)
+                && self
+                    .conversation(&conversation_id)
+                    .is_some_and(AIConversation::is_remote_child)
+            {
                 self.set_parent_for_conversation(conversation_id, parent_conversation_id);
             }
             return conversation_id;
@@ -659,9 +663,14 @@ impl BlocklistAIHistoryModel {
         task: &AmbientAgentTask,
         ctx: &mut ModelContext<Self>,
     ) {
-        if let Some(conversation) = self.conversations_by_id.get_mut(&conversation_id) {
-            conversation.set_remote_run_updated_at(task.updated_at.with_timezone(&Local));
-        }
+        let Some(conversation) = self
+            .conversations_by_id
+            .get_mut(&conversation_id)
+            .filter(|conversation| conversation.is_remote_child())
+        else {
+            return;
+        };
+        conversation.set_remote_run_updated_at(task.updated_at.with_timezone(&Local));
         self.update_conversation_status(
             terminal_surface_id,
             conversation_id,
@@ -2133,19 +2142,26 @@ impl BlocklistAIHistoryModel {
         }
     }
 
+    /// Marks the stream's exchanges as finished without updating the conversation status.
+    /// Returns `true` when the stream's output queued no actions, so the turn ended with it.
     pub fn mark_response_stream_completed_successfully(
         &mut self,
         stream_id: &ResponseStreamId,
         conversation_id: AIConversationId,
         terminal_surface_id: EntityId,
         ctx: &mut ModelContext<Self>,
-    ) {
+    ) -> bool {
         let Some(conversation) = self.conversations_by_id.get_mut(&conversation_id) else {
-            return;
+            return false;
         };
-        if let Err(e) = conversation.mark_request_completed(stream_id, terminal_surface_id, ctx) {
-            log::warn!("Failed to mark exchange as completed: {e}");
-        }
+        let turn_ended =
+            match conversation.mark_request_completed(stream_id, terminal_surface_id, ctx) {
+                Ok(turn_ended) => turn_ended,
+                Err(e) => {
+                    log::warn!("Failed to mark exchange as completed: {e}");
+                    false
+                }
+            };
 
         // If this conversation doesn't have server metadata yet, and it has a server conversation token,
         // fetch the metadata from the server.
@@ -2163,7 +2179,7 @@ impl BlocklistAIHistoryModel {
                 .in_flight_server_metadata_fetches
                 .insert(conversation_id)
             {
-                return;
+                return turn_ended;
             }
 
             let server_api = ServerApiProvider::as_ref(ctx).get_ai_client();
@@ -2199,6 +2215,7 @@ impl BlocklistAIHistoryModel {
                 },
             );
         }
+        turn_ended
     }
 
     pub fn set_exchange_time_to_first_token(

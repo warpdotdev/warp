@@ -301,7 +301,7 @@ lazy_static! {
 }
 
 cfg_if::cfg_if! {
-    if #[cfg(test)] {
+    if #[cfg(any(test, feature = "test-util"))] {
         lazy_static! {
             // Compiling the regexes for the default command execution allowlist/denylist can be slow
             // in an unoptimized build, so we use empty lists in unit tests.

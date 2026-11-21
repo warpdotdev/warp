@@ -19,7 +19,8 @@ Use this skill for repository files. It is not the skill for operating a live
 factory: use `factory-mcp` to send work to a factory, inspect task status, or
 pull a task down locally. Playbooks under a factory's own `skills/` directories
 tell that factory's agents how to do their job; editing one is a prompt change,
-not a schema change, so this skill's rules do not apply to their contents.
+not a schema change, so this skill's rules do not apply to their contents,
+except for skill reference files (see "Reference skills from another repository").
 
 ## Locate the Factory root
 Every Factory tree is rooted at the directory containing `factory.yaml`. All
@@ -44,6 +45,8 @@ benchmarks/<name>/suite.yaml         optional; benchmark suite manifest
 benchmarks/<name>/tasks/<name>.yaml  optional; benchmark suite task
 webhooks/<name>.yaml                optional; custom webhook sources
 skills/**                           skills every agent in the factory can use
+skills/<file>.yaml                  optional; skill references for every agent
+agents/<name>/skills/<file>.yaml    optional; skill references for that agent
 ```
 
 Resource names come from the path, never from a field inside the file. Renaming
@@ -74,8 +77,8 @@ The registry lists the versions the server supports. The version endpoint
 returns every document describing one version, keyed by file name:
 `factory.schema.json` for `factory.yaml`, `agent.schema.json`,
 `automation.schema.json`, `runner.schema.json`, `scorer.schema.json` and
-`benchmark_suite.schema.json`, `benchmark_suite_task.schema.json`, and
-`webhook.schema.json` for the corresponding resources, and
+`benchmark_suite.schema.json`, `benchmark_suite_task.schema.json`,
+`webhook.schema.json` and `skill_reference.schema.json` for the corresponding resources, and
 `common.schema.json` for the definitions they share. Both endpoints are
 unauthenticated. They are exact for the version they describe: an unknown
 field is an error, and each enumerated value is one the server accepts today.
@@ -178,6 +181,43 @@ read them.
   different name.
 - A webhook subscription's `filter.webhook_ids` takes source UIDs the server
   assigned, not the file names declared here.
+
+## Reference skills from another repository
+A `.yaml` or `.yml` file directly in `skills/` (every agent) or
+`agents/<name>/skills/` (that declared agent) loads selected skills from
+another repository. YAML deeper inside a skill folder belongs to that skill.
+`skill_reference.schema.json` has the exact rules.
+
+```yaml
+# skills/shared.yaml
+source: github.com:acme/shared-skills@v1.4.0
+include:
+  - safe-secrets          # a skill name, searched in the standard skill folders
+  - skills/release-notes  # a path to a skill folder or its SKILL.md
+  - "frontend/*"          # a glob; `*` stays in one path segment, `**` crosses them
+exclude:
+  - "legacy-*"
+```
+
+- `source` is `[<host>:]<owner>/<repo>[@<ref>]`, with host `github.com`,
+  `gitlab.com` or `dev.azure.com`, or a mapping with `owner`, `repo`, and
+  optional `codeForge` and `ref`. A ref containing `@` needs the mapping form.
+- The forge (host or `codeForge`) may be omitted only when the Factory has
+  exactly one code forge, and must be one of the Factory's code forges.
+- A 40-character lowercase hex `ref` pins a commit; 64-character SHAs are
+  rejected. Any other ref is a branch or tag, and the branch wins. Without a
+  `ref`, each run uses the latest commit on the default branch.
+- Quote entries that start with `*`. Paths can't start with `/` or contain
+  `..`; `./SKILL.md` selects a skill at the repository root. The same literal
+  skill name twice at one level is an error.
+- Public source repositories work as they are. A private one must be attached
+  in `repositories`; `deferred: true` attaches it without preparing it for
+  every run.
+
+For each agent, the first skill with a given name wins: the agent's skill
+folders, its reference files, the Factory's skill folders, then the Factory's
+reference files. A reference that doesn't resolve never fails a run; its
+skills are skipped with a warning.
 
 ## Do not add a local copy of the format
 It is tempting to bundle the schema, or to reimplement a few checks here so

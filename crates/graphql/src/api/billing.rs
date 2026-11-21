@@ -278,6 +278,7 @@ pub enum CustomerType {
     Lightspeed,
     Build,
     BuildMax,
+    Scale,
     #[cynic(fallback)]
     Other(String),
 }

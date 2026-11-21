@@ -24,7 +24,7 @@ jobs:
       private_repo: warpdotdev/warp-internal
     secrets:
       app_private_key: ${{ secrets.REPO_SYNC_APP_PRIVATE_KEY }}
-      warp_api_key: ${{ secrets.WARP_API_KEY }}
+      warp_api_key: ${{ secrets.REPO_SYNC_WARP_API_KEY }}
 
   restack:
     # Run the restack workflow on PRs for `repo-sync/`-prefixed branches
@@ -48,7 +48,7 @@ jobs:
       private_repo: warpdotdev/warp-internal
     secrets:
       app_private_key: ${{ secrets.REPO_SYNC_APP_PRIVATE_KEY }}
-      warp_api_key: ${{ secrets.WARP_API_KEY }}
+      warp_api_key: ${{ secrets.REPO_SYNC_WARP_API_KEY }}
 
   approve:
     if: >-

@@ -17,7 +17,7 @@ fn make_run_event(
     ref_id: Option<&str>,
 ) -> AgentRunEvent {
     AgentRunEvent {
-        event_type: event_type.to_string(),
+        kind: serde_json::from_value(serde_json::json!({"event_type": event_type})).unwrap(),
         run_id: run_id.to_string(),
         ref_id: ref_id.map(|value| value.to_string()),
         execution_id: None,

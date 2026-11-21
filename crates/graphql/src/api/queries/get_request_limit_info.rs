@@ -2,6 +2,7 @@ use crate::ai::RequestLimitInfo;
 use crate::billing::{BonusGrant, BonusGrantsInfo};
 use crate::error::UserFacingError;
 use crate::request_context::RequestContext;
+use crate::scalars::Time;
 use crate::schema;
 
 /*
@@ -11,6 +12,13 @@ query GetRequestLimitInfo($requestContext: RequestContext!) {
       user {
         workspaces {
           uid
+          includedUsageInfo {
+            includedUsageCredits
+            usageCreditsUsedSinceLastRefresh
+            includedUsageCents
+            usageCentsUsedSinceLastRefresh
+            nextRefreshTime
+          }
           bonusGrantsInfo {
             grants {
               createdAt
@@ -74,6 +82,7 @@ pub struct UserOutput {
 pub struct WorkspaceInfo {
     pub uid: cynic::Id,
     pub bonus_grants_info: BonusGrantsInfo,
+    pub included_usage_info: Option<WorkspaceIncludedUsageInfo>,
 }
 
 #[derive(cynic::QueryFragment, Debug)]
@@ -100,3 +109,16 @@ pub enum UserResult {
     #[cynic(fallback)]
     Unknown,
 }
+
+#[derive(cynic::QueryFragment, Clone, Debug)]
+pub struct WorkspaceIncludedUsageInfo {
+    pub included_usage_credits: f64,
+    pub usage_credits_used_since_last_refresh: f64,
+    pub included_usage_cents: f64,
+    pub usage_cents_used_since_last_refresh: f64,
+    pub next_refresh_time: Time,
+}
+
+#[cfg(test)]
+#[path = "get_request_limit_info_tests.rs"]
+mod tests;

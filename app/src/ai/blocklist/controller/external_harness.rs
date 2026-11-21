@@ -39,6 +39,30 @@ pub(in crate::ai) struct ExternalHarnessPrompt {
     pub base: Option<BaseUserQuery>,
 }
 
+impl ExternalHarnessPrompt {
+    pub(super) fn new(
+        text: String,
+        attachments: Vec<AgentAttachment>,
+        participant_id: ParticipantId,
+        base: Option<BaseUserQuery>,
+    ) -> Self {
+        let mut query = base
+            .unwrap_or_else(|| BaseUserQuery::unattributed("shared_session_author_unavailable"))
+            .to_proto();
+        // The base retains raw text when a displayed queue row is relayed again.
+        if query.query.is_empty() {
+            query.query = text;
+        }
+        let base = BaseUserQuery::from_proto(query);
+        Self {
+            text: base.format_third_party_prompt(""),
+            attachments,
+            participant_id,
+            base: Some(base),
+        }
+    }
+}
+
 /// A request to interrupt the turn an external harness is running, relayed to that harness.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ExternalHarnessCancel;
@@ -221,12 +245,12 @@ impl BlocklistAIController {
                 let (participant_id, attachments) = row.shared_session_prompt()?;
                 Some((
                     row.id(),
-                    ExternalHarnessPrompt {
-                        text: row.text().to_owned(),
-                        attachments: attachments.to_vec(),
-                        participant_id: participant_id.clone(),
-                        base: row.base_user_query().cloned(),
-                    },
+                    ExternalHarnessPrompt::new(
+                        row.text().to_owned(),
+                        attachments.to_vec(),
+                        participant_id.clone(),
+                        row.base_user_query().cloned(),
+                    ),
                 ))
             })
             .collect();
