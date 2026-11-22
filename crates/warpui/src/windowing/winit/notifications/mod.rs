@@ -19,9 +19,16 @@ pub(super) use imp::request_notification_permissions;
 pub async fn send_notification(
     notification_info: NotificationInfo,
     window_id: WindowId,
+    desktop_entry: Option<String>,
     event_loop_proxy: EventLoopProxy<CustomEvent>,
 ) {
-    imp::send_notification(notification_info, window_id, event_loop_proxy).await
+    imp::send_notification(
+        notification_info,
+        window_id,
+        desktop_entry,
+        event_loop_proxy,
+    )
+    .await
 }
 
 pub(super) fn request_desktop_notification_permissions(

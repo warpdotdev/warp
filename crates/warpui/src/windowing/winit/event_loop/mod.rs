@@ -1388,12 +1388,14 @@ impl EventLoop {
     #[allow(unused_variables)]
     fn send_notification(&mut self, notification_info: NotificationInfo, window_id: WindowId) {
         let proxy = self.proxy.clone();
+        let desktop_entry = self.window_class.clone();
         self.ui_app.update(|ctx| {
             ctx.background_executor()
                 .spawn(async move {
                     crate::windowing::winit::notifications::send_notification(
                         notification_info,
                         window_id,
+                        desktop_entry,
                         proxy,
                     )
                     .await;

@@ -10,6 +10,7 @@ use crate::windowing::winit::app::RequestPermissionsCallback;
 pub async fn send_notification(
     notification_info: NotificationInfo,
     _window_id: WindowId,
+    _desktop_entry: Option<String>,
     proxy: EventLoopProxy<CustomEvent>,
 ) {
     let NotificationInfo {
