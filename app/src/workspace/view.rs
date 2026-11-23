@@ -2684,7 +2684,7 @@ impl Workspace {
                 me.shown_staging_banner_count += 1;
                 me.toast_stack.update(ctx, |toast_stack, ctx| {
                     let toast = DismissibleToast::error(
-                        "Staging API call failed. Did your IP address change?".to_string(),
+                        "Staging API call failed. Do you have IAP disabled? Go to Settings → Account to enable.".to_string(),
                     )
                     .with_object_id("staging_access_blocked_toast".to_string());
                     toast_stack.add_ephemeral_toast(toast, ctx);
