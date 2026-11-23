@@ -48,6 +48,19 @@ fn test_wildcard_pattern_question_mark() {
 }
 
 #[test]
+fn wildcard_question_and_literal_count_characters_not_bytes() {
+    // "é" is one character and two UTF-8 bytes. "??" needs two characters.
+    assert!(match_wildcard_pattern("é", "??").is_none());
+    assert!(match_wildcard_pattern("é", "?").is_some());
+    assert!(match_wildcard_pattern("a", "??").is_none());
+    // A literal must not let '?' consume one byte of the following character.
+    assert!(match_wildcard_pattern("aé", "a??").is_none());
+    assert!(match_wildcard_pattern("aé", "?é").is_some());
+    assert!(match_wildcard_pattern("é", "*??").is_none());
+    assert!(match_wildcard_pattern("aé", "*?é").is_some());
+}
+
+#[test]
 fn test_wildcard_pattern_no_match() {
     let result = match_wildcard_pattern("button.rs", "*.py");
     assert!(result.is_none());
