@@ -82,7 +82,7 @@ async fn drain(
                     continue;
                 }
             };
-            let text = render(&messages);
+            let text = format_agent_messages(&messages);
             let text = match &opening_context {
                 Some(context) if !context.is_empty() => format!("{context}\n\n{text}"),
                 Some(_) | None => text,
@@ -127,7 +127,7 @@ async fn drain(
     }
 }
 
-fn render(messages: &[UndeliveredAgentMessage]) -> String {
+fn format_agent_messages(messages: &[UndeliveredAgentMessage]) -> String {
     let messages = serde_json::to_string(messages).expect("agent messages serialize as JSON");
     format!(
         "[Agent messages]\n\

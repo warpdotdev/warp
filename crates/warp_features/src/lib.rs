@@ -1103,6 +1103,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::GitMirrorCache,
     FeatureFlag::AgentPromptSteering,
     FeatureFlag::CwdScopedCloudSkills,
+    FeatureFlag::SessionAgentMessages,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).
