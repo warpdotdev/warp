@@ -157,6 +157,66 @@ fn live_cli_prompts_format_identity_without_changing_raw_control_submission() {
     });
 }
 
+#[test]
+fn cancelled_cli_accepts_shared_prompts_only_without_a_task() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let writes = Rc::new(RefCell::new(Vec::new()));
+        let captured = writes.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, move |_, event, _| {
+                if let Event::WriteBytesToPty { bytes } = event {
+                    captured.borrow_mut().push(bytes.to_vec());
+                }
+            });
+            CLIAgentSessionsModel::handle(ctx).update(ctx, |sessions, ctx| {
+                sessions.set_session(
+                    terminal.id(),
+                    CLIAgentSession {
+                        agent: CLIAgent::Pi,
+                        status: CLIAgentSessionStatus::Cancelled,
+                        session_context: Default::default(),
+                        input_state: CLIAgentInputState::Closed,
+                        should_auto_toggle_input: false,
+                        listener: None,
+                        remote_host: None,
+                        plugin_version: None,
+                        draft_text: None,
+                        custom_command_prefix: None,
+                        received_rich_notification: false,
+                    },
+                    ctx,
+                );
+            });
+            accept_agent_prompt(
+                &terminal,
+                prompt_request("continue", None),
+                ParticipantId::new(),
+                ctx,
+            );
+        });
+        assert_eq!(writes.borrow().len(), 1);
+        assert!(writes.borrow()[0].ends_with(b"\n\ncontinue\r"));
+
+        app.update(|ctx| {
+            LocalAgentTaskSyncModel::handle(ctx).update(ctx, |model, _| {
+                model.register_cli_session_for_test(terminal.id(), fixed_task_id());
+            });
+            accept_agent_prompt(
+                &terminal,
+                prompt_request("must not restart", None),
+                ParticipantId::new(),
+                ctx,
+            );
+            PendingCliHarnessPromptQueue::handle(ctx).update(ctx, |queue, _| {
+                assert!(queue.drain(fixed_task_id()).is_empty());
+            });
+        });
+        assert_eq!(writes.borrow().len(), 1);
+    });
+}
+
 /// The task owner (or any principal the server recognizes) is accepted when the server
 /// explicitly authorizes the request.
 #[tokio::test]

@@ -20,8 +20,7 @@ use warp_errors::{report_error, report_if_error};
 use warpui::{AppContext, ModelContext, SingletonEntity as _};
 
 use super::{
-    AgentDriver, AgentDriverError, IdleTimeoutSender, SDKConversationOutputStatus,
-    idle_window_for_terminal_status, output,
+    AgentDriver, AgentDriverError, IdleTimeoutSender, SDKConversationOutputStatus, output,
 };
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::{AIAgentActionId, AIAgentInput, RenderableAIError, ResolvedRunPrompt};
@@ -342,7 +341,7 @@ impl AgentDriver {
                             ),
                             true,
                         );
-                        me.end_run_before_conversation(run_exit, error, ctx);
+                        Self::end_run_before_conversation(run_exit, error);
                         return;
                     }
                     let messenger = HookRuntime::as_ref(ctx).messenger();
@@ -391,32 +390,23 @@ impl AgentDriver {
 
     /// Ends the run as failed because a hook stopped its first prompt, with the hook's reason.
     pub(super) fn end_run_for_halted_prompt(
-        &mut self,
         run_exit: IdleTimeoutSender<SDKConversationOutputStatus>,
         reason: &str,
-        ctx: &mut ModelContext<Self>,
     ) {
         let error = RenderableAIError::other(
             format!("The run was ended because an agent hook stopped its first prompt. {reason}"),
             true,
         );
-        self.end_run_before_conversation(run_exit, error, ctx);
+        Self::end_run_before_conversation(run_exit, error);
     }
 
-    /// Ends the run as failed with `error` before its conversation has started, holding the
-    /// process open for the `--idle-on-fail` window the way a failed conversation does.
+    /// Ends the run as failed with `error` before its conversation has started.
     fn end_run_before_conversation(
-        &mut self,
         run_exit: IdleTimeoutSender<SDKConversationOutputStatus>,
         error: RenderableAIError,
-        ctx: &mut ModelContext<Self>,
     ) {
         report_error!("{error}");
-        let status = SDKConversationOutputStatus::Error { error };
-        match idle_window_for_terminal_status(&status, self.idle_on_complete, self.idle_on_fail) {
-            Some(window) => self.arm_debug_window(run_exit, status, window, ctx),
-            None => run_exit.end_run_now(status),
-        }
+        run_exit.end_run_now(SDKConversationOutputStatus::Error { error });
     }
 
     /// Fails the conversation where the hook denied an action, or the run's own conversation if

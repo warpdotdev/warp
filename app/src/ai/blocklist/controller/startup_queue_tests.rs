@@ -2,6 +2,10 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use async_channel::unbounded;
+use chrono::Utc;
+use futures::executor::block_on;
+use futures::future::{pending, ready};
+use serde_json::json;
 use uuid::Uuid;
 use warp_core::command::ExitCode;
 use warp_multi_agent_api::request::input::UserQuery as ApiUserQuery;
@@ -12,12 +16,14 @@ use warpui::{App, ModelContext};
 
 use super::*;
 use crate::ai::agent::base_user_query::warp_client_origin;
-use crate::ai::agent::conversation::ConversationStatus;
+use crate::ai::agent::conversation::{ConversationStatus, TaskSyncMode};
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
     AIAgentActionId, AIAgentActionResult, AIAgentActionResultType, AIAgentContext, AIAgentInput,
     CancellationReason, RequestCommandOutputResult,
 };
+use crate::ai::agent_conversations_model::AgentConversationsModel;
+use crate::ai::ambient_agents::{AmbientAgentTask, AmbientAgentTaskId, AmbientAgentTaskState};
 use crate::ai::blocklist::block::FinishReason;
 use crate::ai::blocklist::orchestration_events::{
     OrchestrationEventService, PendingEvent, PendingEventDetail,
@@ -46,6 +52,228 @@ fn start_injection_command(
         block.id().clone()
     };
     (id, task_id, block_id, action_id)
+}
+
+#[test]
+fn blocked_shared_session_followup_starts_one_new_turn() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let controller = terminal.read(&app, |view, _| view.ai_controller().clone());
+        controller.update(&mut app, |controller, ctx| {
+            let id = controller.bind_native_prompt_conversation(None, ctx);
+            controller.send_user_query_in_conversation("initial".into(), id, None, ctx);
+            settle_native_request(controller, id, ctx);
+            BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, _| {
+                history.conversation_mut(&id).unwrap().set_status_for_test(
+                    ConversationStatus::Blocked {
+                        blocked_action: "approval".into(),
+                    },
+                );
+            });
+            controller.execute_warp_agent_prompt_from_shared_session_injection(
+                "continue".into(),
+                None,
+                vec![],
+                ParticipantId::new(),
+                None,
+                ctx,
+            );
+            let history = BlocklistAIHistoryModel::as_ref(ctx);
+            assert_eq!(user_queries_in_order(history, id), ["initial", "continue"]);
+            assert_eq!(
+                history.conversation(&id).unwrap().status(),
+                &ConversationStatus::InProgress
+            );
+            assert_eq!(
+                controller
+                    .in_flight_response_streams
+                    .stream_ids_for_conversation(id, ctx)
+                    .len(),
+                1
+            );
+            assert!(!QueuedQueryModel::as_ref(ctx).has_queue(id));
+        });
+    });
+}
+
+#[test]
+fn cancelled_shared_session_followup_has_no_admission_side_effects() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let controller = terminal.read(&app, |view, _| view.ai_controller().clone());
+        controller.update(&mut app, |controller, ctx| {
+            let id = controller.bind_native_prompt_conversation(None, ctx);
+            controller.send_user_query_in_conversation("initial".into(), id, None, ctx);
+            settle_native_request(controller, id, ctx);
+            BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, _| {
+                history
+                    .conversation_mut(&id)
+                    .unwrap()
+                    .set_status_for_test(ConversationStatus::Cancelled);
+            });
+            let (sink, receiver) = unbounded();
+            controller.external_harness_prompt_sink = Some(sink);
+            controller.execute_warp_agent_prompt_from_shared_session_injection(
+                "late prompt".into(),
+                None,
+                vec![AgentAttachment::FileReference {
+                    attachment_id: "file".into(),
+                    file_name: "late.txt".into(),
+                }],
+                ParticipantId::new(),
+                None,
+                ctx,
+            );
+            assert!(receiver.try_recv().is_err());
+            assert!(!QueuedQueryModel::as_ref(ctx).has_queue(id));
+            let history = BlocklistAIHistoryModel::as_ref(ctx);
+            assert_eq!(user_queries_in_order(history, id), ["initial"]);
+            assert_eq!(
+                history.conversation(&id).unwrap().status(),
+                &ConversationStatus::Cancelled
+            );
+            assert!(!controller.has_active_stream_for_conversation(id, ctx));
+        });
+    });
+}
+
+#[test]
+fn queued_prompt_prepared_after_cancellation_does_not_restart_the_run() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let controller = terminal.read(&app, |view, _| view.ai_controller().clone());
+        controller.update(&mut app, |controller, ctx| {
+            let id = controller.bind_native_prompt_conversation(None, ctx);
+            controller.send_user_query_in_conversation("initial".into(), id, None, ctx);
+            let row = QueuedQuery::new_shared_session_prompt(
+                "pending".into(),
+                ParticipantId::new(),
+                vec![AgentAttachment::FileReference {
+                    attachment_id: "file".into(),
+                    file_name: "pending.txt".into(),
+                }],
+                None,
+            );
+            let row_id = row.id();
+            QueuedQueryModel::handle(ctx).update(ctx, |queue, ctx| queue.append(id, row, ctx));
+            settle_native_request(controller, id, ctx);
+            BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, _| {
+                history
+                    .conversation_mut(&id)
+                    .unwrap()
+                    .set_status_for_test(ConversationStatus::Cancelled);
+            });
+            QueuedQueryModel::handle(ctx).update(ctx, |queue, ctx| {
+                queue.complete_preparation(id, row_id, HashMap::new(), ctx);
+            });
+            controller.dispatch_queued_warp_agent_prompt(id, Some(row_id), ctx);
+            assert_eq!(
+                user_queries_in_order(BlocklistAIHistoryModel::as_ref(ctx), id),
+                ["initial"]
+            );
+            assert!(!controller.has_active_stream_for_conversation(id, ctx));
+            assert_eq!(QueuedQueryModel::as_ref(ctx).queue(id).len(), 1);
+        });
+    });
+}
+
+#[test]
+fn retained_setup_debug_bootstraps_outside_the_original_setup_barrier() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let controller = terminal.read(&app, |view, _| view.ai_controller().clone());
+        let task_id: AmbientAgentTaskId = "550e8400-e29b-41d4-a716-446655440b00".parse().unwrap();
+        let now = Utc::now();
+        let task: AmbientAgentTask = serde_json::from_value(json!({
+            "task_id": task_id, "title": "setup failure", "state": "FAILED",
+            "prompt": "original", "created_at": now, "updated_at": now,
+            "is_sandbox_running": true, "debug_agent_available": true,
+        }))
+        .unwrap();
+        AgentConversationsModel::handle(&app)
+            .update(&mut app, |model, _| model.insert_task_for_test(task));
+        controller.update(&mut app, |controller, ctx| {
+            controller.ambient_agent_task_id = Some(task_id);
+            let original_id = controller.bind_native_prompt_conversation(None, ctx);
+            assert!(QueuedQueryModel::as_ref(ctx).is_dispatch_blocked(original_id));
+            BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, _| {
+                history
+                    .conversation_mut(&original_id)
+                    .unwrap()
+                    .set_status_for_test(ConversationStatus::Cancelled);
+                history.set_server_conversation_token_for_conversation(
+                    original_id,
+                    task_id.to_string(),
+                );
+            });
+            controller.execute_warp_agent_prompt_from_shared_session_injection(
+                "why did setup fail".into(),
+                Some(ServerConversationToken::from_uuid(
+                    Uuid::parse_str(&task_id.to_string()).unwrap(),
+                )),
+                vec![],
+                ParticipantId::new(),
+                None,
+                ctx,
+            );
+            let debug_id = controller.native_prompt_conversation_id().unwrap();
+            assert_ne!(debug_id, original_id);
+            assert!(!QueuedQueryModel::as_ref(ctx).is_dispatch_blocked(original_id));
+            assert_eq!(
+                BlocklistAIHistoryModel::as_ref(ctx)
+                    .conversation(&original_id)
+                    .unwrap()
+                    .exchange_count(),
+                0
+            );
+            let history = BlocklistAIHistoryModel::as_ref(ctx);
+            assert_eq!(
+                history.conversation(&debug_id).unwrap().task_sync_mode(),
+                TaskSyncMode::PreserveTerminalSetupFailure
+            );
+            assert_eq!(
+                user_queries_in_order(history, debug_id),
+                ["why did setup fail"]
+            );
+            settle_native_request(controller, debug_id, ctx);
+            BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, _| {
+                history
+                    .conversation_mut(&debug_id)
+                    .unwrap()
+                    .set_status_for_test(ConversationStatus::Error);
+            });
+            controller.execute_warp_agent_prompt_from_shared_session_injection(
+                "try another diagnostic".into(),
+                None,
+                vec![],
+                ParticipantId::new(),
+                None,
+                ctx,
+            );
+            assert_eq!(controller.native_prompt_conversation_id(), Some(debug_id));
+            assert_eq!(
+                user_queries_in_order(BlocklistAIHistoryModel::as_ref(ctx), debug_id),
+                ["why did setup fail", "try another diagnostic"]
+            );
+            assert_eq!(
+                AgentConversationsModel::as_ref(ctx)
+                    .get_task_data(&task_id)
+                    .unwrap()
+                    .state,
+                AmbientAgentTaskState::Failed
+            );
+        });
+    });
+}
+
+#[test]
+fn attachment_preparation_deadline_settles_an_unfinished_download() {
+    let downloaded = block_on(await_attachment_preparation(pending(), ready(())));
+    assert!(downloaded.is_empty());
 }
 
 #[test]
