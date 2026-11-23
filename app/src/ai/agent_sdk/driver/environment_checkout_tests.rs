@@ -1824,6 +1824,60 @@ fn failed_direct_clone_leaves_a_retryable_target() {
     });
 }
 
+#[cfg(unix)]
+#[test]
+fn failed_blob_transfer_cleans_partial_clone_before_retry() {
+    fixture_test(
+        "failed_blob_transfer_cleans_partial_clone_before_retry",
+        |fixture| {
+            use std::os::unix::fs::PermissionsExt as _;
+
+            let transfers = fixture.root.join("transfers");
+            let hook = fixture.root.join("fail-blob-transfer");
+            fs::write(
+                &hook,
+                format!(
+                    "#!/bin/sh\n\
+                     echo transfer >> '{transfers}'\n\
+                     if [ \"$(wc -l < '{transfers}')\" -eq 2 ]; then exit 1; fi\n\
+                     exec \"$@\"\n",
+                    transfers = transfers.display(),
+                ),
+            )
+            .unwrap();
+            fs::set_permissions(&hook, fs::Permissions::from_mode(0o700)).unwrap();
+            git(
+                &fixture.root,
+                &[
+                    "config",
+                    "--file",
+                    fixture.root.join("gitconfig").to_str().unwrap(),
+                    "uploadpack.packObjectsHook",
+                    hook.to_str().unwrap(),
+                ],
+            );
+            let batch = fixture.batch(vec![fixture.request("retry", None)]);
+            let target = fixture.work().join("retry");
+            let outcomes = checkout_batch(&batch, None).unwrap();
+            assert_eq!(fs::read_to_string(&transfers).unwrap().lines().count(), 2);
+            assert!(
+                outcomes[0]
+                    .diagnostics
+                    .contains("Clone succeeded, but checkout failed")
+            );
+            assert_eq!(outcomes[0].failure, Some(CheckoutFailureKind::Clone));
+            assert!(!target.exists());
+
+            assert_succeeded(&checkout_batch(&batch, None).unwrap());
+            assert_eq!(git(&target, &["rev-parse", "HEAD"]), fixture.base());
+            assert_eq!(
+                fs::read_to_string(target.join("README")).unwrap(),
+                "current blob\n"
+            );
+        },
+    );
+}
+
 impl Fixture {
     fn origin(&self) -> PathBuf {
         self.root.join("origin.git")

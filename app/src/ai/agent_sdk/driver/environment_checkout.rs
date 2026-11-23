@@ -714,9 +714,9 @@ async fn checkout(
         })?;
         let result = checkout_direct(request, &url, &target, git).await;
         if result == Err(CheckoutFailureKind::Clone) {
-            // Git can leave the empty directory we created behind after a failed clone.
-            // A later pass must not mistake it for a successful existing checkout.
-            if let Err(error) = fs::remove_dir(&target).await
+            // A failed blob transfer can leave HEAD but no working tree. This target was created
+            // by this attempt, so remove it before a retry can mistake it for an existing checkout.
+            if let Err(error) = fs::remove_dir_all(&target).await
                 && error.kind() != io::ErrorKind::NotFound
             {
                 git.record_error("could not remove failed clone target", error);
