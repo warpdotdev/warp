@@ -94,7 +94,11 @@ fn startup_drains_batches_only_after_acceptance_without_blocking_followups() {
         first.accepted.unwrap().send(()).await.unwrap();
 
         let second = prompts.recv().await.unwrap();
-        assert!(second.text.starts_with("[Agent messages]"));
+        assert!(
+            second
+                .text
+                .starts_with("You have received new agent messages:\n[Agent messages]\n")
+        );
         assert!(second.text.contains("message-1"));
         assert_eq!(delivered.load(Ordering::SeqCst), 1);
         second.accepted.unwrap().send(()).await.unwrap();
