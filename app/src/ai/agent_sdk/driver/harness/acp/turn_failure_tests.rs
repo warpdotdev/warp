@@ -128,23 +128,6 @@ fn the_claude_reading_applies_to_no_other_harness_kind_or_connection_state() {
 }
 
 #[test]
-fn claude_losing_its_own_process_loses_the_session() {
-    for kind in ["transport_lost", "worker_shutdown"] {
-        let error = rpc_error(-32603, "Internal error", Some(json!({ "errorKind": kind })));
-        assert_eq!(
-            read_prompt_error(Harness::Claude, &error, false),
-            LOST,
-            "{kind}"
-        );
-        assert_eq!(
-            read_prompt_error(Harness::Codex, &error, false),
-            FAILED,
-            "{kind} means nothing from another harness"
-        );
-    }
-}
-
-#[test]
 fn codex_losing_its_app_server_loses_the_session_only_when_it_cannot_restart() {
     let exited = |data: Value| rpc_error(1001, "Codex app-server exited", Some(data));
     assert_eq!(
@@ -217,13 +200,13 @@ fn errors_the_agent_did_not_send_are_classified_by_the_connection_alone() {
         TurnFailure::SessionLost
     );
     let wrapped = anyhow::Error::new(rpc_error(
-        -32603,
-        "Internal error",
-        Some(json!({ "errorKind": "worker_shutdown" })),
+        1001,
+        "Codex app-server exited",
+        Some(json!({ "restartable": false })),
     ))
     .context("session/prompt failed");
     assert_eq!(
-        classify_turn_failure(Harness::Claude, &wrapped, false),
+        classify_turn_failure(Harness::Codex, &wrapped, false),
         TurnFailure::SessionLost,
         "an agent's error is still read through added context"
     );

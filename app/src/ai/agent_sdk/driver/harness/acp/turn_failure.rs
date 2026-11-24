@@ -11,6 +11,9 @@ use super::connection::RpcError;
 /// The Codex adapter's code for its app-server exiting under a turn.
 const CODEX_APP_SERVER_EXITED: i64 = 1001;
 
+/// The Claude adapter's error kind for a turn that ended with tool calls left without a result.
+const CLAUDE_INCOMPLETE_TOOL_CALL: &str = "incomplete_tool_call";
+
 /// The prefix of Anthropic's ids for tool calls the API runs itself.
 const SERVER_TOOL_CALL_ID_PREFIX: &str = "srvtoolu_";
 
@@ -78,20 +81,15 @@ pub(super) fn classify_turn_failure(
     }
 }
 
+/// The adapter counts a tool call the API runs itself as one it owes a result for, and rejects the
+/// prompt when the API never answered it, although nothing the turn did depended on that answer
+/// (agentclientprotocol/claude-agent-acp#1486). A client tool call left without a result is a real
+/// failure and is not read this way.
 fn claude_hint(error: &RpcError) -> Option<PromptErrorReading> {
-    match error.error_kind()? {
-        // The adapter counts a tool call the API runs itself as one it owes a result for, and
-        // rejects the prompt when the API never answered it, although nothing the turn did
-        // depended on that answer (agentclientprotocol/claude-agent-acp#1486). A client tool call
-        // left without a result is a real failure and is not read this way.
-        "incomplete_tool_call" => {
-            only_server_tool_calls(&error.message).then_some(PromptErrorReading::Completed)
-        }
-        "transport_lost" | "worker_shutdown" => {
-            Some(PromptErrorReading::Failed(TurnFailure::SessionLost))
-        }
-        _ => None,
+    if error.error_kind()? != CLAUDE_INCOMPLETE_TOOL_CALL {
+        return None;
     }
+    only_server_tool_calls(&error.message).then_some(PromptErrorReading::Completed)
 }
 
 fn codex_hint(error: &RpcError) -> Option<PromptErrorReading> {
