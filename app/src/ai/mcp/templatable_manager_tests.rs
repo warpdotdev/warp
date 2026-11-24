@@ -229,6 +229,48 @@ fn reconnect_completion_notifies_all_waiters() {
 }
 
 #[test]
+fn builtin_iap_header_refresh_replaces_only_warp_hosted_servers() {
+    let headers = |pairs: &[(&str, &str)]| -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(name, value)| (name.to_string(), value.to_string()))
+            .collect()
+    };
+    let other_uuid = Uuid::new_v4();
+    let other_headers = headers(&[("Authorization", "Bearer managed")]);
+    let mut manager = TemplatableMCPServerManager::default();
+    manager.refreshable_headers.insert(
+        builtin::FACTORY_MCP_INSTALLATION_UUID,
+        RefreshableHeaders::new(headers(&[("Proxy-Authorization", "Bearer stale")]), None)
+            .expect("valid headers"),
+    );
+    manager.refreshable_headers.insert(
+        other_uuid,
+        RefreshableHeaders::new(other_headers.clone(), None).expect("valid headers"),
+    );
+
+    let iap_headers = headers(&[
+        ("Proxy-Authorization", "Bearer fresh"),
+        ("x-warp-enable-iap", "1"),
+    ]);
+    manager.replace_builtin_iap_headers(&iap_headers);
+
+    assert_eq!(
+        manager.refreshable_headers[&builtin::FACTORY_MCP_INSTALLATION_UUID].current(),
+        iap_headers
+    );
+    assert_eq!(
+        manager.refreshable_headers[&other_uuid].current(),
+        other_headers
+    );
+    assert!(
+        !manager
+            .refreshable_headers
+            .contains_key(&builtin::PREVIEW_URLS_MCP_INSTALLATION_UUID)
+    );
+}
+
+#[test]
 fn shutdown_ends_ephemeral_reconnect_lifecycle() {
     App::test((), |mut app| async move {
         initialize_settings_for_tests(&mut app);
