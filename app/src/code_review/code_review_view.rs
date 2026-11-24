@@ -2525,27 +2525,45 @@ impl CodeReviewView {
             return;
         };
 
-        // Deallocate global buffers that are going to be invalidated.
-        if let Some(repo) = self.active_repo.as_mut() {
-            repo.state = CodeReviewViewState::None;
-            GlobalBufferModel::handle(ctx).update(ctx, |model, ctx| {
-                model.remove_deallocated_buffers(ctx);
-            });
+        // Reconcile incoming diffs against existing per-file editors so a
+        // redundant reload reuses loaded editors instead of tearing the
+        // whole view down and flashing back to the loading skeleton.
+        let mut previous_states = self
+            .active_repo
+            .as_mut()
+            .and_then(|repo| repo.pop_loaded_state())
+            .map(|loaded| loaded.file_states)
+            .unwrap_or_default();
+
+        let mut file_states: IndexMap<String, FileState> = IndexMap::new();
+        for file in &diff_data.files {
+            let state = previous_states
+                .shift_remove(&file.file_diff.file_path)
+                .and_then(|existing| self.reuse_file_state_if_compatible(existing, file, ctx))
+                .unwrap_or_else(|| {
+                    self.build_view_state_for_file_diffs(std::slice::from_ref(file), ctx)
+                        .into_iter()
+                        .next()
+                        .expect("build_view_state_for_file_diffs returns one state per file")
+                });
+            file_states.insert(file.file_diff.file_path.clone(), state);
         }
+        // Drop removed files' editors before reclaiming stale buffers so
+        // global buffers still referenced by reused editors aren't freed.
+        drop(previous_states);
+        GlobalBufferModel::handle(ctx).update(ctx, |model, ctx| {
+            model.remove_deallocated_buffers(ctx);
+        });
 
         // Create a new list state for this update
         self.viewported_list_state = Self::create_list_state(ctx);
 
-        let file_states_vec = self.build_view_state_for_file_diffs(&diff_data.files, ctx);
         let is_local = self.repo_is_local();
         let diff_mode = self.diff_state_model.as_ref(ctx).diff_mode(ctx);
 
         if let Some(repo) = self.active_repo.as_mut() {
             repo.state = CodeReviewViewState::Loaded(LoadedState {
-                file_states: file_states_vec
-                    .into_iter()
-                    .map(|fs| (fs.file_diff.file_path.clone(), fs))
-                    .collect(),
+                file_states,
                 total_additions: diff_data.total_additions,
                 total_deletions: diff_data.total_deletions,
                 files_changed: diff_data.files_changed,
@@ -2577,6 +2595,53 @@ impl CodeReviewView {
         }
 
         ctx.notify();
+    }
+
+    /// Reuse `existing` for an incoming `file` when the diff is compatible,
+    /// preserving the editor's loaded state so a redundant reload doesn't
+    /// flash the view back to the skeleton. Returns `None` when the file
+    /// state must be rebuilt instead.
+    fn reuse_file_state_if_compatible(
+        &self,
+        mut existing: FileState,
+        file: &FileDiffAndContent,
+        ctx: &mut ViewContext<Self>,
+    ) -> Option<FileState> {
+        // Binary files and files without head content have no editor to reuse.
+        if file.file_diff.is_binary || file.content_at_head.is_none() {
+            return None;
+        }
+        // A transition into or out of Deleted changes what the editor must
+        // display, so rebuild rather than reuse.
+        if file_status_changed_deleted_state(&existing.file_diff.status, &file.file_diff.status) {
+            return None;
+        }
+        if existing.file_diff == file.file_diff {
+            // Byte-identical diff (e.g. the redundant reload fired right
+            // after open): nothing to update.
+            return Some(existing);
+        }
+        let editor_state = existing.editor_state.as_ref()?;
+        if editor_state.has_unsaved_changes(ctx) {
+            // Never clobber unsaved edits; keep the stale diff like the
+            // single-file update path does.
+            return Some(existing);
+        }
+        let comment_line_numbers = self.repo_path().map(|repo_path| {
+            let full_file_location = repo_path.join(&file.file_diff.file_path);
+            self.comment_line_numbers_for_file(&full_file_location, ctx)
+        });
+        Self::apply_diff_to_code_editor(
+            editor_state.editor(),
+            file,
+            false,
+            &comment_line_numbers.unwrap_or_default(),
+            ctx,
+        );
+        // Advance file_diff only after the new diff has actually been
+        // applied to the editor.
+        existing.file_diff = file.file_diff.clone();
+        Some(existing)
     }
 
     /// Builds view state for the given file diffs, returning the list of newly created file states.
