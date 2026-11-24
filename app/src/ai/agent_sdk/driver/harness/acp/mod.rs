@@ -865,6 +865,11 @@ impl HarnessRunner for AcpHarnessRunner {
                     restored.server_id.clone(),
                     self.client.clone(),
                     self.harness_working_dir.clone(),
+                    self.cli_session
+                        .as_ref()
+                        .expect("transcript root resolved")
+                        .root
+                        .clone(),
                 )
             })
         });

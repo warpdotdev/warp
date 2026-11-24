@@ -1,9 +1,11 @@
 use std::fs::{self, File};
-use std::io::{BufRead as _, BufReader, Read as _};
+use std::io::{BufRead as _, BufReader, Read as _, Write as _};
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
-use serde_json::Value;
+use anyhow::{Context as _, Result, anyhow, ensure};
+use chrono::Utc;
+use serde_json::{Value, json};
+use tempfile::NamedTempFile;
 use uuid::Uuid;
 
 pub(super) fn find_session_file(root: &Path, cwd: &Path, session_id: Uuid) -> Option<PathBuf> {
@@ -37,9 +39,15 @@ pub(super) fn find_session_file(root: &Path, cwd: &Path, session_id: Uuid) -> Op
         .map(|(entry, _)| entry.path())
 }
 
-fn mapped_session_file(session_dir: &Path, cwd: &Path, session_id: Uuid) -> Option<PathBuf> {
+pub(super) fn session_map_path() -> Result<PathBuf> {
     // pi-acp keeps its map under HOME even when Pi's session directory is overridden.
-    let map_path = dirs::home_dir()?.join(".pi/pi-acp/session-map.json");
+    Ok(dirs::home_dir()
+        .ok_or_else(|| anyhow!("Cannot locate the pi-acp session map without a home directory"))?
+        .join(".pi/pi-acp/session-map.json"))
+}
+
+fn mapped_session_file(session_dir: &Path, cwd: &Path, session_id: Uuid) -> Option<PathBuf> {
+    let map_path = session_map_path().ok()?;
     let map: Value = serde_json::from_slice(&fs::read(map_path).ok()?).ok()?;
     if map["version"] != 1 {
         return None;
@@ -61,7 +69,11 @@ fn session_header(path: &Path, cwd: &Path) -> Option<Uuid> {
     BufReader::new(file.take(8 * 1024 * 1024))
         .read_line(&mut header)
         .ok()?;
-    let header = serde_json::from_str::<Value>(&header).ok()?;
+    parse_session_header(header.as_bytes(), cwd)
+}
+
+fn parse_session_header(header: &[u8], cwd: &Path) -> Option<Uuid> {
+    let header = serde_json::from_slice::<Value>(header).ok()?;
     if header["type"] != "session"
         || header["cwd"]
             .as_str()
@@ -73,3 +85,63 @@ fn session_header(path: &Path, cwd: &Path) -> Option<Uuid> {
         .as_str()
         .and_then(|id| Uuid::parse_str(id).ok())
 }
+
+pub(super) fn rehydrate_pi_transcript(
+    transcript: &[u8],
+    root: &Path,
+    cwd: &Path,
+    map_path: &Path,
+) -> Result<Uuid> {
+    let header = transcript
+        .split(|byte| *byte == b'\n')
+        .next()
+        .unwrap_or_default();
+    let native_id = parse_session_header(header, cwd)
+        .ok_or_else(|| anyhow!("Invalid Pi session header or mismatched working directory"))?;
+    let mut map: Value = match fs::read(map_path) {
+        Ok(bytes) => serde_json::from_slice(&bytes).context("Invalid pi-acp session map")?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            json!({"version": 1, "sessions": {}})
+        }
+        Err(error) => return Err(error).context("Failed to read the pi-acp session map"),
+    };
+    ensure!(
+        map["version"] == 1 && map["sessions"].is_object(),
+        "Unsupported pi-acp session map"
+    );
+
+    let session_dir = root.join("sessions");
+    fs::create_dir_all(&session_dir)?;
+    let session_path = session_dir
+        .canonicalize()?
+        .join(format!("{native_id}.jsonl"));
+    let mut file = NamedTempFile::new_in(&session_dir)?;
+    file.write_all(transcript)?;
+    if !transcript.ends_with(b"\n") {
+        file.write_all(b"\n")?;
+    }
+    file.flush()?;
+    file.persist(&session_path).map_err(|error| error.error)?;
+
+    // The native transcript does not carry pi-acp's id; each restore needs its own mapping.
+    let session_id = Uuid::new_v4();
+    map["sessions"][session_id.to_string()] = json!({
+        "sessionId": session_id,
+        "cwd": cwd,
+        "sessionFile": session_path,
+        "updatedAt": Utc::now().to_rfc3339(),
+    });
+    let map_dir = map_path
+        .parent()
+        .context("pi-acp session map has no parent")?;
+    fs::create_dir_all(map_dir)?;
+    let mut file = NamedTempFile::new_in(map_dir)?;
+    serde_json::to_writer(&mut file, &map)?;
+    file.flush()?;
+    file.persist(map_path).map_err(|error| error.error)?;
+    Ok(session_id)
+}
+
+#[cfg(test)]
+#[path = "pi_transcript_tests.rs"]
+mod tests;
