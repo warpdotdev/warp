@@ -3,7 +3,7 @@ use crate::server::server_api::ai::RunPreview;
 
 #[test]
 #[cfg(not(target_family = "wasm"))]
-fn only_docker_sandbox_requires_viewer_credentials() {
+fn only_docker_sandbox_requires_ingress_tokens() {
     assert!(matches!(
         credential_policy(Some(IsolationPlatformType::DockerSandbox)).unwrap(),
         CredentialPolicy::DockerSandbox

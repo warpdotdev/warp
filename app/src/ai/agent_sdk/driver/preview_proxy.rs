@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 
 #[cfg(not(target_family = "wasm"))]
-use ::preview_proxy::ViewerAuthorization;
+use ::preview_proxy::IngressTokenValidation;
 use ::preview_proxy::{CredentialPolicy, PortSource, PreviewRecord, Proxy};
 use anyhow::Context as _;
 use tokio_util::sync::CancellationToken;
@@ -102,14 +102,17 @@ impl Manager {
 
 impl PortSource for Client {
     #[cfg(not(target_family = "wasm"))]
-    async fn authorize_viewer(&self, request: ViewerAuthorization<'_>) -> anyhow::Result<()> {
+    async fn validate_ingress_token(
+        &self,
+        request: IngressTokenValidation<'_>,
+    ) -> anyhow::Result<()> {
         self.client
-            .authorize_preview_viewer(
+            .validate_preview_ingress_token(
                 &self.task_id,
                 self.execution_id,
                 request.preview_id,
                 request.port,
-                request.credential,
+                request.ingress_token,
             )
             .await
     }
