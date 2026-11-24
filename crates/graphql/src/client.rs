@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 
 use cynic::{GraphQlResponse, QueryFragment, QueryVariables};
-use http::{HeaderValue, StatusCode};
+use http::{HeaderMap, HeaderValue, StatusCode};
 use instant::Duration;
 use reqwest::header::CONTENT_TYPE;
 use serde::Serialize;
@@ -50,6 +50,9 @@ pub enum GraphQLError {
     /// the IAP bearer token is stale or missing.
     #[error("blocked by IAP challenge")]
     IapChallengeBlocked,
+    /// The server rejected an anonymous session that is no longer valid.
+    #[error("anonymous session is no longer valid")]
+    AnonymousSessionRejected,
     #[error("received non-OK response code {status}")]
     HttpError { status: StatusCode, body: String },
     #[error("Failed to deserialize GraphQL response: {0:?}")]
@@ -60,7 +63,9 @@ impl ErrorExt for GraphQLError {
     fn is_actionable(&self) -> bool {
         match self {
             GraphQLError::RequestError(e) | GraphQLError::ResponseError(e) => e.is_actionable(),
-            GraphQLError::StagingAccessBlocked | GraphQLError::IapChallengeBlocked => false,
+            GraphQLError::StagingAccessBlocked
+            | GraphQLError::IapChallengeBlocked
+            | GraphQLError::AnonymousSessionRejected => false,
             GraphQLError::HttpError { status, .. } => {
                 !matches!(status.as_u16(), 408 | 429 | 500..=599)
             }
@@ -68,6 +73,16 @@ impl ErrorExt for GraphQLError {
     }
 }
 register_error!(GraphQLError);
+
+/// Response header warp-server sets when it rejects an anonymous session that is no longer valid.
+const ANONYMOUS_SESSION_REJECTED_HEADER: &str = "X-Warp-Anonymous-Session-Rejected";
+
+fn is_anonymous_session_rejection(status: StatusCode, headers: &HeaderMap) -> bool {
+    status == StatusCode::UNAUTHORIZED
+        && headers
+            .get(ANONYMOUS_SESSION_REJECTED_HEADER)
+            .is_some_and(|value| value == "true")
+}
 
 /// Options for sending a GraphQL request.
 #[derive(Default)]
@@ -161,6 +176,9 @@ where
             // `x-goog-iap-generated-response` header.
             if http_client::iap::is_iap_challenge(status_code, response.headers()) {
                 return Err(GraphQLError::IapChallengeBlocked);
+            }
+            if is_anonymous_session_rejection(status_code, response.headers()) {
+                return Err(GraphQLError::AnonymousSessionRejected);
             }
             if status_code == StatusCode::FORBIDDEN && ChannelState::uses_staging_server() {
                 // Both our server and Cloud Armor can send back HTTP 403 errors.
@@ -267,3 +285,7 @@ macro_rules! define_operation {
     };
 }
 pub(crate) use define_operation;
+
+#[cfg(test)]
+#[path = "client_tests.rs"]
+mod tests;

@@ -351,3 +351,28 @@ fn test_persist_skips_when_api_key_authenticated() {
         });
     });
 }
+
+#[test]
+fn test_anonymous_linking_url_falls_back_to_sign_in_when_reauth_needed() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_ctx| ServerApiProvider::new_for_test());
+        app.add_singleton_model(|_| AuthStateProvider::new_anonymous_for_test());
+        app.add_singleton_model(AuthManager::new_for_test);
+        app.update(|ctx| {
+            AuthStateProvider::as_ref(ctx).get().set_needs_reauth(true);
+        });
+
+        AuthManager::handle(&app).update(&mut app, |auth_manager, ctx| {
+            auth_manager.copy_anonymous_user_linking_url_to_clipboard(ctx);
+            assert!(auth_manager.pending_auth_state.is_some());
+        });
+
+        app.update(|ctx| {
+            let copied = ctx.clipboard().read().plain_text;
+            assert!(
+                copied.contains("/login/remote?"),
+                "expected the sign-in URL, got {copied}"
+            );
+        });
+    });
+}

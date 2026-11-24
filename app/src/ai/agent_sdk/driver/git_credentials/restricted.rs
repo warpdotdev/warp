@@ -714,7 +714,9 @@ pub(crate) fn is_transient_request_error(error: &anyhow::Error) -> bool {
                     }
                     transient |= error.is_timeout() || error.is_connect() || error.is_body();
                 }
-                GraphQLError::StagingAccessBlocked | GraphQLError::IapChallengeBlocked => {
+                GraphQLError::StagingAccessBlocked
+                | GraphQLError::IapChallengeBlocked
+                | GraphQLError::AnonymousSessionRejected => {
                     return false;
                 }
             }

@@ -76,6 +76,7 @@ pub(crate) fn is_transient_graphql_or_http_error(e: &anyhow::Error) -> bool {
                 GraphQLError::HttpError { status, .. } => is_transient_status(status.as_u16()),
                 GraphQLError::StagingAccessBlocked
                 | GraphQLError::IapChallengeBlocked
+                | GraphQLError::AnonymousSessionRejected
                 | GraphQLError::ResponseError(_) => false,
             };
         }
