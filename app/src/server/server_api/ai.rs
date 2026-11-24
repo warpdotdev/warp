@@ -1582,13 +1582,13 @@ pub struct UpdateMemoryResponse {
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
 pub trait AIClient: 'static + Send + Sync {
     #[cfg(not(target_family = "wasm"))]
-    async fn authorize_preview_viewer(
+    async fn validate_preview_ingress_token(
         &self,
         task_id: &AmbientAgentTaskId,
         execution_id: i64,
         preview_id: uuid::Uuid,
         port: u16,
-        credential: &str,
+        ingress_token: &str,
     ) -> anyhow::Result<()>;
 
     async fn list_run_previews(
@@ -2365,21 +2365,21 @@ fn convert_upload_field(
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
 impl AIClient for ServerApi {
     #[cfg(not(target_family = "wasm"))]
-    async fn authorize_preview_viewer(
+    async fn validate_preview_ingress_token(
         &self,
         task_id: &AmbientAgentTaskId,
         execution_id: i64,
         preview_id: uuid::Uuid,
         port: u16,
-        credential: &str,
+        ingress_token: &str,
     ) -> anyhow::Result<()> {
         self.base_client
-            .authorize_preview_viewer(
+            .validate_preview_ingress_token(
                 &task_id.to_string(),
                 execution_id,
                 preview_id,
                 port,
-                credential,
+                ingress_token,
             )
             .await
     }
