@@ -83,7 +83,11 @@ impl BackgroundFileWatcher {
                         self.notifier
                             .unwatch(path)
                             .inspect_err(|err| {
-                                log::warn!("Failed to remove repo watcher: {err:?}");
+                                if matches!(err.kind, notify::ErrorKind::WatchNotFound) {
+                                    log::debug!("Repo watcher was already absent: {err:?}");
+                                } else {
+                                    log::warn!("Failed to remove repo watcher: {err:?}");
+                                }
                             })
                             .map_err(anyhow::Error::new),
                     );

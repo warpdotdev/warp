@@ -38,6 +38,9 @@ use crate::ai::agent_sdk::environment_snapshot::{
 };
 use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
 use crate::ai::cloud_environments::{AmbientAgentEnvironment, SourceRepo};
+use crate::ai::codebase_auto_indexing::{
+    CodebaseAutoIndexingSurface, should_use_codebase_indexing,
+};
 use crate::server::telemetry::secret_redaction::redact_secrets_in_string;
 use crate::terminal::model::BlockId;
 use crate::terminal::model::session::command_executor::shell_escape_single_quotes;
@@ -441,7 +444,7 @@ pub(crate) fn validate_repository_preparation_overrides(
 
 /// Prepare a cloud agent environment within a terminal session. This will:
 /// 1. Materialize all repositories, enforcing server-provided HEAD overrides.
-/// 2. Begin codebase indexing for all repositories (Oz harness only).
+/// 2. Begin codebase indexing for all repositories when enabled (Oz harness only).
 /// 3. Run any setup commands.
 /// 4. If there is only one repository, navigate into it.
 ///
@@ -463,6 +466,8 @@ pub(crate) fn prepare_environment(
     ctx: &mut ModelContext<TerminalDriver>,
 ) -> impl Future<Output = Result<PathBuf, PrepareEnvironmentError>> + use<> {
     let spawner = ctx.spawner();
+    let should_index_codebase = harness == Harness::Oz
+        && should_use_codebase_indexing(CodebaseAutoIndexingSurface::Local, ctx);
     async move {
         let WorkspaceConfiguration {
             source_repos,
@@ -476,9 +481,6 @@ pub(crate) fn prepare_environment(
             preparation_policy: _,
             resolved_repos: _,
         } = workspace;
-        // Only index the codebase for the Oz harness; third-party harnesses (e.g. Claude)
-        // have their own methods for navigating a codebase.
-        let should_index_codebase = harness == Harness::Oz;
         let should_subscribe_to_index_updates = should_index_codebase && !source_repos.is_empty();
         let repo_channels = Arc::new(Mutex::new(HashMap::<PathBuf, oneshot::Sender<()>>::new()));
 
@@ -1739,6 +1741,10 @@ async fn index_repo_codebase(
     let repo_path_for_spawn = repo_path.clone();
     spawner
         .spawn(move |_, ctx| {
+            if !should_use_codebase_indexing(CodebaseAutoIndexingSurface::Local, ctx) {
+                return None;
+            }
+
             CodebaseIndexManager::handle(ctx).update(ctx, |manager, ctx| {
                 manager.index_directory(repo_path_for_spawn.clone(), ctx);
             });

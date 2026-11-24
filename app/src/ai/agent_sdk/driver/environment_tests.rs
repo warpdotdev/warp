@@ -1,5 +1,7 @@
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use cloud_object_models::CodeForge;
 use command::blocking::Command;
@@ -7,28 +9,66 @@ use futures::channel::oneshot;
 use futures::executor::block_on;
 use futures::future::{pending, ready};
 use futures::poll;
+use settings::Setting;
 use warp_cli::agent::{
     RepositoryForge, RepositoryHeadRef, RepositoryIdentity, RepositoryPreparationOverride,
 };
 use warp_core::command::ExitCode;
+use warp_core::features::FeatureFlag;
+use warpui::{App, SingletonEntity};
 
 use super::super::environment_checkout_protocol::{
     CheckoutBatch, CheckoutFailureKind, CheckoutOutcome, CheckoutReport, CheckoutRequest,
     CloneFailureCredentialIdentity, ResolvedHeads, is_valid_git_object_id,
 };
 use super::{
-    CheckoutHelperResult, CloneFailureIdentityDiagnostics, ExecutedCommand,
+    CheckoutHelperResult, CloneFailureIdentityDiagnostics, CodebaseIndexManager, ExecutedCommand,
     PrepareEnvironmentError, RepositoryCloneRequest, ResolvedRepository,
-    SETUP_COMMAND_OUTPUT_TRUNCATION_MARKER, SetupCommandPhase, WorkspaceConfiguration,
-    await_checkout_helper, await_setup_phase, build_checkout_helper_command,
-    checkout_failure_error, checkout_with_clone_retry, environment_snapshot, merge_repos_deduped,
-    parse_resolved_head_sha, read_checkout_report, reported_resolved_heads,
-    repository_clone_requests, setup_command_failure, single_repo_name,
+    SETUP_COMMAND_OUTPUT_TRUNCATION_MARKER, SetupCommandPhase, TerminalDriver,
+    WorkspaceConfiguration, await_checkout_helper, await_setup_phase,
+    build_checkout_helper_command, checkout_failure_error, checkout_with_clone_retry,
+    environment_snapshot, merge_repos_deduped, parse_resolved_head_sha, read_checkout_report,
+    reported_resolved_heads, repository_clone_requests, setup_command_failure, single_repo_name,
     validate_repository_preparation_overrides,
 };
 use crate::ai::agent_sdk::driver::AgentDriverError;
 use crate::ai::cloud_environments::{AmbientAgentEnvironment, SourceRepo};
+use crate::settings::CodeSettings;
 use crate::terminal::shell::ShellType;
+use crate::test_util::add_window_with_terminal;
+use crate::test_util::terminal::initialize_app_for_terminal_view;
+
+#[test]
+fn disabled_codebase_context_skips_setup_index_and_sync_waiter() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _indexing = FeatureFlag::FullSourceCodeEmbedding.override_enabled(true);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let driver = app.update(|ctx| TerminalDriver::create_from_existing_view(terminal, ctx));
+        app.update(|ctx| {
+            CodeSettings::handle(ctx).update(ctx, |settings, ctx| {
+                settings
+                    .codebase_context_enabled
+                    .set_value(false, ctx)
+                    .unwrap();
+            });
+        });
+        let repo = tempfile::tempdir().unwrap();
+        fs::create_dir(repo.path().join("repo")).unwrap();
+        let channels = Arc::new(Mutex::new(HashMap::new()));
+        let spawner = driver.update(&mut app, |_, ctx| ctx.spawner());
+
+        let receiver = super::index_repo_codebase("repo", repo.path(), channels.clone(), &spawner)
+            .await
+            .unwrap();
+
+        assert!(receiver.is_none());
+        assert!(channels.lock().unwrap().is_empty());
+        app.read(|ctx| {
+            assert_eq!(CodebaseIndexManager::as_ref(ctx).num_active_indices(), 0);
+        });
+    });
+}
 
 fn checkout_outcome(
     index: usize,
