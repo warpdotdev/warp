@@ -37,9 +37,9 @@ const PREVIEW_CACHE_TTL: Duration = Duration::from_secs(15 * 60);
 const MISS_REFRESH_BACKOFF: Duration = Duration::from_secs(1);
 const ACCEPT_RETRY_DELAY: Duration = Duration::from_millis(100);
 const MAX_CONNECTIONS: usize = 256;
-const VIEWER_AUTHORIZATION_TIMEOUT: Duration = Duration::from_secs(5);
-const MAX_VIEWER_AUTHORIZATIONS: usize = 32;
-const MAX_VIEWER_CREDENTIAL_BYTES: usize = 8192;
+const INGRESS_VALIDATION_TIMEOUT: Duration = Duration::from_secs(5);
+const MAX_INGRESS_VALIDATIONS: usize = 32;
+const MAX_INGRESS_TOKEN_BYTES: usize = 8192;
 
 type Body = BoxBody<Bytes, hyper::Error>;
 #[derive(Clone, Debug)]
@@ -52,18 +52,18 @@ pub struct PreviewRecord {
 pub trait PortSource: Send + Sync {
     fn previews(&self) -> impl Future<Output = Result<Vec<PreviewRecord>>> + Send;
 
-    fn authorize_viewer(
+    fn validate_ingress_token(
         &self,
-        _: ViewerAuthorization<'_>,
+        _: IngressTokenValidation<'_>,
     ) -> impl Future<Output = Result<()>> + Send {
-        async { bail!("Viewer authorization is unavailable") }
+        async { bail!("Ingress token validation is unavailable") }
     }
 }
 
-pub struct ViewerAuthorization<'a> {
+pub struct IngressTokenValidation<'a> {
     pub preview_id: Uuid,
     pub port: u16,
-    pub credential: &'a str,
+    pub ingress_token: &'a str,
 }
 
 #[derive(Clone, Copy)]
@@ -108,29 +108,29 @@ struct Routing<S> {
     listener_port: u16,
     source: Arc<S>,
     credential_policy: CredentialPolicy,
-    viewer_capacity: Semaphore,
+    ingress_capacity: Semaphore,
     upstream: UpstreamClient,
     cache: RwLock<PreviewCache>,
     refreshing: Mutex<()>,
 }
 
 impl<S: PortSource> Routing<S> {
-    async fn authorize_viewer(&self, route: &ParsedRoute, headers: &HeaderMap) -> bool {
-        let credential = match parse_viewer_credential(headers) {
-            Ok(Some(credential)) => credential,
+    async fn validate_ingress_token(&self, route: &ParsedRoute, headers: &HeaderMap) -> bool {
+        let ingress_token = match parse_ingress_token(headers) {
+            Ok(Some(ingress_token)) => ingress_token,
             Ok(None) => return matches!(self.credential_policy, CredentialPolicy::Namespace),
             Err(()) => return false,
         };
-        let Ok(_permit) = self.viewer_capacity.try_acquire() else {
+        let Ok(_permit) = self.ingress_capacity.try_acquire() else {
             return false;
         };
         matches!(
             timeout(
-                VIEWER_AUTHORIZATION_TIMEOUT,
-                self.source.authorize_viewer(ViewerAuthorization {
+                INGRESS_VALIDATION_TIMEOUT,
+                self.source.validate_ingress_token(IngressTokenValidation {
                     preview_id: route.id,
                     port: route.port,
-                    credential,
+                    ingress_token,
                 }),
             )
             .await,
@@ -289,15 +289,15 @@ fn parse_route(headers: &HeaderMap, listener_port: u16) -> Option<ParsedRoute> {
     Some(ParsedRoute { port, id, origin })
 }
 
-fn parse_viewer_credential(headers: &HeaderMap) -> std::result::Result<Option<&str>, ()> {
-    let Some(value) = unique_header(headers, "x-warp-preview-authorization")? else {
+fn parse_ingress_token(headers: &HeaderMap) -> std::result::Result<Option<&str>, ()> {
+    let Some(value) = unique_header(headers, "x-warp-preview-ingress-token")? else {
         return Ok(None);
     };
-    let credential = value.to_str().map_err(|_| ())?;
-    if credential.len() > MAX_VIEWER_CREDENTIAL_BYTES {
+    let ingress_token = value.to_str().map_err(|_| ())?;
+    if ingress_token.len() > MAX_INGRESS_TOKEN_BYTES {
         return Err(());
     }
-    let Some(token) = credential.strip_prefix("Bearer ") else {
+    let Some(token) = ingress_token.strip_prefix("Bearer ") else {
         return Err(());
     };
     if token.is_empty()
@@ -307,7 +307,7 @@ fn parse_viewer_credential(headers: &HeaderMap) -> std::result::Result<Option<&s
     {
         return Err(());
     }
-    Ok(Some(credential))
+    Ok(Some(ingress_token))
 }
 
 fn connection_nominates_identity(headers: &HeaderMap) -> bool {
@@ -323,7 +323,7 @@ fn connection_nominates_identity(headers: &HeaderMap) -> bool {
         "x-original-uri",
         "x-warp-preview-id",
         "x-warp-preview-port",
-        "x-warp-preview-authorization",
+        "x-warp-preview-ingress-token",
     ];
     for value in headers.get_all(CONNECTION).iter() {
         let Ok(value) = value.to_str() else {
@@ -374,7 +374,7 @@ impl Proxy {
             listener_port: port,
             source,
             credential_policy,
-            viewer_capacity: Semaphore::new(MAX_VIEWER_AUTHORIZATIONS),
+            ingress_capacity: Semaphore::new(MAX_INGRESS_VALIDATIONS),
             upstream: upstream::new_client(cancel.clone()),
             cache: RwLock::new(PreviewCache::default()),
             refreshing: Mutex::new(()),
@@ -483,7 +483,10 @@ async fn forward<S: PortSource + 'static>(
     let Some(authorized) = routing.authorize(&route).await else {
         return Ok(empty(StatusCode::FORBIDDEN));
     };
-    if !routing.authorize_viewer(&route, request.headers()).await {
+    if !routing
+        .validate_ingress_token(&route, request.headers())
+        .await
+    {
         return Ok(empty(StatusCode::FORBIDDEN));
     }
     let app_port = authorized.port;

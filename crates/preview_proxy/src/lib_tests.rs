@@ -14,32 +14,32 @@ pub(super) struct Ports {
     resume: tokio::sync::Notify,
 }
 
-struct ViewerPorts {
+struct IngressPorts {
     port: u16,
     allowed: AtomicBool,
 }
 
-impl PortSource for ViewerPorts {
+impl PortSource for IngressPorts {
     async fn previews(&self) -> Result<Vec<PreviewRecord>> {
         Ok(vec![preview(self.port)])
     }
 
-    async fn authorize_viewer(&self, request: ViewerAuthorization<'_>) -> Result<()> {
+    async fn validate_ingress_token(&self, request: IngressTokenValidation<'_>) -> Result<()> {
         anyhow::ensure!(
             self.allowed.load(Ordering::SeqCst)
                 && request.preview_id == preview(self.port).id
                 && request.port == self.port
-                && request.credential == "Bearer viewer",
-            "Viewer rejected"
+                && request.ingress_token == "Bearer ingress",
+            "Ingress token rejected"
         );
         Ok(())
     }
 }
 
 #[tokio::test]
-async fn docker_rechecks_viewer_before_each_http_request_and_upgrade() {
+async fn docker_validates_ingress_token_before_each_http_request_and_upgrade() {
     let (app_port, app_task) = app().await;
-    let source = Arc::new(ViewerPorts {
+    let source = Arc::new(IngressPorts {
         port: app_port,
         allowed: AtomicBool::new(true),
     });
@@ -49,7 +49,7 @@ async fn docker_rechecks_viewer_before_each_http_request_and_upgrade() {
     let mut stream = request(
         proxy.port(),
         app_port,
-        "Connection: close\r\nX-Warp-Preview-Authorization: Bearer viewer\r\nAuthorization: Bearer application\r\nCookie: app=visible; __Host-warp_preview_viewer=hidden\r\n",
+        "Connection: close\r\nX-Warp-Preview-Ingress-Token: Bearer ingress\r\nX-Warp-Preview-Authorization: Bearer viewer\r\nAuthorization: Bearer application\r\nCookie: app=visible; __Host-warp_preview_viewer=hidden\r\n",
     )
     .await;
     let mut response = String::new();
@@ -58,6 +58,7 @@ async fn docker_rechecks_viewer_before_each_http_request_and_upgrade() {
     assert!(response.contains("Bearer application"), "{response}");
     assert!(response.contains("app=visible"), "{response}");
     assert!(!response.contains("Bearer viewer"), "{response}");
+    assert!(!response.contains("Bearer ingress"), "{response}");
     assert!(!response.contains("hidden"), "{response}");
     assert!(!response.contains("x-warp-preview-"), "{response}");
 
@@ -65,14 +66,14 @@ async fn docker_rechecks_viewer_before_each_http_request_and_upgrade() {
     let mut stream = request(
         proxy.port(),
         app_port,
-        "Connection: close\r\nX-Warp-Preview-Authorization: Bearer viewer\r\n",
+        "Connection: close\r\nX-Warp-Preview-Ingress-Token: Bearer ingress\r\n",
     )
     .await;
     assert!(headers(&mut stream).await.starts_with("HTTP/1.1 403"));
     let mut upgrade = request(
         proxy.port(),
         app_port,
-        "Connection: upgrade\r\nUpgrade: websocket\r\nX-Warp-Preview-Authorization: Bearer viewer\r\n",
+        "Connection: upgrade\r\nUpgrade: websocket\r\nX-Warp-Preview-Ingress-Token: Bearer ingress\r\n",
     )
     .await;
     assert!(headers(&mut upgrade).await.starts_with("HTTP/1.1 403"));
@@ -81,10 +82,10 @@ async fn docker_rechecks_viewer_before_each_http_request_and_upgrade() {
 }
 
 #[tokio::test]
-async fn docker_rejects_missing_malformed_and_duplicate_viewer_credentials() {
+async fn docker_rejects_missing_malformed_and_duplicate_ingress_tokens() {
     let target = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
     let app_port = target.local_addr().unwrap().port();
-    let source = Arc::new(ViewerPorts {
+    let source = Arc::new(IngressPorts {
         port: app_port,
         allowed: AtomicBool::new(true),
     });
@@ -93,21 +94,28 @@ async fn docker_rejects_missing_malformed_and_duplicate_viewer_credentials() {
         .unwrap();
     for extra in [
         "",
-        "X-Warp-Preview-Authorization:\r\n",
-        "X-Warp-Preview-Authorization: Basic viewer\r\n",
-        "X-Warp-Preview-Authorization: Bearer\r\n",
-        "X-Warp-Preview-Authorization: Bearer view er\r\n",
-        "X-Warp-Preview-Authorization: Bearer viewer,other\r\n",
-        "X-Warp-Preview-Authorization: Bearer viewer\r\nX-Warp-Preview-Authorization: Bearer viewer\r\n",
-        "X-Warp-Preview-Authorization: Bearer wrong-viewer\r\n",
+        "X-Warp-Preview-Authorization: Bearer viewer\r\n",
+        "X-Warp-Preview-Ingress-Token:\r\n",
+        "X-Warp-Preview-Ingress-Token: Basic ingress\r\n",
+        "X-Warp-Preview-Ingress-Token: Bearer\r\n",
+        "X-Warp-Preview-Ingress-Token: Bearer ing ress\r\n",
+        "X-Warp-Preview-Ingress-Token: Bearer ingress,other\r\n",
+        "X-Warp-Preview-Ingress-Token: Bearer ingress\r\nX-Warp-Preview-Ingress-Token: Bearer ingress\r\n",
+        "X-Warp-Preview-Ingress-Token: Bearer wrong-ingress\r\n",
     ] {
         let mut stream = request(proxy.port(), app_port, extra).await;
         assert!(headers(&mut stream).await.starts_with("HTTP/1.1 403"));
     }
+    let oversized = format!(
+        "X-Warp-Preview-Ingress-Token: Bearer {}\r\n",
+        "a".repeat(MAX_INGRESS_TOKEN_BYTES)
+    );
+    let mut stream = request(proxy.port(), app_port, &oversized).await;
+    assert!(headers(&mut stream).await.starts_with("HTTP/1.1 403"));
     let mut nominated = request(
         proxy.port(),
         app_port,
-        "Connection: x-warp-preview-authorization\r\nX-Warp-Preview-Authorization: Bearer viewer\r\n",
+        "Connection: x-warp-preview-ingress-token\r\nX-Warp-Preview-Ingress-Token: Bearer ingress\r\n",
     )
     .await;
     assert!(headers(&mut nominated).await.starts_with("HTTP/1.1 400"));
@@ -119,14 +127,14 @@ async fn docker_rejects_missing_malformed_and_duplicate_viewer_credentials() {
 }
 
 #[tokio::test]
-async fn namespace_rejects_supplied_credentials_when_authorizer_is_unavailable() {
+async fn namespace_rejects_supplied_ingress_tokens_when_validator_is_unavailable() {
     let target = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
     let app_port = target.local_addr().unwrap().port();
     let mut proxy = Proxy::bind(0, Ports::new(vec![app_port])).await.unwrap();
     let mut stream = request(
         proxy.port(),
         app_port,
-        "X-Warp-Preview-Authorization: Bearer viewer\r\n",
+        "X-Warp-Preview-Ingress-Token: Bearer ingress\r\n",
     )
     .await;
     assert!(headers(&mut stream).await.starts_with("HTTP/1.1 403"));
@@ -859,7 +867,7 @@ async fn concurrent_cache_misses_share_successful_and_failed_refreshes() {
             listener_port: 0,
             source: source.clone(),
             credential_policy: CredentialPolicy::Namespace,
-            viewer_capacity: Semaphore::new(MAX_VIEWER_AUTHORIZATIONS),
+            ingress_capacity: Semaphore::new(MAX_INGRESS_VALIDATIONS),
             upstream: upstream::new_client(cancel.clone()),
             cache: RwLock::new(PreviewCache::default()),
             refreshing: Mutex::new(()),
