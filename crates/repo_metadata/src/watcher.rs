@@ -243,7 +243,11 @@ impl DirectoryWatcher {
                 "[GIT_EVENT_ROUTING] tier=repo-specific path={}",
                 git_path.display()
             );
-            let standardized = StandardizedPath::from_local_canonicalized(git_path).ok();
+            // Canonicalization fails once `.git` has been deleted; fall back to
+            // the raw path so a repository teardown still reaches its repo.
+            let standardized = StandardizedPath::from_local_canonicalized(git_path)
+                .ok()
+                .or_else(|| StandardizedPath::try_from_local(git_path).ok());
             if let Some(ref std_path) = standardized
                 && let Some(repo) = self.find_containing_directory(std_path)
             {

@@ -563,6 +563,36 @@ fn test_is_git_internal_path() {
 }
 
 #[test]
+fn test_git_event_on_deleted_git_dir_still_routes_to_repo() {
+    VirtualFS::test("deleted_git_dir_routes", |dirs, mut vfs| {
+        stub_git_repository(&mut vfs, "repo");
+
+        let repo_path = dirs.tests().join("repo");
+        // `.git/index.lock` was never created, so canonicalizing this path
+        // fails the same way it does once `.git` has been deleted.
+        let deleted_git_path = dirs.tests().join("repo/.git/index.lock");
+
+        App::test((), |mut app| async move {
+            let watcher_handle = app.add_singleton_model(DirectoryWatcher::new_for_testing);
+
+            let repo_handle = watcher_handle
+                .update(&mut app, |watcher, ctx| {
+                    watcher.add_directory(
+                        StandardizedPath::from_local_canonicalized(&repo_path).unwrap(),
+                        ctx,
+                    )
+                })
+                .unwrap();
+
+            let affected = watcher_handle.update(&mut app, |watcher, ctx| {
+                watcher.find_repos_for_git_event(&deleted_git_path, ctx)
+            });
+            assert_eq!(affected, vec![repo_handle]);
+        });
+    });
+}
+
+#[test]
 fn test_remote_tracking_ref_routes_only_to_repos_tracking_that_ref() {
     VirtualFS::test("remote_tracking_ref_routes", |dirs, mut vfs| {
         stub_git_repository(&mut vfs, "repo");

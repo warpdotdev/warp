@@ -1593,6 +1593,17 @@ impl CurrentPrompt {
             .and_then(|h| h.as_ref(ctx).metadata(ctx).cloned());
 
         let Some(metadata) = metadata else {
+            // Metadata cleared (e.g. `.git` was deleted): drop stale git chip
+            // values instead of leaving the last-known branch/diff visible.
+            let branch_cleared = self
+                .latest_chip_value(&ContextChipKind::ShellGitBranch)
+                .is_some();
+            self.update_chip_value(&ContextChipKind::ShellGitBranch, None);
+            self.update_chip_value(&ContextChipKind::GitBranchStatus, None);
+            self.update_chip_value(&ContextChipKind::GitDiffStats, None);
+            if branch_cleared {
+                self.refresh_git_branch_dropdown(ContextChipKind::ShellGitBranch, ctx);
+            }
             return;
         };
 
