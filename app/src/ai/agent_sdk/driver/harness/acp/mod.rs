@@ -28,6 +28,7 @@ mod policy;
 mod protocol;
 mod resume;
 mod turn_driver;
+mod turn_failure;
 
 use std::collections::{HashMap, VecDeque};
 use std::ffi::OsString;
@@ -1146,6 +1147,7 @@ impl HarnessRunner for AcpHarnessRunner {
             host,
             telemetry: Arc::new(setup_events.clone()),
             state: self.turn_state.clone(),
+            harness: self.harness,
             turn,
             session_id,
             suppressed_startup_message,

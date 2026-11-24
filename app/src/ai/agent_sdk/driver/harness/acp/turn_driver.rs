@@ -28,6 +28,7 @@ use futures::stream::{FuturesOrdered, FuturesUnordered};
 use futures::{FutureExt, StreamExt, future, pin_mut, select, select_biased};
 use parking_lot::Mutex;
 use session_sharing_protocol::common::ParticipantId;
+use warp_cli::agent::Harness;
 use warp_multi_agent_api::ClientAction;
 use warp_multi_agent_api::response_event::{StreamFinished, stream_finished};
 use warpui::r#async::Timer;
@@ -41,6 +42,7 @@ use super::protocol::{
     SessionUpdateParams, SteeringIdleBehavior, SteeringMeta, SteeringOptions, SteeringOutcome,
     SteeringParams, SteeringResponse, StopReason,
 };
+use super::turn_failure::{PromptErrorReading, classify_turn_failure, read_prompt_error};
 use crate::ai::agent_sdk::setup_observability::{AcpActionEvent, SetupClientEventReporter};
 use crate::ai::attachment_utils::DownloadedAttachment;
 use crate::ai::blocklist::{
@@ -187,6 +189,9 @@ impl TurnState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum TurnOutcome {
     Stopped(StopReason),
+    /// The agent answered the prompt with an error its harness is known to send for a turn
+    /// whose work completed.
+    StoppedDespiteError,
     /// The agent acknowledged a `session/cancel`.
     Cancelled,
 }
@@ -201,6 +206,7 @@ impl TurnOutcome {
             Self::Stopped(StopReason::Refusal) => "stopped_refusal",
             Self::Stopped(StopReason::Cancelled) => "stopped_cancelled",
             Self::Stopped(StopReason::Unknown) => "stopped_unknown",
+            Self::StoppedDespiteError => "stopped_despite_error",
             Self::Cancelled => "cancelled",
         }
     }
@@ -405,6 +411,8 @@ pub(super) struct TurnDriver {
     pub host: Arc<dyn TurnHost>,
     pub telemetry: Arc<dyn TurnTelemetry>,
     pub state: Arc<TurnState>,
+    /// Which agent is on the other end, for the conventions only its adapter follows.
+    pub harness: Harness,
     /// The currently open request stream.
     pub turn: ExternalHarnessTurn,
     pub session_id: String,
@@ -618,7 +626,11 @@ impl TurnDriver {
         };
         let (outcome, is_error) = match &turn_result {
             Ok(outcome) => (outcome.metric_label(), false),
-            Err(_) => ("error", true),
+            Err(error) => {
+                let failure =
+                    classify_turn_failure(self.harness, error, self.notifications.is_closed());
+                (failure.metric_label(), true)
+            }
         };
         self.telemetry
             .action(AcpActionEvent::Turn, outcome, started, is_error);
@@ -644,6 +656,10 @@ impl TurnDriver {
             }
             Ok(TurnOutcome::Stopped(stop_reason)) => {
                 self.finish_turn(stream_id, stream_finished_for(*stop_reason))
+                    .await;
+            }
+            Ok(TurnOutcome::StoppedDespiteError) => {
+                self.finish_turn(stream_id, stream_finished_for(StopReason::EndTurn))
                     .await;
             }
             Err(error) => {
@@ -1181,7 +1197,8 @@ impl TurnDriver {
 
     /// Maps the prompt response to the turn's outcome. While a cancel is pending an agent error
     /// is taken as the cancellation (some agents report an aborted turn that way rather than
-    /// with a `cancelled` stop reason).
+    /// with a `cancelled` stop reason). Otherwise an agent error fails the turn unless its
+    /// harness is known to send it for a turn that completed.
     fn settle_response(
         &self,
         response: Result<PromptResponse>,
@@ -1198,7 +1215,23 @@ impl TurnDriver {
                 );
                 Ok(TurnOutcome::Cancelled)
             }
+            Err(error) if self.completed_despite_error(&error) => {
+                log::warn!("Treating the agent's error as the end of a completed turn: {error}");
+                Ok(TurnOutcome::StoppedDespiteError)
+            }
             Err(error) => Err(error),
+        }
+    }
+
+    /// Whether `error` is one the agent's harness is known to answer a prompt with after the
+    /// turn's work completed.
+    fn completed_despite_error(&self, error: &anyhow::Error) -> bool {
+        let Some(rpc_error) = error.downcast_ref::<RpcError>() else {
+            return false;
+        };
+        match read_prompt_error(self.harness, rpc_error, self.notifications.is_closed()) {
+            PromptErrorReading::Completed => true,
+            PromptErrorReading::Failed(_) => false,
         }
     }
 
