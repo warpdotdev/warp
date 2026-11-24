@@ -22,14 +22,14 @@ static AUTHORIZATION_CLIENT: LazyLock<Result<reqwest::Client, reqwest::Error>> =
     });
 
 #[derive(Serialize)]
-struct ViewerRequest<'a> {
-    credential: &'a str,
+struct IngressRequest<'a> {
+    ingress_token: &'a str,
     execution_id: i64,
     port: u16,
 }
 
 #[derive(Deserialize)]
-struct ViewerResponse {
+struct IngressResponse {
     allowed: bool,
     preview_id: Uuid,
     execution_id: i64,
@@ -38,32 +38,32 @@ struct ViewerResponse {
 }
 
 impl BaseClient {
-    /// Authorizes a viewer against the current run execution without caching the decision.
-    pub async fn authorize_preview_viewer(
+    /// Validates a server-issued ingress token against the current execution without caching.
+    pub async fn validate_preview_ingress_token(
         &self,
         task_id: &str,
         execution_id: i64,
         preview_id: Uuid,
         port: u16,
-        credential: &str,
+        ingress_token: &str,
     ) -> Result<()> {
         let root = Url::parse(ChannelState::server_root_url().as_ref())?;
         ensure!(
             root.scheme() == "https"
                 || (root.scheme() == "http"
                     && matches!(root.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"))),
-            "Preview authorization requires a secure server URL"
+            "Preview ingress validation requires a secure server URL"
         );
         ensure!(
             root.username().is_empty()
                 && root.password().is_none()
                 && root.query().is_none()
                 && root.fragment().is_none(),
-            "Invalid preview authorization server URL"
+            "Invalid preview ingress validation server URL"
         );
         let mut url = root;
         url.path_segments_mut()
-            .map_err(|()| anyhow::anyhow!("Invalid preview authorization server URL"))?
+            .map_err(|()| anyhow::anyhow!("Invalid preview ingress validation server URL"))?
             .clear()
             .extend([
                 "api",
@@ -78,7 +78,7 @@ impl BaseClient {
         let auth_token = self.get_or_refresh_access_token().await?;
         let worker_token = auth_token
             .as_bearer_token()
-            .context("Preview authorization requires worker credentials")?;
+            .context("Preview ingress validation requires worker credentials")?;
         let ambient = self
             .ambient_headers(AmbientHeaderPolicy::for_task(task_id))
             .await?;
@@ -86,7 +86,7 @@ impl BaseClient {
             ambient.iter().any(|(name, value)| {
                 name.eq_ignore_ascii_case(AMBIENT_WORKLOAD_TOKEN_HEADER) && !value.is_empty()
             }),
-            "Preview authorization requires a workload token"
+            "Preview ingress validation requires a workload token"
         );
         let mut headers = reqwest::header::HeaderMap::new();
         let mut authorization = HeaderValue::from_str(&format!("Bearer {worker_token}"))?;
@@ -108,12 +108,12 @@ impl BaseClient {
                 value,
             );
         }
-        send_authorization(
+        send_ingress_validation(
             url,
             headers,
             preview_id,
-            ViewerRequest {
-                credential,
+            IngressRequest {
+                ingress_token,
                 execution_id,
                 port,
             },
@@ -122,45 +122,46 @@ impl BaseClient {
     }
 }
 
-async fn send_authorization(
+async fn send_ingress_validation(
     url: Url,
     headers: reqwest::header::HeaderMap,
     preview_id: Uuid,
-    body: ViewerRequest<'_>,
+    body: IngressRequest<'_>,
 ) -> Result<()> {
     let client = AUTHORIZATION_CLIENT
         .as_ref()
-        .map_err(|_| anyhow::anyhow!("Preview authorization transport unavailable"))?;
+        .map_err(|_| anyhow::anyhow!("Preview ingress validation transport unavailable"))?;
     let response = client
         .post(url)
         .headers(headers)
         .json(&body)
         .send()
         .await
-        .map_err(|_| anyhow::anyhow!("Preview authorization request failed"))?;
+        .map_err(|_| anyhow::anyhow!("Preview ingress validation request failed"))?;
     ensure!(
         response.status() == reqwest::StatusCode::OK,
-        "Viewer rejected"
+        "Ingress token rejected"
     );
     let mut bytes = Vec::new();
     let mut stream = response.bytes_stream();
     while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|_| anyhow::anyhow!("Invalid preview authorization response"))?;
+        let chunk =
+            chunk.map_err(|_| anyhow::anyhow!("Invalid preview ingress validation response"))?;
         ensure!(
             bytes.len() + chunk.len() <= MAX_RESPONSE_BYTES,
-            "Authorization response too large"
+            "Ingress validation response too large"
         );
         bytes.extend_from_slice(&chunk);
     }
-    let response: ViewerResponse = serde_json::from_slice(&bytes)
-        .map_err(|_| anyhow::anyhow!("Invalid preview authorization response"))?;
+    let response: IngressResponse = serde_json::from_slice(&bytes)
+        .map_err(|_| anyhow::anyhow!("Invalid preview ingress validation response"))?;
     ensure!(
         response.allowed
             && response.preview_id == preview_id
             && response.execution_id == body.execution_id
             && response.port == body.port
             && response.valid_until > Utc::now(),
-        "Viewer rejected"
+        "Ingress token rejected"
     );
     Ok(())
 }

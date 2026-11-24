@@ -1,6 +1,7 @@
+use std::sync::Arc;
+
 use mockito::Matcher;
 use serde_json::json;
-use std::sync::Arc;
 use warp_server_auth::auth_state::AuthState;
 use warp_server_auth::credentials::Credentials;
 
@@ -45,18 +46,23 @@ fn rereads_worker_credentials_for_the_bound_run() {
                 .match_header("authorization", format!("Bearer {worker}").as_str())
                 .match_header(AMBIENT_WORKLOAD_TOKEN_HEADER, workload)
                 .match_header(super::super::CLOUD_AGENT_ID_HEADER, "run-one")
+                .match_body(Matcher::Json(json!({
+                    "ingress_token": "Bearer ingress",
+                    "execution_id": 42,
+                    "port": 3000,
+                })))
                 .with_status(200)
                 .with_body(allowed_response().to_string())
                 .create()
         };
 
         runtime
-            .block_on(client.authorize_preview_viewer(
+            .block_on(client.validate_preview_ingress_token(
                 "run-one",
                 42,
                 PREVIEW_ID,
                 3000,
-                "Bearer viewer",
+                "Bearer ingress",
             ))
             .unwrap();
 
@@ -74,12 +80,12 @@ async fn authorize(server: &mockito::ServerGuard) -> Result<()> {
         "x-warp-ambient-workload-token",
         HeaderValue::from_static("workload"),
     );
-    send_authorization(
+    send_ingress_validation(
         Url::parse(&format!("{}/authorize", server.url())).unwrap(),
         headers,
         PREVIEW_ID,
-        ViewerRequest {
-            credential: "Bearer viewer",
+        IngressRequest {
+            ingress_token: "Bearer ingress",
             execution_id: 42,
             port: 3000,
         },
@@ -98,15 +104,16 @@ fn allowed_response() -> serde_json::Value {
 }
 
 #[tokio::test]
-async fn separates_worker_headers_from_viewer_body() {
+async fn separates_worker_headers_from_ingress_token_body() {
     let mut server = mockito::Server::new_async().await;
     let request = server
         .mock("POST", "/authorize")
         .match_header("authorization", "Bearer worker")
         .match_header(AMBIENT_WORKLOAD_TOKEN_HEADER, "workload")
         .match_header("x-warp-preview-authorization", Matcher::Missing)
+        .match_header("x-warp-preview-ingress-token", Matcher::Missing)
         .match_body(Matcher::Json(json!({
-            "credential": "Bearer viewer",
+            "ingress_token": "Bearer ingress",
             "execution_id": 42,
             "port": 3000,
         })))
@@ -121,7 +128,7 @@ async fn separates_worker_headers_from_viewer_body() {
 }
 
 #[tokio::test]
-async fn rejects_same_origin_redirects_without_resending_viewer_credentials() {
+async fn rejects_same_origin_redirects_without_resending_ingress_tokens() {
     let mut server = mockito::Server::new_async().await;
     let redirect = server
         .mock("POST", "/authorize")
