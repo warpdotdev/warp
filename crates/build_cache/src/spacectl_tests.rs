@@ -62,6 +62,7 @@ fn mount_command_has_exact_explicit_modes_dry_run_false_root_and_cwd() {
         ]
     );
     assert_eq!(command.get_current_dir(), Some(Path::new("/tmp/scratch")));
+    #[cfg(unix)]
     assert_disables_toolchain_downloads(&command);
 }
 
