@@ -19,6 +19,7 @@ mod attachments;
 mod bridge;
 mod cli_transcript;
 mod connection;
+mod inbox;
 mod launch;
 mod manifest;
 mod mapping;
@@ -389,15 +390,21 @@ impl ThirdPartyHarness for AcpHarness {
             error,
         })?;
 
+        let inbox_server = task_id
+            .filter(|task_id| server_api.uses_session_agent_messages(&task_id.to_string()))
+            .map(|_| server_api.clone());
+        let opening_wake = inbox_server.is_some()
+            && prompt_attribution.is_some_and(BaseUserQuery::is_agent_message_wake);
+        let initial_prompt = if opening_wake { "" } else { prompt };
         let prompt_text = self.initial_prompt_text(
-            prompt,
+            initial_prompt,
             system_prompt,
             resumption_prompt,
             context,
             &SessionOrigin::New,
         );
         let resumed_prompt_text = self.initial_prompt_text(
-            prompt,
+            initial_prompt,
             system_prompt,
             resumption_prompt,
             context,
@@ -441,6 +448,7 @@ impl ThirdPartyHarness for AcpHarness {
             harness_working_dir: harness_working_dir.to_path_buf(),
             model_config: third_party_harness_model_config.cloned(),
             task_id,
+            inbox_server,
             client: server_api,
             terminal_driver,
             attachments: Arc::new(attachments),
@@ -553,6 +561,7 @@ pub(crate) struct AcpHarnessRunner {
     harness_working_dir: PathBuf,
     model_config: Option<HarnessModelConfig>,
     task_id: Option<AmbientAgentTaskId>,
+    inbox_server: Option<Arc<ServerApi>>,
     client: Arc<dyn HarnessSupportClient>,
     terminal_driver: ModelHandle<TerminalDriver>,
     attachments: Arc<AttachmentResolver>,
@@ -1109,7 +1118,31 @@ impl HarnessRunner for AcpHarnessRunner {
         })
         .await?;
 
-        let (mut mapper, opening_actions) = match restored_root_task_id {
+        let opening_wake = self.inbox_server.is_some()
+            && self
+                .opening_base
+                .as_ref()
+                .is_some_and(BaseUserQuery::is_agent_message_wake);
+        let prompt_text = match &origin {
+            SessionOrigin::Resumed(ReopenMethod::Resume | ReopenMethod::Load) => {
+                self.resumed_prompt_text.clone()
+            }
+            SessionOrigin::New | SessionOrigin::ResumeMissed(_) => self.prompt_text.clone(),
+        };
+        let (follow_up_rx, initial_inbox_ready) = match (&self.inbox_server, self.task_id) {
+            (Some(server), Some(task_id)) => {
+                let (prompts, ready) = inbox::connect(
+                    server.clone(),
+                    task_id,
+                    follow_up_rx,
+                    opening_wake.then(|| prompt_text.clone()),
+                    &background,
+                );
+                (prompts, Some(ready))
+            }
+            (Some(_), None) | (None, _) => (follow_up_rx, None),
+        };
+        let (mut mapper, mut opening_actions) = match restored_root_task_id {
             Some(root_task_id) => {
                 let mapper = AcpTurnMapper::new(
                     root_task_id,
@@ -1130,6 +1163,9 @@ impl HarnessRunner for AcpHarnessRunner {
                 (mapper, actions)
             }
         };
+        if opening_wake {
+            opening_actions.pop();
+        }
         apply_actions(
             foreground,
             &self.terminal_driver,
@@ -1149,12 +1185,9 @@ impl HarnessRunner for AcpHarnessRunner {
             turn,
             session_id,
             suppressed_startup_message,
-            prompt_text: match &origin {
-                SessionOrigin::Resumed(ReopenMethod::Resume | ReopenMethod::Load) => {
-                    self.resumed_prompt_text.clone()
-                }
-                SessionOrigin::New | SessionOrigin::ResumeMissed(_) => self.prompt_text.clone(),
-            },
+            prompt_text,
+            initial_inbox_ready,
+            skip_initial_prompt: opening_wake,
             initial_attachments: self.initial_attachments.clone(),
             attachments: self.attachments.clone(),
             boundary_snapshot: self.boundary_snapshot.clone(),
