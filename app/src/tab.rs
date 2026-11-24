@@ -1532,7 +1532,9 @@ impl<'a> TabComponent<'a> {
     ) -> Box<dyn Element> {
         let should_render = {
             let is_last_tab = self.tab_bar.tab_count == 1;
+            self.close_button_position.enabled() && (
             ContextFlag::CloseWindow.is_enabled() || !is_last_tab
+            )
         };
         let button = if is_hovered && should_render {
             let tab_index = self.tab_index;
@@ -1936,6 +1938,7 @@ impl<'a> TabComponent<'a> {
         )
         .finish();
 
+        let show_close_button = self.close_button_position.enabled();
         let close_button_background = if let Some(custom_background) = self.styles.background {
             match custom_background {
                 ThemeFill::Solid(color) => {
@@ -2009,22 +2012,24 @@ impl<'a> TabComponent<'a> {
         let build_full_stack = |is_narrow: bool| {
             let reserve_pin_space = self.show_pin_indicator() && !is_narrow;
             let mut full_stack = Stack::new().with_child(build_full_content(reserve_pin_space));
-            full_stack.add_positioned_child(
-                build_close_button_overlay(is_narrow, is_hovered),
-                OffsetPositioning::offset_from_parent(
-                    vec2f(horizontal_inset, 0.0),
-                    ParentOffsetBounds::ParentByPosition,
-                    parent_anchor,
-                    child_anchor,
-                ),
-            );
+            if show_close_button || self.show_pin_indicator() && !is_narrow {
+                full_stack.add_positioned_child(
+                    build_close_button_overlay(is_narrow, is_hovered),
+                    OffsetPositioning::offset_from_parent(
+                        vec2f(horizontal_inset, 0.0),
+                        ParentOffsetBounds::ParentByPosition,
+                        parent_anchor,
+                        child_anchor,
+                    ),
+                );
+            }
             full_stack.finish()
         };
 
         let mut compact_stack = Stack::new().with_child(compact_tab_content);
         // Only show the close button on the active tab for narrow width
         // to prevent accidental clicks
-        if self.is_active_tab() {
+        if show_close_button && self.is_active_tab() {
             compact_stack.add_positioned_child(
                 // Compact tabs are too narrow to show a pin icon.
                 build_close_button_overlay(true, is_hovered),

@@ -56,6 +56,13 @@ pub enum TabCloseButtonPosition {
     #[default]
     Right,
     Left,
+    None,
+}
+
+impl TabCloseButtonPosition {
+    pub fn enabled() -> bool {
+        ! matches!(self, Self::None)
+    }
 }
 
 settings::macros::implement_setting_for_enum!(

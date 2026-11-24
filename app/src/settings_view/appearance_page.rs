@@ -1716,6 +1716,7 @@ impl AppearanceSettingsPageView {
         match value {
             TabCloseButtonPosition::Right => "Right",
             TabCloseButtonPosition::Left => "Left",
+            TabCloseButtonPosition::None => "None",
         }
     }
 
@@ -2642,6 +2643,7 @@ impl AppearanceSettingsPageView {
             let values = [
                 TabCloseButtonPosition::Right,
                 TabCloseButtonPosition::Left,
+                TabCloseButtonPosition::None,
             ];
 
             let current_value = TabSettings::as_ref(ctx).close_button_position;
@@ -4811,7 +4813,7 @@ impl SettingsWidget for TabCloseButtonPositionWidget {
     type View = AppearanceSettingsPageView;
 
     fn search_terms(&self) -> &str {
-        "tab bar close button position left right"
+        "tab bar close button position left right hide"
     }
 
     fn render(
