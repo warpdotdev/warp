@@ -826,6 +826,10 @@ fn handle_model_event(event: ModelEvent, connection: &mut SqliteConnection) -> a
             enabled,
         } => upsert_workspace_language_server(connection, &workspace_path, lsp_type, enabled)
             .context("error upserting workspace language server"),
+        ModelEvent::DeleteWorkspaceLanguageServers { workspace_path } => {
+            delete_workspace_language_servers(connection, &workspace_path)
+                .context("error deleting workspace language servers")
+        }
         ModelEvent::UpdateBlockAgentViewVisibility {
             block_id,
             agent_view_visibility,
@@ -1617,6 +1621,24 @@ fn upsert_workspace_language_server(
             .values(&new_language_server)
             .execute(conn)?;
     }
+
+    Ok(())
+}
+
+fn delete_workspace_language_servers(conn: &mut SqliteConnection, path: &Path) -> Result<()> {
+    use schema::workspace_language_server::dsl::*;
+    use schema::workspace_metadata::dsl::*;
+
+    let path_string = path.to_string_lossy().to_string();
+    let Some(metadata) = workspace_metadata
+        .filter(repo_path.eq(&path_string))
+        .first::<WorkspaceMetadataModel>(conn)
+        .optional()?
+    else {
+        return Ok(());
+    };
+
+    diesel::delete(workspace_language_server.filter(workspace_id.eq(metadata.id))).execute(conn)?;
 
     Ok(())
 }
