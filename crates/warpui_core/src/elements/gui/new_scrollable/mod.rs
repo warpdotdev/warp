@@ -1346,6 +1346,7 @@ impl NewScrollable {
                 precise,
                 position,
                 modifiers: ModifiersState { ctrl: false, .. },
+                ..
             } => {
                 let is_covered = ctx.is_covered(Point::from_vec2f(*position, z_index));
                 let in_bound = self

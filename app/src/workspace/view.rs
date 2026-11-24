@@ -16,6 +16,7 @@ pub(crate) mod onboarding;
 pub(crate) mod openwarp_launch_modal;
 pub(crate) mod orchestration_launch_modal;
 pub(crate) mod right_panel;
+mod spaces;
 mod startup_directory;
 mod tab_grouping;
 #[cfg(test)]
@@ -120,6 +121,7 @@ use warpui::{
     UpdateModel, UpdateView, View, ViewAsRef, ViewContext, ViewHandle, WeakViewHandle, WindowId,
 };
 
+use self::spaces::SpaceChipDrop;
 use self::vertical_tabs::telemetry::{VerticalTabsDisplayOption, VerticalTabsTelemetryEvent};
 use self::vertical_tabs::{
     SummaryPaneKind, SummaryPaneKindIcons, VERTICAL_TABS_SETTINGS_BUTTON_POSITION_ID,
@@ -366,11 +368,11 @@ use crate::settings_view::{SettingsSection, SettingsView, SettingsViewEvent, fla
 #[cfg(all(target_os = "windows", feature = "local_tty"))]
 use crate::shell_indicator::ShellIndicatorType;
 use crate::tab::{
-    COMPACT_TAB_WIDTH_THRESHOLD, ColorPickerTarget, MOVE_TO_GROUP_LABEL, NewSessionMenuItem,
-    PaneNameMenuTarget, SelectedTabColor, TAB_BAR_BORDER_HEIGHT, TAB_INDICATOR_HEIGHT,
-    TAB_PIN_INDICATOR_ICON_SIZE, TAB_PIN_VANISH_THRESHOLD, TabBarState, TabComponent, TabData,
-    TabShortcutModifierState, TabTelemetryAction, color_picker_menu_items, next_tab_color,
-    tab_position_id, uses_vertical_tabs,
+    COMPACT_TAB_WIDTH_THRESHOLD, ColorPickerTarget, MOVE_TO_GROUP_LABEL, MOVE_TO_SPACE_LABEL,
+    NewSessionMenuItem, PaneNameMenuTarget, SelectedTabColor, TAB_BAR_BORDER_HEIGHT,
+    TAB_INDICATOR_HEIGHT, TAB_PIN_INDICATOR_ICON_SIZE, TAB_PIN_VANISH_THRESHOLD, TabBarState,
+    TabComponent, TabData, TabShortcutModifierState, TabTelemetryAction, color_picker_menu_items,
+    move_to_space_menu_items, next_tab_color, tab_position_id, uses_vertical_tabs,
 };
 use crate::tab_configs::action_sidecar::SidecarItemKind;
 use crate::tab_configs::remove_confirmation_dialog::{
@@ -504,6 +506,8 @@ use crate::workspace::cross_window_tab_drag::{
 use crate::workspace::header_toolbar_editor::{HeaderToolbarEditorEvent, HeaderToolbarEditorModal};
 use crate::workspace::header_toolbar_item::HeaderToolbarItemKind;
 use crate::workspace::one_time_modal_model::OneTimeModalModel;
+use crate::workspace::space::{self, SpaceId, StashedSpace};
+use crate::workspace::swipe_detector::SwipeDetector;
 use crate::workspace::sync_inputs::SyncedInputState;
 use crate::workspace::tab_group::{TabGroup, TabGroupId};
 use crate::workspace::tab_settings::TabCloseButtonPosition;
@@ -1057,6 +1061,17 @@ pub struct Workspace {
     traffic_light_mouse_states: TrafficLightMouseStates,
     /// Tab groups in this workspace, keyed by id.
     pub(crate) tab_groups: HashMap<TabGroupId, TabGroup>,
+    /// Spaces in this window, in display order. Never empty.
+    pub(crate) spaces: Vec<space::Space>,
+    /// The space whose tabs are held in the live tab fields (`tabs`, `active_tab_index`,
+    /// `tab_mru_order`, `tab_groups`).
+    pub(crate) active_space: SpaceId,
+    /// Tab state of non-active spaces. A space without an entry has no tabs.
+    stashed_spaces: HashMap<SpaceId, StashedSpace>,
+    /// Turns scroll events over the vertical tabs panel into space switches.
+    space_swipe_detector: SwipeDetector,
+    /// The switcher chip a dragged tab or group is over, and what dropping there moves.
+    space_chip_drop: Option<(SpaceId, SpaceChipDrop)>,
     /// Per-group hover state for the horizontal tab bar.
     horizontal_tab_group_mouse_states: RefCell<HashMap<TabGroupId, HorizontalTabGroupMouseStates>>,
     tab_rename_editor: ViewHandle<EditorView>,
@@ -1076,6 +1091,9 @@ pub struct Workspace {
     show_tab_group_right_click_menu: Option<(TabGroupId, TabContextMenuAnchor)>,
     /// Open multi-tab selection menu (right-click on any tab in a multi-tab selection).
     show_tab_selection_right_click_menu: Option<(usize, TabContextMenuAnchor)>,
+    /// Pointer position of the open space switcher chip menu; reuses the `tab_right_click_menu`
+    /// view.
+    show_space_right_click_menu: Option<Vector2F>,
     // TODO(CORE-2300): this used to be add_tab_dropdown_menu.
     // Because we are rolling out the change behind a feature flag,
     // keep this comment here until the feature flag is removed.
@@ -1238,6 +1256,8 @@ pub struct Workspace {
     /// tab group; each selection dispatches `WorkspaceAction::MoveTabToGroup`.
     move_to_group_sidecar_menu: ViewHandle<Menu<WorkspaceAction>>,
     show_move_to_group_sidecar: bool,
+    /// Label of the submenu parent ("Move to group" or "Move to space") the sidecar is shown for.
+    move_to_sidecar_anchor_label: &'static str,
     tab_config_action_sidecar_item: Option<SidecarItemKind>,
     tab_config_action_sidecar_mouse_states: crate::tab_configs::action_sidecar::SidecarMouseStates,
     remove_tab_config_confirmation_dialog: ViewHandle<RemoveTabConfigConfirmationDialog>,
@@ -1555,6 +1575,12 @@ impl Workspace {
                 EditorEvent::Blurred | EditorEvent::Escape => {
                     self.cancel_tab_group_rename(ctx);
                 }
+                _ => {}
+            }
+        } else if self.current_workspace_state.space_being_renamed().is_some() {
+            match event {
+                EditorEvent::Enter => self.finish_space_rename(ctx),
+                EditorEvent::Blurred | EditorEvent::Escape => self.cancel_space_rename(ctx),
                 _ => {}
             }
         }
@@ -3449,6 +3475,7 @@ impl Workspace {
             },
         );
 
+        let initial_space = space::Space::new();
         let mut ws = Self {
             tabs: Vec::new(),
             active_tab_index: 0,
@@ -3457,6 +3484,11 @@ impl Workspace {
             tab_bar_hover_state: Default::default(),
             traffic_light_mouse_states: Default::default(),
             tab_groups: HashMap::new(),
+            active_space: initial_space.id,
+            spaces: vec![initial_space],
+            stashed_spaces: HashMap::new(),
+            space_swipe_detector: SwipeDetector::default(),
+            space_chip_drop: None,
             horizontal_tab_group_mouse_states: RefCell::default(),
             tab_rename_editor: Self::tab_rename_editor(ctx),
             pane_rename_editor: Self::pane_rename_editor(ctx),
@@ -3473,6 +3505,7 @@ impl Workspace {
             show_tab_right_click_menu: None,
             show_tab_group_right_click_menu: None,
             show_tab_selection_right_click_menu: None,
+            show_space_right_click_menu: None,
             new_session_dropdown_menu,
             show_new_session_dropdown_menu: None,
             changelog_model,
@@ -3597,6 +3630,7 @@ impl Workspace {
             new_session_sidecar_add_repo_mouse_state: Default::default(),
             move_to_group_sidecar_menu,
             show_move_to_group_sidecar: false,
+            move_to_sidecar_anchor_label: MOVE_TO_GROUP_LABEL,
             tab_config_action_sidecar_item: None,
             tab_config_action_sidecar_mouse_states: Default::default(),
             remove_tab_config_confirmation_dialog:
@@ -4163,6 +4197,9 @@ impl Workspace {
                             );
                         }
                     });
+                let active_tab_index = self
+                    .restore_spaces(&window_snapshot)
+                    .unwrap_or(active_tab_index);
 
                 if self.tab_count() == 0 {
                     if self.should_trigger_get_started_onboarding(ctx) {
@@ -5372,24 +5409,16 @@ impl Workspace {
         pane_group_id: EntityId,
         ctx: &mut ViewContext<Self>,
     ) {
-        if let Some(index) = self
-            .tabs
-            .iter()
-            .position(|t| t.pane_group.id() == pane_group_id)
-        {
+        if let Some(index) = self.reveal_tab_by_pane_group_id(pane_group_id, ctx) {
             self.activate_tab(index, ctx);
         }
     }
 
     fn tab_navigation_data(&self, window_id: WindowId, ctx: &AppContext) -> Vec<TabNavigationData> {
-        self.tab_mru_order
-            .iter()
-            .filter_map(|&pane_group_id| {
-                let (tab_index, tab) = self
-                    .tabs
-                    .iter()
-                    .enumerate()
-                    .find(|(_, t)| t.pane_group.id() == pane_group_id)?;
+        self.tabs_in_mru_order()
+            .into_iter()
+            .map(|(space_name, tab_index, tab)| {
+                let pane_group_id = tab.pane_group.id();
                 let title = tab.pane_group.as_ref(ctx).display_title(ctx);
                 let subtitle = tab
                     .pane_group
@@ -5403,14 +5432,15 @@ impl Workspace {
                         }
                         p.display().to_string()
                     });
-                Some(TabNavigationData {
+                TabNavigationData {
                     pane_group_id,
                     title,
                     subtitle,
                     window_id,
                     tab_index: tab_index + 1,
                     color: tab.color(),
-                })
+                    space_name,
+                }
             })
             .collect()
     }
@@ -5430,14 +5460,14 @@ impl Workspace {
         &self,
         task_id: AmbientAgentTaskId,
         ctx: &AppContext,
-    ) -> Option<(usize, PaneViewLocator)> {
+    ) -> Option<PaneViewLocator> {
         // First, check ActiveAgentViewsModel for the terminal view that has this task registered.
         // This is the authoritative source since it's updated when the session is joined.
         let active_terminal_view_id =
             ActiveAgentViewsModel::as_ref(ctx).get_terminal_view_id_for_ambient_task(task_id);
 
-        self.tabs.iter().enumerate().find_map(|(index, tab)| {
-            let pane_group = tab.pane_group.as_ref(ctx);
+        self.all_tab_views().find_map(|pane_group_handle| {
+            let pane_group = pane_group_handle.as_ref(ctx);
             let pane_id = pane_group.visible_pane_ids().into_iter().find(|pane_id| {
                 pane_group
                     .terminal_view_from_pane_id(*pane_id, ctx)
@@ -5450,28 +5480,23 @@ impl Workspace {
                         tv.as_ref(ctx).ambient_agent_task_id_for_details_panel(ctx) == Some(task_id)
                     })
             });
-            pane_id.map(|pane_id| {
-                (
-                    index,
-                    PaneViewLocator {
-                        pane_group_id: tab.pane_group.id(),
-                        pane_id,
-                    },
-                )
+            pane_id.map(|pane_id| PaneViewLocator {
+                pane_group_id: pane_group_handle.id(),
+                pane_id,
             })
         })
     }
 
-    /// Gets all sessions in the current workspace.
+    /// Gets all sessions in the current workspace, including those in hidden spaces.
     pub fn workspace_sessions<'a>(
         &'a self,
         window_id: WindowId,
         app: &'a AppContext,
     ) -> impl Iterator<Item = SessionNavigationData> + 'a {
-        self.tabs.iter().flat_map(move |tab| {
+        self.all_tab_views().flat_map(move |pane_group| {
             // Each tab has a pane group
-            let pane_group_id = tab.pane_group.id();
-            let view = tab.pane_group.as_ref(app);
+            let pane_group_id = pane_group.id();
+            let view = pane_group.as_ref(app);
 
             view.pane_sessions(pane_group_id, window_id, app)
         })
@@ -6027,14 +6052,11 @@ impl Workspace {
     }
 
     /// Focuses the given pane, revealing it first if it is hidden behind a
-    /// temporary swap.
+    /// temporary swap or in a hidden space.
     pub fn focus_pane(&mut self, pane_view_locator: PaneViewLocator, ctx: &mut ViewContext<Self>) {
-        if let Some((index, tab)) = self
-            .tabs
-            .iter()
-            .enumerate()
-            .find(|(_, tab_data)| tab_data.pane_group.id() == pane_view_locator.pane_group_id)
+        if let Some(index) = self.reveal_tab_by_pane_group_id(pane_view_locator.pane_group_id, ctx)
         {
+            let tab = &self.tabs[index];
             // Update the pane group to focus the active pane,
             // and then focus the pane group (tab). The order is important
             // because if we otherwise focus the tab first and another pane
@@ -6049,29 +6071,27 @@ impl Workspace {
         }
     }
 
-    /// Searches this workspace's tabs for the given terminal view and focuses it.
+    /// Searches this workspace's tabs, in every space, for the given terminal view and focuses it.
     /// Returns true if the terminal view was found and focused.
     fn focus_terminal_view_locally(
         &mut self,
         terminal_view_id: EntityId,
         ctx: &mut ViewContext<Self>,
     ) -> bool {
-        for tab in self.tabs.iter() {
-            let pane_group_handle = &tab.pane_group;
-            let pane_group = pane_group_handle.as_ref(ctx);
-            if let Some(pane_id) = pane_group.find_pane_id_for_terminal_view(terminal_view_id, ctx)
-            {
-                self.focus_pane(
-                    PaneViewLocator {
-                        pane_group_id: pane_group_handle.id(),
-                        pane_id,
-                    },
-                    ctx,
-                );
-                return true;
-            }
-        }
-        false
+        let locator = self.all_tab_views().find_map(|pane_group_handle| {
+            let pane_id = pane_group_handle
+                .as_ref(ctx)
+                .find_pane_id_for_terminal_view(terminal_view_id, ctx)?;
+            Some(PaneViewLocator {
+                pane_group_id: pane_group_handle.id(),
+                pane_id,
+            })
+        });
+        let Some(locator) = locator else {
+            return false;
+        };
+        self.focus_pane(locator, ctx);
+        true
     }
 
     /// Searches other windows for the given terminal view and focuses it there.
@@ -6087,18 +6107,21 @@ impl Workspace {
             .iter()
             .filter(|(win_id, _)| *win_id != current_window)
             .find_map(|(win_id, workspace)| {
-                workspace.as_ref(ctx).tab_views().find_map(|pane_group| {
-                    let pane_id = pane_group
-                        .as_ref(ctx)
-                        .find_pane_id_for_terminal_view(terminal_view_id, ctx)?;
-                    Some((
-                        *win_id,
-                        PaneViewLocator {
-                            pane_group_id: pane_group.id(),
-                            pane_id,
-                        },
-                    ))
-                })
+                workspace
+                    .as_ref(ctx)
+                    .all_tab_views()
+                    .find_map(|pane_group| {
+                        let pane_id = pane_group
+                            .as_ref(ctx)
+                            .find_pane_id_for_terminal_view(terminal_view_id, ctx)?;
+                        Some((
+                            *win_id,
+                            PaneViewLocator {
+                                pane_group_id: pane_group.id(),
+                                pane_id,
+                            },
+                        ))
+                    })
             });
 
         if let Some((window_id, locator)) = result {
@@ -6122,12 +6145,8 @@ impl Workspace {
         pane_id: PaneId,
         ctx: &mut ViewContext<Self>,
     ) {
-        if let Some(tab) = self
-            .tabs
-            .iter()
-            .find(|tab_data| tab_data.pane_group.id() == pane_group_id)
-        {
-            tab.pane_group.update(ctx, |view, ctx| {
+        if let Some(pane_group) = self.get_pane_group_view_with_id(pane_group_id) {
+            pane_group.update(ctx, |view, ctx| {
                 view.show_notification_error(notification_error, pane_id, ctx);
             });
 
@@ -7543,9 +7562,11 @@ impl Workspace {
             Some(id) if id == self.tab_rename_editor.id() => {
                 self.current_workspace_state.is_tab_being_renamed()
             }
-            Some(id) if id == self.tab_group_rename_editor.id() => self
-                .current_workspace_state
-                .is_any_tab_group_being_renamed(),
+            Some(id) if id == self.tab_group_rename_editor.id() => {
+                self.current_workspace_state
+                    .is_any_tab_group_being_renamed()
+                    || self.current_workspace_state.space_being_renamed().is_some()
+            }
             _ => false,
         }
     }
@@ -8148,6 +8169,7 @@ impl Workspace {
     ) {
         if self.show_tab_group_right_click_menu.is_some() {
             self.show_tab_group_right_click_menu = None;
+            self.hide_move_to_group_sidecar(ctx);
             ctx.notify();
             return;
         }
@@ -10229,12 +10251,14 @@ impl Workspace {
                 self.show_tab_right_click_menu = None;
                 self.show_tab_group_right_click_menu = None;
                 self.show_tab_selection_right_click_menu = None;
+                self.show_space_right_click_menu = None;
                 self.hide_move_to_group_sidecar(ctx);
                 if !self.current_workspace_state.is_tab_being_renamed()
                     && !self.current_workspace_state.is_any_pane_being_renamed()
                     && !self
                         .current_workspace_state
                         .is_any_tab_group_being_renamed()
+                    && self.current_workspace_state.space_being_renamed().is_none()
                 {
                     self.focus_active_tab(ctx);
                 }
@@ -10292,6 +10316,7 @@ impl Workspace {
                         .into_item(),
                 );
             }
+            items.extend(move_to_space_menu_items());
             items
         };
 
@@ -10395,12 +10420,14 @@ impl Workspace {
         menu_items
     }
 
-    /// Opens the sidecar when "Move to group" is hovered, hides it otherwise.
-    /// Handles both the single-tab pane menu and the multi-tab selection menu.
+    /// Opens the sidecar when "Move to group" or "Move to space" is hovered,
+    /// hides it otherwise. Handles the single-tab pane menu, the multi-tab
+    /// selection menu, and (for "Move to space") the tab group menu.
     fn update_move_to_group_sidecar(&mut self, ctx: &mut ViewContext<Self>) {
-        // If neither menu is open, nothing to update.
+        // If no menu with a sidecar is open, nothing to update.
         if self.show_tab_right_click_menu.is_none()
             && self.show_tab_selection_right_click_menu.is_none()
+            && self.show_tab_group_right_click_menu.is_none()
         {
             return;
         }
@@ -10426,14 +10453,24 @@ impl Workspace {
             return;
         };
 
-        if label == MOVE_TO_GROUP_LABEL {
-            // Single-tab pane menu carries a `tab_index`; the multi-tab
-            // selection menu has no single source tab so we pass `None` and
-            // the sidecar builder infers the multi-tab selection.
-            let source_tab_index = self
-                .show_tab_right_click_menu
-                .map(|(tab_index, _)| tab_index);
-            let items = self.build_move_to_group_sidecar_items(source_tab_index);
+        if label == MOVE_TO_GROUP_LABEL || label == MOVE_TO_SPACE_LABEL {
+            let (anchor_label, items) = if label == MOVE_TO_GROUP_LABEL {
+                // Single-tab pane menu carries a `tab_index`; the multi-tab
+                // selection menu has no single source tab so we pass `None` and
+                // the sidecar builder infers the multi-tab selection.
+                let source_tab_index = self
+                    .show_tab_right_click_menu
+                    .map(|(tab_index, _)| tab_index);
+                (
+                    MOVE_TO_GROUP_LABEL,
+                    self.build_move_to_group_sidecar_items(source_tab_index),
+                )
+            } else {
+                (
+                    MOVE_TO_SPACE_LABEL,
+                    self.build_move_to_space_sidecar_items(),
+                )
+            };
             if items.is_empty() {
                 self.hide_move_to_group_sidecar(ctx);
                 return;
@@ -10443,6 +10480,7 @@ impl Workspace {
                     menu.set_items(items, view_ctx);
                 });
             self.show_move_to_group_sidecar = true;
+            self.move_to_sidecar_anchor_label = anchor_label;
 
             let sidecar_rect = ctx.element_position_by_id_at_last_frame(
                 self.window_id,
@@ -10470,9 +10508,9 @@ impl Workspace {
         ctx.notify();
     }
 
-    /// Shared between the single-tab pane menu and the multi-tab selection
-    /// menu render paths so the two parent menus can't drift apart in how
-    /// they position the "move to group" sidecar.
+    /// Shared between the single-tab pane menu, the multi-tab selection menu,
+    /// and the tab group menu render paths so the parent menus can't drift
+    /// apart in how they position the "move to group/space" sidecar.
     fn add_move_to_group_sidecar_overlay(&self, stack: &mut Stack, app: &AppContext) {
         if !self.show_move_to_group_sidecar {
             return;
@@ -10484,8 +10522,11 @@ impl Workspace {
         .finish();
 
         // Flip the anchor side when the sidecar would overflow the window.
-        let render_left =
-            self.should_render_sidecar_left(MOVE_TO_GROUP_LABEL, MOVE_TO_GROUP_SIDECAR_WIDTH, app);
+        let render_left = self.should_render_sidecar_left(
+            self.move_to_sidecar_anchor_label,
+            MOVE_TO_GROUP_SIDECAR_WIDTH,
+            app,
+        );
         let (offset, parent_anchor, child_anchor) = if render_left {
             (
                 vec2f(-4., 0.),
@@ -10503,7 +10544,7 @@ impl Workspace {
         stack.add_positioned_overlay_child(
             sidecar_element,
             OffsetPositioning::offset_from_save_position_element(
-                MOVE_TO_GROUP_LABEL,
+                self.move_to_sidecar_anchor_label,
                 offset,
                 PositionedElementOffsetBounds::WindowByPosition,
                 parent_anchor,
@@ -10524,6 +10565,7 @@ impl Workspace {
                 if *via_select_item {
                     self.show_tab_right_click_menu = None;
                     self.show_tab_selection_right_click_menu = None;
+                    self.show_tab_group_right_click_menu = None;
                 }
                 self.show_move_to_group_sidecar = false;
                 self.tab_right_click_menu.update(ctx, |menu, _| {
@@ -11643,9 +11685,10 @@ impl Workspace {
         }
     }
 
-    /// Returns the pane group with the matching EntityId, or None if it doesn't exist.
+    /// Returns the pane group with the matching EntityId in any space, or None if it doesn't
+    /// exist.
     fn get_pane_group_view_with_id(&self, id: EntityId) -> Option<&ViewHandle<PaneGroup>> {
-        self.tab_views().find(|view| view.id() == id)
+        self.all_tab_views().find(|view| view.id() == id)
     }
 
     // The workspace manages the close confirmation dialog, so it may need to close a pane after the user confirms in the dialog.
@@ -11877,7 +11920,6 @@ impl Workspace {
             .platform_window(window_id)
             .map(|window| window.fullscreen_state())
             .unwrap_or_default();
-        let active_tab_index = self.active_tab_index();
         let drag_model = CrossWindowTabDrag::as_ref(app);
         // Use the placeholder-aware getter so we don't skip an unrelated
         // tab at a stale `source_tab_index` after a put-back handoff has
@@ -11903,11 +11945,13 @@ impl Workspace {
         } else {
             None
         };
-        let tabs: Vec<TabSnapshot> = self
-            .tab_views()
-            .enumerate()
-            .filter(|(tab_index, _)| Some(*tab_index) != transferred_tab_index)
-            .map(|(tab_index, pane_group_view)| {
+        let tabs: Vec<(SpaceId, usize, TabSnapshot)> = self
+            .all_tabs()
+            .filter(|(space_id, tab_index, _)| {
+                *space_id != self.active_space || Some(*tab_index) != transferred_tab_index
+            })
+            .map(|(space_id, tab_index, tab)| {
+                let pane_group_view = &tab.pane_group;
                 let resizable_data = ResizableData::handle(app);
                 let modal_sizes = resizable_data.as_ref(app).get_all_handles(window_id);
 
@@ -11931,32 +11975,26 @@ impl Workspace {
                     self.compute_left_panel_snapshot(pane_group_view, left_panel_width, app);
                 let right_panel =
                     self.compute_right_panel_snapshot(pane_group_view, right_panel_width, app);
-                TabSnapshot {
+                let tab_snapshot = TabSnapshot {
                     root,
                     custom_title: pane_group.custom_title(app),
-                    default_directory_color: self
-                        .tabs
-                        .get(tab_index)
-                        .and_then(|tab| tab.default_directory_color),
-                    selected_color: self
-                        .tabs
-                        .get(tab_index)
-                        .map(|tab| tab.selected_color)
-                        .unwrap_or_default(),
+                    default_directory_color: tab.default_directory_color,
+                    selected_color: tab.selected_color,
                     left_panel,
                     right_panel,
                     group_id: if FeatureFlag::GroupedTabs.is_enabled() {
-                        self.tabs.get(tab_index).and_then(|tab| tab.group_id)
+                        tab.group_id
                     } else {
                         None
                     },
                     // Only persist pinned state when the Pinned Tabs feature is
                     // enabled.
-                    pinned: FeatureFlag::PinnedTabs.is_enabled()
-                        && self.tabs.get(tab_index).is_some_and(|tab| tab.pinned),
-                }
+                    pinned: FeatureFlag::PinnedTabs.is_enabled() && tab.pinned,
+                    space_id: FeatureFlag::Spaces.is_enabled().then_some(space_id),
+                };
+                (space_id, tab_index, tab_snapshot)
             })
-            .filter(|tab| {
+            .filter(|(_, _, tab)| {
                 // Filter out any tab that contains a single, read-only session.
                 !matches!(
                     tab.root,
@@ -11975,9 +12013,8 @@ impl Workspace {
         // This is a safety net and ensures empty groups are not saved/restored.
         let tab_groups: Vec<TabGroupSnapshot> = if FeatureFlag::GroupedTabs.is_enabled() {
             let referenced_group_ids: HashSet<TabGroupId> =
-                tabs.iter().filter_map(|tab| tab.group_id).collect();
-            self.tab_groups
-                .values()
+                tabs.iter().filter_map(|(_, _, tab)| tab.group_id).collect();
+            self.all_tab_groups()
                 .filter(|group| referenced_group_ids.contains(&group.id))
                 .map(|group| TabGroupSnapshot {
                     id: group.id,
@@ -11990,6 +12027,7 @@ impl Workspace {
         } else {
             Vec::new()
         };
+        let (tabs, active_tab_index, spaces) = self.order_snapshot_tabs(tabs, &tab_groups);
 
         let resizable_data = ResizableData::handle(app);
         let modal_sizes = resizable_data.as_ref(app).get_all_handles(window_id);
@@ -12059,6 +12097,10 @@ impl Workspace {
             right_panel_width,
             agent_management_filters,
             tab_groups,
+            spaces,
+            active_space: FeatureFlag::Spaces
+                .is_enabled()
+                .then_some(self.active_space),
         }
     }
 
@@ -12305,8 +12347,8 @@ impl Workspace {
             .clear_detail_sidecar_if_for_pane_group(pane_group.id());
 
         // If this is the last tab, close the window instead of actually removing
-        // the tab.
-        if self.tabs.len() == 1 {
+        // the tab. With spaces, the window stays open while another space has tabs.
+        if self.tabs.len() == 1 && !self.hidden_spaces_have_tabs() {
             if ContextFlag::CloseWindow.is_enabled() {
                 ctx.close_window();
             }
@@ -12362,6 +12404,13 @@ impl Workspace {
             });
         }
 
+        if self.tabs.is_empty() {
+            self.switch_to_nearest_non_empty_space(ctx);
+            ctx.dispatch_global_action("workspace:save_app", ());
+            ctx.notify();
+            return;
+        }
+
         match index.cmp(&self.active_tab_index) {
             Ordering::Equal => {
                 // Activate the tab that was immediately after the closed one — to the
@@ -12387,7 +12436,7 @@ impl Workspace {
     fn should_confirm_close_session(&self, ctx: &mut ViewContext<Self>) -> bool {
         // If we're closing the only remaining tab, we're actually going to close the window.
         // We don't need a user confirmation here because there's already another one on window close.
-        if self.tab_count() == 1 {
+        if self.tab_count() == 1 && !self.hidden_spaces_have_tabs() {
             return false;
         }
         // TODO: remove session sharing flag check when long-running commands are included
@@ -12509,7 +12558,7 @@ impl Workspace {
         add_to_undo_stack: bool,
         ctx: &mut ViewContext<Self>,
     ) {
-        let is_last_tab = self.tabs.len() == 1;
+        let is_last_tab = self.tabs.len() == 1 && !self.hidden_spaces_have_tabs();
         if !ContextFlag::CloseWindow.is_enabled() && is_last_tab {
             return;
         }
@@ -12661,7 +12710,7 @@ impl Workspace {
     /// Update this workspace when it is reopened after being closed.
     pub fn handle_reopen(&mut self, ctx: &mut ViewContext<Self>) {
         self.sync_window_button_visibility(ctx);
-        for pane_group in self.tab_views() {
+        for pane_group in self.all_tab_views() {
             pane_group.update(ctx, |pane_group, ctx| {
                 pane_group.reattach_panes(ctx);
             })
@@ -16344,6 +16393,8 @@ impl Workspace {
 
                 if let Some(tab_index) = tab {
                     self.close_tab(tab_index, true, *add_to_undo_stack, ctx);
+                } else {
+                    self.remove_stashed_tab(pane_group.id(), ctx);
                 }
             }
             pane_group::Event::PaneTitleUpdated => {
@@ -16662,12 +16713,7 @@ impl Workspace {
                 ctx.notify();
             }
             pane_group::Event::FocusPaneGroup => {
-                for (index, tab) in self.tabs.iter().enumerate() {
-                    if tab.pane_group.id() == pane_group.id() {
-                        self.activate_tab(index, ctx);
-                        break;
-                    }
-                }
+                self.activate_tab_by_pane_group_id(pane_group.id(), ctx);
             }
             pane_group::Event::FocusPane { pane_to_focus } => {
                 let Some(tab_index_to_focus) = self
@@ -24158,6 +24204,11 @@ impl TypedActionView for Workspace {
                     WarpA11yRole::UserAction,
                 ))
             }
+            // Fired on every scroll event / pointer move over the panel; announcing them
+            // would flood screen readers with debug text.
+            WorkspaceAction::SwipeSpaces { .. } | WorkspaceAction::DragSpace { .. } => {
+                ActionAccessibilityContent::Empty
+            }
             _ => ActionAccessibilityContent::from_debug(),
         }
     }
@@ -24289,6 +24340,7 @@ impl TypedActionView for Workspace {
                 self.cancel_tab_rename(ctx);
                 self.cancel_pane_rename(ctx);
                 self.cancel_tab_group_rename(ctx);
+                self.cancel_space_rename(ctx);
             }
             NewTabGroupFromTab(tab_index) => self.new_tab_group_from_tab(*tab_index, ctx),
             MoveTabToGroup {
@@ -24344,6 +24396,36 @@ impl TypedActionView for Workspace {
                     self.unpin_tab_group(group_id, ctx);
                 }
             }
+            SwitchToSpace(number) => self.switch_to_space_number(*number, ctx),
+            NextSpace => self.switch_to_adjacent_space(1, ctx),
+            PrevSpace => self.switch_to_adjacent_space(-1, ctx),
+            NewSpace => self.create_and_switch_to_new_space(ctx),
+            SwitchToSpaceById(space_id) => self.switch_space(*space_id, ctx),
+            ToggleSpaceRightClickMenu { space_id, position } => {
+                self.toggle_space_right_click_menu(*space_id, *position, ctx)
+            }
+            RenameSpace(space_id) => self.rename_space(*space_id, ctx),
+            RenameActiveSpace => self.rename_space(self.active_space, ctx),
+            ToggleSpaceColor { color, space_id } => self.toggle_space_color(*space_id, *color, ctx),
+            DeleteSpace(space_id) => self.delete_space(*space_id, ctx),
+            DeleteActiveSpace => self.delete_space(self.active_space, ctx),
+            MoveTabToSpace {
+                tab_index,
+                space_id,
+            } => self.move_tab_to_space(*tab_index, *space_id, ctx),
+            MoveTabGroupToSpace { group_id, space_id } => {
+                self.move_tab_group_to_space(*group_id, *space_id, ctx)
+            }
+            MoveSelectedTabsToSpace { space_id } => {
+                self.move_selected_tabs_to_space(*space_id, ctx)
+            }
+            DragSpace { space_id, position } => self.on_space_chip_drag(*space_id, *position, ctx),
+            DropSpace => ctx.notify(),
+            SwipeSpaces {
+                delta,
+                precise,
+                phase,
+            } => self.handle_space_swipe(*delta, *precise, *phase, Instant::now(), ctx),
             AddDefaultTab => {
                 let effective_mode = AISettings::as_ref(ctx).default_session_mode(ctx);
                 match effective_mode {
@@ -24931,6 +25013,7 @@ impl TypedActionView for Workspace {
             }
             DropGroup => {
                 send_telemetry_from_ctx!(TelemetryEvent::DragAndDropTabGroup, ctx);
+                self.drop_on_space_chip(ctx);
                 ctx.notify();
             }
             OpenWarpDrive => {
@@ -25366,6 +25449,9 @@ impl TypedActionView for Workspace {
                     }
                 }
                 send_telemetry_from_ctx!(TelemetryEvent::DragAndDropTab, ctx);
+                if !is_cross_window {
+                    self.drop_on_space_chip(ctx);
+                }
                 if is_cross_window {
                     let drop_result =
                         CrossWindowTabDrag::handle(ctx).update(ctx, |drag, ctx| drag.on_drop(ctx));
@@ -25885,7 +25971,7 @@ impl TypedActionView for Workspace {
                 // through to opening a fresh shared-session tab.
                 let existing_pane = self.find_pane_with_ambient_agent_conversation(*task_id, ctx);
                 let mut attached_locator = None;
-                if let Some((_, locator)) = existing_pane
+                if let Some(locator) = existing_pane
                     && let Some(pane_group) = self
                         .get_pane_group_view_with_id(locator.pane_group_id)
                         .cloned()
@@ -25914,7 +26000,7 @@ impl TypedActionView for Workspace {
             } => {
                 // Check if there's already a terminal viewing this conversation's task.
                 if let Some(task_id) = ambient_agent_task_id
-                    && let Some((_, locator)) =
+                    && let Some(locator) =
                         self.find_pane_with_ambient_agent_conversation(*task_id, ctx)
                 {
                     self.focus_pane(locator, ctx);
@@ -27345,7 +27431,25 @@ impl View for Workspace {
                     ChildView::new(&self.tab_right_click_menu).finish(),
                     positioning,
                 );
+                self.add_move_to_group_sidecar_overlay(&mut stack, app);
             }
+        }
+
+        // Space switcher chip menu (reuses the `tab_right_click_menu` view). Chips only exist in
+        // the vertical tabs panel.
+        if let Some(position) = self.show_space_right_click_menu
+            && uses_vertical_tabs(app)
+            && self.vertical_tabs_panel_open
+        {
+            stack.add_positioned_overlay_child(
+                ChildView::new(&self.tab_right_click_menu).finish(),
+                OffsetPositioning::offset_from_parent(
+                    position,
+                    ParentOffsetBounds::WindowByPosition,
+                    ParentAnchor::TopLeft,
+                    ChildAnchor::TopLeft,
+                ),
+            );
         }
 
         // Render the new session dropdown menu. This is outside the tab bar visibility
@@ -28220,7 +28324,7 @@ impl View for Workspace {
         #[cfg(any(windows, target_os = "linux"))]
         {
             event_handler =
-                event_handler.on_scroll_wheel(move |ctx, _app, delta, modifiers_state| {
+                event_handler.on_scroll_wheel(move |ctx, _app, delta, _, _, modifiers_state| {
                     if !modifiers_state.ctrl {
                         return DispatchEventResult::PropagateToParent;
                     }
@@ -28262,7 +28366,7 @@ impl View for Workspace {
     /// Update this workspace when it has been closed, but may still be restored.
     fn on_window_closed(&mut self, ctx: &mut ViewContext<Self>) {
         if !self.suppress_detach_panes_on_window_close {
-            for pane_group in self.tab_views() {
+            for pane_group in self.all_tab_views() {
                 pane_group.update(ctx, |pane_group, ctx| {
                     pane_group.detach_panes(ctx);
                 });
@@ -28728,6 +28832,14 @@ impl Workspace {
                 }
                 if source_was_single_tab {
                     self.close_window_for_content_transfer(ctx);
+                } else if self.tabs.len() == 1 {
+                    // The placeholder is the active space's only tab (other spaces have tabs).
+                    // `remove_tab` would switch to another space before the tab is put back.
+                    let placeholder = self.tabs.remove(source_tab_index);
+                    self.tab_mru_order.clear();
+                    if let Some(group_id) = placeholder.group_id {
+                        self.prune_empty_tab_group(group_id, ctx);
+                    }
                 } else {
                     self.remove_tab_without_undo(source_tab_index, ctx);
                 }
@@ -28910,7 +29022,18 @@ impl Workspace {
             return;
         }
 
-        let source_is_single_tab = self.tabs.len() == 1;
+        let dragged_tab = &self.tabs[current_index];
+        if self.update_space_chip_drop(
+            dragged_tab.draggable_state.dragging_mouse_position(),
+            SpaceChipDrop::Tab(dragged_tab.pane_group.id()),
+            ctx,
+        ) {
+            return;
+        }
+
+        // A window whose other spaces still have tabs must not travel with its last visible tab,
+        // so that drag detaches the tab into a preview window like a multi-tab drag.
+        let source_is_single_tab = self.tabs.len() == 1 && !self.hidden_spaces_have_tabs();
         if (is_drag_outside_tab_bar || source_is_single_tab)
             && FeatureFlag::DragTabsToWindows.is_enabled()
         {
@@ -29001,7 +29124,12 @@ impl Workspace {
                 });
             }
 
-            if !source_was_single_tab && current_index == self.active_tab_index {
+            // With spaces, the detached tab can be the only live one; it then stays active until
+            // the drop removes it and switches spaces.
+            if !source_was_single_tab
+                && current_index == self.active_tab_index
+                && self.tabs.len() > 1
+            {
                 let adjacent = if current_index + 1 < self.tabs.len() {
                     current_index + 1
                 } else {
@@ -29539,6 +29667,9 @@ impl Workspace {
         cursor_position: Vector2F,
         ctx: &mut ViewContext<Self>,
     ) {
+        if self.update_space_chip_drop(Some(cursor_position), SpaceChipDrop::Group(group_id), ctx) {
+            return;
+        }
         let Some((first, last)) = group_member_index_range(&self.tabs, group_id) else {
             return;
         };

@@ -570,18 +570,21 @@ impl UriHost {
                     .all_workspaces(ctx)
                     .iter()
                     .find_map(|(win_id, workspace)| {
-                        workspace.as_ref(ctx).tab_views().find_map(|pane_group| {
-                            let pane_id = pane_group
-                                .as_ref(ctx)
-                                .find_terminal_pane_by_session_uuid(&uuid_bytes)?;
-                            Some((
-                                *win_id,
-                                PaneViewLocator {
-                                    pane_group_id: pane_group.id(),
-                                    pane_id,
-                                },
-                            ))
-                        })
+                        workspace
+                            .as_ref(ctx)
+                            .all_tab_views()
+                            .find_map(|pane_group| {
+                                let pane_id = pane_group
+                                    .as_ref(ctx)
+                                    .find_terminal_pane_by_session_uuid(&uuid_bytes)?;
+                                Some((
+                                    *win_id,
+                                    PaneViewLocator {
+                                        pane_group_id: pane_group.id(),
+                                        pane_id,
+                                    },
+                                ))
+                            })
                     });
 
                 if let Some((window_id, locator)) = result {
@@ -1569,11 +1572,11 @@ fn find_workspace_for_terminal_view(
             continue;
         };
         for workspace in workspaces {
-            let contains_terminal = workspace
-                .as_ref(ctx)
-                .list_tab_pane_groups(ctx)
-                .iter()
-                .any(|group| group.terminal_ids.contains(&terminal_view_id));
+            let contains_terminal = workspace.as_ref(ctx).all_tab_views().any(|pane_group| {
+                pane_group
+                    .as_ref(ctx)
+                    .contains_terminal_view(terminal_view_id, ctx)
+            });
             if contains_terminal {
                 return Some((window_id, workspace));
             }
@@ -1635,7 +1638,7 @@ fn find_cloud_mode_terminal_in_workspace(
 ) -> Option<EntityId> {
     let mut fallback_ambient_terminal_id = None;
 
-    for pane_group_handle in workspace.tab_views() {
+    for pane_group_handle in workspace.all_tab_views() {
         let pane_group = pane_group_handle.as_ref(ctx);
         let ambient_terminal_id =
             pane_group

@@ -694,14 +694,17 @@ fn pane_group_and_terminal_view_for_owner(
         .all_workspaces(ctx)
         .into_iter()
         .find_map(|(_, workspace)| {
-            workspace.as_ref(ctx).tab_views().find_map(|pane_group| {
-                terminal_view_for_owner_in_group(
-                    pane_group.as_ref(ctx),
-                    owner_terminal_view_id,
-                    ctx,
-                )
-                .map(|terminal_view| (pane_group.clone(), terminal_view))
-            })
+            workspace
+                .as_ref(ctx)
+                .all_tab_views()
+                .find_map(|pane_group| {
+                    terminal_view_for_owner_in_group(
+                        pane_group.as_ref(ctx),
+                        owner_terminal_view_id,
+                        ctx,
+                    )
+                    .map(|terminal_view| (pane_group.clone(), terminal_view))
+                })
         })
 }
 
@@ -789,13 +792,16 @@ fn pane_group_hosting_split_off_child(
         .all_workspaces(ctx)
         .into_iter()
         .find_map(|(_, workspace)| {
-            workspace.as_ref(ctx).tab_views().find_map(|pane_group| {
-                let group = pane_group.as_ref(ctx);
-                group
-                    .child_agent_origin()
-                    .is_some_and(|origin| origin.conversation_id == conversation_id)
-                    .then(|| pane_group.clone())
-            })
+            workspace
+                .as_ref(ctx)
+                .all_tab_views()
+                .find_map(|pane_group| {
+                    let group = pane_group.as_ref(ctx);
+                    group
+                        .child_agent_origin()
+                        .is_some_and(|origin| origin.conversation_id == conversation_id)
+                        .then(|| pane_group.clone())
+                })
         })
 }
 

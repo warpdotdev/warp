@@ -362,6 +362,7 @@ fn convert_touch_moved(
                 position: window_state.last_cursor_position.to_vec2f(),
                 delta: Vector2F::new(delta_x as f32, delta_y as f32),
                 precise: true,
+                phase: None,
                 modifiers: from_winit_modifiers_state(window_state.modifiers),
             }))
         }
@@ -393,6 +394,7 @@ fn convert_touch_moved(
                 position: window_state.last_cursor_position.to_vec2f(),
                 delta,
                 precise: true,
+                phase: None,
                 modifiers: from_winit_modifiers_state(window_state.modifiers),
             }))
         }
@@ -835,6 +837,7 @@ impl EventLoop {
                         position,
                         delta,
                         precise: true,
+                        phase: None,
                         modifiers: ModifiersState::default(),
                     },
                 );
@@ -1264,6 +1267,7 @@ impl EventLoop {
                     position: window_state.last_cursor_position.to_vec2f(),
                     delta,
                     precise,
+                    phase: None,
                     modifiers: from_winit_modifiers_state(window_state.modifiers),
                 }))
             }

@@ -254,6 +254,7 @@ impl Element for WaterfallGapElement {
                     delta,
                     precise,
                     modifiers: ModifiersState { ctrl: false, .. },
+                    ..
                 }) => self.scroll_internal(*position, *delta, *precise, ctx),
                 _ => false,
             };

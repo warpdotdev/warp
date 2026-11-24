@@ -1,3 +1,4 @@
+pub(super) mod space_slide;
 pub mod telemetry;
 
 use std::cell::RefCell;
@@ -5,6 +6,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use instant::Instant;
 use languages::language_by_local_filename;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::rect::RectF;
@@ -20,12 +22,12 @@ use warp_core::ui::theme::{AnsiColorIdentifier, Fill as WarpThemeFill, WarpTheme
 use warpui::elements::{
     Border, ChildAnchor, Clipped, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox,
     Container, CornerRadius, CrossAxisAlignment, DispatchEventResult, DragAxis, DragBarSide,
-    Draggable, DropShadow, DropTarget, Element, Empty, EventHandler, Expanded, Fill as ElementFill,
-    Flex, Highlight, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle,
-    OffsetPositioning, Padding, ParentAnchor, ParentElement, ParentOffsetBounds,
+    Draggable, DraggableState, DropShadow, DropTarget, Element, Empty, EventHandler, Expanded,
+    Fill as ElementFill, Flex, Highlight, Hoverable, MainAxisAlignment, MainAxisSize,
+    MouseStateHandle, OffsetPositioning, Padding, ParentAnchor, ParentElement, ParentOffsetBounds,
     PositionedElementAnchor, PositionedElementOffsetBounds, Radius, Resizable,
     ResizableStateHandle, SavePosition, ScrollTarget, ScrollToPositionMode, ScrollbarWidth,
-    Shrinkable, Stack, Text, resizable_state_handle,
+    Shrinkable, Stack, Text, Wrap, resizable_state_handle,
 };
 use warpui::fonts::{Properties, Weight};
 use warpui::platform::Cursor;
@@ -35,6 +37,7 @@ use warpui::ui_components::components::{UiComponent, UiComponentStyles};
 use warpui::ui_components::text_input::TextInput;
 use warpui::{AppContext, EntityId, SingletonEntity, ViewHandle, WindowId};
 
+use self::space_slide::{SpaceSlide, SpaceSlideElement};
 use super::{render_group_member_icon_collage, select_unique_pane_kinds};
 use crate::ai::agent::conversation::{ConversationStatus, StatusColorStyle};
 use crate::ai::agent_management::AgentNotificationsModel;
@@ -73,6 +76,7 @@ use crate::util::color::Opacity;
 use crate::workspace::action::{NewSessionMenuAnchor, WorkspaceAction};
 use crate::workspace::cross_window_tab_drag::CrossWindowTabDrag;
 use crate::workspace::hoa_onboarding::HoaOnboardingStep;
+use crate::workspace::space::{Space, SpaceId};
 use crate::workspace::sync_inputs::SyncedInputState;
 use crate::workspace::tab_group::{TabGroup, TabGroupId};
 use crate::workspace::tab_settings::{
@@ -729,6 +733,13 @@ pub(super) struct VerticalTabsPanelState {
     show_diff_stats_mouse_state: MouseStateHandle,
     show_details_on_hover_mouse_state: MouseStateHandle,
     panel_right_click_mouse_state: MouseStateHandle,
+    /// Hover states for the space switcher chips, keyed by `SpaceId`.
+    space_chip_mouse_states: RefCell<HashMap<SpaceId, MouseStateHandle>>,
+    /// Drag states for the space switcher chips, keyed by `SpaceId`.
+    space_chip_drag_states: RefCell<HashMap<SpaceId, DraggableState>>,
+    new_space_button_mouse_state: MouseStateHandle,
+    /// The tab list's slide after the latest space switch; ignored once it has finished.
+    pub(super) space_slide: Option<SpaceSlide>,
     pub(super) show_settings_popup: bool,
 }
 
@@ -767,6 +778,10 @@ impl Default for VerticalTabsPanelState {
             show_diff_stats_mouse_state: Default::default(),
             show_details_on_hover_mouse_state: Default::default(),
             panel_right_click_mouse_state: Default::default(),
+            space_chip_mouse_states: RefCell::default(),
+            space_chip_drag_states: RefCell::default(),
+            new_space_button_mouse_state: Default::default(),
+            space_slide: None,
             show_settings_popup: false,
         }
     }
@@ -788,6 +803,24 @@ impl VerticalTabsPanelState {
             .lock()
             .map(|overlay_state| overlay_state.active_target.is_some())
             .unwrap_or(false)
+    }
+
+    pub(super) fn remove_space_chip_state(&self, space_id: SpaceId) {
+        self.space_chip_mouse_states.borrow_mut().remove(&space_id);
+        self.space_chip_drag_states.borrow_mut().remove(&space_id);
+    }
+
+    /// Slides the tab list in from the side of the space switched to, restarting any slide still
+    /// running.
+    pub(super) fn start_space_slide(&mut self, from_index: usize, to_index: usize) {
+        self.space_slide = SpaceSlide::between(from_index, to_index, Instant::now());
+    }
+
+    pub(super) fn is_space_chip_dragging(&self) -> bool {
+        self.space_chip_drag_states
+            .borrow()
+            .values()
+            .any(DraggableState::is_dragging)
     }
 
     pub(super) fn clear_detail_sidecar(&self) {
@@ -1269,6 +1302,15 @@ const CONTROL_BAR_SPACING: f32 = 4.;
 const SEARCH_ICON_SIZE: f32 = 12.;
 const SEARCH_BAR_HEIGHT: f32 = 24.;
 const CONTROL_BAR_BUTTON_RADIUS: Radius = Radius::Pixels(4.);
+const SPACE_CHIP_FONT_SIZE: f32 = 12.;
+const SPACE_CHIP_DOT_SIZE: f32 = 8.;
+const SPACE_CHIP_DOT_GAP: f32 = 4.;
+const SPACE_CHIP_VERTICAL_PADDING: f32 = 2.;
+const SPACE_CHIP_HORIZONTAL_PADDING: f32 = 6.;
+const SPACE_CHIP_RENAME_EDITOR_WIDTH: f32 = 96.;
+const NEW_SPACE_BUTTON_PADDING: f32 = 3.;
+const SPACE_SWITCHER_VERTICAL_PADDING: f32 = 6.;
+const SPACE_SWITCHER_POSITION_ID: &str = "vertical_tabs_space_switcher";
 const SPLIT_BUTTON_HEIGHT: f32 = SEARCH_BAR_HEIGHT;
 pub(super) const VERTICAL_TABS_ADD_TAB_POSITION_ID: &str = "vertical_tabs_add_tab_button";
 pub(super) const VERTICAL_TABS_SETTINGS_BUTTON_POSITION_ID: &str = "vertical_tabs_settings_button";
@@ -1679,7 +1721,7 @@ fn render_vertical_tabs_panel(
 
     let scrollable_groups = ClippedScrollable::vertical(
         state.scroll_state.clone(),
-        render_groups(state, workspace, app),
+        SpaceSlideElement::new(render_groups(state, workspace, app), state.space_slide).finish(),
         ScrollbarWidth::Custom(4.),
         theme.nonactive_ui_detail().into(),
         theme.active_ui_detail().into(),
@@ -1688,7 +1730,7 @@ fn render_vertical_tabs_panel(
     .with_overlayed_scrollbar()
     .finish();
 
-    let panel_content = Flex::column()
+    let mut panel_column = Flex::column()
         .with_main_axis_size(MainAxisSize::Max)
         .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
         .with_child(render_control_bar(
@@ -1697,8 +1739,11 @@ fn render_vertical_tabs_panel(
             &workspace.vertical_tabs_search_input,
             app,
         ))
-        .with_child(Shrinkable::new(1., scrollable_groups).finish())
-        .finish();
+        .with_child(Shrinkable::new(1., scrollable_groups).finish());
+    if FeatureFlag::Spaces.is_enabled() {
+        panel_column.add_child(render_space_switcher(state, workspace, app));
+    }
+    let panel_content = panel_column.finish();
 
     // Catch-all drop target so a pane dragged into any gap not covered by a
     // row, group-header, or member target (between groups, below the last tab)
@@ -1714,6 +1759,24 @@ fn render_vertical_tabs_panel(
             },
         )
         .finish()
+    } else {
+        panel_content
+    };
+
+    // Observes scrolls over the whole panel for space swipes. `with_always_handle` because the tab
+    // list's scrollable consumes them first, and it keeps scrolling the list.
+    let panel_content = if FeatureFlag::Spaces.is_enabled() {
+        EventHandler::new(panel_content)
+            .with_always_handle()
+            .on_scroll_wheel(|ctx, _, delta, precise, phase, _| {
+                ctx.dispatch_typed_action(WorkspaceAction::SwipeSpaces {
+                    delta,
+                    precise,
+                    phase,
+                });
+                DispatchEventResult::PropagateToParent
+            })
+            .finish()
     } else {
         panel_content
     };
@@ -1761,6 +1824,180 @@ fn render_vertical_tabs_panel(
             (MIN_PANEL_WIDTH, max_width.max(MIN_PANEL_WIDTH))
         }))
         .finish()
+}
+
+/// Name shown for a space; unnamed spaces use a placeholder based on their 1-based `position`.
+pub(super) fn space_display_name(space: &Space, position: usize) -> String {
+    space
+        .name
+        .clone()
+        .unwrap_or_else(|| format!("Space {position}"))
+}
+
+pub(super) fn space_chip_position_id(space_id: SpaceId) -> String {
+    format!("vertical_tabs_space_chip_{}", space_id.0)
+}
+
+/// Row of space chips (plus a `+` to create one) pinned to the bottom of the panel. Click switches,
+/// double-click renames inline, right-click opens the space menu, dragging reorders.
+fn render_space_switcher(
+    state: &VerticalTabsPanelState,
+    workspace: &Workspace,
+    app: &AppContext,
+) -> Box<dyn Element> {
+    let appearance = Appearance::as_ref(app);
+    let theme = appearance.theme();
+    let space_being_renamed = workspace.current_workspace_state.space_being_renamed();
+    let sub_text = theme.sub_text_color(theme.background());
+    let main_text = theme.main_text_color(theme.background());
+
+    let mut chip_mouse_states = state.space_chip_mouse_states.borrow_mut();
+    let mut chip_drag_states = state.space_chip_drag_states.borrow_mut();
+    let mut chips: Vec<Box<dyn Element>> = workspace
+        .spaces
+        .iter()
+        .enumerate()
+        .map(|(index, space)| {
+            let position = index + 1;
+            let is_active = space.id == workspace.active_space;
+            let label = space_display_name(space, position);
+            let dot_fill: ThemeFill = space
+                .color
+                .resolve(None)
+                .map(|c| c.to_ansi_color(&theme.terminal_colors().normal).into())
+                .unwrap_or(sub_text);
+            let mouse_state = chip_mouse_states.entry(space.id).or_default().clone();
+            let is_being_renamed = space_being_renamed == Some(space.id);
+            let is_drop_target = workspace
+                .space_chip_drop
+                .is_some_and(|(target, _)| target == space.id);
+            let space_id = space.id;
+            let chip = Hoverable::new(mouse_state, move |hover_state| {
+                let dot = ConstrainedBox::new(UiIcon::Ellipse.to_warpui_icon(dot_fill).finish())
+                    .with_width(SPACE_CHIP_DOT_SIZE)
+                    .with_height(SPACE_CHIP_DOT_SIZE)
+                    .finish();
+                let text = if is_being_renamed {
+                    ConstrainedBox::new(render_inline_tab_rename_editor(
+                        &workspace.tab_group_rename_editor,
+                        appearance,
+                        app,
+                    ))
+                    .with_width(SPACE_CHIP_RENAME_EDITOR_WIDTH)
+                    .finish()
+                } else {
+                    Text::new_inline(label, appearance.ui_font_family(), SPACE_CHIP_FONT_SIZE)
+                        .with_color(if is_active { main_text } else { sub_text }.into())
+                        .finish()
+                };
+                let background = if is_active {
+                    internal_colors::fg_overlay_3(theme)
+                } else if hover_state.is_hovered() || is_drop_target {
+                    internal_colors::fg_overlay_2(theme)
+                } else {
+                    ThemeFill::Solid(ColorU::transparent_black())
+                };
+                let mut container = Container::new(
+                    Flex::row()
+                        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                        .with_spacing(SPACE_CHIP_DOT_GAP)
+                        .with_child(dot)
+                        .with_child(text)
+                        .finish(),
+                )
+                .with_padding(
+                    Padding::uniform(SPACE_CHIP_VERTICAL_PADDING)
+                        .with_left(SPACE_CHIP_HORIZONTAL_PADDING)
+                        .with_right(SPACE_CHIP_HORIZONTAL_PADDING),
+                )
+                .with_background(background)
+                .with_corner_radius(CornerRadius::with_all(CONTROL_BAR_BUTTON_RADIUS));
+                if is_drop_target {
+                    container = container
+                        .with_foreground_border(Border::all(1.).with_border_fill(theme.accent()));
+                }
+                container.finish()
+            });
+            // While renaming, clicks belong to the editor.
+            let chip = if is_being_renamed {
+                chip.finish()
+            } else {
+                let chip = chip
+                    .with_cursor(Cursor::PointingHand)
+                    .on_click(move |ctx, _, _| {
+                        ctx.dispatch_typed_action(WorkspaceAction::SwitchToSpaceById(space_id));
+                    })
+                    .on_double_click(move |ctx, _, _| {
+                        ctx.dispatch_typed_action(WorkspaceAction::RenameSpace(space_id));
+                    })
+                    .on_right_click(move |ctx, _, position| {
+                        ctx.dispatch_typed_action(WorkspaceAction::ToggleSpaceRightClickMenu {
+                            space_id,
+                            position,
+                        });
+                    })
+                    .finish();
+                let drag_state = chip_drag_states.entry(space_id).or_default().clone();
+                Draggable::new(drag_state, chip)
+                    .with_drag_bounds_callback(|position_cache, _| {
+                        position_cache.get_position(SPACE_SWITCHER_POSITION_ID)
+                    })
+                    .on_drag(move |ctx, _, position, _| {
+                        ctx.dispatch_typed_action(WorkspaceAction::DragSpace {
+                            space_id,
+                            position,
+                        });
+                    })
+                    .on_drop(|ctx, _, _, _| {
+                        ctx.dispatch_typed_action(WorkspaceAction::DropSpace);
+                    })
+                    .finish()
+            };
+            SavePosition::new(chip, &space_chip_position_id(space_id)).finish()
+        })
+        .collect();
+
+    let new_space_button = Hoverable::new(
+        state.new_space_button_mouse_state.clone(),
+        move |hover_state| {
+            let icon = ConstrainedBox::new(UiIcon::Plus.to_warpui_icon(sub_text).finish())
+                .with_width(SPACE_CHIP_FONT_SIZE)
+                .with_height(SPACE_CHIP_FONT_SIZE)
+                .finish();
+            let background = if hover_state.is_hovered() {
+                internal_colors::fg_overlay_2(theme)
+            } else {
+                ThemeFill::Solid(ColorU::transparent_black())
+            };
+            Container::new(icon)
+                .with_uniform_padding(NEW_SPACE_BUTTON_PADDING)
+                .with_background(background)
+                .with_corner_radius(CornerRadius::with_all(CONTROL_BAR_BUTTON_RADIUS))
+                .finish()
+        },
+    )
+    .with_cursor(Cursor::PointingHand)
+    .on_click(|ctx, _, _| {
+        ctx.dispatch_typed_action(WorkspaceAction::NewSpace);
+    })
+    .finish();
+    chips.push(new_space_button);
+
+    let switcher = Container::new(
+        Wrap::row()
+            .with_spacing(CONTROL_BAR_SPACING)
+            .with_run_spacing(CONTROL_BAR_SPACING)
+            .with_children(chips)
+            .finish(),
+    )
+    .with_padding(
+        Padding::uniform(SPACE_SWITCHER_VERTICAL_PADDING)
+            .with_left(GROUP_HORIZONTAL_PADDING)
+            .with_right(GROUP_HORIZONTAL_PADDING),
+    )
+    .with_border(Border::top(1.).with_border_fill(internal_colors::fg_overlay_2(theme)))
+    .finish();
+    SavePosition::new(switcher, SPACE_SWITCHER_POSITION_ID).finish()
 }
 
 fn render_groups(

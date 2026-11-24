@@ -4646,6 +4646,7 @@ impl Element for BlockListElement {
                 delta,
                 precise,
                 modifiers: ModifiersState { ctrl: false, .. },
+                ..
             } if !handled => self.scroll_internal(*position, *delta, *precise, ctx, app),
             Event::LeftMouseDown {
                 position,

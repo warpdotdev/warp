@@ -8,7 +8,7 @@ use super::{
     LayoutContext, PaintContext, Point, SelectableElement, Selection, SelectionFragment,
     SizeConstraint, ZIndex,
 };
-use crate::event::{DispatchedEvent, EventDiscriminants, KeyState, ModifiersState};
+use crate::event::{DispatchedEvent, EventDiscriminants, KeyState, ModifiersState, ScrollPhase};
 use crate::keymap::Keystroke;
 use crate::platform::keyboard::KeyCode;
 use crate::text::word_boundaries::WordBoundariesPolicy;
@@ -17,6 +17,18 @@ use crate::text::{IsRect, SelectionDirection, SelectionType};
 type Handler = Box<dyn FnMut(&mut EventContext, &AppContext, Vector2F) -> DispatchEventResult>;
 type HandlerWithModifiers = Box<
     dyn FnMut(&mut EventContext, &AppContext, Vector2F, &ModifiersState) -> DispatchEventResult,
+>;
+/// Receives the scroll delta, whether it is precise (trackpad) rather than line-based (mouse wheel),
+/// the trackpad gesture phase if known, and the modifiers.
+type ScrollWheelHandler = Box<
+    dyn FnMut(
+        &mut EventContext,
+        &AppContext,
+        Vector2F,
+        bool,
+        Option<ScrollPhase>,
+        &ModifiersState,
+    ) -> DispatchEventResult,
 >;
 type KeyHandler = Box<dyn FnMut(&mut EventContext, &AppContext, &Keystroke) -> DispatchEventResult>;
 type ModifierStateChangedHandler =
@@ -57,7 +69,7 @@ pub struct EventHandler {
     mouse_in_behavior: MouseInBehavior,
     mouse_out: Option<RefCell<Handler>>,
     mouse_dragged: Option<RefCell<Handler>>,
-    scroll_wheel: Option<RefCell<HandlerWithModifiers>>,
+    scroll_wheel: Option<RefCell<ScrollWheelHandler>>,
     keydown: Option<RefCell<KeyHandler>>,
     modifier_state_changed: Option<RefCell<ModifierStateChangedHandler>>,
     origin: Option<Point>,
@@ -192,7 +204,14 @@ impl EventHandler {
     pub fn on_scroll_wheel<F>(mut self, callback: F) -> Self
     where
         F: 'static
-            + FnMut(&mut EventContext, &AppContext, Vector2F, &ModifiersState) -> DispatchEventResult,
+            + FnMut(
+                &mut EventContext,
+                &AppContext,
+                Vector2F,
+                bool,
+                Option<ScrollPhase>,
+                &ModifiersState,
+            ) -> DispatchEventResult,
     {
         self.scroll_wheel = Some(RefCell::new(Box::new(callback)));
         self
@@ -361,17 +380,19 @@ impl Element for EventHandler {
             Some(Event::ScrollWheel {
                 position,
                 delta,
-                precise: _,
+                precise,
+                phase,
                 modifiers,
             }) => {
                 if let Some(callback) = self.scroll_wheel.as_ref()
                     && let Some(rect) = ctx.visible_rect(self.origin.unwrap(), self.size().unwrap())
                     && rect.contains_point(*position)
+                    && matches!(
+                        callback.borrow_mut()(ctx, app, *delta, *precise, *phase, modifiers),
+                        DispatchEventResult::StopPropagation
+                    )
                 {
-                    return match callback.borrow_mut()(ctx, app, *delta, modifiers) {
-                        DispatchEventResult::PropagateToParent => false,
-                        DispatchEventResult::StopPropagation => true,
-                    };
+                    return true;
                 }
             }
             _ => {}

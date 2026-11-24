@@ -465,6 +465,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::TabConfigs,
         #[cfg(feature = "grouped_tabs")]
         FeatureFlag::GroupedTabs,
+        #[cfg(feature = "spaces")]
+        FeatureFlag::Spaces,
         #[cfg(feature = "pinned_tabs")]
         FeatureFlag::PinnedTabs,
         #[cfg(feature = "warp_control_cli")]

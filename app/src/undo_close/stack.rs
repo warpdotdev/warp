@@ -80,7 +80,7 @@ impl ClosedItem {
                 });
                 if let Some(workspace) = window_workspace(window_id, ctx) {
                     workspace.update(ctx, |workspace, ctx| {
-                        for pane_group in workspace.tab_views() {
+                        for pane_group in workspace.all_tab_views() {
                             // Mark conversations from all terminal panes in each tab
                             Self::mark_conversations_historical_for_pane_group(
                                 pane_group,

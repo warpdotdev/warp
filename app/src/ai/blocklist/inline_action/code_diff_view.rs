@@ -2536,7 +2536,7 @@ impl View for CodeDiffView {
                 }
 
                 return EventHandler::new(stack.finish())
-                    .on_scroll_wheel(move |ctx, _, delta, _| {
+                    .on_scroll_wheel(move |ctx, _, delta, _, _, _| {
                         if delta.y() < 0. {
                             ctx.dispatch_typed_action(CodeDiffViewAction::ScrollToExpand);
                             DispatchEventResult::StopPropagation

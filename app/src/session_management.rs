@@ -243,4 +243,6 @@ pub struct TabNavigationData {
     pub tab_index: usize,
     /// The tab's color, if one has been set by the user.
     pub color: Option<AnsiColorIdentifier>,
+    /// Display name of the tab's space, when the window has more than one space.
+    pub space_name: Option<String>,
 }

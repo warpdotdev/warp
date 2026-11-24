@@ -1,11 +1,11 @@
 use std::ffi::CStr;
 
 use cocoa::base::id;
-use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventType};
+use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventPhase, NSEventType};
 use objc2_foundation::NSUInteger;
 use pathfinder_geometry::vector::vec2f;
 use warpui_core::Event;
-use warpui_core::event::{KeyEventDetails, ModifiersState};
+use warpui_core::event::{KeyEventDetails, ModifiersState, ScrollPhase};
 use warpui_core::keymap::Keystroke;
 use warpui_core::platform::keyboard::{KeyCode, PhysicalKey};
 
@@ -24,6 +24,21 @@ fn modifier_flags_to_state(flags: NSEventModifierFlags) -> ModifiersState {
         shift: flags.contains(NSEventModifierFlags::Shift),
         ctrl: flags.contains(NSEventModifierFlags::Control),
         func: flags.contains(NSEventModifierFlags::Function),
+    }
+}
+
+/// Momentum events carry `momentumPhase` with no `phase`; mouse wheels carry neither.
+fn scroll_phase(phase: NSEventPhase, momentum_phase: NSEventPhase) -> Option<ScrollPhase> {
+    if momentum_phase != NSEventPhase::None {
+        Some(ScrollPhase::Momentum)
+    } else if phase == NSEventPhase::Began {
+        Some(ScrollPhase::Began)
+    } else if phase.intersects(NSEventPhase::Ended | NSEventPhase::Cancelled) {
+        Some(ScrollPhase::Ended)
+    } else if phase != NSEventPhase::None {
+        Some(ScrollPhase::Changed)
+    } else {
+        None
     }
 }
 
@@ -247,6 +262,7 @@ pub unsafe fn from_native(
                     native_event.scrollingDeltaY() as f32,
                 ),
                 precise: native_event.hasPreciseScrollingDeltas(),
+                phase: scroll_phase(native_event.phase(), native_event.momentumPhase()),
                 modifiers,
             }),
             _ => None,

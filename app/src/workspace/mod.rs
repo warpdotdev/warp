@@ -17,6 +17,8 @@ mod native_modal;
 mod one_time_modal_model;
 mod registry;
 pub mod rewind_confirmation_dialog;
+pub mod space;
+pub mod swipe_detector;
 pub mod sync_inputs;
 pub mod tab_group;
 pub mod tab_settings;
@@ -1031,6 +1033,61 @@ pub fn init(app: &mut AppContext) {
                 & !id!("Workspace_PaneDragging"),
         ),
     ]);
+
+    // Space bindings (keyless by default, since the natural `ctrl-<n>` choices are taken on macOS;
+    // gated on `Spaces`).
+    const SWITCH_TO_SPACE_BINDINGS: [(&str, &str); 9] = [
+        ("workspace:switch_to_space_1", "Switch to space 1"),
+        ("workspace:switch_to_space_2", "Switch to space 2"),
+        ("workspace:switch_to_space_3", "Switch to space 3"),
+        ("workspace:switch_to_space_4", "Switch to space 4"),
+        ("workspace:switch_to_space_5", "Switch to space 5"),
+        ("workspace:switch_to_space_6", "Switch to space 6"),
+        ("workspace:switch_to_space_7", "Switch to space 7"),
+        ("workspace:switch_to_space_8", "Switch to space 8"),
+        ("workspace:switch_to_space_9", "Switch to space 9"),
+    ];
+    let space_binding = |name, description, action| {
+        EditableBinding::new(name, description, action)
+            .with_enabled(|| FeatureFlag::Spaces.is_enabled())
+            .with_group(bindings::BindingGroup::Navigation.as_str())
+            .with_context_predicate(id!("Workspace") & !id!("Workspace_PaneDragging"))
+    };
+    app.register_editable_bindings(
+        SWITCH_TO_SPACE_BINDINGS
+            .into_iter()
+            .enumerate()
+            .map(|(index, (name, description))| {
+                space_binding(name, description, WorkspaceAction::SwitchToSpace(index + 1))
+            })
+            .chain([
+                space_binding(
+                    "workspace:next_space",
+                    "Switch to next space",
+                    WorkspaceAction::NextSpace,
+                ),
+                space_binding(
+                    "workspace:prev_space",
+                    "Switch to previous space",
+                    WorkspaceAction::PrevSpace,
+                ),
+                space_binding(
+                    "workspace:new_space",
+                    "Create new space",
+                    WorkspaceAction::NewSpace,
+                ),
+                space_binding(
+                    "workspace:rename_active_space",
+                    "Rename current space",
+                    WorkspaceAction::RenameActiveSpace,
+                ),
+                space_binding(
+                    "workspace:delete_active_space",
+                    "Delete current space",
+                    WorkspaceAction::DeleteActiveSpace,
+                ),
+            ]),
+    );
 
     // Tab/group pinning bindings (keyless by default; gated on `PinnedTabs`).
     // Pin/unpin are split into separate entries so the palette label tracks
