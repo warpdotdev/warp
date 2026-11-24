@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use async_compat::CompatExt as _;
 use futures::channel::oneshot;
+use http_client::is_warp_server_origin;
 use mcp::oauth::{
     self, AuthContext, CallbackResult, FILE_BASED_MCP_CREDENTIALS_KEY,
     FileBasedPersistedCredentialsMap, OAuthCallbackMode, PersistedCredentials,
@@ -1185,6 +1186,11 @@ impl TemplatableMCPServerManager {
         let should_persist = mode.should_persist_running_state_to_sqlite();
         let should_send_telemetry = mode.should_send_telemetry();
 
+        let refreshable_headers = with_warp_server_iap_headers(
+            self.refreshable_headers.get(&installation_uuid).cloned(),
+            &server.transport_type,
+            ctx,
+        );
         self.change_server_state(installation_uuid, MCPServerState::Starting, ctx);
         let task = ctx.spawn(
             spawn_server(
@@ -1195,7 +1201,7 @@ impl TemplatableMCPServerManager {
                 server.transport_type.clone(),
                 logger.clone(),
                 auth_context,
-                self.refreshable_headers.get(&installation_uuid).cloned(),
+                refreshable_headers,
             )
             .compat(),
             move |me, server_info: Result<_, rmcp::RmcpError>, ctx| {
@@ -2054,4 +2060,35 @@ impl TemplatableMCPServerManager {
         self.file_based_server_credentials
             .contains_key(&installation_hash)
     }
+}
+
+/// Adds the Warp client's IAP headers, read on every request, to an HTTP connection to
+/// warp-server: staging IAP routing rejects warp-server requests without them. Other servers, and
+/// builds without IAP, get `refreshable_headers` back unchanged.
+fn with_warp_server_iap_headers(
+    refreshable_headers: Option<RefreshableHeaders>,
+    transport_type: &TransportType,
+    ctx: &AppContext,
+) -> Option<RefreshableHeaders> {
+    let TransportType::ServerSentEvents(server) = transport_type else {
+        return refreshable_headers;
+    };
+    let is_warp_server = Url::parse(&server.url).is_ok_and(|url| is_warp_server_origin(&url));
+    if !is_warp_server
+        || ChannelState::iap_config().is_none()
+        || !ctx.has_singleton_model::<ServerApiProvider>()
+    {
+        return refreshable_headers;
+    }
+    let refreshable_headers =
+        refreshable_headers.or_else(|| RefreshableHeaders::new(HashMap::new(), None).ok())?;
+    let server_api = ServerApiProvider::as_ref(ctx).get();
+    refreshable_headers.set_source(Arc::new(move || {
+        server_api
+            .iap_headers()
+            .into_iter()
+            .map(|(name, value)| (name.to_owned(), value))
+            .collect()
+    }));
+    Some(refreshable_headers)
 }

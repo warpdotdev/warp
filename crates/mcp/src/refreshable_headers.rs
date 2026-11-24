@@ -19,6 +19,10 @@ use sse_stream::{Error as SseError, Sse};
 /// or the handler has given up on replacing them.
 pub type RejectionHandler = Arc<dyn Fn(String) -> BoxFuture<'static, ()> + Send + Sync>;
 
+/// Computes headers when each request is sent, for credentials that their owner keeps current on
+/// its own schedule.
+pub type HeaderSource = Arc<dyn Fn() -> HashMap<String, String> + Send + Sync>;
+
 #[derive(Debug, thiserror::Error)]
 #[error("'{name}' is not a valid HTTP header")]
 pub struct InvalidHeaderError {
@@ -35,6 +39,7 @@ pub struct RefreshableHeaders {
 struct Inner {
     current: RwLock<Current>,
     on_rejected: Option<RejectionHandler>,
+    source: RwLock<Option<HeaderSource>>,
 }
 
 struct Current {
@@ -59,8 +64,19 @@ impl RefreshableHeaders {
                     generation: 0,
                 }),
                 on_rejected,
+                source: RwLock::new(None),
             }),
         })
+    }
+
+    /// Sends the headers `source` computes with every request, in place of any replaceable header
+    /// of the same name. Takes the place of any earlier source.
+    pub fn set_source(&self, source: HeaderSource) {
+        *self
+            .inner
+            .source
+            .write()
+            .unwrap_or_else(PoisonError::into_inner) = Some(source);
     }
 
     /// Replaces the headers for every later request, including the retry of a rejected one.
@@ -83,9 +99,11 @@ impl RefreshableHeaders {
         &self,
         configured: &HashMap<String, String>,
     ) -> (HashMap<String, String>, u64) {
+        let sourced = self.sourced();
         let current = self.read();
-        let mut headers = without_names(configured, &current);
+        let mut headers = without_names(configured, current.headers.keys().chain(sourced.keys()));
         headers.extend(current.headers.clone());
+        headers.extend(sourced);
         (headers, current.generation)
     }
 
@@ -94,7 +112,8 @@ impl RefreshableHeaders {
         &self,
         configured: &HashMap<String, String>,
     ) -> HashMap<String, String> {
-        without_names(configured, &self.read())
+        let sourced = self.sourced();
+        without_names(configured, self.read().headers.keys().chain(sourced.keys()))
     }
 
     /// Gives the owner the chance to replace headers a server rejected, and reports whether
@@ -116,12 +135,33 @@ impl RefreshableHeaders {
 
     /// The headers requests are sent with now.
     pub fn current(&self) -> HashMap<String, String> {
-        self.read().headers.clone()
+        let sourced = self.sourced();
+        let mut headers = self.read().headers.clone();
+        headers.extend(sourced);
+        headers
     }
 
     fn parsed(&self) -> (HashMap<HeaderName, HeaderValue>, u64) {
+        let sourced = self.sourced();
         let current = self.read();
-        (current.parsed.clone(), current.generation)
+        let mut parsed = current.parsed.clone();
+        // A source has no caller to report an invalid header to, so the header is not sent.
+        parsed.extend(
+            sourced
+                .iter()
+                .filter_map(|(name, value)| parse_header(name, value).ok()),
+        );
+        (parsed, current.generation)
+    }
+
+    fn sourced(&self) -> HashMap<String, String> {
+        self.inner
+            .source
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+            .map(|source| source())
+            .unwrap_or_default()
     }
 
     fn read(&self) -> RwLockReadGuard<'_, Current> {
@@ -142,17 +182,17 @@ impl fmt::Debug for RefreshableHeaders {
     }
 }
 
-fn without_names(
+fn without_names<'a>(
     configured: &HashMap<String, String>,
-    current: &Current,
+    names: impl IntoIterator<Item = &'a String>,
 ) -> HashMap<String, String> {
+    let names: Vec<&String> = names.into_iter().collect();
     configured
         .iter()
         .filter(|(name, _)| {
-            !current
-                .headers
-                .keys()
-                .any(|refreshable| refreshable.eq_ignore_ascii_case(name))
+            !names
+                .iter()
+                .any(|supplied| supplied.eq_ignore_ascii_case(name))
         })
         .map(|(name, value)| (name.clone(), value.clone()))
         .collect()
@@ -163,14 +203,18 @@ fn parse_headers(
 ) -> Result<HashMap<HeaderName, HeaderValue>, InvalidHeaderError> {
     headers
         .iter()
-        .map(|(name, value)| {
-            let invalid = || InvalidHeaderError { name: name.clone() };
-            let parsed_name = HeaderName::try_from(name.as_str()).map_err(|_| invalid())?;
-            let mut parsed_value = HeaderValue::try_from(value.as_str()).map_err(|_| invalid())?;
-            parsed_value.set_sensitive(true);
-            Ok((parsed_name, parsed_value))
-        })
+        .map(|(name, value)| parse_header(name, value))
         .collect()
+}
+
+fn parse_header(name: &str, value: &str) -> Result<(HeaderName, HeaderValue), InvalidHeaderError> {
+    let invalid = || InvalidHeaderError {
+        name: name.to_owned(),
+    };
+    let parsed_name = HeaderName::try_from(name).map_err(|_| invalid())?;
+    let mut parsed_value = HeaderValue::try_from(value).map_err(|_| invalid())?;
+    parsed_value.set_sensitive(true);
+    Ok((parsed_name, parsed_value))
 }
 
 /// Sends every request with the current [`RefreshableHeaders`], and repeats a request the server
