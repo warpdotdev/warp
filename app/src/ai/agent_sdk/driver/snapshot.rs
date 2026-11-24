@@ -494,7 +494,7 @@ async fn writer_task(
     }
 }
 
-/// Normalize, preempt against existing repos, and write one JSONL line for `raw_path`.
+/// Write one JSONL line for `raw_path`, excluding temporary files and files in existing repos.
 /// All failures log at WARN and return without advancing `seen`.
 async fn process_append_path(
     raw_path: String,
@@ -524,6 +524,13 @@ async fn process_append_path(
     if seen.contains(&absolute_str) {
         return;
     }
+    if path_is_under_temp_dir(&absolute).await {
+        log::debug!(
+            "Skipping file declaration for '{absolute_str}': inside a temporary directory (task {task_id})"
+        );
+        seen.insert(absolute_str);
+        return;
+    }
     if path_is_under_existing_repo(&absolute).await {
         log::debug!(
             "Skipping file declaration for '{absolute_str}': already inside an existing git repo (task {task_id})"
@@ -541,6 +548,25 @@ async fn process_append_path(
             );
         }
     }
+}
+
+async fn path_is_under_temp_dir(path: &Path) -> bool {
+    let temp_dirs = [std::env::temp_dir(), PathBuf::from("/tmp")];
+    if temp_dirs.iter().any(|temp_dir| path.starts_with(temp_dir)) {
+        return true;
+    }
+    let canonical_path = tokio_fs::canonicalize(path).await.ok();
+    for temp_dir in temp_dirs {
+        if let Ok(canonical_temp_dir) = tokio_fs::canonicalize(temp_dir).await
+            && (path.starts_with(&canonical_temp_dir)
+                || canonical_path
+                    .as_ref()
+                    .is_some_and(|path| path.starts_with(&canonical_temp_dir)))
+        {
+            return true;
+        }
+    }
+    false
 }
 
 /// Walk ancestors of `path` and return `true` if any of them already contains a `.git`
