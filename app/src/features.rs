@@ -91,8 +91,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::CloudAgentRunners,
         #[cfg(feature = "cloud_agent_execution_config")]
         FeatureFlag::CloudAgentExecutionConfig,
-        #[cfg(feature = "session_agent_messages")]
-        FeatureFlag::SessionAgentMessages,
         #[cfg(feature = "account_first_onboarding")]
         FeatureFlag::AccountFirstOnboarding,
         #[cfg(all(feature = "simulate_github_unauthed", debug_assertions))]

@@ -464,17 +464,6 @@ pub struct AgentMessageHeader {
     pub read_at: Option<String>,
 }
 
-#[cfg(not(target_family = "wasm"))]
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub(crate) struct UndeliveredAgentMessage {
-    pub message_id: String,
-    pub sender_run_id: String,
-    pub subject: String,
-    pub body: String,
-    pub sent_at: String,
-    pub delegated_github_coauthor_user_uid: Option<String>,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct AgentRunEvent {
     #[serde(flatten)]
@@ -2120,7 +2109,6 @@ impl ServerApi {
         let operation = ExecutionBootstrap::build_with_capabilities(ExecutionBootstrapVariables {
             execution_id: execution_id.to_string().into(),
             supports_deferred_repositories,
-            supports_session_agent_messages: FeatureFlag::SessionAgentMessages.is_enabled(),
             secrets_input: TaskSecretsInput {
                 task_id: task_id.to_string().into(),
                 workload_token,
@@ -2143,10 +2131,6 @@ impl ServerApi {
                 return Err(anyhow!("Unknown execution task response"));
             }
         };
-        *self.session_message_task.lock() = config
-            .session_agent_messages
-            .unwrap_or(false)
-            .then(|| task_id.to_owned());
         Ok(ExecutionBootstrapData {
             config,
             secrets: super::managed_secrets::task_secrets_from_result(response.task_secrets),
@@ -2202,21 +2186,6 @@ impl ServerApi {
             .await?;
         let response = response.json::<Vec<AgentMessageHeader>>().await?;
         Ok(response)
-    }
-
-    #[cfg(not(target_family = "wasm"))]
-    pub(crate) async fn list_undelivered_agent_messages_for_task(
-        &self,
-        task_id: &AmbientAgentTaskId,
-    ) -> anyhow::Result<Vec<UndeliveredAgentMessage>> {
-        self.get_public_api_response_for_task(
-            task_id,
-            &format!("agent/messages/{task_id}?undelivered=true&include_body=true&limit=100"),
-        )
-        .await?
-        .json()
-        .await
-        .map_err(Into::into)
     }
 
     pub(crate) async fn mark_message_delivered_for_task(

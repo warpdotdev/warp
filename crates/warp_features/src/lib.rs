@@ -875,8 +875,6 @@ pub enum FeatureFlag {
     NamedAgents,
     /// Loads server-owned execution settings for paired cloud agent launches.
     CloudAgentExecutionConfig,
-    /// Delivers cloud agent messages through typed shared-session wakes.
-    SessionAgentMessages,
     /// Enables on-demand Factory repository checkouts and their credential scope.
     FactoryDeferredRepositories,
     /// Gates the driver behavior that writes GitHub credentials to disk
@@ -1103,7 +1101,6 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::GitMirrorCache,
     FeatureFlag::AgentPromptSteering,
     FeatureFlag::CwdScopedCloudSkills,
-    FeatureFlag::SessionAgentMessages,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).

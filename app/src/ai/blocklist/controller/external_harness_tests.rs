@@ -537,7 +537,6 @@ fn queued_harness_prompts_are_shown_as_rows_until_hidden() {
                     attachments: vec![],
                     participant_id: ParticipantId::new(),
                     base: None,
-                    accepted: None,
                 };
                 let row = controller.show_external_harness_prompt_queued(id, &prompt, ctx);
                 let queue = QueuedQueryModel::as_ref(ctx);
