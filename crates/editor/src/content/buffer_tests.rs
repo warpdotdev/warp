@@ -15,6 +15,7 @@ use string_offset::{ByteOffset, CharOffset};
 use vec1::{Vec1, vec1};
 use warp_util::content_version::ContentVersion;
 use warpui_core::elements::ListIndentLevel;
+use warpui_core::fonts::Weight;
 use warpui_core::text::point::Point;
 use warpui_core::{App, AppContext, ModelContext, ModelHandle, ReadModel};
 
@@ -1909,6 +1910,47 @@ fn test_block_style() {
                     })
                 ]
             );
+        });
+    });
+}
+
+#[test]
+fn test_block_style_strips_non_bold_weight() {
+    // #13949: TextStyles::all() only names Bold, so a code block keeps other weights.
+    App::test((), |mut app| async move {
+        let buffer = app.add_model(|_| Buffer::new(Box::new(|_, _| IndentBehavior::Ignore)));
+        let selection = app.add_model(|_| BufferSelectionModel::new(buffer.clone()));
+
+        buffer.update(&mut app, |buffer, ctx| {
+            let _ = buffer.edit_internal_first_selection(
+                CharOffset::from(1)..CharOffset::from(1),
+                "test",
+                TextStyles::default(),
+                selection.clone(),
+                ctx,
+            );
+            buffer.set_selection(
+                CharOffset::from(1)..CharOffset::from(3),
+                selection.clone(),
+                ctx,
+            );
+            let mut black = TextStyles::default();
+            black.set_weight(Weight::Black);
+            let _ = buffer.style_internal(black, selection.clone(), ctx);
+            assert_eq!(buffer.content.debug(), "<text><b_s>te<b_e>st");
+
+            let _ = buffer
+                .block_style_range(
+                    CharOffset::from(1)..CharOffset::from(5),
+                    BufferBlockStyle::CodeBlock {
+                        code_block_type: Default::default(),
+                    },
+                    selection.clone(),
+                    ctx,
+                )
+                .delta
+                .expect("Should exist");
+            assert_eq!(buffer.content.debug(), "<code:Shell>test<text>");
         });
     });
 }
