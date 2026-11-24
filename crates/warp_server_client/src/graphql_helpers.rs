@@ -25,6 +25,10 @@ pub fn is_auth_rejection(error: &anyhow::Error) -> bool {
         cause.to_string() == AUTH_REJECTED_MESSAGE
             || matches!(
                 cause.downcast_ref::<GraphQLError>(),
+                Some(GraphQLError::AnonymousSessionRejected)
+            )
+            || matches!(
+                cause.downcast_ref::<GraphQLError>(),
                 Some(GraphQLError::HttpError { status, .. }) if is_auth_rejection_status(*status)
             )
     })
@@ -121,9 +125,17 @@ where
             let _ = base_client.send_auth_event(AuthEvent::IapChallengeReceived);
             anyhow::bail!(GraphQLError::IapChallengeBlocked);
         }
+        Err(GraphQLError::AnonymousSessionRejected) => {
+            if !base_client.is_auth_refresh_allowed() {
+                anyhow::bail!(AUTH_REJECTED_MESSAGE);
+            }
+            let _ = base_client.send_auth_event(AuthEvent::NeedsReauth);
+            anyhow::bail!(GraphQLError::AnonymousSessionRejected);
+        }
         Err(err) => {
             let auth_rejected = match &err {
                 GraphQLError::HttpError { status, .. } => is_auth_rejection_status(*status),
+                GraphQLError::AnonymousSessionRejected => true,
                 GraphQLError::RequestError(_)
                 | GraphQLError::StagingAccessBlocked
                 | GraphQLError::IapChallengeBlocked

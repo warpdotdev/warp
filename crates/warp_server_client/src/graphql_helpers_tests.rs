@@ -153,6 +153,51 @@ fn refreshable_user_not_in_context_emits_account_disabled_event() {
     assert_user_disabled_event(&event_receiver);
 }
 
+#[test]
+fn refreshable_anonymous_session_rejection_emits_needs_reauth_event() {
+    let (base_client, event_receiver) = refreshable_base_client();
+    let send_count = Arc::new(AtomicUsize::new(0));
+
+    let error = block_on(send_graphql_request(
+        &base_client,
+        FakeGraphqlOperation::anonymous_session_rejected(None, send_count.clone()),
+        None,
+    ))
+    .unwrap_err();
+
+    assert!(matches!(
+        error.downcast_ref::<GraphQLError>(),
+        Some(GraphQLError::AnonymousSessionRejected)
+    ));
+    assert!(super::is_auth_rejection(&error));
+    assert_eq!(send_count.load(Ordering::SeqCst), 1);
+    match event_receiver.try_recv().unwrap() {
+        AuthEvent::NeedsReauth => {}
+        event => panic!("Expected NeedsReauth event, got {event:?}"),
+    }
+    assert_no_events(&event_receiver);
+}
+
+#[test]
+fn external_anonymous_session_rejection_returns_credentials_rejected_without_event() {
+    let (base_client, event_receiver) = externally_authenticated_base_client("daemon-token");
+    let send_count = Arc::new(AtomicUsize::new(0));
+
+    let error = block_on(send_graphql_request(
+        &base_client,
+        FakeGraphqlOperation::anonymous_session_rejected(Some("daemon-token"), send_count.clone()),
+        None,
+    ))
+    .unwrap_err();
+
+    assert!(has_error_message(
+        &error,
+        "server rejected authentication credentials"
+    ));
+    assert_eq!(send_count.load(Ordering::SeqCst), 1);
+    assert_no_events(&event_receiver);
+}
+
 fn refreshable_base_client() -> (BaseClient, async_channel::Receiver<AuthEvent>) {
     base_client(AuthState::new_for_test())
 }
@@ -191,6 +236,7 @@ struct FakeGraphqlOperation {
 enum FakeGraphqlResult {
     Success,
     Rejected(StatusCode),
+    AnonymousSessionRejected,
     ResponseErrors(Vec<String>),
 }
 
@@ -229,6 +275,19 @@ impl FakeGraphqlOperation {
             expected_team_uid: None,
             send_count,
             result: FakeGraphqlResult::Rejected(status),
+            expected_ambient: None,
+        }
+    }
+
+    fn anonymous_session_rejected(
+        expected_auth_token: Option<&str>,
+        send_count: Arc<AtomicUsize>,
+    ) -> Self {
+        Self {
+            expected_auth_token: expected_auth_token.map(ToOwned::to_owned),
+            expected_team_uid: None,
+            send_count,
+            result: FakeGraphqlResult::AnonymousSessionRejected,
             expected_ambient: None,
         }
     }
@@ -296,6 +355,9 @@ impl warp_graphql::client::Operation<()> for FakeGraphqlOperation {
                     status,
                     body: "redacted auth rejection".to_string(),
                 }),
+                FakeGraphqlResult::AnonymousSessionRejected => {
+                    Err(GraphQLError::AnonymousSessionRejected)
+                }
                 FakeGraphqlResult::ResponseErrors(messages) => Ok(GraphQlResponse {
                     data: None,
                     errors: Some(

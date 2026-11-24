@@ -751,11 +751,22 @@ impl AuthManager {
         };
     }
 
+    /// Whether anonymous linking must fall back to a normal sign-in. Linking needs a custom
+    /// token, which a session that needs reauth can no longer mint.
+    fn linking_requires_sign_in(&self) -> bool {
+        !cfg!(target_family = "wasm") && self.auth_state.needs_reauth()
+    }
+
     pub fn initiate_anonymous_user_linking(
-        &self,
+        &mut self,
         entrypoint: AnonymousUserSignupEntrypoint,
         ctx: &mut ModelContext<Self>,
     ) {
+        if self.linking_requires_sign_in() {
+            let sign_in_url = self.sign_in_url();
+            ctx.open_url(&sign_in_url);
+            return;
+        }
         let auth_client = self.auth_client.clone();
         let _ = ctx.spawn(
             async move { auth_client.fetch_new_custom_token().await },
@@ -807,8 +818,10 @@ impl AuthManager {
     ) {
         if !self.auth_state.is_user_anonymous().unwrap_or_default()
             || !self.auth_state.is_logged_in()
+            || self.auth_state.needs_reauth()
         {
-            // Not an anonymous Firebase user, or fully logged out — open URL without token.
+            // Not an anonymous Firebase user, fully logged out, or unable to mint a token —
+            // open URL without token.
             let url: String = construct_url(None);
             ctx.open_url(&url);
             return;
@@ -834,8 +847,17 @@ impl AuthManager {
         );
     }
 
-    pub fn copy_anonymous_user_linking_url_to_clipboard(&self, ctx: &mut ModelContext<Self>) {
+    pub fn copy_anonymous_user_linking_url_to_clipboard(&mut self, ctx: &mut ModelContext<Self>) {
         if !self.auth_state.is_user_anonymous().unwrap_or_default() {
+            return;
+        }
+        if self.linking_requires_sign_in() {
+            let sign_in_url = self.sign_in_url();
+            ctx.clipboard().write(ClipboardContent {
+                plain_text: sign_in_url.clone(),
+                paths: Some(vec![sign_in_url]),
+                ..Default::default()
+            });
             return;
         }
         let auth_client = self.auth_client.clone();
