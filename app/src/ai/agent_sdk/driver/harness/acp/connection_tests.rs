@@ -492,6 +492,71 @@ fn error_detail_renders_string_data_bounded_and_without_repeating_the_message() 
 }
 
 #[test]
+fn error_kind_is_read_only_from_a_string_field_of_object_data() {
+    let error = |data: Option<Value>| RpcError {
+        code: -32603,
+        message: "Internal error".to_owned(),
+        data,
+    };
+    assert_eq!(
+        error(Some(json!({ "errorKind": "incomplete_tool_call" }))).error_kind(),
+        Some("incomplete_tool_call")
+    );
+    assert_eq!(
+        error(Some(
+            json!({ "errorKind": "rate_limit", "rateLimit": { "resetsAt": 1 } })
+        ))
+        .error_kind(),
+        Some("rate_limit")
+    );
+    for data in [
+        None,
+        Some(Value::Null),
+        Some(json!("incomplete_tool_call")),
+        Some(json!({ "errorKind": 7 })),
+        Some(json!({ "codexErrorInfo": "usageLimitExceeded" })),
+        Some(json!(["errorKind"])),
+    ] {
+        assert_eq!(error(data.clone()).error_kind(), None, "{data:?}");
+    }
+}
+
+#[test]
+fn session_not_found_is_recognised_by_its_code_as_the_agent_sends_it() {
+    let (connection, _notifications, mut agent) = connect(rejecting_handler());
+    block_on(async {
+        let request = connection.request::<_, Value>("session/prompt", json!({}));
+        let agent = async {
+            let message = agent.next_message().await;
+            agent
+                .send(json!({
+                    "jsonrpc": "2.0",
+                    "id": message["id"],
+                    "error": {
+                        "code": -32002,
+                        "message": "Session sess_1 not found",
+                        "data": {"sessionId": "sess_1"},
+                    },
+                }))
+                .await;
+        };
+        let (response, ()) = join!(request, agent);
+        let error = response.unwrap_err().context("session/prompt failed");
+        assert!(
+            error
+                .downcast_ref::<RpcError>()
+                .unwrap()
+                .is_session_not_found()
+        );
+    });
+    let internal = RpcError::internal("Session sess_1 not found");
+    assert!(
+        !internal.is_session_not_found(),
+        "the message alone does not make a session lost"
+    );
+}
+
+#[test]
 fn agent_requests_are_answered_through_the_handler() {
     let handler: AgentRequestHandler = Arc::new(|method, params| {
         let answer = match method {

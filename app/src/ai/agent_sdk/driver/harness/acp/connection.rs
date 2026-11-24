@@ -32,6 +32,8 @@ use super::protocol::{METHOD_REQUEST_PERMISSION, PermissionOutcome, RequestPermi
 const JSON_RPC_VERSION: &str = "2.0";
 const METHOD_NOT_FOUND: i64 = -32601;
 const INTERNAL_ERROR: i64 = -32603;
+/// ACP's code for a request naming a resource, such as a session, the agent does not have.
+const RESOURCE_NOT_FOUND: i64 = -32002;
 /// Bounds the rendered `data` so an agent that attaches a large payload (a backtrace, a whole
 /// API response) cannot flood the task status.
 const MAX_RENDERED_DATA_CHARS: usize = 1000;
@@ -80,6 +82,16 @@ impl RpcError {
             rendered.push('…');
         }
         format!("{}: {rendered}", self.message)
+    }
+
+    /// Whether the agent no longer has the session the request named.
+    pub(super) fn is_session_not_found(&self) -> bool {
+        self.code == RESOURCE_NOT_FOUND
+    }
+
+    /// The machine-readable failure kind some agents attach as `data.errorKind`.
+    pub(super) fn error_kind(&self) -> Option<&str> {
+        self.data.as_ref()?.get("errorKind")?.as_str()
     }
 }
 
