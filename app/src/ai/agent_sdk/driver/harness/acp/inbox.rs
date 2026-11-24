@@ -21,8 +21,11 @@ pub(super) fn connect(
     opening_context: Option<String>,
     background: &Arc<Background>,
 ) -> (Receiver<ExternalHarnessPrompt>, Receiver<()>) {
+    // The turn driver consumes ordinary followups and hydrated inbox batches from one prompt stream.
     let (prompts, receiver) = async_channel::unbounded();
+    // Startup must not idle-exit before the first inbox lookup is empty or has queued a prompt.
     let (ready, startup_ready) = async_channel::bounded(1);
+    // Wake queries carry no content; one pending signal covers any number of new messages.
     let (wakes, wake_receiver) = async_channel::bounded(1);
     let _ = wakes.try_send(());
     let forwarded = prompts.clone();
@@ -72,6 +75,7 @@ async fn drain(
                 .await
             {
                 Ok(messages) if messages.is_empty() => {
+                    log::debug!("Agent inbox drain found no undelivered messages");
                     let _ = startup_ready.try_send(());
                     break;
                 }
