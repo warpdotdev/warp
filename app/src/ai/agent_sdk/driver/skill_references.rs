@@ -453,7 +453,6 @@ fn checkouts(
                 .ok_or(UnresolvedReason::CloneFailed);
         };
         match outcome.failure {
-            // The helper reports heads only when the whole batch succeeds.
             None => {
                 let sha = outcome.resolved_head.clone();
                 let sha = sha.or_else(|| read_head(&dir).map(|(sha, _)| sha));
@@ -466,6 +465,7 @@ fn checkouts(
                 CheckoutFailureKind::Clone
                 | CheckoutFailureKind::Checkout
                 | CheckoutFailureKind::RemoveOrigin
+                | CheckoutFailureKind::RemoveTarget
                 | CheckoutFailureKind::VerifyHead,
             ) => Err(UnresolvedReason::CloneFailed),
         }

@@ -1245,10 +1245,12 @@ fn helper_writes_typed_failures_and_rejects_invalid_requests_before_work() {
             let report: CheckoutReport =
                 serde_json::from_slice(&fs::read(&args.report_file).unwrap()).unwrap();
             assert_eq!(report.outcomes.len(), 3);
-            // A failed batch reports no heads, since nothing downstream should trust them.
+            assert_eq!(
+                report.outcomes[0].resolved_head.as_deref(),
+                Some(fixture.base().as_str())
+            );
             assert!(
-                report
-                    .outcomes
+                report.outcomes[1..]
                     .iter()
                     .all(|outcome| outcome.resolved_head.is_none())
             );
@@ -1953,6 +1955,110 @@ fn lazy_pins_verify_sha_origin_policy_and_never_fall_back() {
 
 struct Fixture {
     root: PathBuf,
+}
+#[test]
+fn failed_direct_clone_leaves_a_retryable_target() {
+    fixture_test("failed_direct_clone_leaves_a_retryable_target", |fixture| {
+        fixture.prepare(fixture.request("ready", None), false);
+        let preserved = fixture.work().join("ready");
+        fs::write(preserved.join("README"), "uncommitted work\n").unwrap();
+        let original_config = fs::read(preserved.join(".git/config")).unwrap();
+        let unavailable = fixture.root.join("unavailable.git");
+        fs::rename(fixture.origin(), &unavailable).unwrap();
+        let batch = fixture.batch(vec![
+            fixture.request("ready", None),
+            fixture.request("retry", None),
+        ]);
+        let args = EnvironmentCheckoutArgs {
+            requests_file: fixture.root.join("requests.json"),
+            report_file: fixture.root.join("report.json"),
+            remove_origins_only: false,
+            fail_if_target_exists: false,
+            legacy_preparation: false,
+        };
+        fs::write(fixture.root.join("cache/git-mirrors"), "").unwrap();
+        fs::write(&args.requests_file, serde_json::to_vec(&batch).unwrap()).unwrap();
+        assert!(run(&args).is_err());
+        let report: CheckoutReport =
+            serde_json::from_slice(&fs::read(&args.report_file).unwrap()).unwrap();
+        assert_eq!(
+            report.outcomes[0].resolved_head.as_deref(),
+            Some(git(&unavailable, &["rev-parse", "main"]).as_str())
+        );
+        assert_eq!(report.outcomes[1].failure, Some(CheckoutFailureKind::Clone));
+        assert!(!fixture.work().join("retry").exists());
+
+        fs::rename(&unavailable, fixture.origin()).unwrap();
+        let retry = fixture.batch(vec![batch.repositories[1].clone()]);
+        fs::write(&args.requests_file, serde_json::to_vec(&retry).unwrap()).unwrap();
+        run(&args).unwrap();
+        assert_eq!(
+            git(&fixture.work().join("retry"), &["rev-parse", "HEAD"]),
+            fixture.base()
+        );
+        assert_eq!(
+            fs::read_to_string(preserved.join("README")).unwrap(),
+            "uncommitted work\n"
+        );
+        assert_eq!(
+            fs::read(preserved.join(".git/config")).unwrap(),
+            original_config
+        );
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn failed_blob_transfer_cleans_partial_clone_before_retry() {
+    fixture_test(
+        "failed_blob_transfer_cleans_partial_clone_before_retry",
+        |fixture| {
+            use std::os::unix::fs::PermissionsExt as _;
+
+            let transfers = fixture.root.join("transfers");
+            let hook = fixture.root.join("fail-blob-transfer");
+            fs::write(
+                &hook,
+                format!(
+                    "#!/bin/sh\n\
+                     echo transfer >> '{transfers}'\n\
+                     if [ \"$(wc -l < '{transfers}')\" -eq 2 ]; then exit 1; fi\n\
+                     exec \"$@\"\n",
+                    transfers = transfers.display(),
+                ),
+            )
+            .unwrap();
+            fs::set_permissions(&hook, fs::Permissions::from_mode(0o700)).unwrap();
+            git(
+                &fixture.root,
+                &[
+                    "config",
+                    "--file",
+                    fixture.root.join("gitconfig").to_str().unwrap(),
+                    "uploadpack.packObjectsHook",
+                    hook.to_str().unwrap(),
+                ],
+            );
+            let batch = fixture.batch(vec![fixture.request("retry", None)]);
+            let target = fixture.work().join("retry");
+            let outcomes = checkout_batch(&batch, None).unwrap();
+            assert_eq!(fs::read_to_string(&transfers).unwrap().lines().count(), 2);
+            assert!(
+                outcomes[0]
+                    .diagnostics
+                    .contains("Clone succeeded, but checkout failed")
+            );
+            assert_eq!(outcomes[0].failure, Some(CheckoutFailureKind::Clone));
+            assert!(!target.exists());
+
+            assert_succeeded(&checkout_batch(&batch, None).unwrap());
+            assert_eq!(git(&target, &["rev-parse", "HEAD"]), fixture.base());
+            assert_eq!(
+                fs::read_to_string(target.join("README")).unwrap(),
+                "current blob\n"
+            );
+        },
+    );
 }
 
 impl Fixture {

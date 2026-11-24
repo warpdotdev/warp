@@ -56,6 +56,7 @@ pub enum CheckoutFailureKind {
     Clone,
     Checkout,
     RemoveOrigin,
+    RemoveTarget,
     VerifyHead,
 }
 
