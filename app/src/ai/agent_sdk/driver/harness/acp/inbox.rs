@@ -75,7 +75,7 @@ async fn drain(
                 .await
             {
                 Ok(messages) if messages.is_empty() => {
-                    log::debug!("Agent inbox drain found no undelivered messages");
+                    log::info!("Agent inbox drain found no undelivered messages");
                     let _ = startup_ready.try_send(());
                     break;
                 }
