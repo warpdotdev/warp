@@ -388,8 +388,8 @@ struct DetectedCacheModes {
     source: RepositoryCacheSource,
     relative_cache_dir: PathBuf,
     modes: Vec<String>,
-    /// Dry-run mount destinations inside the repository, relative to its root. `None` when the
-    /// dry run did not report a complete destination for every mount.
+    /// Dry-run destinations: checkout-relative inside the repository, absolute outside it.
+    /// `None` when the dry run did not report a complete destination for every mount.
     repository_mount_paths: Option<BTreeSet<PathBuf>>,
 }
 
@@ -849,9 +849,8 @@ where
     }
 }
 
-/// Resolves dry-run mount destinations relative to `cwd` and keeps those inside
-/// `repository_root`, expressed relative to it. Tools may report destinations through a
-/// symlink-resolved working directory, so both the lexical and canonical roots are accepted.
+/// Normalizes dry-run destinations for comparison within one repository, including external paths.
+/// Checkout-relative identities let lexical and symlink-resolved roots claim the same destinations.
 fn repository_mount_paths(
     repository_root: &Path,
     cwd: &Path,
@@ -860,9 +859,11 @@ fn repository_mount_paths(
     if mounts.is_empty() {
         return None;
     }
+    let repository_root = std::path::absolute(repository_root).ok()?;
+    let cwd = std::path::absolute(cwd).ok()?;
     let roots = [
-        Some(lexically_normalized(repository_root)),
-        std::fs::canonicalize(repository_root).ok(),
+        Some(lexically_normalized(&repository_root)),
+        std::fs::canonicalize(&repository_root).ok(),
     ];
     let mut paths = BTreeSet::new();
     for mount in mounts {
@@ -876,6 +877,8 @@ fn repository_mount_paths(
             .find_map(|root| destination.strip_prefix(root).ok())
         {
             paths.insert(relative.to_owned());
+        } else {
+            paths.insert(destination);
         }
     }
     Some(paths)
@@ -907,11 +910,9 @@ fn repository_mount_paths(
 /// - `/workspace/repo-a/target` => `/cache/<repo-a-key>/target`
 /// - `/workspace/repo-b/target` => `/cache/<repo-b-key>/target`
 ///
-/// Because the global configuration covers everything outside the repositories, a repository
-/// configuration is only kept if it mounts a destination inside its repository that no earlier
-/// configuration (in canonical order) already mounts. Otherwise, sub-projects such as Cargo
-/// workspace members would each re-mount the workspace's shared `target` directory, so the
-/// winning cache location would depend on which sub-projects discovery happened to select.
+/// The global cwd cannot rediscover project-specific targets outside the checkout. Only earlier
+/// configurations of the same repository can prove a child's destinations are already covered.
+/// Roots retain ownership of shared workspace targets instead of letting member crates replace them.
 #[tracing::instrument(skip_all, fields(tags.cloud_agent = true, additional_global_modes = tracing::field::Empty, resolved_modes = tracing::field::Empty, pruned_configurations = tracing::field::Empty))]
 fn construct_plan(
     cache_root: PathBuf,
@@ -950,6 +951,7 @@ fn construct_plan(
     let mut pruned_configurations = 0u64;
     let mut configurations = Vec::new();
     for detection in detections {
+        let is_root = detection.order.normalized_relative_path.is_none();
         let mounts_unclaimed_path = match detection.repository_mount_paths {
             None => true,
             Some(paths) => {
@@ -960,7 +962,7 @@ fn construct_plan(
                 unclaimed
             }
         };
-        if !mounts_unclaimed_path {
+        if !is_root && !mounts_unclaimed_path {
             pruned_configurations += 1;
             continue;
         }

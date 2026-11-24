@@ -15,8 +15,7 @@ use serde_json::Value;
 struct Fixture {
     name: &'static str,
     files: &'static [(&'static str, &'static str)],
-    /// Modes of the repository's root configuration, which is kept only when it mounts paths
-    /// inside the repository.
+    /// Modes of the repository's root configuration.
     repository_modes: &'static [&'static str],
     /// Modes the global configuration must include for this repository.
     global_modes: &'static [&'static str],
@@ -51,13 +50,13 @@ const FIXTURES: &[Fixture] = &[
     Fixture {
         name: "go",
         files: &[("go.mod", GO_MOD)],
-        repository_modes: &[],
+        repository_modes: &["go"],
         global_modes: &["go"],
     },
     Fixture {
         name: "go-secondary",
         files: &[("go.mod", GO_MOD)],
-        repository_modes: &[],
+        repository_modes: &["go"],
         global_modes: &["go"],
     },
     Fixture {
@@ -464,10 +463,10 @@ fn validate_fixture_modes(report: &build_cache::CacheSetupReport, fixtures: &[&F
         .iter()
         .flat_map(|plan| &plan.configurations)
         .filter_map(|configuration| match &configuration.scope {
-            CacheScope::Repository { name, .. } => {
+            CacheScope::Repository { name, .. } if configuration.cwd.ends_with(name) => {
                 Some((name.as_str(), configuration.modes.as_slice()))
             }
-            CacheScope::Global => None,
+            CacheScope::Repository { .. } | CacheScope::Global => None,
         })
         .collect::<BTreeMap<_, _>>();
 
@@ -566,16 +565,15 @@ fn validate_nested_fixture(report: &build_cache::CacheSetupReport, fixtures: &[&
         println!("  mismatch nested: expected the root configuration with rust");
         failures += 1;
     }
-    // Go and npm only mount global paths, which the global configuration already covers.
-    for suffix in ["nested/backend", "nested/frontend"] {
-        if configurations
-            .iter()
-            .any(|configuration| configuration.cwd.ends_with(suffix))
-        {
-            println!("  mismatch {suffix}: expected no repository configuration");
-            failures += 1;
+    for (suffix, mode) in [("nested/backend", "go"), ("nested/frontend", "npm")] {
+        if configurations.iter().any(|configuration| {
+            configuration.cwd.ends_with(suffix)
+                && configuration.modes.iter().any(|actual| actual == mode)
+        }) {
+            println!("  ok {suffix}: retained for its distinct {mode} destinations");
         } else {
-            println!("  ok {suffix}: no repository configuration");
+            println!("  mismatch {suffix}: expected a repository configuration with {mode}");
+            failures += 1;
         }
     }
     failures
