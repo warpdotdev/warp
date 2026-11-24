@@ -3002,3 +3002,95 @@ fn test_parse_html_comment_with_trailing_same_line_content_is_not_block() {
         ])]
     );
 }
+
+#[test]
+fn test_parse_br_mid_paragraph() {
+    let source = "First line of the paragraph.<br>\nSecond line, after a raw `<br>`.\n";
+    assert_eq!(
+        test_parse_markdown(source),
+        vec![
+            FormattedTextLine::Line(vec![FormattedTextFragment::plain_text(
+                "First line of the paragraph."
+            )]),
+            FormattedTextLine::Line(vec![
+                FormattedTextFragment::plain_text("Second line, after a raw "),
+                FormattedTextFragment::inline_code("<br>"),
+                FormattedTextFragment::plain_text("."),
+            ]),
+        ]
+    );
+}
+
+#[test]
+fn test_parse_br_line_variants() {
+    for (source, expected_text) in [
+        ("a<br>b", vec!["a\n", "b\n"]),
+        ("a<br/>b", vec!["a\n", "b\n"]),
+        ("a<br />b", vec!["a\n", "b\n"]),
+        ("a<BR>b", vec!["a\n", "b\n"]),
+        ("a <br> b", vec!["a \n", " b\n"]),
+    ] {
+        let lines = test_parse_markdown(source);
+        let texts: Vec<String> = lines.iter().map(FormattedTextLine::raw_text).collect();
+        assert_eq!(texts, expected_text, "source: {source:?}");
+        assert!(
+            lines
+                .iter()
+                .all(|l| matches!(l, FormattedTextLine::Line(_))),
+            "source: {source:?}"
+        );
+    }
+}
+
+#[test]
+fn test_parse_br_consecutive_produces_blank_line() {
+    let lines = test_parse_markdown("a<br><br>b");
+    assert_eq!(
+        lines,
+        vec![
+            FormattedTextLine::Line(vec![FormattedTextFragment::plain_text("a")]),
+            FormattedTextLine::LineBreak,
+            FormattedTextLine::Line(vec![FormattedTextFragment::plain_text("b")]),
+        ]
+    );
+}
+
+#[test]
+fn test_parse_br_preserves_styles_across_break() {
+    // Emphasis spanning a `<br>` applies to both resulting lines.
+    let lines = test_parse_markdown("**bold<br>text**");
+    assert_eq!(
+        lines,
+        vec![
+            FormattedTextLine::Line(vec![FormattedTextFragment::bold("bold")]),
+            FormattedTextLine::Line(vec![FormattedTextFragment::bold("text")]),
+        ]
+    );
+}
+
+#[test]
+fn test_parse_br_inside_table_cell_becomes_space() {
+    // Table cells render on a single line, so a `<br>` degrades to a separating space
+    // rather than rendering as literal tag text.
+    let source =
+        "| Feature | Notes |\n| --- | --- |\n| Export | Supports CSV.<br>Also supports JSON. |\n";
+    let lines = test_parse_markdown_with_gfm_tables(source);
+    let Some(FormattedTextLine::Table(table)) = lines.first() else {
+        panic!("expected a table");
+    };
+    let cell_text: String = table.rows[0][1].iter().map(|f| f.text.as_str()).collect();
+    assert_eq!(cell_text, "Supports CSV. Also supports JSON.");
+}
+
+#[test]
+fn test_parse_br_inside_code_span_is_literal() {
+    let lines = test_parse_markdown("a `<br>` b");
+    assert_eq!(
+        lines,
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::plain_text("a "),
+            FormattedTextFragment::inline_code("<br>"),
+            FormattedTextFragment::plain_text(" b"),
+        ])]
+    );
+}
