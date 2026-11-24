@@ -888,6 +888,7 @@ fn repository_mount_paths_include_external_destinations() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("repo");
     let child = root.join("sub");
+    let external_cache = temp.path().join("home/agent/.npm");
     fs::create_dir_all(&child).unwrap();
 
     let paths = repository_mount_paths(
@@ -897,7 +898,7 @@ fn repository_mount_paths_include_external_destinations() {
             mount_at("./target"),
             mount_at("../shared/out"),
             mount_at(root.join("other")),
-            mount_at("/home/agent/.npm"),
+            mount_at(&external_cache),
             mount_at(temp.path().join("repo-sibling")),
         ],
     );
@@ -908,7 +909,7 @@ fn repository_mount_paths_include_external_destinations() {
             PathBuf::from("sub/target"),
             PathBuf::from("shared/out"),
             PathBuf::from("other"),
-            PathBuf::from("/home/agent/.npm"),
+            external_cache,
             temp.path().join("repo-sibling"),
         ]))
     );
