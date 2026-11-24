@@ -9,7 +9,6 @@ fn bootstrap_fetches_all_task_data_in_one_operation() {
         let operation = ExecutionBootstrap::build_with_capabilities(ExecutionBootstrapVariables {
             execution_id: "execution".into(),
             supports_deferred_repositories,
-            supports_session_agent_messages: supports_deferred_repositories,
             secrets_input: TaskSecretsInput {
                 task_id: "task".into(),
                 workload_token: "token".to_owned(),
@@ -58,12 +57,6 @@ fn bootstrap_fetches_all_task_data_in_one_operation() {
             supports_deferred_repositories
         );
         assert!(query.contains("supportsAgentHooks: true"));
-        assert_eq!(
-            query
-                .lines()
-                .any(|line| line.trim() == "sessionAgentMessages"),
-            supports_deferred_repositories
-        );
         for field in ["agentHookSources", "onAsk", "strict"] {
             assert!(query.contains(field), "missing {field}");
         }

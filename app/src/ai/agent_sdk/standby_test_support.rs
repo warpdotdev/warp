@@ -233,7 +233,6 @@ pub(super) fn connection() -> (ConnectionAttempt, TestServer) {
 
 pub(super) fn execution_config() -> ExecutionConfiguration {
     ExecutionConfiguration {
-        session_agent_messages: None,
         task_id: "run-id".into(),
         execution_id: "42".into(),
         conversation_id: None,

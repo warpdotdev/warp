@@ -613,7 +613,6 @@ impl Fixture {
                 attachments: Vec::new(),
                 participant_id: participant_id.clone(),
                 base: None,
-                accepted: None,
             })
             .await
             .unwrap();
@@ -692,8 +691,6 @@ fn start(
         session_id: SESSION.to_owned(),
         suppressed_startup_message: None,
         prompt_text: "initial prompt".to_owned(),
-        initial_inbox_ready: None,
-        skip_initial_prompt: false,
         initial_attachments: Vec::new(),
         attachments: Arc::new(AttachmentResolver::new(
             Arc::new(MockAIClient::new()),
@@ -1650,7 +1647,6 @@ fn more_than_two_ready_batches_are_submitted_fifo_without_empty_prompts_or_dupli
                         attachments: Vec::new(),
                         participant_id: participant_id.clone(),
                         base: None,
-                        accepted: None,
                     },
                     None,
                 ));
@@ -2105,142 +2101,6 @@ fn turn_state_reports_idle_once_the_prompt_resolves() {
 }
 
 #[test]
-fn delivery_receipt_waits_for_a_successful_prompt_response() {
-    let (driver, mut mapper, mut fixture) = start_default();
-    let (accepted, receipt) = async_channel::bounded(1);
-    let script = async {
-        let first = fixture.agent.next_prompt().await;
-        fixture.agent.respond(&first, "end_turn").await;
-        fixture.host.wait_for_finished(1).await;
-        fixture
-            .follow_ups
-            .send(ExternalHarnessPrompt {
-                text: "inbox batch".into(),
-                attachments: Vec::new(),
-                participant_id: ParticipantId::new(),
-                base: None,
-                accepted: Some(accepted),
-            })
-            .await
-            .unwrap();
-        let prompt = fixture.agent.next_prompt().await;
-        fixture.agent.read_barrier().await;
-        assert_eq!(receipt.try_recv(), Err(async_channel::TryRecvError::Empty));
-
-        fixture.agent.respond(&prompt, "end_turn").await;
-        receipt.recv().await.unwrap();
-        fixture.host.wait_for_finished(2).await;
-        fixture.unbind()
-    };
-    block_on(join(script, driver.run(&mut mapper)));
-}
-
-#[test]
-fn rejected_prompt_releases_its_delivery_receipt_without_accepting() {
-    let (driver, mut mapper, mut fixture) = start_default();
-    let (accepted, receipt) = async_channel::bounded(1);
-    fixture
-        .follow_ups
-        .try_send(ExternalHarnessPrompt {
-            text: "inbox batch".into(),
-            attachments: Vec::new(),
-            participant_id: ParticipantId::new(),
-            base: None,
-            accepted: Some(accepted),
-        })
-        .unwrap();
-    let script = async {
-        let prompt = fixture.agent.next_prompt().await;
-        fixture
-            .agent
-            .send(json!({
-                "jsonrpc": "2.0", "id": prompt["id"],
-                "error": { "code": -32603, "message": "not accepted" }
-            }))
-            .await;
-
-        assert_eq!(receipt.recv().await, Err(async_channel::RecvError));
-        fixture.host.wait_for_finished(1).await;
-        fixture.unbind()
-    };
-    block_on(join(script, driver.run(&mut mapper)));
-}
-
-#[test]
-fn injected_steer_accepts_delivery_before_the_running_turn_finishes() {
-    let (driver, mut mapper, mut fixture) = start_steering();
-    let (accepted, receipt) = async_channel::bounded(1);
-    let script = async {
-        let first = fixture.agent.next_prompt().await;
-        fixture
-            .follow_ups
-            .send(ExternalHarnessPrompt {
-                text: "inbox batch".into(),
-                attachments: Vec::new(),
-                participant_id: ParticipantId::new(),
-                base: None,
-                accepted: Some(accepted),
-            })
-            .await
-            .unwrap();
-        let steer = fixture.agent.next_steer().await;
-        fixture.agent.read_barrier().await;
-        assert_eq!(receipt.try_recv(), Err(async_channel::TryRecvError::Empty));
-
-        fixture.agent.answer_steer(&steer, "injected").await;
-        receipt.recv().await.unwrap();
-        fixture.agent.respond(&first, "end_turn").await;
-        fixture.host.wait_for_finished(1).await;
-        fixture.unbind()
-    };
-    block_on(join(script, driver.run(&mut mapper)));
-}
-
-#[test]
-fn opening_wake_does_not_submit_a_synthetic_prompt() {
-    let (mut driver, mut mapper, mut fixture) = start_default();
-    let (ready, inbox_ready) = async_channel::bounded(1);
-    driver.initial_inbox_ready = Some(inbox_ready);
-    driver.skip_initial_prompt = true;
-    let mut running = Box::pin(driver.run(&mut mapper));
-    assert!(running.as_mut().now_or_never().is_none());
-    assert_eq!(ended_count(&fixture.host.events()), 0);
-    let script = async {
-        ready.send(()).await.unwrap();
-        fixture.host.wait_for_finished(1).await;
-        assert!(fixture.agent.next_message().now_or_never().is_none());
-
-        fixture.send_follow_up("resolved inbox batch").await;
-        let prompt = fixture.agent.next_prompt().await;
-        assert_eq!(prompt_text(&prompt), "resolved inbox batch");
-        fixture.agent.respond(&prompt, "end_turn").await;
-        fixture.host.wait_for_finished(2).await;
-        fixture.unbind()
-    };
-    block_on(join(script, running));
-}
-
-#[test]
-fn opening_inbox_batch_runs_on_the_initial_stream_without_an_idle_boundary() {
-    let (mut driver, mut mapper, mut fixture) = start_default();
-    let (ready, inbox_ready) = async_channel::bounded(1);
-    driver.initial_inbox_ready = Some(inbox_ready);
-    driver.skip_initial_prompt = true;
-    let script = async {
-        fixture.send_follow_up("resolved inbox batch").await;
-        ready.send(()).await.unwrap();
-        let prompt = fixture.agent.next_prompt().await;
-        assert_eq!(prompt_text(&prompt), "resolved inbox batch");
-        assert_eq!(ended_count(&fixture.host.events()), 0);
-        fixture.agent.respond(&prompt, "end_turn").await;
-        fixture.host.wait_for_finished(1).await;
-        fixture.unbind()
-    };
-    let ((host, _), ()) = block_on(join(script, driver.run(&mut mapper)));
-    assert_eq!(host.streams().len(), 1);
-}
-
-#[test]
 fn opening_batch_preserves_attachments_and_authorship_across_preparation() {
     let (driver, mut mapper, mut fixture) = start_default();
     let author_b = ParticipantId::new();
@@ -2264,7 +2124,6 @@ fn opening_batch_preserves_attachments_and_authorship_across_preparation() {
             }],
             participant_id: author_b,
             base: Some(base),
-            accepted: None,
         })
         .unwrap();
     block_on(fixture.send_follow_up("C"));
@@ -2792,7 +2651,6 @@ fn follow_ups_a_prompt_could_not_carry_are_steered_into_its_turn() {
                 attachments: Vec::new(),
                 participant_id: ParticipantId::new(),
                 base: None,
-                accepted: None,
             },
             None,
         ));

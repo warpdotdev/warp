@@ -443,7 +443,6 @@ register_error!(TranscribeError);
 #[non_structural_derive(Send, Sync)]
 pub struct ServerApi {
     base_client: Arc<BaseClient>,
-    session_message_task: Mutex<Option<String>>,
     // TODO(jeff): Make `TelemetryApi` another type of client, and move it off `ServerApi`.
     telemetry_api: TelemetryApi,
     last_server_time: Arc<Mutex<Option<ServerTime>>>,
@@ -514,7 +513,6 @@ impl ServerApi {
             base_client,
             telemetry_api,
             last_server_time: Arc::new(Mutex::new(None)),
-            session_message_task: Mutex::new(None),
         }
     }
 
@@ -553,10 +551,6 @@ impl ServerApi {
             None,
             TelemetryApi::new(),
         )
-    }
-
-    pub(crate) fn uses_session_agent_messages(&self, task_id: &str) -> bool {
-        self.session_message_task.lock().as_deref() == Some(task_id)
     }
 
     /// Sets the ambient agent task ID to be sent with all subsequent requests.
