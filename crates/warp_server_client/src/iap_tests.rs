@@ -119,47 +119,6 @@ fn manual_refresh_clears_the_rejection_streak() {
     });
 }
 
-#[test]
-fn request_headers_carry_cached_token_and_routing_opt_in() {
-    let manager = test_manager();
-    let state = manager.state.as_ref().unwrap();
-    state.set_loaded(cached("iap-token", Some(Duration::from_secs(3600))));
-    state.set_routing_opt_in(true);
-
-    assert_eq!(
-        manager.request_headers(),
-        Some(HashMap::from([
-            (
-                "Proxy-Authorization".to_string(),
-                "Bearer iap-token".to_string()
-            ),
-            ("x-warp-enable-iap".to_string(), "1".to_string()),
-        ]))
-    );
-}
-
-#[test]
-fn request_headers_are_empty_without_token_or_routing_opt_in() {
-    let manager = test_manager();
-    manager
-        .state
-        .as_ref()
-        .unwrap()
-        .set_loaded(cached("expired-token", None));
-
-    assert_eq!(manager.request_headers(), Some(HashMap::new()));
-}
-
-#[test]
-fn request_headers_are_none_when_iap_is_inactive() {
-    let manager = IapManager {
-        state: None,
-        ..test_manager()
-    };
-
-    assert_eq!(manager.request_headers(), None);
-}
-
 fn now_unix() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)

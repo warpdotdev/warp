@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -255,21 +254,6 @@ impl IapManager {
         self.state
             .as_ref()
             .is_some_and(|s| s.get_cached().is_some())
-    }
-
-    /// The IAP credential and routing opt-in headers a warp-server request carries now, or `None`
-    /// when IAP is inactive for this build.
-    pub fn request_headers(&self) -> Option<HashMap<String, String>> {
-        let state = self.state.as_ref()?;
-        Some(
-            http_client::iap::headers(
-                state.get_cached(),
-                state.routing_opt_in.load(Ordering::Relaxed),
-            )
-            .into_iter()
-            .map(|(name, value)| (name.to_string(), value))
-            .collect(),
-        )
     }
 
     /// Establishes IAP access for a blocking caller: triggers a refresh and, if

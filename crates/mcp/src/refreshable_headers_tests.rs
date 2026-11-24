@@ -310,6 +310,64 @@ fn applies_over_and_excludes_configured_headers_of_the_same_name() {
     );
 }
 
+#[tokio::test]
+async fn sourced_headers_are_read_for_every_request() {
+    let http_client = FakeClient::accepting("Bearer second");
+    let token = Arc::new(Mutex::new("Bearer first"));
+    let refreshable = RefreshableHeaders::new(HashMap::new(), None).expect("valid headers");
+    refreshable.set_source({
+        let token = token.clone();
+        Arc::new(move || headers(&[("Authorization", *token.lock().expect("token"))]))
+    });
+    let client = RefreshableHeaderClient::new(http_client.clone(), refreshable);
+
+    let rejected = post(&client, HashMap::new()).await;
+    *token.lock().expect("token") = "Bearer second";
+    post(&client, HashMap::new())
+        .await
+        .expect("request with the new sourced header should be accepted");
+
+    assert!(matches!(
+        rejected,
+        Err(StreamableHttpError::AuthRequired(_))
+    ));
+    assert_eq!(http_client.seen(), vec!["Bearer first", "Bearer second"]);
+}
+
+#[test]
+fn sourced_headers_apply_over_and_exclude_configured_headers_of_the_same_name() {
+    let refreshable =
+        RefreshableHeaders::new(headers(&[("X-Static", "static")]), None).expect("valid headers");
+    refreshable.set_source(Arc::new(|| {
+        headers(&[("Proxy-Authorization", "Bearer sourced")])
+    }));
+    let configured = headers(&[
+        ("proxy-authorization", "Bearer configured"),
+        ("X-Team", "core"),
+    ]);
+
+    let (applied, _) = refreshable.applied_to(&configured);
+    assert_eq!(
+        applied,
+        headers(&[
+            ("X-Static", "static"),
+            ("Proxy-Authorization", "Bearer sourced"),
+            ("X-Team", "core"),
+        ])
+    );
+    assert_eq!(
+        refreshable.excluded_from(&configured),
+        headers(&[("X-Team", "core")])
+    );
+    assert_eq!(
+        refreshable.current(),
+        headers(&[
+            ("X-Static", "static"),
+            ("Proxy-Authorization", "Bearer sourced"),
+        ])
+    );
+}
+
 #[test]
 fn debug_output_and_errors_omit_header_values() {
     let refreshable =

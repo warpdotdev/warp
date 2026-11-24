@@ -41,17 +41,6 @@ pub const FACTORY_MCP_SERVER_NAME: &str = "warp-factory";
 /// The server name under which the preview URLs MCP's tools are grouped.
 pub const PREVIEW_URLS_MCP_SERVER_NAME: &str = "warp-preview-urls";
 
-/// Stable installation UUID for the built-in preview URLs MCP server.
-pub const PREVIEW_URLS_MCP_INSTALLATION_UUID: Uuid =
-    Uuid::from_u128(0xb6b375a8_1ba5_4a51_a407_22563d4f7e81);
-
-/// Installation UUIDs of the built-in servers hosted by warp-server. Their requests must carry the
-/// same IAP headers as every other warp-server request, or staging IAP routing rejects them.
-pub const WARP_HOSTED_INSTALLATION_UUIDS: [Uuid; 2] = [
-    FACTORY_MCP_INSTALLATION_UUID,
-    PREVIEW_URLS_MCP_INSTALLATION_UUID,
-];
-
 /// The server name under which the computer use MCP's tools are given to third-party harnesses.
 /// Transcript viewers identify the server's tool calls by this name, so it is the server's own.
 pub const COMPUTER_USE_MCP_SERVER_NAME: &str = computer_use_mcp::SERVER_NAME;
@@ -90,7 +79,7 @@ const PREVIEW_URLS_MCP: BuiltinMcpServer = BuiltinMcpServer {
     path: "/api/v1/mcp/preview-urls",
     description: "Warp's hosted preview URLs MCP server. Expose a port from this cloud agent \
                   run's sandbox as a shareable preview URL.",
-    installation_uuid: PREVIEW_URLS_MCP_INSTALLATION_UUID,
+    installation_uuid: Uuid::from_u128(0xb6b375a8_1ba5_4a51_a407_22563d4f7e81),
     template_uuid: Uuid::from_u128(0xb6b375a8_1ba5_4a51_a407_22563d4f7e82),
 };
 

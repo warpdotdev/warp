@@ -436,7 +436,8 @@ impl Client {
     }
 }
 
-fn is_warp_server_origin(url: &reqwest::Url) -> bool {
+/// Whether `url` has the origin of the Warp server or its RTC endpoint.
+pub fn is_warp_server_origin(url: &reqwest::Url) -> bool {
     [
         ChannelState::server_root_url(),
         ChannelState::rtc_http_url(),

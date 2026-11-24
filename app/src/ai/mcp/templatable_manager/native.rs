@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use async_compat::CompatExt as _;
 use futures::channel::oneshot;
+use http_client::is_warp_server_origin;
 use mcp::oauth::{
     self, AuthContext, CallbackResult, FILE_BASED_MCP_CREDENTIALS_KEY,
     FileBasedPersistedCredentialsMap, OAuthCallbackMode, PersistedCredentials,
@@ -22,7 +23,6 @@ use warp_core::safe_error;
 use warp_core::settings::Setting as _;
 use warp_errors::report_error;
 use warp_server_client::auth::AuthEvent;
-use warp_server_client::iap::IapManager;
 use warpui::windowing::WindowManager;
 use warpui::{AppContext, ModelContext, SingletonEntity};
 
@@ -801,8 +801,6 @@ impl TemplatableMCPServerManager {
         ctx: &mut ModelContext<Self>,
     ) {
         self.cli_spawned_server_uuids.insert(installation.uuid());
-        let refreshable_headers =
-            refreshable_headers.or_else(|| builtin_iap_headers(installation.uuid(), ctx));
         match refreshable_headers {
             Some(refreshable_headers) => {
                 self.refreshable_headers
@@ -881,41 +879,7 @@ impl TemplatableMCPServerManager {
         // No ambient headers here: this path only ever runs for interactive (GUI/TUI)
         // clients, which have no active ambient task. CLI/cloud agent runs attach their
         // own run-scoped installation instead (see AgentDriver::builtin_factory_mcp_for_run).
-        match builtin_iap_headers(installation_uuid, ctx) {
-            Some(iap_headers) => {
-                self.refreshable_headers
-                    .insert(installation_uuid, iap_headers);
-            }
-            None => {
-                self.refreshable_headers.remove(&installation_uuid);
-            }
-        }
         self.spawn_ephemeral_server(builtin::factory_mcp_installation(&token, &[]), ctx);
-    }
-
-    /// Replaces the IAP headers of running built-in Warp-hosted servers with the current ones,
-    /// without reconnecting them.
-    pub fn refresh_builtin_iap_headers(&self, ctx: &AppContext) {
-        if let Some(iap_headers) = iap_request_headers(ctx) {
-            self.replace_builtin_iap_headers(&iap_headers);
-        }
-    }
-
-    pub(super) fn replace_builtin_iap_headers(&self, iap_headers: &HashMap<String, String>) {
-        for installation_uuid in builtin::WARP_HOSTED_INSTALLATION_UUIDS {
-            let Some(refreshable_headers) = self.refreshable_headers.get(&installation_uuid) else {
-                continue;
-            };
-            if refreshable_headers.current() == *iap_headers {
-                continue;
-            }
-            if let Err(err) = refreshable_headers.replace(iap_headers.clone()) {
-                report_error!(
-                    anyhow::Error::new(err)
-                        .context("Failed to refresh IAP headers on a built-in MCP server")
-                );
-            }
-        }
     }
 
     /// Spawns a new MCP server from a given installation UUID.
@@ -1222,6 +1186,11 @@ impl TemplatableMCPServerManager {
         let should_persist = mode.should_persist_running_state_to_sqlite();
         let should_send_telemetry = mode.should_send_telemetry();
 
+        let refreshable_headers = with_warp_server_iap_headers(
+            self.refreshable_headers.get(&installation_uuid).cloned(),
+            &server.transport_type,
+            ctx,
+        );
         self.change_server_state(installation_uuid, MCPServerState::Starting, ctx);
         let task = ctx.spawn(
             spawn_server(
@@ -1232,7 +1201,7 @@ impl TemplatableMCPServerManager {
                 server.transport_type.clone(),
                 logger.clone(),
                 auth_context,
-                self.refreshable_headers.get(&installation_uuid).cloned(),
+                refreshable_headers,
             )
             .compat(),
             move |me, server_info: Result<_, rmcp::RmcpError>, ctx| {
@@ -2093,28 +2062,33 @@ impl TemplatableMCPServerManager {
     }
 }
 
-/// The current IAP request headers, or `None` when IAP is inactive. `IapManager` is registered
-/// after this manager at startup, so its absence is expected early on.
-fn iap_request_headers(ctx: &AppContext) -> Option<HashMap<String, String>> {
-    if !ctx.has_singleton_model::<IapManager>() {
-        return None;
+/// Adds the Warp client's IAP headers, read on every request, to an HTTP connection to
+/// warp-server: staging IAP routing rejects warp-server requests without them. Other servers, and
+/// builds without IAP, get `refreshable_headers` back unchanged.
+fn with_warp_server_iap_headers(
+    refreshable_headers: Option<RefreshableHeaders>,
+    transport_type: &TransportType,
+    ctx: &AppContext,
+) -> Option<RefreshableHeaders> {
+    let TransportType::ServerSentEvents(server) = transport_type else {
+        return refreshable_headers;
+    };
+    let is_warp_server = Url::parse(&server.url).is_ok_and(|url| is_warp_server_origin(&url));
+    if !is_warp_server
+        || ChannelState::iap_config().is_none()
+        || !ctx.has_singleton_model::<ServerApiProvider>()
+    {
+        return refreshable_headers;
     }
-    IapManager::as_ref(ctx).request_headers()
-}
-
-/// Refreshable IAP headers for a built-in Warp-hosted server, or `None` for any other server or
-/// when IAP is inactive.
-fn builtin_iap_headers(installation_uuid: Uuid, ctx: &AppContext) -> Option<RefreshableHeaders> {
-    if !builtin::WARP_HOSTED_INSTALLATION_UUIDS.contains(&installation_uuid) {
-        return None;
-    }
-    match RefreshableHeaders::new(iap_request_headers(ctx)?, None) {
-        Ok(iap_headers) => Some(iap_headers),
-        Err(err) => {
-            report_error!(
-                anyhow::Error::new(err).context("Invalid IAP headers for a built-in MCP server")
-            );
-            None
-        }
-    }
+    let refreshable_headers =
+        refreshable_headers.or_else(|| RefreshableHeaders::new(HashMap::new(), None).ok())?;
+    let server_api = ServerApiProvider::as_ref(ctx).get();
+    refreshable_headers.set_source(Arc::new(move || {
+        server_api
+            .iap_headers()
+            .into_iter()
+            .map(|(name, value)| (name.to_owned(), value))
+            .collect()
+    }));
+    Some(refreshable_headers)
 }

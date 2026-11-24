@@ -1552,17 +1552,6 @@ fn authenticate_user_after_iap_access(
     iap_manager.update(ctx, |manager, ctx| manager.ensure_access(ctx));
 }
 
-/// Pushes the current IAP headers to running built-in Warp-hosted MCP servers. The routing setting
-/// can change before `TemplatableMCPServerManager` is registered, so its absence is tolerated.
-#[cfg(not(target_family = "wasm"))]
-fn refresh_builtin_mcp_iap_headers(ctx: &mut AppContext) {
-    if !ctx.has_singleton_model::<TemplatableMCPServerManager>() {
-        return;
-    }
-    TemplatableMCPServerManager::handle(ctx)
-        .update(ctx, |manager, ctx| manager.refresh_builtin_iap_headers(ctx));
-}
-
 #[::tracing::instrument(skip_all, fields(tags.cloud_agent = true))]
 pub(crate) fn initialize_app(
     launch_mode: &LaunchMode,
@@ -1647,7 +1636,6 @@ pub(crate) fn initialize_app(
             &settings::IapRoutingSettings::handle(ctx),
             move |settings, _, ctx| {
                 state.set_routing_opt_in(*settings.as_ref(ctx).routing_enabled);
-                refresh_builtin_mcp_iap_headers(ctx);
             },
         );
     }
@@ -2565,11 +2553,6 @@ pub(crate) fn initialize_app(
             path_future
         });
         IapManager::new(iap_state, path_resolver, managed_iap_mint, ctx)
-    });
-    #[cfg(not(target_family = "wasm"))]
-    ctx.subscribe_to_model(&IapManager::handle(ctx), |_, event, ctx| match event {
-        IapManagerEvent::StateChanged => refresh_builtin_mcp_iap_headers(ctx),
-        IapManagerEvent::AccessUnavailable | IapManagerEvent::RefreshFailed { .. } => {}
     });
     // Subscribe to IAP manager events to show toasts when refresh fails.
     ctx.subscribe_to_model(&IapManager::handle(ctx), |_, e, ctx| {
