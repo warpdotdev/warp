@@ -9,6 +9,7 @@ use super::*;
 
 fn request() -> RunAgentsRequest {
     RunAgentsRequest {
+        delegated_github_coauthor_user_uid: None,
         metadata: Default::default(),
         summary: "summary".to_string(),
         base_prompt: "base".to_string(),

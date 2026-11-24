@@ -13,7 +13,7 @@ use pathfinder_color::ColorU;
 use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 use warp_cli::agent::Harness;
-use warp_completer::parsers::simple::top_level_command;
+use warp_completer::parsers::simple::{all_parsed_commands, top_level_command};
 use warp_editor::content::buffer::Buffer;
 use warp_editor::content::markdown::MarkdownStyle;
 use warp_util::path::EscapeChar;
@@ -463,7 +463,31 @@ impl CLIAgent {
             return false;
         };
         let basename = first_word.rsplit(['/', '\\']).next().unwrap_or(&first_word);
-        self.command_prefixes().contains(&basename)
+        if !self.command_prefixes().contains(&basename) {
+            return false;
+        }
+        let non_session_subcommands: &[&str] = match self {
+            CLIAgent::Claude => &["auth"],
+            CLIAgent::Codex => &["login", "logout"],
+            // The ACP bridge uses this executable but receives prompts over a socket, not its PTY.
+            CLIAgent::WarpTui => &["acp-bridge"],
+            _ => return true,
+        };
+        let is_non_session_command = match escape_char {
+            Some(esc) => all_parsed_commands(command, esc)
+                .next()
+                .is_some_and(|command| {
+                    command
+                        .parts
+                        .get(1)
+                        .is_some_and(|part| non_session_subcommands.contains(&part.item.as_str()))
+                }),
+            None => command
+                .split_whitespace()
+                .nth(1)
+                .is_some_and(|part| non_session_subcommands.contains(&part)),
+        };
+        !is_non_session_command
     }
 
     /// Detects the CLI agent from a command string.

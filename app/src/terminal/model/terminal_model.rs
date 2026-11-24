@@ -475,6 +475,7 @@ pub struct TerminalModel {
     /// Whether or not the underlying shell process has terminated.
     handled_exit: bool,
     pending_shell_recovery_status: Option<ObservedExitStatus>,
+    shell_replacement_pending: bool,
 
     /// The shell type of the login shell for this session.
     shell_launch_state: ShellLaunchState,
@@ -1111,6 +1112,7 @@ impl TerminalModel {
             did_receive_rc_file_dcs: None,
             handled_exit: false,
             pending_shell_recovery_status: None,
+            shell_replacement_pending: false,
             env_var_collection_name: None,
             shell_launch_state: shell_state,
             obfuscate_secrets,
@@ -1508,6 +1510,19 @@ impl TerminalModel {
     /// owning surface can decide between recovering the shell and calling
     /// [`Self::finalize_exit`]; every other terminal and reason finalizes immediately.
     pub fn exit(&mut self, reason: ExitReason) {
+        if self.shell_replacement_pending {
+            self.shell_process_info = None;
+            let status = match reason {
+                ExitReason::ShellProcessExited { status } => status,
+                ExitReason::PtySpawnFailed
+                | ExitReason::PtyDisconnected
+                | ExitReason::ProcessKilled
+                | ExitReason::ShellNotFound => ObservedExitStatus::Unavailable,
+            };
+            self.event_proxy
+                .send_app_event(Event::ShellExitObserved { status });
+            return;
+        }
         let ExitReason::ShellProcessExited { status } = reason else {
             self.finalize_exit(reason);
             return;
@@ -1533,6 +1548,22 @@ impl TerminalModel {
     pub fn prepare_shell_recovery(&mut self, status: ObservedExitStatus) {
         self.pending_shell_recovery_status = Some(status);
         self.exit_alt_screen(true);
+    }
+
+    pub fn prepare_shell_replacement(&mut self) {
+        self.shell_replacement_pending = true;
+        self.shell_process_info = None;
+    }
+
+    pub fn finish_shell_replacement(&mut self, succeeded: bool) {
+        if self.shell_replacement_pending && !succeeded {
+            let transition = self.plan_lifecycle_transition(LifecycleInput::Exit, None, None, None);
+            self.handled_exit = true;
+            self.shell_process_info = None;
+            self.ignore_bootstrapping_messages = true;
+            self.commit_lifecycle_transition(&transition);
+        }
+        self.shell_replacement_pending = false;
     }
 
     /// Makes the terminal read-only and emits [`Event::Exit`]. Returns `false` if the exit was

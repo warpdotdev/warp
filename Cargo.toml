@@ -42,6 +42,7 @@ cloud_object_client = { path = "crates/cloud_object_client" }
 cloud_object_persistence = { path = "crates/cloud_object_persistence" }
 cloud_object_models = { path = "crates/cloud_object_models" }
 computer_use = { path = "crates/computer_use" }
+computer_use_mcp = { path = "crates/computer_use_mcp" }
 field_mask = { path = "crates/field_mask" }
 firebase = { path = "crates/firebase" }
 fuzzy_match = { path = "crates/fuzzy_match" }
@@ -63,6 +64,7 @@ node_runtime = { path = "crates/node_runtime" }
 onboarding = { path = "crates/onboarding" }
 persistence = { path = "crates/persistence" }
 prevent_sleep = { path = "crates/prevent_sleep" }
+preview_proxy = { path = "crates/preview_proxy" }
 regex_dfas = { path = "crates/regex_dfas" }
 remote_server = { path = "crates/remote_server" }
 repo_metadata = { path = "crates/repo_metadata" }
@@ -119,6 +121,7 @@ ashpd = { version = "0.11", default-features = false, features = ["async-std"] }
 async-channel = "2.3.1"
 async-compat = "0.2.5"
 async-io = "2.4.0"
+async-lock = "3.4.0"
 async-process = "2.3.0"
 async-stream = "0.3.5"
 async-task = "4.2.0"
@@ -174,6 +177,8 @@ hashbrown = "0.17.1"
 hex = "0.4.3"
 # This matches the version of hyper used by reqwest.
 hyper = "1.6.0"
+hyper-util = "0.1"
+http-body-util = "0.1"
 html5ever = "0.35.0"
 http = "1.1.0"
 humantime = "2.1.0"
@@ -348,7 +353,7 @@ version-compare = "0.1"
 vte = { git = "https://github.com/warpdotdev/vte.git", rev = "4b399c87b63ba88f45709edaa6383fc519f6c900", default-features = false }
 walkdir = "2"
 warp-workflows = { git = "https://github.com/warpdotdev/workflows", rev = "793a98ddda6ef19682aed66364faebd2829f0e01" }
-warp_multi_agent_api = { git = "https://github.com/warpdotdev/warp-proto-apis.git", rev = "c5aa18336af009426711f997591480d701280cf2" }
+warp_multi_agent_api = { git = "https://github.com/warpdotdev/warp-proto-apis.git", rev = "9c9bad2f6cc27247ce7addd7c2cf40d7d830878d" }
 wasm-bindgen = "0.2.89"
 wasm-bindgen-futures = "0.4.42"
 web-sys = { version = "0.3.69", features = [
@@ -381,6 +386,7 @@ wgpu = { version = "30.0.0", default-features = false, features = [
   "vulkan",
   "wgsl",
 ] }
+yaml-rust = "0.4.5"
 zbus = "5.9.0"
 memchr = "2"
 memo-map = "0.3.1"

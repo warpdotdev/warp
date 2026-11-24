@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "hooks": {
+    "beforeShellExecution": [
+      { "command": "true", "matcher": "([unclosed" },
+      { "command": "true", "matcher": "^ls" }
+    ],
+    "onTabClosed": [
+      { "command": "true" }
+    ]
+  }
+}

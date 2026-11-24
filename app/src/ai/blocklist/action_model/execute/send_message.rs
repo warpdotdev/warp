@@ -147,6 +147,7 @@ impl SendMessageToAgentExecutor {
                     addresses,
                     subject,
                     message,
+                    delegated_github_coauthor_user_uid,
                 },
             ..
         } = input.action
@@ -172,6 +173,7 @@ impl SendMessageToAgentExecutor {
             "Sending orchestration message: conversation_id={conversation_id:?} resolution={task_resolution:?} sender_run_id={log_sender_run_id:?} task_id={log_task_id:?} target_agent_ids={log_addresses:?} subject={log_subject:?} body_len={log_body_len}"
         );
         let request = SendAgentMessageRequest {
+            delegated_github_coauthor_user_uid: delegated_github_coauthor_user_uid.clone(),
             to: addresses,
             subject,
             body: message_body,

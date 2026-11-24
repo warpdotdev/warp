@@ -22,6 +22,7 @@ pub use sort_order::SortOrderArg;
 pub mod agent;
 pub mod api_key;
 pub mod completions;
+pub mod computer_use_mcp;
 pub mod config_file;
 mod date_time;
 pub mod environment;
@@ -53,6 +54,8 @@ pub const WARP_HARNESS_ENV: &str = "WARP_HARNESS";
 pub const SERVER_ROOT_URL_OVERRIDE_ENV: &str = "WARP_SERVER_ROOT_URL";
 pub const WS_SERVER_URL_OVERRIDE_ENV: &str = "WARP_WS_SERVER_URL";
 pub const SESSION_SHARING_SERVER_URL_OVERRIDE_ENV: &str = "WARP_SESSION_SHARING_SERVER_URL";
+pub const PREWARMED_SANDBOX_CONTROL_URL_OVERRIDE_ENV: &str = "WARP_PREWARMED_SANDBOX_CONTROL_URL";
+pub const WARP_PREWARMED_SANDBOX_ID_ENV: &str = "WARP_PREWARMED_SANDBOX_ID";
 
 /// Options related to the parent process that spawned this Warp instance.
 #[derive(Debug, Default, Clone, clap::Args)]
@@ -532,6 +535,11 @@ pub enum WorkerCommand {
         #[clap(long = "launch-file")]
         launch_file: std::path::PathBuf,
     },
+
+    /// Serve computer-use tools to an external agent harness over MCP on stdin/stdout.
+    #[cfg(not(target_family = "wasm"))]
+    #[clap(hide = true)]
+    ComputerUseMcp(computer_use_mcp::ComputerUseMcpArgs),
 
     /// Run a headless ripgrep search worker.
     #[cfg(not(target_family = "wasm"))]

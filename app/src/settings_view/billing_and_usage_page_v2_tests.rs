@@ -6,6 +6,24 @@ fn workspace_uid(id: i64) -> WorkspaceUid {
     WorkspaceUid::from(ServerId::from(id))
 }
 
+#[test]
+fn scale_addon_balance_preserves_fractional_cents_with_no_whole_credits() {
+    let current = workspace_uid(1);
+    let classified = ClassifiedGrants::new(
+        &[grant_in_dollars(
+            BonusGrantScope::Workspace(current),
+            0,
+            0.75,
+        )],
+        Some(current),
+    );
+    assert!(!classified.workspace.is_empty());
+    assert_eq!(
+        classified.workspace.balance(UsageDisplayUnit::Dollars),
+        BalanceAmount::Cents(0.75)
+    );
+}
+
 fn grant(scope: BonusGrantScope, grant_type: BonusGrantType, remaining: i32) -> BonusGrant {
     BonusGrant {
         created_at: Utc::now(),
@@ -118,6 +136,17 @@ fn bucket_balance_is_dollars_only_when_shown_in_dollars_with_every_grant_priced(
 #[test]
 fn balance_amount_formats_in_its_unit() {
     assert_eq!(BalanceAmount::Credits(1_500).format(), "1,500");
+    for (credits, expected) in [
+        (0.0, "0"),
+        (0.001, "<1"),
+        (0.49, "<1"),
+        (0.5, "1"),
+        (0.6, "1"),
+        (984.625, "985"),
+        (1234.75, "1,235"),
+    ] {
+        assert_eq!(BalanceAmount::RoundedCredits(credits).format(), expected);
+    }
     assert_eq!(
         BalanceAmount::Credits(1_500).pool_label("Team"),
         "Team credits"

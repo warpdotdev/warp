@@ -242,6 +242,7 @@ pub(super) fn convert_input(
                 context,
                 runtime_skill,
                 attachments_dir,
+                resolved_prompt: _,
             } => {
                 return Ok(api::request::Input {
                     context: Some(convert_context(context.as_ref())),
@@ -765,6 +766,11 @@ impl TryFrom<AIAgentActionResult> for api::request::input::user_inputs::user_inp
             AIAgentActionResultType::WaitForEvents(wait_for_events_result) => {
                 Some(wait_for_events_result.try_into()?)
             }
+            AIAgentActionResultType::DeniedByHook { reason } => {
+                Some(api::request::input::tool_call_result::Result::DeniedByHook(
+                    api::DeniedByHook { reason },
+                ))
+            }
         };
         Ok(
             api::request::input::user_inputs::user_input::Input::ToolCallResult(
@@ -1005,13 +1011,12 @@ fn convert_mcp_tool(tool: rmcp::model::Tool) -> Option<api::request::mcp_context
 /// Builds the `MCPContext.MCPServer.identity` for a server from its `warp_id`
 /// (the `MCPServerConfig.warp_id` it was resolved from).
 ///
-/// A uuid is a managed MCP server; anything else is a well-known integration
-/// id owned by warp-server. An id this build does not know yields `None`, so a
-/// newer server-side integration is simply unnamed rather than misattributed;
-/// so does an empty id (local and ad-hoc servers). `display_name` is left
-/// unset: `MCPContext.MCPServer.name` carries it, and warp-server fills it in
-/// when it copies the identity onto tool calls.
-fn mcp_server_identity(warp_id: &str) -> Option<api::McpServerIdentity> {
+/// A uuid is a managed MCP server; other known ids are integrations owned by warp-server. An id
+/// this build does not know yields `None`, so a newer server-side integration is simply unnamed
+/// rather than misattributed; so does an empty id (local and ad-hoc servers). `display_name` is
+/// left unset: `MCPContext.MCPServer.name` carries it, and warp-server fills it in when it copies
+/// the identity onto tool calls.
+pub(crate) fn mcp_server_identity(warp_id: &str) -> Option<api::McpServerIdentity> {
     if warp_id.is_empty() {
         return None;
     }
@@ -1026,6 +1031,7 @@ fn mcp_server_identity(warp_id: &str) -> Option<api::McpServerIdentity> {
         "slack" => api::McpIntegration::Slack,
         "jira" => api::McpIntegration::Jira,
         "linear_agent_session" => api::McpIntegration::LinearAgentSession,
+        "github" => api::McpIntegration::Github,
         _ => return None,
     };
     Some(api::McpServerIdentity {

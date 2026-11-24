@@ -17,28 +17,11 @@ use crate::ai::agent::{
 const MAX_RETRY_ATTEMPTS: i32 = 3;
 const MAX_PENDING_LIFECYCLE_EVENTS_PER_TARGET: usize = 200;
 
-/// Stage associated with a lifecycle error detail.
-/// This keeps persisted/runtime metadata consistent across API payloads and DB rows.
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub enum LifecycleEventDetailStage {
-    Runtime,
-}
-
 #[derive(Debug, Clone, Default)]
 pub(super) struct LifecycleEventDetailPayload {
-    pub(crate) stage: Option<LifecycleEventDetailStage>,
     pub(crate) reason: Option<String>,
     pub(crate) error_message: Option<String>,
     pub(crate) blocked_action: Option<String>,
-}
-
-impl LifecycleEventDetailStage {
-    /// Canonical lowercase representation used in persistence/API payloads.
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Runtime => "runtime",
-        }
-    }
 }
 
 /// Type-specific queued data.
@@ -136,7 +119,6 @@ impl OrchestrationEventService {
     /// (QUALITY-1801). Assumes [`ExitCommitHandle::commit`] already committed the exiting flag
     /// for this conversation — by the time this runs, on the model thread, it always has — so
     /// this only does the part that needs model access: the flag itself is not touched here.
-    #[cfg(not(target_family = "wasm"))]
     pub fn drop_pending_events_for_exiting_conversation(
         &mut self,
         conversation_id: AIConversationId,
@@ -615,6 +597,7 @@ fn lifecycle_event_detail_from_type(
         LifecycleEventType::InProgress => {
             Some(api::agent_event::lifecycle_event::Detail::InProgress(()))
         }
+        LifecycleEventType::Waiting => Some(api::agent_event::lifecycle_event::Detail::Waiting(())),
         LifecycleEventType::Succeeded => {
             Some(api::agent_event::lifecycle_event::Detail::Succeeded(()))
         }
@@ -633,7 +616,11 @@ fn lifecycle_event_detail_from_type(
             Some(api::agent_event::lifecycle_event::Detail::InProgress(()))
         }
         LifecycleEventType::Cancelled => {
-            Some(api::agent_event::lifecycle_event::Detail::Cancelled(()))
+            Some(api::agent_event::lifecycle_event::Detail::Cancelled(
+                api::agent_event::lifecycle_event::Cancelled {
+                    reason: detail_payload.reason.clone().unwrap_or_default(),
+                },
+            ))
         }
         LifecycleEventType::Blocked => Some(api::agent_event::lifecycle_event::Detail::Blocked(
             api::agent_event::lifecycle_event::Blocked {
@@ -642,10 +629,7 @@ fn lifecycle_event_detail_from_type(
         )),
         LifecycleEventType::Errored => Some(api::agent_event::lifecycle_event::Detail::Errored(
             api::agent_event::lifecycle_event::Errored {
-                stage: detail_payload
-                    .stage
-                    .map(|stage| stage.as_str().to_string())
-                    .unwrap_or_default(),
+                stage: String::new(),
                 reason: detail_payload.reason.clone().unwrap_or_default(),
                 error_message: detail_payload.error_message.clone().unwrap_or_default(),
             },
@@ -661,6 +645,9 @@ pub(super) fn lifecycle_event_type_from_proto(
     match lifecycle_event.detail.as_ref() {
         Some(api::agent_event::lifecycle_event::Detail::InProgress(_)) => {
             api::LifecycleEventType::InProgress
+        }
+        Some(api::agent_event::lifecycle_event::Detail::Waiting(_)) => {
+            api::LifecycleEventType::Waiting
         }
         Some(api::agent_event::lifecycle_event::Detail::Succeeded(_)) => {
             api::LifecycleEventType::Succeeded

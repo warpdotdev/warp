@@ -65,6 +65,7 @@ fn incompatible_startup_preserves_prompt_without_reporting() {
 
         assert_eq!(prompt.prompt, "test");
         assert_eq!(prompt.harness_usage, None);
+        assert_eq!(prompt.user_query_b64, None);
     }
 }
 
@@ -73,7 +74,8 @@ fn startup_accepts_only_the_advertised_execution() {
     let prompt: ResolvedHarnessPrompt = serde_json::from_value(json!({
         "prompt": "test",
         "resumption_prompt": "continue",
-        "harness_usage": {"execution_id": 41, "future_field": true}
+        "harness_usage": {"execution_id": 41, "future_field": true},
+        "user_query_b64": "CgA="
     }))
     .unwrap();
 
@@ -82,6 +84,7 @@ fn startup_accepts_only_the_advertised_execution() {
         Some(HarnessUsageCapability { execution_id: 41 })
     );
     assert_eq!(prompt.resumption_prompt.as_deref(), Some("continue"));
+    assert_eq!(prompt.user_query_b64.as_deref(), Some("CgA="));
 }
 
 #[test]

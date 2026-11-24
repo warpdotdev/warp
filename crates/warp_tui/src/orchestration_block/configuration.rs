@@ -30,6 +30,7 @@ pub(super) fn build_request(
     state: &OrchestrationConfigState,
 ) -> RunAgentsRequest {
     RunAgentsRequest {
+        delegated_github_coauthor_user_uid: fields.delegated_github_coauthor_user_uid.clone(),
         metadata: fields.metadata.clone(),
         summary: fields.summary.clone(),
         base_prompt: fields.base_prompt.clone(),

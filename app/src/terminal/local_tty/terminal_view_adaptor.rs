@@ -54,7 +54,7 @@ use crate::persistence::ModelEvent;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::telemetry::{TelemetryAgentViewEntryOrigin, TelemetryEvent};
 use crate::terminal::cli_agent_sessions::{
-    CLIAgentInputState, CLIAgentSessionsModel, CLIAgentSessionsModelEvent,
+    CLIAgentInputState, CLIAgentSessionStatus, CLIAgentSessionsModel, CLIAgentSessionsModelEvent,
 };
 use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
 use crate::terminal::session_settings::{SessionSettings, SessionSettingsChangedEvent};
@@ -136,53 +136,6 @@ fn accept_agent_prompt(
     participant_id: ParticipantId,
     ctx: &mut AppContext,
 ) {
-    let terminal_view_id = terminal_view.id();
-    let has_active_cli_agent = CLIAgentSessionsModel::as_ref(ctx)
-        .session(terminal_view_id)
-        .is_some();
-    if has_active_cli_agent {
-        log::info!(
-            "event=prompt_routed terminal_id={terminal_view_id:?} participant_id={participant_id} destination=live_cli",
-        );
-        // Reuse the rich input submit pipeline so agent-specific
-        // strategies are applied. Bypasses the rich-input-UI side effects
-        // (telemetry, draft clear, editor buffer clear, pending-image consumption).
-        terminal_view.update(ctx, |view, ctx| {
-            view.submit_text_to_cli_agent_pty(request.prompt.clone(), ctx);
-        });
-        return;
-    }
-
-    // `register_cli_session` runs at harness setup time, before the harness process is
-    // launched (see its call site in `AgentDriver::subscribe_to_cli_agent_session_events`), so
-    // this is true independent of whether the CLI-harness session above has actually started a
-    // live PTY yet.
-    if let Some(task_id) =
-        LocalAgentTaskSyncModel::as_ref(ctx).cli_harness_task_id_for_terminal_view(terminal_view_id)
-    {
-        log::info!(
-            "event=prompt_routed terminal_id={terminal_view_id:?} participant_id={participant_id} task_id={task_id} destination=pending_cli",
-        );
-        if !request.attachments.is_empty() {
-            log::warn!(
-                "accept_agent_prompt: dropping {} file attachment(s) from a shared-session \
-                 prompt queued for task {task_id}'s not-yet-started CLI-harness session; \
-                 attachment delivery to a CLI harness PTY is not supported",
-                request.attachments.len()
-            );
-        }
-        PendingCliHarnessPromptQueue::handle(ctx).update(ctx, |queue, _ctx| {
-            queue.queue(
-                task_id,
-                QueuedCliHarnessPrompt {
-                    prompt: request.prompt.clone(),
-                    participant_id: participant_id.clone(),
-                },
-            );
-        });
-        return;
-    }
-
     // warp-server-injected follow-ups carry the query itself. Viewer-typed prompts and older
     // relays leave it unset; those are attributed to the viewer from presence so the server
     // never records them as the sharer's own input. A payload that does not decode is sent
@@ -200,6 +153,65 @@ fn accept_agent_prompt(
             BaseUserQuery::for_viewer(profile)
         }
     };
+
+    let terminal_view_id = terminal_view.id();
+    let cli_harness_task_id = LocalAgentTaskSyncModel::as_ref(ctx)
+        .cli_harness_task_id_for_terminal_view(terminal_view_id);
+    if cli_harness_task_id.is_some()
+        && CLIAgentSessionsModel::as_ref(ctx)
+            .session(terminal_view_id)
+            .is_some_and(|session| matches!(session.status, CLIAgentSessionStatus::Cancelled))
+        || terminal_view
+            .as_ref(ctx)
+            .ai_controller()
+            .as_ref(ctx)
+            .rejects_shared_session_prompts(ctx)
+    {
+        return;
+    }
+    let has_active_cli_agent = CLIAgentSessionsModel::as_ref(ctx)
+        .session(terminal_view_id)
+        .is_some();
+    if has_active_cli_agent {
+        log::info!(
+            "event=prompt_routed terminal_id={terminal_view_id:?} participant_id={participant_id} destination=live_cli",
+        );
+        // Reuse the rich input submit pipeline so agent-specific
+        // strategies are applied. Bypasses the rich-input-UI side effects
+        // (telemetry, draft clear, editor buffer clear, pending-image consumption).
+        terminal_view.update(ctx, |view, ctx| {
+            view.submit_text_to_cli_agent_pty(base.format_third_party_prompt(&request.prompt), ctx);
+        });
+        return;
+    }
+
+    // `register_cli_session` runs at harness setup time, before the harness process is
+    // launched (see its call site in `AgentDriver::subscribe_to_cli_agent_session_events`), so
+    // this is true independent of whether the CLI-harness session above has actually started a
+    // live PTY yet.
+    if let Some(task_id) = cli_harness_task_id {
+        log::info!(
+            "event=prompt_routed terminal_id={terminal_view_id:?} participant_id={participant_id} task_id={task_id} destination=pending_cli",
+        );
+        if !request.attachments.is_empty() {
+            log::warn!(
+                "accept_agent_prompt: dropping {} file attachment(s) from a shared-session \
+                 prompt queued for task {task_id}'s not-yet-started CLI-harness session; \
+                 attachment delivery to a CLI harness PTY is not supported",
+                request.attachments.len()
+            );
+        }
+        PendingCliHarnessPromptQueue::handle(ctx).update(ctx, |queue, _ctx| {
+            queue.queue(
+                task_id,
+                QueuedCliHarnessPrompt {
+                    prompt: base.format_third_party_prompt(&request.prompt),
+                    participant_id: participant_id.clone(),
+                },
+            );
+        });
+        return;
+    }
 
     // Execute the agent prompt in the Oz-harness case.
     terminal_view.update(ctx, |view, ctx| {
@@ -1569,11 +1581,11 @@ impl TerminalManager<TerminalView> {
                         return;
                     }
 
-                    // REMOTE-2661: a no-token prompt is how a debug conversation bootstraps
-                    // into a retained setup-failure session. The sharer only knows the
+                    // A restored viewer may still send the original conversation token.
+                    // Every retained setup-debug prompt needs authorization. The sharer knows the
                     // participant's firebase_uid from presence, not a credential, so this must
                     // be authorized by the server before being honored.
-                    if request.server_conversation_token.is_none() {
+                    {
                         let task_id = model.lock().ambient_agent_task_id().filter(|task_id| {
                             AgentConversationsModel::as_ref(ctx)
                                 .get_task_data(task_id)
@@ -2234,6 +2246,13 @@ impl TerminalManagerTrait for TerminalManager<TerminalView> {
         ctx: &mut ModelContext<Box<dyn TerminalManagerTrait>>,
     ) -> bool {
         TerminalManager::recover_cloud_shell(self, request, ctx)
+    }
+    fn replace_shell(
+        &mut self,
+        request: crate::terminal::shell_recovery::ShellReplacementRequest,
+        ctx: &mut ModelContext<Box<dyn TerminalManagerTrait>>,
+    ) -> anyhow::Result<()> {
+        TerminalManager::replace_shell(self, request, ctx)
     }
 
     fn on_session_bootstrapped(

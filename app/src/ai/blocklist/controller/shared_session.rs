@@ -10,20 +10,24 @@ use warp_errors::report_error;
 use warp_multi_agent_api::client_action::Action;
 use warp_multi_agent_api::message::Message;
 use warp_multi_agent_api::response_event::{ClientActions, stream_finished};
+use warpui::r#async::Timer;
 use warpui::{AppContext, ModelContext, SingletonEntity};
 
 use super::response_stream::ResponseStreamId;
+use super::startup_queue::{ATTACHMENT_PREPARATION_TIMEOUT, await_attachment_preparation};
 use super::{BlocklistAIController, RequestInput, SessionContext};
 use crate::ai::agent::conversation::{AIConversationId, ConversationStatus, TaskSyncMode};
 use crate::ai::agent::{AIAgentActionId, AIAgentAttachment, BaseUserQuery, EntrypointType};
 use crate::ai::agent_conversations_model::AgentConversationsModel;
-use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::ambient_agents::{AmbientAgentTaskId, AmbientAgentTaskState};
 use crate::ai::attachment_utils::{
     build_file_attachment_map, download_task_file_attachments, resolve_agent_attachments,
 };
+use crate::ai::blocklist::QueuedQueryModel;
 use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
 use crate::ai::blocklist::history_model::BlocklistAIHistoryModel;
 use crate::ai::blocklist::local_agent_task_sync_model::LocalAgentTaskSyncModel;
+use crate::ai::blocklist::orchestration_events::OrchestrationEventService;
 use crate::server::server_api::ServerApiProvider;
 use crate::workspaces::user_workspaces::ResolvedTeamScope;
 
@@ -720,6 +724,66 @@ impl BlocklistAIController {
         }
     }
 
+    pub(crate) fn rejects_shared_session_prompts(&self, ctx: &AppContext) -> bool {
+        if let Some(task_id) = self.ambient_agent_task_id
+            && let Some(task) = AgentConversationsModel::as_ref(ctx).get_task_data(&task_id)
+        {
+            if task.state == AmbientAgentTaskState::Cancelled {
+                return true;
+            }
+            if task.is_setup_failure_debug_session_open() {
+                return false;
+            }
+        }
+        if self.ambient_agent_task_id.is_none()
+            && self.native_prompt_conversation_id.is_none()
+            && self.external_harness_prompt_sink.is_none()
+        {
+            return false;
+        }
+        let history = BlocklistAIHistoryModel::as_ref(ctx);
+        self.native_prompt_conversation_id
+            .or_else(|| history.active_conversation_id(self.terminal_surface_id))
+            .and_then(|id| history.conversation(&id))
+            .is_some_and(|conversation| {
+                conversation.status().is_cancelled()
+                    && !conversation
+                        .task_sync_mode()
+                        .suppresses_task_lifecycle_updates()
+            })
+    }
+
+    fn prepare_setup_failure_debug_conversation(&mut self, ctx: &mut ModelContext<Self>) {
+        if !self.is_open_for_setup_failure_debug_bootstrap(ctx) {
+            return;
+        }
+        if self.native_prompt_conversation_id.is_some_and(|id| {
+            BlocklistAIHistoryModel::as_ref(ctx)
+                .conversation(&id)
+                .is_some_and(|conversation| {
+                    conversation
+                        .task_sync_mode()
+                        .suppresses_task_lifecycle_updates()
+                })
+        }) {
+            return;
+        }
+        if let Some(original_id) = self.native_prompt_conversation_id.take() {
+            OrchestrationEventService::handle(ctx).update(ctx, |service, _| {
+                service.drop_pending_events_for_exiting_conversation(original_id);
+            });
+            QueuedQueryModel::handle(ctx).update(ctx, |queue, ctx| {
+                queue.clear_queue(original_id, ctx);
+                queue.finish_native_setup(original_id, ctx);
+            });
+        }
+        let debug_id = BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+            history.start_new_conversation(self.terminal_surface_id, false, false, false, ctx)
+        });
+        self.tag_conversation_as_setup_failure_debug_bootstrap(debug_id, ctx);
+        self.native_prompt_conversation_id = Some(debug_id);
+    }
+
     /// Execute an agent prompt on behalf of the viewer, against Warp's native Oz harness.
     ///
     /// Callers must have already routed away third-party-harness-backed tasks: this method (and
@@ -738,6 +802,17 @@ impl BlocklistAIController {
         base: Option<BaseUserQuery>,
         ctx: &mut ModelContext<Self>,
     ) {
+        if self.rejects_shared_session_prompts(ctx) {
+            return;
+        }
+        let server_conversation_token = if self.is_open_for_setup_failure_debug_bootstrap(ctx) {
+            None
+        } else {
+            server_conversation_token
+        };
+        if server_conversation_token.is_none() {
+            self.prepare_setup_failure_debug_conversation(ctx);
+        }
         // Route through the bound native conversation, if any -- see
         // `route_native_startup_injection`'s doc comment for why this must fully own dispatch
         // once bound, rather than falling back to token resolution below.
@@ -760,7 +835,16 @@ impl BlocklistAIController {
         {
             SharedSessionPromptTarget::Existing(id) => {
                 match BlocklistAIHistoryModel::as_ref(ctx).conversation(&id) {
-                    Some(_) => Some(id),
+                    Some(conversation) => {
+                        if conversation.status().is_cancelled()
+                            && !conversation
+                                .task_sync_mode()
+                                .suppresses_task_lifecycle_updates()
+                        {
+                            return;
+                        }
+                        Some(id)
+                    }
                     None => {
                         report_error!(
                             "Tried to execute prompt for non-existent conversation",
@@ -847,12 +931,15 @@ impl BlocklistAIController {
         let http_client = ServerApiProvider::as_ref(ctx).get_http_client();
 
         ctx.spawn(
-            download_task_file_attachments(
-                ai_client,
-                http_client,
-                task_id,
-                attachment_dir,
-                file_downloads,
+            await_attachment_preparation(
+                download_task_file_attachments(
+                    ai_client,
+                    http_client,
+                    task_id,
+                    attachment_dir,
+                    file_downloads,
+                ),
+                Timer::after(ATTACHMENT_PREPARATION_TIMEOUT),
             ),
             move |controller, downloaded, ctx| {
                 let file_attachments = build_file_attachment_map(&downloaded);
@@ -875,7 +962,7 @@ impl BlocklistAIController {
         self.ambient_agent_task_id.is_some_and(|task_id| {
             AgentConversationsModel::as_ref(ctx)
                 .get_task_data(&task_id)
-                .is_some_and(|task| task.is_open_for_setup_failure_debug_bootstrap())
+                .is_some_and(|task| task.is_setup_failure_debug_session_open())
         })
     }
 
@@ -932,6 +1019,9 @@ impl BlocklistAIController {
         base: Option<BaseUserQuery>,
         ctx: &mut ModelContext<Self>,
     ) {
+        if self.rejects_shared_session_prompts(ctx) {
+            return;
+        }
         if let Some(conversation_id) = conversation_id {
             if FeatureFlag::AgentView.is_enabled() {
                 // Enter agent view for this conversation so the sharer's UI state is correct

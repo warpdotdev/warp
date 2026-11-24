@@ -577,12 +577,12 @@ fn reserve_conflict_backup_path(target: &Path) -> Result<PathBuf> {
 }
 
 #[cfg(unix)]
-fn create_symlink(source: &Path, target: &Path) -> std::io::Result<()> {
+pub(crate) fn create_symlink(source: &Path, target: &Path) -> std::io::Result<()> {
     std::os::unix::fs::symlink(source, target)
 }
 
 #[cfg(windows)]
-fn create_symlink(source: &Path, target: &Path) -> std::io::Result<()> {
+pub(crate) fn create_symlink(source: &Path, target: &Path) -> std::io::Result<()> {
     std::os::windows::fs::symlink_dir(source, target)
 }
 

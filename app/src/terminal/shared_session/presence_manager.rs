@@ -647,11 +647,8 @@ impl PresenceManager {
     /// Refreshes the block ID to participants selected cache to be consistent with the current participant data stored.
     fn refresh_block_id_to_participants_selected(&mut self) {
         self.block_id_to_participants_selected.clear();
-        let participants = if self.sharer.is_some() {
-            Either::Left(
-                iter::once(self.sharer.as_ref().expect("sharer should exist"))
-                    .chain(self.present_viewers.values()),
-            )
+        let participants = if let Some(sharer) = self.sharer.as_ref() {
+            Either::Left(iter::once(sharer).chain(self.present_viewers.values()))
         } else {
             Either::Right(self.present_viewers.values())
         };

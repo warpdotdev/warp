@@ -3,6 +3,8 @@
 //! Fans out per-child via [`super::start_agent::StartAgentExecutor::dispatch`]
 //! and aggregates the outcomes into a single `RunAgentsResult`.
 use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use ai::agent::action::{RunAgentsAgentRunConfig, RunAgentsExecutionMode, RunAgentsRequest};
@@ -11,9 +13,11 @@ use ai::agent::action_result::{
     RunAgentsResult,
 };
 use ai::agent::orchestration_config::OrchestrationConfig;
+use ai::hooks::{SubagentExecutionMode, SubagentLaunch};
 use ai::skills::SkillReference;
 use futures::FutureExt;
 use futures::future::BoxFuture;
+use uuid::Uuid;
 use warp_cli::agent::Harness;
 use warp_core::execution_mode::AppExecutionMode;
 use warp_core::telemetry::TelemetryEvent as _;
@@ -27,6 +31,7 @@ use crate::ai::agent::{
     AIAgentAction, AIAgentActionId, AIAgentActionResultType, AIAgentActionType, AIAgentInput,
     StartAgentExecutionMode,
 };
+use crate::ai::blocklist::hooks::subagent::{self, ChildDecision};
 use crate::ai::blocklist::telemetry::{
     BlocklistOrchestrationTelemetryEvent, run_agents_completed_event,
 };
@@ -41,6 +46,7 @@ use crate::ai::orchestration::{
 };
 use crate::features::FeatureFlag;
 use crate::server::team_scope::RequestTeamScope;
+use crate::terminal::model::session::active_session::ActiveSession;
 use crate::workspaces::user_workspaces::{
     TeamContextForOperation, TeamContextForOperationResolver, TeamContextResolver, TeamScope,
     UserWorkspaces,
@@ -59,9 +65,13 @@ pub struct RunAgentsSpawningSnapshot {
 }
 
 /// In-flight tracking per `RunAgents` action (idempotency guard).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 enum PendingRunAgents {
     Publishing,
+    /// The children's `subagent.start` hooks are running; nothing has launched yet.
+    ConsultingHooks {
+        cancel: Arc<AtomicBool>,
+    },
     Spawning,
 }
 #[derive(Debug, Clone)]
@@ -74,6 +84,8 @@ pub struct RunAgentsExecutor {
     pending: HashMap<AIAgentActionId, PendingRunAgents>,
     launched_agents: HashMap<AIConversationId, HashMap<String, ExistingLaunchedAgent>>,
     start_agent_executor: ModelHandle<StartAgentExecutor>,
+    /// The session the parent works in, which the children's hooks describe.
+    active_session: ModelHandle<ActiveSession>,
     terminal_view_id: EntityId,
     team_context_resolver: TeamContextForOperationResolver,
 }
@@ -96,6 +108,7 @@ impl Entity for RunAgentsExecutor {
 impl RunAgentsExecutor {
     pub fn new(
         start_agent_executor: ModelHandle<StartAgentExecutor>,
+        active_session: ModelHandle<ActiveSession>,
         terminal_view_id: EntityId,
         team_context_resolver: TeamContextResolver,
     ) -> Self {
@@ -103,6 +116,7 @@ impl RunAgentsExecutor {
             pending: HashMap::new(),
             launched_agents: HashMap::new(),
             start_agent_executor,
+            active_session,
             terminal_view_id,
             team_context_resolver: UserWorkspaces::team_context_for_operation_resolver(
                 team_context_resolver,
@@ -118,21 +132,24 @@ impl RunAgentsExecutor {
         self.pending.contains_key(action_id)
     }
 
-    /// Cancels a pending run so publication completion cannot fan out children.
+    /// Cancels a run that has not fanned out yet, so neither publication completion nor the
+    /// children's hooks answering can launch children afterwards.
     pub(super) fn cancel_execution(
         &mut self,
         action_id: &AIAgentActionId,
         ctx: &mut ModelContext<Self>,
     ) {
-        if matches!(
-            self.pending.get(action_id),
-            Some(PendingRunAgents::Publishing)
-        ) {
-            self.pending.remove(action_id);
-            ctx.emit(RunAgentsExecutorEvent::SpawningFinished {
-                action_id: action_id.clone(),
-            });
+        match self.pending.get(action_id) {
+            Some(PendingRunAgents::Publishing) => {}
+            Some(PendingRunAgents::ConsultingHooks { cancel }) => {
+                cancel.store(true, Ordering::Release);
+            }
+            Some(PendingRunAgents::Spawning) | None => return,
         }
+        self.pending.remove(action_id);
+        ctx.emit(RunAgentsExecutorEvent::SpawningFinished {
+            action_id: action_id.clone(),
+        });
     }
 
     fn record_launched_agents(
@@ -235,6 +252,9 @@ impl RunAgentsExecutor {
         receiver
     }
 
+    /// Works out how each child would launch, asks the children's `subagent.start` hooks, and
+    /// launches the children they allow. A child that cannot launch at all (a rejected mode, a
+    /// remote child with no parent run) is never offered to the hooks.
     fn dispatch_children_for_prepared_request(
         &mut self,
         action_id: AIAgentActionId,
@@ -244,60 +264,134 @@ impl RunAgentsExecutor {
         sender: async_channel::Sender<RunAgentsResult>,
         ctx: &mut ModelContext<Self>,
     ) {
-        self.pending
-            .insert(action_id.clone(), PendingRunAgents::Spawning);
         let parent_run_id = BlocklistAIHistoryModel::as_ref(ctx)
             .conversation(&parent_conversation_id)
             .and_then(|c| c.run_id());
+        let children = prepare_children(&request, parent_run_id.is_some());
+        let launches = children
+            .iter()
+            .filter_map(|child| child.launch.as_ref().ok())
+            .map(|(_, launch)| launch.clone())
+            .collect::<Vec<_>>();
+        let Some(pending) = subagent::begin(
+            &launches,
+            &action_id,
+            parent_conversation_id,
+            &self.active_session,
+            ctx,
+        ) else {
+            let decisions = vec![ChildDecision::Launch; launches.len()];
+            self.launch_children(
+                action_id,
+                request,
+                children,
+                decisions,
+                parent_conversation_id,
+                parent_run_id,
+                team_scope,
+                sender,
+                ctx,
+            );
+            return;
+        };
+        self.pending.insert(
+            action_id.clone(),
+            PendingRunAgents::ConsultingHooks {
+                cancel: pending.cancel,
+            },
+        );
+        ctx.spawn(pending.outcomes, move |me, outcomes, ctx| {
+            if !matches!(
+                me.pending.get(&action_id),
+                Some(PendingRunAgents::ConsultingHooks { .. })
+            ) {
+                return;
+            }
+            let decisions = subagent::decide(outcomes, &action_id, parent_conversation_id, ctx);
+            me.launch_children(
+                action_id,
+                request,
+                children,
+                decisions,
+                parent_conversation_id,
+                parent_run_id,
+                team_scope,
+                sender,
+                ctx,
+            );
+        });
+    }
 
+    /// Launches the children of `request` that the hooks allowed. `decisions` has one entry per
+    /// child in `children` that could launch, in order; a child the hooks kept back is reported
+    /// as failed with their reason.
+    #[allow(clippy::too_many_arguments)]
+    fn launch_children(
+        &mut self,
+        action_id: AIAgentActionId,
+        request: RunAgentsRequest,
+        children: Vec<PreparedChild>,
+        decisions: Vec<ChildDecision>,
+        parent_conversation_id: AIConversationId,
+        parent_run_id: Option<String>,
+        team_scope: RequestTeamScope,
+        sender: async_channel::Sender<RunAgentsResult>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.pending
+            .insert(action_id.clone(), PendingRunAgents::Spawning);
         let RunAgentsRequest {
+            delegated_github_coauthor_user_uid,
             metadata,
             execution_mode: run_execution_mode,
             harness_type,
             model_id,
-            skills,
             agent_run_configs,
-            base_prompt,
-            harness_auth_secret_name,
             ..
         } = request;
 
-        let mut slots: Vec<ChildSlot> = Vec::with_capacity(agent_run_configs.len());
-        for cfg in &agent_run_configs {
-            let prompt = compose_run_agents_child_prompt(&base_prompt, &cfg.prompt);
-            let mode = match run_agents_to_start_agent_mode(
-                &run_execution_mode,
-                &harness_type,
-                &model_id,
-                &skills,
-                harness_auth_secret_name.as_deref(),
-                cfg,
-            ) {
-                Ok(mode) => mode,
-                Err(err) => {
-                    slots.push(ChildSlot::Failed(err));
+        let mut decisions = decisions.into_iter();
+        let mut slots: Vec<ChildSlot> = Vec::with_capacity(children.len());
+        for (cfg, child) in agent_run_configs.iter().zip(children) {
+            let (mode, launch) = match child.launch {
+                Ok(launch) => launch,
+                Err(error) => {
+                    slots.push(ChildSlot::Failed(error));
                     continue;
                 }
             };
-            if matches!(run_execution_mode, RunAgentsExecutionMode::Remote { .. })
-                && parent_run_id.is_none()
-            {
-                slots.push(ChildSlot::Failed(
-                    "Remote child agents require the parent run_id to be available.".to_string(),
-                ));
-                continue;
+            match decisions.next() {
+                Some(ChildDecision::Launch) => {}
+                Some(ChildDecision::Denied { reason }) => {
+                    slots.push(ChildSlot::Failed(reason));
+                    continue;
+                }
+                None => {
+                    log::error!(
+                        "RunAgentsExecutor: no hook decision for child {}; not launching it",
+                        cfg.name
+                    );
+                    slots.push(ChildSlot::Failed(subagent::CANCELLED_REASON.to_owned()));
+                    continue;
+                }
             }
+            log::info!(
+                "RunAgentsExecutor: launching child {} (subagent {})",
+                cfg.name,
+                launch.subagent_id
+            );
             let recv = self.start_agent_executor.update(ctx, |executor, exec_ctx| {
                 let mut child_metadata = metadata.clone();
                 child_metadata.extend(cfg.metadata.clone());
                 executor.dispatch(
                     cfg.name.clone(),
-                    prompt,
+                    child.prompt,
                     mode,
                     child_metadata,
                     None, /* lifecycle_subscription */
                     parent_conversation_id,
                     parent_run_id.clone(),
+                    delegated_github_coauthor_user_uid.clone(),
                     team_scope,
                     exec_ctx,
                 )
@@ -305,11 +399,11 @@ impl RunAgentsExecutor {
             slots.push(ChildSlot::Pending(recv));
         }
 
-        let agent_run_configs_for_result = agent_run_configs.clone();
-        let action_id_for_aggr = action_id.clone();
-        let run_model_id = model_id.clone();
-        let run_harness_type = harness_type.clone();
-        let run_execution_mode_for_aggr = run_execution_mode.clone();
+        let agent_run_configs_for_result = agent_run_configs;
+        let action_id_for_aggr = action_id;
+        let run_model_id = model_id;
+        let run_harness_type = harness_type;
+        let run_execution_mode_for_aggr = run_execution_mode;
         let parent_conversation_id_for_result = parent_conversation_id;
 
         ctx.spawn(
@@ -515,6 +609,68 @@ mod tests;
 enum ChildSlot {
     Failed(String),
     Pending(async_channel::Receiver<StartAgentOutcome>),
+}
+
+/// One child of a `run_agents` call, as it would launch.
+struct PreparedChild {
+    prompt: String,
+    /// How the child launches and how its hooks see it, or why it cannot launch.
+    launch: Result<(StartAgentExecutionMode, SubagentLaunch), String>,
+}
+
+/// Works out how each child of `request` would launch, in the order the request names them.
+fn prepare_children(request: &RunAgentsRequest, has_parent_run_id: bool) -> Vec<PreparedChild> {
+    let harness = request.harness_type.trim().to_ascii_lowercase();
+    let harness = if harness.is_empty() {
+        "oz".to_owned()
+    } else {
+        harness
+    };
+    let execution_mode = match request.execution_mode {
+        RunAgentsExecutionMode::Local => SubagentExecutionMode::Local,
+        RunAgentsExecutionMode::Remote { .. } => SubagentExecutionMode::Remote,
+    };
+    let is_parallel_worker = request.agent_run_configs.len() > 1;
+    request
+        .agent_run_configs
+        .iter()
+        .map(|cfg| {
+            let prompt = compose_run_agents_child_prompt(&request.base_prompt, &cfg.prompt);
+            let mode = run_agents_to_start_agent_mode(
+                &request.execution_mode,
+                &request.harness_type,
+                &request.model_id,
+                &request.skills,
+                request.harness_auth_secret_name.as_deref(),
+                cfg,
+            );
+            let launch = match mode {
+                Err(error) => Err(error),
+                Ok(_) if execution_mode == SubagentExecutionMode::Remote && !has_parent_run_id => {
+                    Err(
+                        "Remote child agents require the parent run_id to be available."
+                            .to_string(),
+                    )
+                }
+                Ok(mode) => Ok((
+                    mode,
+                    SubagentLaunch {
+                        subagent_id: Uuid::new_v4(),
+                        name: cfg.name.clone(),
+                        task: prompt.clone(),
+                        model_id: [cfg.model_id.trim(), request.model_id.trim()]
+                            .into_iter()
+                            .find(|model| !model.is_empty())
+                            .map(str::to_owned),
+                        harness: harness.clone(),
+                        execution_mode,
+                        is_parallel_worker,
+                    },
+                )),
+            };
+            PreparedChild { prompt, launch }
+        })
+        .collect()
 }
 
 fn approved_orchestration_config_can_autoexecute(

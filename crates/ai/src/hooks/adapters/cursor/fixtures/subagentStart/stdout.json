@@ -1,0 +1,4 @@
+{
+  "permission": "deny",
+  "user_message": "Child agents are not allowed in this repository."
+}

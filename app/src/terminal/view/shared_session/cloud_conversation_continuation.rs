@@ -53,10 +53,6 @@ pub(crate) enum AIQueryRouting {
     /// Continues on the local machine. Covers ordinary local agent panes and local ambient sharers
     /// (e.g. `run_agents(local)` orchestration children, `/remote-control` of a local session).
     Local,
-    /// A retained environment-setup-failure session with an open debug window (REMOTE-2661).
-    /// Must route through the authenticated follow-up service, never the direct viewer prompt
-    /// path or the local agent — either would bypass authorization and could reopen the run.
-    RetainedSetupFailureDebug { task_id: AmbientAgentTaskId },
 }
 
 /// Which cloud-connection chip the agent input footer should show for a routing decision.
@@ -79,8 +75,6 @@ impl AIQueryRouting {
                 ..
             } => Some(CloudRoutingIndicator::LiveSession),
             Self::NewCloudVm { .. } => Some(CloudRoutingIndicator::NewCloudVm),
-            // A debug follow-up lands on the still-retained session, not a new VM.
-            Self::RetainedSetupFailureDebug { .. } => Some(CloudRoutingIndicator::LiveSession),
             // Shared *local* session viewers (no ambient task) and non-live panes show no indicator.
             Self::LiveRemoteVm {
                 ambient_agent_task_id: None,
@@ -223,21 +217,25 @@ pub(crate) fn resolve_ai_query_routing(
     let ambient_agent_task_id =
         resolve_ambient_agent_task_id(ambient_agent_view_model, terminal_model, app);
 
-    // Takes priority over live-viewer routing below: an already-attached viewer must still
-    // submit through the authenticated follow-up service, not the direct viewer prompt path.
-    if let Some(task_id) = ambient_agent_task_id
-        && let Some(task) = AgentConversationsModel::as_ref(app).get_task_data(&task_id)
-        && is_retained_setup_failure_debug_editable(&task, app)
-    {
-        return AIQueryRouting::RetainedSetupFailureDebug { task_id };
-    }
-
-    // A live shared-session viewer forwards its follow-up to the sharer via the viewer prompt
-    // path, whether the shared session is an ambient cloud run or a shared local session.
+    // Attached viewers debug the retained sandbox through its authorized session path.
+    // Ordinary server follow-ups are a separate operation that can create a replacement.
     if status.is_active_viewer() {
         return AIQueryRouting::LiveRemoteVm {
             is_executor: status.is_executor(),
             ambient_agent_task_id,
+        };
+    }
+    if status.is_active_sharer() {
+        return AIQueryRouting::Local;
+    }
+
+    if let Some(task_id) = ambient_agent_task_id
+        && let Some(task) = AgentConversationsModel::as_ref(app).get_task_data(&task_id)
+        && is_retained_setup_failure_debug_editable(&task, app)
+    {
+        return AIQueryRouting::LiveRemoteVm {
+            is_executor: false,
+            ambient_agent_task_id: Some(task_id),
         };
     }
 
@@ -245,10 +243,6 @@ pub(crate) fn resolve_ai_query_routing(
     if !is_ambient && !is_transcript_viewer {
         return AIQueryRouting::Local;
     }
-    if status.is_active_sharer() {
-        return AIQueryRouting::Local;
-    }
-
     // Disconnected / ended / transcript ambient pane: defer to the resolved continuation state.
     let Some(task_id) = ambient_agent_task_id else {
         return AIQueryRouting::Local;
@@ -278,12 +272,7 @@ pub(crate) fn resolve_ai_query_routing(
     }
 }
 
-/// Whether `task`'s retained setup-failure session presents an editable agent input for the
-/// current principal (REMOTE-2661), rather than the read-only tombstone or viewer prompt path.
-///
-/// Deliberately independent of whether a debug conversation exists yet: PRODUCT.md §7 requires
-/// every later prompt to reuse the same authenticated route once the first bootstrap persists a
-/// conversation ID.
+/// Whether the current principal can edit the retained setup-failure session's input.
 fn is_retained_setup_failure_debug_editable(task: &AmbientAgentTask, app: &AppContext) -> bool {
     task.is_setup_failure_debug_session_open()
         && task_ownership_access(task, app) == ConversationAccess::Edit

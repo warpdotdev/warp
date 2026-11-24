@@ -11,6 +11,9 @@ pub enum Message {
     /// Indicates that the `EventLoop` should be shut down.
     Shutdown,
 
+    /// Stops the old shell without terminating the terminal that will host its replacement.
+    ShutdownForReplacement,
+
     /// Indicates that the child process has exited.
     ///
     /// Only used on Windows, as we need to pass this information to the

@@ -18,6 +18,7 @@ pub(super) mod util;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Display;
 use std::ops::{AddAssign, Deref, DerefMut, Range};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -125,6 +126,11 @@ pub enum CancellationReason {
     /// finalized as a terminal `Error` (with a shell-exit message) by the
     /// controller rather than reported as a user cancellation.
     AgentExitedShell,
+
+    /// An agent hook asked to stop the run (a hook's `ask` in a run configured to fail when no
+    /// one can answer). Like [`Self::AgentExitedShell`], the in-flight work is cancelled to stop
+    /// it and the controller finalizes the conversation as a terminal `Error`.
+    HookEndedRun,
 }
 
 /// How a [`CancellationReason`] maps to the conversation's resulting status.
@@ -166,6 +172,7 @@ impl Display for CancellationReason {
             CancellationReason::AgentExitedShell => {
                 write!(f, "agent command exited the shell")
             }
+            CancellationReason::HookEndedRun => write!(f, "agent hook ended the run"),
         }
     }
 }
@@ -209,9 +216,12 @@ impl CancellationReason {
             // successful completions rather than cancellations.
             CancellationReason::CommandFinishedDuringInlineAgentView
             | CancellationReason::Reverted => CancellationOutcome::Succeeded,
-            // The shell died under the agent; a dedicated path finalizes this as a
-            // terminal `Error`, so the cancellation machinery must not stamp a status.
-            CancellationReason::AgentExitedShell => CancellationOutcome::FinalizedExternally,
+            // The shell died under the agent, or a hook ended the run; a dedicated path
+            // finalizes this as a terminal `Error`, so the cancellation machinery must not
+            // stamp a status.
+            CancellationReason::AgentExitedShell | CancellationReason::HookEndedRun => {
+                CancellationOutcome::FinalizedExternally
+            }
             CancellationReason::ManuallyCancelled
             | CancellationReason::AutomaticCloudHandoff
             | CancellationReason::UserCommandExecuted
@@ -1317,6 +1327,9 @@ impl<'a> std::fmt::Display for MarkdownActionResult<'a> {
                     )
                 }
             },
+            AIAgentActionResultType::DeniedByHook { reason } => {
+                write!(f, "\n_Denied by an agent hook: {reason}_")
+            }
             AIAgentActionResultType::WriteToLongRunningShellCommand(result) => match result {
                 WriteToLongRunningShellCommandResult::CommandFinished { output, .. } => {
                     write!(f, "\n```\n{output}\n```")
@@ -2965,6 +2978,14 @@ pub fn display_user_query_with_mode(mode: UserQueryMode, query: &str) -> String 
     }
 }
 
+/// The prompt an ambient agent run starts with, as the server resolved it for this client.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResolvedRunPrompt {
+    pub text: String,
+    /// The task's attachment files, where the client downloaded them.
+    pub attachments: Vec<PathBuf>,
+}
+
 // TODO(zachbai): Refactor this to consolidate with `LongRunningCommandSnapshot` and `Snapshot`
 // variants of `ReadShellCommandOutputResult` and `WriteToLongRunningShellCommandResult`.
 #[derive(Clone, Debug, PartialEq)]
@@ -3083,6 +3104,10 @@ pub enum AIAgentInput {
         /// Optional directory path where the client downloaded task attachments.
         /// Passed to the server so it can construct correct file paths for the LLM.
         attachments_dir: Option<String>,
+        /// The run's prompt as the server resolved it, fetched ahead of the request so the
+        /// prompt hooks can see it. It is not sent: the server resolves the prompt itself from
+        /// the stored task.
+        resolved_prompt: Option<ResolvedRunPrompt>,
     },
 
     /// The result of an `AIAgentAction`, relayed back to the LLM for it to continue answering a

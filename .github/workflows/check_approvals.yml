@@ -12,6 +12,9 @@ jobs:
     runs-on: ubuntu-latest
     # Skip draft PRs.
     if: github.event.pull_request.draft == false && github.repository_owner == 'warpdotdev'
+    permissions:
+      contents: read # actions/checkout clones the repo so the script can read OWNERS and diff the changed files
+      pull-requests: write # `gh pr view` reads the PR's reviews, and `gh pr comment` posts the list of missing approvals
     steps:
       - name: Checkout repository
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6

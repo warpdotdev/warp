@@ -198,6 +198,22 @@ impl TerminalPane {
         self.view.as_ref(ctx).child_data(ctx).clone()
     }
 
+    /// The terminal manager for `terminal_view`, which need not be the active view in the stack.
+    fn terminal_manager_for_view(
+        &self,
+        terminal_view: &WeakViewHandle<TerminalView>,
+        ctx: &AppContext,
+    ) -> Option<ModelHandle<Box<dyn TerminalManager>>> {
+        self.view
+            .as_ref(ctx)
+            .pane_stack()
+            .as_ref(ctx)
+            .entries()
+            .iter()
+            .find(|(_, view)| view.id() == terminal_view.id())
+            .map(|(manager, _)| manager.clone())
+    }
+
     /// Instructs the SQLite thread to delete blocks for this session.
     pub(in crate::pane_group) fn delete_blocks(&self, ctx: &AppContext) {
         if !AppExecutionMode::as_ref(ctx).can_save_session() {
@@ -921,17 +937,28 @@ fn handle_terminal_view_event(
             Event::ExecuteCommand(event) => {
                 ctx.emit(pane_group::Event::ExecuteCommand(event.clone()));
             }
+            Event::ReplaceShell(request) => {
+                let result = group
+                    .terminal_session_by_id(pane_id)
+                    .and_then(|pane| pane.terminal_manager_for_view(terminal_view, ctx))
+                    .ok_or_else(|| anyhow::anyhow!("terminal manager is unavailable"))
+                    .and_then(|manager| {
+                        manager.update(ctx, |manager, ctx| {
+                            manager.replace_shell(request.clone(), ctx)
+                        })
+                    });
+                if let Err(error) = result
+                    && let Some(terminal_view) = terminal_view.upgrade(ctx)
+                {
+                    terminal_view.update(ctx, |view, ctx| {
+                        view.complete_shell_replacement(request.id, Err(error), ctx);
+                    });
+                }
+            }
             Event::RecoverCloudShell(request) => {
-                let terminal_manager = group.terminal_session_by_id(pane_id).and_then(|pane| {
-                    pane.view
-                        .as_ref(ctx)
-                        .pane_stack()
-                        .as_ref(ctx)
-                        .entries()
-                        .iter()
-                        .find(|(_, view)| view.id() == terminal_view.id())
-                        .map(|(manager, _)| manager.clone())
-                });
+                let terminal_manager = group
+                    .terminal_session_by_id(pane_id)
+                    .and_then(|pane| pane.terminal_manager_for_view(terminal_view, ctx));
                 let accepted = terminal_manager.is_some_and(|manager| {
                     manager.update(ctx, |manager, ctx| {
                         manager.recover_cloud_shell(request.clone(), ctx)

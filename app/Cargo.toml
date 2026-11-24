@@ -110,6 +110,7 @@ futures-util.workspace = true
 futures.workspace = true
 fuzzy_match.workspace = true
 getset.workspace = true
+globset.workspace = true
 handlebars.workspace = true
 hex.workspace = true
 http.workspace = true
@@ -149,6 +150,7 @@ mcp.workspace = true
 memchr.workspace = true
 memo-map.workspace = true
 mermaid_to_svg.workspace = true
+non_structural_derive = "0.1.2"
 num-traits.workspace = true
 num_cpus = "1.13.0"
 oauth2.workspace = true
@@ -308,6 +310,7 @@ axum.workspace = true
 build_cache.workspace = true
 cloud_object_persistence.workspace = true
 comfy-table = "7.1.4"
+computer_use_mcp.workspace = true
 inquire = "0.9.1"
 diesel = { workspace = true, features = ["sqlite", "chrono"] }
 diesel_migrations = { version = "2.2.0", features = ["sqlite"] }
@@ -323,6 +326,7 @@ opentelemetry.workspace = true
 opentelemetry-http.workspace = true
 opentelemetry-otlp.workspace = true
 opentelemetry_sdk.workspace = true
+preview_proxy.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 tracing-opentelemetry.workspace = true
@@ -500,6 +504,7 @@ creating_shared_sessions = []
 cross_repo_context = []
 codebase_index_persistence = ["full_source_code_embedding"]
 well_known_mcp_ids = []
+managed_mcp_credential_refresh = []
 factory_mcp = []
 preview_urls_mcp = []
 default = [
@@ -680,6 +685,7 @@ default = [
     "settings_file",
     "directory_tab_colors",
     "git_credential_refresh",
+    "factory_deferred_repositories",
     "oz_handoff",
     "handoff_local_cloud",
     "pending_user_query_indicator",
@@ -703,13 +709,16 @@ default = [
     "cloud_agent_execution_config",
     "file_backed_execution_profiles",
     "well_known_mcp_ids",
+    "managed_mcp_credential_refresh",
     "factory_mcp",
+    "preview_urls_mcp",
     "ime_marked_text",
     "ctrl_c_cancels_third_party_harness",
     "shell_widget_handoff",
     "native_shell_completions",
     "history_search_ranking_v2",
     "cloud_agent_shell_respawn",
+    "acp_harness",
 ]
 # Enable this feature to automatically perform heap profiling.  NOTE: This will
 # substantially slow down program execution.
@@ -790,6 +799,7 @@ list_skills = []
 # include dependencies that should only exist in such environments.
 local_tty = ["warp_terminal/local_tty"]
 local_computer_use = []
+computer_use_mcp = []
 local_claude_codex_child_harnesses = []
 # This feature is enabled in build.rs when compiling for platforms which
 # have APIs for interacting with a local filesystem.  It can be used to
@@ -998,6 +1008,7 @@ incremental_auto_reload = []
 pending_user_query_indicator = []
 queue_slash_command = []
 queued_prompts_v2 = ["queue_slash_command"]
+agent_prompt_steering = []
 inline_menu_headers = []
 directory_tab_colors = []
 hoa_code_review = []
@@ -1009,6 +1020,7 @@ pinned_tabs = []
 warp_control_cli = []
 agent_harness = []
 oz_handoff = []
+restore_local_subtree = []
 handoff_local_cloud = []
 hoa_notifications = []
 open_code_notifications = []
@@ -1037,6 +1049,7 @@ shell_widget_handoff = []
 history_search_ranking_v2 = []
 stored_screenshots = []
 cloud_agent_shell_respawn = []
+acp_harness = []
 
 [package.metadata.bundle.bin.warp-oss]
 category = "public.app-category.developer-tools"

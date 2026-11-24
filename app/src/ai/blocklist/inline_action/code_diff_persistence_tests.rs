@@ -6,7 +6,6 @@ use warpui::platform::WindowStyle;
 use warpui::{App, ReadView};
 
 use super::*;
-use crate::notebooks::editor::keys::NotebookKeybindings;
 use crate::test_util::terminal::initialize_app_for_terminal_view;
 use crate::vim_registers::VimRegisters;
 
@@ -14,7 +13,6 @@ fn add_review(app: &mut App, path: &Path, diff: DiffType) -> ViewHandle<CodeDiff
     initialize_app_for_terminal_view(app);
     app.add_singleton_model(FileModel::new);
     app.add_singleton_model(|_| VimRegisters::new());
-    app.add_singleton_model(NotebookKeybindings::new);
     app.add_singleton_model(|_| ToastStack);
     let (_, view) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
         let mut view = CodeDiffView::new_passive(

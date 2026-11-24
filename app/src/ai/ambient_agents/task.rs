@@ -150,7 +150,8 @@ impl AgentSource {
     }
 }
 
-/// Where the server executed an agent run.
+/// Whether the run is local or remote. This value is kept after execution ends and can change if
+/// the run is reassigned.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum ExecutionLocation {

@@ -20,11 +20,18 @@ use super::{
 };
 use crate::auth::{AuthClient, AuthClientImpl};
 
-struct StaticIapTokenProvider;
+#[derive(Default)]
+struct StaticIapTokenProvider {
+    routing_opt_in: bool,
+}
 
 impl http_client::iap::IapTokenProvider for StaticIapTokenProvider {
     fn cached_token(&self) -> Option<String> {
         Some("iap-token".to_string())
+    }
+
+    fn routing_opt_in_enabled(&self) -> bool {
+        self.routing_opt_in
     }
 }
 
@@ -77,6 +84,25 @@ fn graphql_identity_transitions_between_standby_and_run() {
     );
 }
 
+#[test]
+fn iap_headers_read_current_routing_preference() {
+    let state = Arc::new(crate::iap::IapState::new(&warp_core::channel::IapConfig {
+        audiences: "test-audience".into(),
+        service_account_email: "test@example.com".into(),
+    }));
+    let mut client = client();
+    client.iap_token_provider = Some(state.clone());
+
+    assert!(client.iap_headers().is_empty());
+    state.set_routing_opt_in(true);
+    assert_eq!(
+        client.iap_headers(),
+        vec![(http_client::iap::IAP_OPT_IN_HEADER, "1".to_string())]
+    );
+    state.set_routing_opt_in(false);
+    assert!(client.iap_headers().is_empty());
+}
+
 fn client() -> BaseClient {
     let (event_sender, _) = async_channel::unbounded();
     let mut authenticated_headers = HashMap::new();
@@ -98,9 +124,9 @@ fn client() -> BaseClient {
 }
 
 #[test]
-fn iap_proxy_auth_header_uses_configured_provider() {
+fn iap_headers_combine_token_and_routing_preference() {
     let (event_sender, _) = async_channel::unbounded();
-    let client = BaseClient::new(
+    let mut client = BaseClient::new(
         Arc::new(http_client::Client::new()),
         Arc::new(http_client::Client::new_external()),
         Arc::new(AuthState::new_for_test()),
@@ -108,15 +134,28 @@ fn iap_proxy_auth_header_uses_configured_provider() {
         None,
         GraphqlRoutingConfig::default(),
         AuthenticatedGraphqlConfig::default(),
-        Some(Arc::new(StaticIapTokenProvider)),
+        Some(Arc::new(StaticIapTokenProvider::default())),
     );
 
     assert_eq!(
-        client.iap_proxy_auth_header(),
-        Some((
+        client.iap_headers(),
+        vec![(
             http_client::iap::IAP_PROXY_AUTH_HEADER,
             "Bearer iap-token".to_string()
-        ))
+        )]
+    );
+    client.iap_token_provider = Some(Arc::new(StaticIapTokenProvider {
+        routing_opt_in: true,
+    }));
+    assert_eq!(
+        client.iap_headers(),
+        vec![
+            (
+                http_client::iap::IAP_PROXY_AUTH_HEADER,
+                "Bearer iap-token".to_string()
+            ),
+            (http_client::iap::IAP_OPT_IN_HEADER, "1".to_string()),
+        ]
     );
 }
 

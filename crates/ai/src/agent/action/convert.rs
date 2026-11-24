@@ -15,7 +15,7 @@ use crate::agent::action::{
 };
 use crate::agent::action_result::{AnyFileContent, FileContext};
 use crate::agent::convert::ToolToAIAgentActionError;
-use crate::diff_validation::{ParsedDiff, V4AHunk};
+use crate::diff_validation::{ParsedDiff, V4AHunk, V4ALineData};
 use crate::document::{AIDocumentId, DEFAULT_PLANNING_DOCUMENT_TITLE};
 
 impl From<api::message::tool_call::RunShellCommand> for AIAgentActionType {
@@ -98,6 +98,12 @@ impl From<api::message::tool_call::ApplyFileDiffs> for AIAgentActionType {
                         old: hunk.old,
                         new: hunk.new,
                         post_context: hunk.post_context,
+                        line_data: hunk.line_data.map(|data| V4ALineData {
+                            pre_context: data.pre_context,
+                            old: data.old,
+                            new: data.new,
+                            post_context: data.post_context,
+                        }),
                     })
                     .collect(),
             })

@@ -42,8 +42,7 @@ use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::ids::{ServerId, SyncId};
 use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::ai::{
-    AgentConfigSnapshot, AmbientAgentTaskState, AttachmentInput, RunFollowupRequest,
-    SpawnAgentRequest,
+    AgentConfigSnapshot, AmbientAgentTaskState, AttachmentInput, SpawnAgentRequest,
 };
 use crate::server::team_scope::RequestTeamScope;
 use crate::terminal::view::ambient_agent::{SetupCommandGroupId, SetupCommandState};
@@ -943,51 +942,6 @@ impl AmbientAgentViewModel {
         self.submit_run_followup_unchecked(prompt, ctx);
     }
 
-    /// Submits a follow-up into a retained environment-setup-failure debug session
-    /// (REMOTE-2661), via the same authenticated `submit_run_followup` service call as
-    /// [`Self::submit_cloud_followup`] but not gated on `HandoffCloudCloud`, and not routed
-    /// through [`Self::submit_run_followup_unchecked`]'s task-state polling: a retained run's
-    /// task is supposed to stay failure-like for the whole debug conversation, so that polling
-    /// would eventually misreport it. Treat this as sent once the server accepts the request.
-    pub fn submit_setup_failure_debug_followup(
-        &mut self,
-        prompt: String,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        let Some(task_id) = self.task_id else {
-            log::warn!(
-                "Attempted to submit a setup-failure debug follow-up without an ambient task ID"
-            );
-            return;
-        };
-
-        let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
-        let request = RunFollowupRequest {
-            message: prompt.clone(),
-        };
-        if self.pending_followup_prompt.is_some() {
-            log::warn!(
-                "event=viewer_followup_slot_replaced task_id={task_id} route=setup_failure_debug",
-            );
-        }
-        self.pending_followup_prompt = Some(prompt);
-        ctx.emit(AmbientAgentViewModelEvent::FollowupDispatched);
-
-        ctx.spawn(
-            async move { ai_client.submit_run_followup(&task_id, request).await },
-            |me, result, ctx| {
-                me.pending_followup_prompt = None;
-                if let Err(err) = result {
-                    log::warn!("Failed to submit setup-failure debug follow-up: {err}");
-                    ctx.emit(AmbientAgentViewModelEvent::FollowupSubmissionFailed {
-                        error_message: err.to_string(),
-                    });
-                }
-                ctx.notify();
-            },
-        );
-    }
-
     fn submit_run_followup_unchecked(&mut self, prompt: String, ctx: &mut ModelContext<Self>) {
         let Some(task_id) = self.task_id else {
             log::warn!("Attempted to submit cloud follow-up without an ambient task ID");
@@ -1151,6 +1105,7 @@ impl AmbientAgentViewModel {
 
         let (prompt, mode) = extract_user_query_mode(prompt);
         let request = SpawnAgentRequest {
+            delegated_github_coauthor_user_uid: None,
             metadata: Default::default(),
             prompt: Some(prompt),
             mode,

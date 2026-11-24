@@ -126,6 +126,9 @@ fn verify_standby_bootstrap() {
                         "__typename": "PrewarmedSandboxConfiguration",
                         "sandboxId": "bootstrap-test",
                         "fingerprint": "bootstrap-generation",
+                    "preparationKind": "AGENT",
+                    "runnerPreparationContractVersion": null,
+                        "githubCredentialMode": "LEGACY",
                         "spec": {
                             "harness": "oz",
                             "repositories": [],
@@ -134,7 +137,8 @@ fn verify_standby_bootstrap() {
                             "mcpServersJson": "{}",
                             "skills": [],
                             "factorySkillDirs": [],
-                            "computerUseEnabled": false
+                            "computerUseEnabled": false,
+                            "providers": null
                         },
                         "environmentVariables": [
                             {"name": "STANDBY_TEST_ENV", "value": "prepared"}
@@ -172,6 +176,7 @@ fn verify_standby_bootstrap() {
         )
         .match_body(Matcher::Json(json!({
             "fingerprint": "bootstrap-generation",
+            "runner_preparation_contract_version": 1,
             "state": "ready",
             "manifest_hash": "bootstrap-generation"
         })))
@@ -241,7 +246,9 @@ fn verify_standby_bootstrap() {
         let driver = async {
             loop {
                 if let Some(driver) = app.models_of_type::<AgentDriver>().into_iter().next()
-                    && driver.read(&app, |driver, _| driver.workspace.is_none())
+                    && driver.read(&app, |driver, _| {
+                        !matches!(driver.workspace, Some(super::WorkspaceState::Pending(_)))
+                    })
                 {
                     break driver;
                 }
@@ -281,7 +288,10 @@ fn verify_standby_bootstrap() {
         driver.read(&app, |driver, _| {
             assert_eq!(driver.working_dir, workspace);
             assert_eq!(driver.harness_working_dir, workspace);
-            assert!(driver.workspace.is_none());
+            let Some(super::WorkspaceState::Prepared(prepared)) = &driver.workspace else {
+                panic!("standby preparation must leave a prepared workspace");
+            };
+            assert!(prepared.repositories.is_empty());
             assert!(driver.task_id.is_none());
             assert!(driver.harness.is_none());
             assert!(driver.run_conversation_id.is_none());

@@ -12,6 +12,10 @@ fn serializes_configuration_mutation_without_workload_token_input() {
     let operation = PrewarmedSandboxConfig::build(PrewarmedSandboxConfigVariables {
         input: PrewarmedSandboxConfigInput {
             sandbox_id: "sandbox".into(),
+            github_credential_contract_version: Some(1),
+            runner_preparation_contract_version: Some(1),
+            supports_deferred_repositories: Some(true),
+            supports_agent_hooks: Some(true),
         },
         request_context: RequestContext {
             client_context: ClientContext { version: None },
@@ -61,8 +65,18 @@ fn serializes_configuration_mutation_without_workload_token_input() {
         "skills",
         "factorySkillDirs",
         "computerUseEnabled",
+        "providers",
+        "gcp",
+        "projectNumber",
+        "poolId",
+        "providerId",
+        "serviceAccountEmail",
+        "aws",
+        "roleArn",
         "environmentVariables",
         "gitCredentials",
+        "githubCredentialMode",
+        "repositoryScope",
         "host",
         "username",
         "token",
@@ -79,7 +93,13 @@ fn serializes_configuration_mutation_without_workload_token_input() {
     let request = serde_json::to_value(operation).unwrap();
     assert_eq!(
         request["variables"]["input"],
-        json!({"sandboxId": "sandbox"})
+        json!({
+            "sandboxId": "sandbox",
+            "githubCredentialContractVersion": 1,
+            "runnerPreparationContractVersion": 1,
+            "supportsDeferredRepositories": true,
+            "supportsAgentHooks": true
+        })
     );
     assert!(request["variables"]["requestContext"].is_object());
 }
@@ -109,6 +129,12 @@ fn deserializes_configuration_response_with_shared_repository_types() {
     assert_eq!(repository.clone_from.as_ref().unwrap().repo, "warp-fork");
     assert!(repository.preserve_origin);
     assert_eq!(config.spec.deferred_repositories[0].repo, "warp-server");
+    let providers = config.spec.providers.as_ref().unwrap();
+    assert_eq!(providers.gcp.as_ref().unwrap().pool_id, "oz-pool");
+    assert_eq!(
+        providers.aws.as_ref().unwrap().role_arn,
+        "arn:aws:iam::123456789012:role/OzAgent"
+    );
     assert!(serde_json::from_str::<serde_json::Value>(&config.spec.mcp_servers_json).is_ok());
     assert_eq!(
         config.environment_variables[0].name,
@@ -169,6 +195,10 @@ fn rejects_invalid_workload_token_headers() {
         let operation = PrewarmedSandboxConfig::build(PrewarmedSandboxConfigVariables {
             input: PrewarmedSandboxConfigInput {
                 sandbox_id: "sandbox".into(),
+                github_credential_contract_version: Some(1),
+                runner_preparation_contract_version: Some(1),
+                supports_deferred_repositories: Some(true),
+                supports_agent_hooks: Some(true),
             },
             request_context: get_request_context(),
         });

@@ -56,6 +56,7 @@ pub fn prepare_conversation_block_restoration(
     conversation: &AIConversation,
     terminal_model: &mut TerminalModel,
 ) -> ConversationBlockRestorationPlan {
+    let first_restored_command = terminal_model.block_list().active_block_index();
     let serialized_items = conversation.to_serialized_blocklist_items();
     if !serialized_items.is_empty() {
         let block_list = terminal_model.block_list_mut();
@@ -72,7 +73,7 @@ pub fn prepare_conversation_block_restoration(
     let command_block_indices = command_block_indices_for_exchanges(
         terminal_model,
         exchanges.iter().copied(),
-        exchanges.len(),
+        first_restored_command,
     );
     let exchanges = exchanges
         .into_iter()
@@ -92,12 +93,13 @@ pub fn prepare_conversation_block_restoration(
 pub(crate) fn command_block_indices_for_exchanges<'a>(
     terminal_model: &TerminalModel,
     exchanges: impl Iterator<Item = &'a AIAgentExchange>,
-    _exchange_count: usize,
+    first_command_block: BlockIndex,
 ) -> Vec<Option<BlockIndex>> {
     let blocks = terminal_model.block_list().blocks();
     let command_blocks: Vec<(BlockIndex, DateTime<Local>)> = blocks
         .iter()
         .enumerate()
+        .skip(first_command_block.0)
         .filter_map(|(index, block)| {
             if !block.is_background() {
                 block.start_ts().map(|ts| (BlockIndex::from(index), *ts))

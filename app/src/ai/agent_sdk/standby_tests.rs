@@ -1,18 +1,85 @@
 use std::sync::{Arc, Mutex};
 
-use async_trait::async_trait;
 use chrono::TimeDelta;
-use futures::executor::block_on;
+use futures::channel::oneshot;
+use futures::future;
 use warp_core::features::FeatureFlag;
+use warp_graphql::ai::PlatformErrorCode;
+use warp_graphql::platform_error::PlatformErrorInfo;
 use warp_graphql::queries::execution_config::CodeForge as ConfigCodeForge;
 use warpui::App;
-use warpui::r#async::FutureExt as _;
 
+use self::support::*;
 use super::*;
 use crate::auth::AuthStateProvider;
 use crate::auth::user::{PrincipalType, User};
-use crate::server::server_api::ai::MockAIClient;
+use crate::server::server_api::ai::{MockAIClient, TaskGitCredentialsError};
 use crate::server::server_api::prewarmed_sandbox::tests::parse_configuration;
+
+#[path = "standby_test_support.rs"]
+mod support;
+
+#[test]
+fn unsupported_deferred_preparation_fails_before_workspace_setup() {
+    App::test((), |mut app| async move {
+        let runner = app.add_singleton_model(|_| AgentDriverRunner);
+        let foreground = runner.update(&mut app, |_, ctx| ctx.spawner());
+        let setup_events = SetupClientEventReporter::standby(
+            Arc::new(MockAIClient::new()),
+            app.background_executor(),
+        );
+        let error = prepare(&foreground, parse_configuration(), false, &setup_events)
+            .await
+            .err()
+            .expect("unsupported preparation must fail");
+        let AgentDriverError::ConfigBuildFailed(source) = error else {
+            panic!("expected unsupported preparation");
+        };
+        assert!(source.to_string().contains("deferred repositories"));
+        assert!(!app.update(|ctx| ctx.has_singleton_model::<AgentDriver>()));
+    });
+}
+
+#[test]
+fn preparation_validates_the_workspace_before_metadata_access() {
+    App::test((), |mut app| async move {
+        let runner = app.add_singleton_model(|_| AgentDriverRunner);
+        let foreground = runner.update(&mut app, |_, ctx| ctx.spawner());
+        let setup_events = SetupClientEventReporter::standby(
+            Arc::new(MockAIClient::new()),
+            app.background_executor(),
+        );
+        let mut claude = parse_configuration();
+        claude.preparation.harness = "claude".into();
+        claude.preparation.factory_skill_dirs = vec!["../outside".into()];
+        let error = prepare(&foreground, claude, true, &setup_events)
+            .await
+            .err()
+            .unwrap();
+        let AgentDriverError::ConfigBuildFailed(source) = error else {
+            panic!("expected invalid workspace");
+        };
+        assert_eq!(
+            source.to_string(),
+            "Execution skill directory must stay within the working directory"
+        );
+
+        let mut codex = parse_configuration();
+        codex.preparation.harness = "codex".into();
+        codex.preparation.factory_skill_dirs = vec!["../outside".into()];
+        let error = prepare(&foreground, codex, true, &setup_events)
+            .await
+            .err()
+            .unwrap();
+        let AgentDriverError::ConfigBuildFailed(source) = error else {
+            panic!("expected invalid workspace");
+        };
+        assert_eq!(
+            source.to_string(),
+            "Execution skill directory must stay within the working directory"
+        );
+    });
+}
 
 #[test]
 fn invalid_preparation_inputs_fail_before_driver_creation_or_metadata_access() {
@@ -23,8 +90,8 @@ fn invalid_preparation_inputs_fail_before_driver_creation_or_metadata_access() {
             Arc::new(MockAIClient::new()),
             app.background_executor(),
         );
-        let mut wrong_harness = parse_configuration();
-        wrong_harness.preparation.harness = "claude".to_string();
+        let mut unknown_harness = parse_configuration();
+        unknown_harness.preparation.harness = "not-a-harness".to_string();
         let mut escaping_skills = parse_configuration();
         escaping_skills.preparation.factory_skill_dirs = vec!["../outside".to_string()];
         let mut duplicate_repository = parse_configuration();
@@ -43,16 +110,17 @@ fn invalid_preparation_inputs_fail_before_driver_creation_or_metadata_access() {
             .deferred_repositories[0]
             .code_forge = ConfigCodeForge::Unknown;
         for config in [
-            wrong_harness,
+            unknown_harness,
             escaping_skills,
             duplicate_repository,
             invalid_mcp,
             unknown_repository,
             unknown_deferred_repository,
         ] {
-            let error = prepare(&foreground, config, &setup_events)
+            let error = prepare(&foreground, config, true, &setup_events)
                 .await
-                .unwrap_err();
+                .err()
+                .expect("preparation should fail");
             assert!(
                 matches!(error, AgentDriverError::ConfigBuildFailed(_)),
                 "{error}"
@@ -77,9 +145,10 @@ fn skill_checkout_collisions_fail_before_cloning_or_metadata_access() {
         ] {
             let mut config = parse_configuration();
             config.preparation.skills = specs.into_iter().map(str::to_owned).collect();
-            let error = prepare(&foreground, config, &setup_events)
+            let error = prepare(&foreground, config, true, &setup_events)
                 .await
-                .unwrap_err();
+                .err()
+                .expect("preparation should fail");
             let AgentDriverError::ConfigBuildFailed(source) = error else {
                 panic!("expected a checkout collision, got {error}");
             };
@@ -123,9 +192,10 @@ fn global_skill_checkout_collisions_fail_before_cloning_or_metadata_access() {
             });
             let mut config = parse_configuration();
             config.preparation.skills = configured.into_iter().map(str::to_owned).collect();
-            let error = prepare(&foreground, config, &setup_events)
+            let error = prepare(&foreground, config, true, &setup_events)
                 .await
-                .unwrap_err();
+                .err()
+                .expect("preparation should fail");
             let AgentDriverError::ConfigBuildFailed(source) = error else {
                 panic!("expected a checkout collision, got {error}");
             };
@@ -138,100 +208,19 @@ fn global_skill_checkout_collisions_fail_before_cloning_or_metadata_access() {
     });
 }
 
-/// A recorded call against the fake client.
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum Call {
-    Status(PrewarmedSandboxState),
-    Heartbeat,
-}
-
-#[derive(Default)]
-struct FakeClientState {
-    calls: Vec<Call>,
-    fail_status: bool,
-    fail_heartbeat: bool,
-    status_release: Option<oneshot::Receiver<()>>,
-}
-
-#[derive(Default)]
-struct FakeClient {
-    state: Mutex<FakeClientState>,
-    events: Option<async_channel::Sender<Call>>,
-}
-
-impl FakeClient {
-    fn calls(&self) -> Vec<Call> {
-        self.state.lock().expect("uncontended").calls.clone()
-    }
-}
-
-#[async_trait]
-impl PrewarmedSandboxClient for FakeClient {
-    async fn fetch_configuration(
-        &self,
-        sandbox_id: &str,
-    ) -> anyhow::Result<PrewarmedSandboxConfiguration> {
-        panic!("Unexpected configuration fetch for {sandbox_id}")
-    }
-
-    async fn report_status(
-        &self,
-        sandbox_id: &str,
-        generation: &str,
-        state: PrewarmedSandboxState,
-    ) -> anyhow::Result<()> {
-        assert_eq!(sandbox_id, "sandbox");
-        assert_eq!(generation, "abc123");
-        let (fail_status, status_release) = {
-            let mut client = self.state.lock().expect("uncontended");
-            client.calls.push(Call::Status(state));
-            if let Some(events) = &self.events {
-                events.try_send(Call::Status(state)).unwrap();
-            }
-            (client.fail_status, client.status_release.take())
-        };
-        if let Some(release) = status_release {
-            release.await.unwrap();
-        }
-        if fail_status {
-            anyhow::bail!("workload token acquisition failed");
-        }
-        Ok(())
-    }
-
-    async fn heartbeat(&self, sandbox_id: &str, generation: &str) -> anyhow::Result<()> {
-        assert_eq!(sandbox_id, "sandbox");
-        assert_eq!(generation, "abc123");
-        let mut client = self.state.lock().expect("uncontended");
-        client.calls.push(Call::Heartbeat);
-        if let Some(events) = &self.events {
-            events.try_send(Call::Heartbeat).unwrap();
-        }
-        if client.fail_heartbeat {
-            return Err(std::io::Error::from(std::io::ErrorKind::TimedOut).into());
-        }
-        Ok(())
-    }
-}
-
 #[test]
 fn reports_ready_after_a_successful_preparation() {
     let client = FakeClient::default();
-    let prepared = PreparedSandbox {
-        generation: "abc123".to_string(),
-        harness_working_dir: PathBuf::from("/workspace/warp"),
-        deferred_repositories: Vec::new(),
-    };
 
     let reported = futures::executor::block_on(report_preparation_outcome(
         &client,
         "sandbox",
         "abc123",
-        Ok(prepared.clone()),
+        Ok("prepared"),
     ))
     .expect("a successful preparation is reported ready");
 
-    assert_eq!(reported, prepared);
+    assert_eq!(reported, "prepared");
     assert_eq!(client.calls(), [Call::Status(PrewarmedSandboxState::Ready)]);
 }
 
@@ -239,7 +228,7 @@ fn reports_ready_after_a_successful_preparation() {
 fn reports_failed_when_preparation_errors() {
     let client = FakeClient::default();
 
-    let error = futures::executor::block_on(report_preparation_outcome(
+    let error = futures::executor::block_on(report_preparation_outcome::<()>(
         &client,
         "sandbox",
         "abc123",
@@ -288,249 +277,432 @@ fn waits_until_shortly_before_the_deadline() {
 }
 
 #[test]
-fn exits_cleanly_at_expiry() {
-    let client = FakeClient::default();
-    block_on(maintain_sandbox(
-        &client,
-        "sandbox",
-        "abc123",
-        async { panic!("expired sandboxes must not prepare") },
-        future::ready(StandbyExit::Expired),
-        stream::repeat(()),
-    ))
+fn expiry_has_priority_over_ready_preparation_and_connection() {
+    let clock = TestClock::new();
+    let hooks = Hooks::default();
+    let (_, connections) = async_channel::unbounded();
+    exercise(
+        drive(
+            async { panic!("must not prepare after expiry") },
+            connections,
+            &clock,
+            &hooks,
+            0,
+        ),
+        async {},
+    )
     .unwrap();
-    assert!(client.calls().is_empty(), "{:?}", client.calls());
+    assert!(hooks.calls.lock().unwrap().is_empty());
 }
 
 #[test]
-fn preparation_error_survives_a_status_credential_failure() {
+fn heartbeats_cover_preparation_and_status_reporting() {
+    for state in [PrewarmedSandboxState::Ready, PrewarmedSandboxState::Failed] {
+        let clock = TestClock::new();
+        let hooks = Hooks::default();
+        let (connect_tx, connections) = async_channel::unbounded();
+        let (connection, server) = connection();
+        connect_tx.try_send(connection).unwrap();
+        let (prepared_tx, prepared_rx) = oneshot::channel();
+        let (status_tx, status_rx) = oneshot::channel();
+        let (status_events, reports) = async_channel::unbounded();
+        let client = FakeClient {
+            state: Mutex::new(FakeClientState {
+                status_release: Some(status_rx),
+                ..Default::default()
+            }),
+            events: Some(status_events),
+        };
+        let preparation = async {
+            report_preparation_outcome(&client, "sandbox", "abc123", prepared_rx.await.unwrap())
+                .await
+        };
+        exercise(
+            drive(preparation, connections, &clock, &hooks, 600),
+            async {
+                hooks.expect(Call::Connected).await;
+                clock.advance(30).await;
+                server.expect_heartbeat("abc123").await;
+                prepared_tx
+                    .send(match state {
+                        PrewarmedSandboxState::Ready => Ok(7),
+                        PrewarmedSandboxState::Failed => Err(AgentDriverError::WarpDriveSyncFailed),
+                    })
+                    .unwrap();
+                assert_eq!(reports.recv().await.unwrap(), Call::Status(state));
+                clock.advance(30).await;
+                server.expect_heartbeat("abc123").await;
+                clock.advance(600).await;
+            },
+        )
+        .unwrap();
+        assert!(status_tx.is_canceled());
+        assert_eq!(hooks.count(Call::Install), 0);
+    }
+}
+
+#[test]
+fn assignment_installs_then_runs_only_after_delivery_is_confirmed() {
+    let clock = TestClock::new();
+    let hooks = Hooks::default();
+    let (connect_tx, connections) = async_channel::unbounded();
+    let (standby, standby_server) = connection();
+    let (assigned, assigned_server) = connection();
+    connect_tx.try_send(standby).unwrap();
+    connect_tx.try_send(assigned).unwrap();
+    exercise(
+        drive(future::ready(Ok(7)), connections, &clock, &hooks, 600),
+        async {
+            hooks.expect(Call::Connected).await;
+            standby_server.send(assignment("chosen", &clock));
+            hooks.expect(Call::Install).await;
+            hooks.expect(Call::Connected).await;
+            assert_eq!(hooks.count(Call::Run), 0);
+            assigned_server.send(assignment("chosen", &clock));
+            hooks.expect(Call::Run).await;
+        },
+    )
+    .unwrap();
+    assert_eq!(hooks.count(Call::Install), 1);
+    assert_eq!(hooks.count(Call::Run), 1);
+}
+
+#[test]
+fn assignment_before_readiness_is_held_and_replays_install_once() {
+    let clock = TestClock::new();
+    let hooks = Hooks::default();
+    let (connect_tx, connections) = async_channel::unbounded();
+    let (standby, standby_server) = connection();
+    let (assigned, assigned_server) = connection();
+    connect_tx.try_send(standby).unwrap();
+    connect_tx.try_send(assigned).unwrap();
+    let (prepared_tx, prepared_rx) = oneshot::channel();
+    exercise(
+        drive(
+            async { prepared_rx.await.unwrap() },
+            connections,
+            &clock,
+            &hooks,
+            600,
+        ),
+        async {
+            hooks.expect(Call::Connected).await;
+            standby_server.send(assignment("chosen", &clock));
+            standby_server.send(assignment("chosen", &clock));
+            yield_once().await;
+            assert_eq!(hooks.count(Call::Install), 0);
+            prepared_tx.send(Ok(7)).unwrap();
+            hooks.expect(Call::Install).await;
+            hooks.expect(Call::Connected).await;
+            assigned_server.send(assignment("chosen", &clock));
+            hooks.expect(Call::Run).await;
+        },
+    )
+    .unwrap();
+    assert_eq!(hooks.count(Call::Install), 1);
+}
+
+#[test]
+fn invalid_assignments_never_install() {
+    for invalid in ["second", "generation", "expired"] {
+        let clock = TestClock::new();
+        let hooks = Hooks::default();
+        let (connect_tx, connections) = async_channel::unbounded();
+        let (connection, server) = connection();
+        connect_tx.try_send(connection).unwrap();
+        let result = exercise(
+            drive(future::pending(), connections, &clock, &hooks, 600),
+            async {
+                hooks.expect(Call::Connected).await;
+                let mut event = assignment("chosen", &clock);
+                if let PrewarmedSandboxControlEvent::Assignment {
+                    generation,
+                    expires_at,
+                    ..
+                } = &mut event
+                {
+                    match invalid {
+                        "second" => server.send(assignment("first", &clock)),
+                        "generation" => *generation = "wrong".into(),
+                        "expired" => *expires_at = clock.now(),
+                        _ => unreachable!(),
+                    }
+                }
+                server.send(event);
+            },
+        );
+        assert!(result.is_err(), "{invalid} assignment was accepted");
+        assert_eq!(hooks.count(Call::Install), 0);
+    }
+}
+
+#[test]
+fn retirement_and_unavailable_connection_never_start_execution() {
+    for unavailable in [false, true] {
+        let clock = TestClock::new();
+        let hooks = Hooks::default();
+        let (connect_tx, connections) = async_channel::unbounded();
+        let (connection, server) = connection();
+        connect_tx
+            .try_send(if unavailable {
+                ConnectionAttempt::Unavailable
+            } else {
+                connection
+            })
+            .unwrap();
+        let result = exercise(
+            drive(future::ready(Ok(7)), connections, &clock, &hooks, 600),
+            async {
+                if !unavailable {
+                    hooks.expect(Call::Connected).await;
+                    server.send(PrewarmedSandboxControlEvent::Retired { reason: None });
+                }
+            },
+        );
+        assert_eq!(result.is_err(), unavailable);
+        assert_eq!(hooks.count(Call::Install), 0);
+    }
+}
+
+#[test]
+fn an_inactive_run_is_installed_but_never_started() {
+    for outcome in ["gone", "retired", "different"] {
+        let clock = TestClock::new();
+        let hooks = Hooks::default();
+        let (connect_tx, connections) = async_channel::unbounded();
+        let (standby, standby_server) = connection();
+        let (assigned, assigned_server) = connection();
+        connect_tx.try_send(standby).unwrap();
+        connect_tx
+            .try_send(if outcome == "gone" {
+                ConnectionAttempt::Unavailable
+            } else {
+                assigned
+            })
+            .unwrap();
+        let result = exercise(
+            drive(future::ready(Ok(7)), connections, &clock, &hooks, 600),
+            async {
+                hooks.expect(Call::Connected).await;
+                standby_server.send(assignment("chosen", &clock));
+                hooks.expect(Call::Install).await;
+                match outcome {
+                    "gone" => {}
+                    "retired" => {
+                        hooks.expect(Call::Connected).await;
+                        assigned_server.send(PrewarmedSandboxControlEvent::Retired {
+                            reason: Some("retired".into()),
+                        });
+                    }
+                    "different" => {
+                        hooks.expect(Call::Connected).await;
+                        assigned_server.send(assignment("other", &clock));
+                    }
+                    _ => unreachable!(),
+                }
+            },
+        );
+        assert_eq!(result.is_err(), outcome == "different", "{outcome}");
+        assert_eq!(hooks.count(Call::Install), 1);
+        assert_eq!(hooks.count(Call::Run), 0);
+    }
+}
+
+#[test]
+fn unknown_control_messages_are_ignored_on_the_same_connection() {
+    let clock = TestClock::new();
+    let hooks = Hooks::default();
+    let (connect_tx, connections) = async_channel::unbounded();
+    let (standby, standby_server) = connection();
+    let (assigned, assigned_server) = connection();
+    connect_tx.try_send(standby).unwrap();
+    connect_tx.try_send(assigned).unwrap();
+    exercise(
+        drive(future::ready(Ok(7)), connections, &clock, &hooks, 600),
+        async {
+            hooks.expect(Call::Connected).await;
+            standby_server.send(PrewarmedSandboxControlEvent::Unknown);
+            standby_server.send(assignment("chosen", &clock));
+            hooks.expect(Call::Install).await;
+            hooks.expect(Call::Connected).await;
+            assigned_server.send(PrewarmedSandboxControlEvent::Unknown);
+            assigned_server.send(assignment("chosen", &clock));
+            hooks.expect(Call::Run).await;
+        },
+    )
+    .unwrap();
+    assert_eq!(hooks.count(Call::Connected), 2);
+}
+
+#[test]
+fn delivery_confirmation_retries_transient_failures() {
+    let clock = TestClock::new();
+    let hooks = Hooks::default();
+    let (connect_tx, connections) = async_channel::unbounded();
+    let (standby, standby_server) = connection();
+    let (dropped, dropped_server) = connection();
+    let (assigned, assigned_server) = connection();
+    dropped_server.events.close();
+    for attempt in [standby, ConnectionAttempt::Retry, dropped, assigned] {
+        connect_tx.try_send(attempt).unwrap();
+    }
+    exercise(
+        drive(future::ready(Ok(7)), connections, &clock, &hooks, 600),
+        async {
+            hooks.expect(Call::Connected).await;
+            standby_server.send(assignment("chosen", &clock));
+            hooks.expect(Call::Install).await;
+            clock.advance(1).await;
+            hooks.expect(Call::Connected).await;
+            clock.advance(1).await;
+            hooks.expect(Call::Connected).await;
+            assigned_server.send(assignment("chosen", &clock));
+            hooks.expect(Call::Run).await;
+        },
+    )
+    .unwrap();
+    assert_eq!(hooks.count(Call::Install), 1);
+}
+
+#[test]
+fn unconfirmed_delivery_fails_after_its_window() {
+    let clock = TestClock::new();
+    let hooks = Hooks::default();
+    let (connect_tx, connections) = async_channel::unbounded();
+    let (standby, standby_server) = connection();
+    connect_tx.try_send(standby).unwrap();
+    let error = exercise(
+        drive(future::ready(Ok(7)), connections, &clock, &hooks, 600),
+        async {
+            hooks.expect(Call::Connected).await;
+            standby_server.send(assignment("chosen", &clock));
+            hooks.expect(Call::Install).await;
+            clock
+                .advance(DELIVERY_CONFIRMATION_WINDOW.as_secs() as i64)
+                .await;
+        },
+    )
+    .unwrap_err();
+    drop(connect_tx);
+    assert!(
+        error.to_string().contains("did not confirm delivery"),
+        "{error:#}"
+    );
+    assert_eq!(hooks.count(Call::Run), 0);
+}
+
+#[test]
+fn committed_assignment_uses_its_new_deadline() {
+    let clock = TestClock::new();
+    let hooks = Hooks::default();
+    let (release, gate) = oneshot::channel();
+    *hooks.install_gate.lock().unwrap() = Some(gate);
+    let (connect_tx, connections) = async_channel::unbounded();
+    let (connection, server) = connection();
+    connect_tx.try_send(connection).unwrap();
+    let result = exercise(
+        drive(future::ready(Ok(7)), connections, &clock, &hooks, 60),
+        async {
+            hooks.expect(Call::Connected).await;
+            server.send(assignment("chosen", &clock));
+            hooks.expect(Call::Install).await;
+            clock.advance(60).await;
+            assert!(!release.is_canceled());
+            clock.advance(600).await;
+        },
+    );
+    assert!(result.unwrap_err().to_string().contains("deadline"));
+    assert!(release.is_canceled());
+    assert_eq!(hooks.count(Call::Run), 0);
+}
+
+#[test]
+fn preparation_failure_survives_a_failed_status_report() {
     let client = FakeClient::default();
     client.state.lock().unwrap().fail_status = true;
-    let error = block_on(maintain_sandbox(
+    let clock = TestClock::new();
+    let hooks = Hooks::default();
+    let (_, connections) = async_channel::unbounded();
+    let preparation = report_preparation_outcome::<usize>(
         &client,
         "sandbox",
         "abc123",
-        future::ready(Err(AgentDriverError::WarpDriveSyncFailed)),
-        future::pending(),
-        stream::pending(),
-    ))
+        Err(AgentDriverError::WarpDriveSyncFailed),
+    );
+    let error = exercise(
+        drive(preparation, connections, &clock, &hooks, 600),
+        async {},
+    )
     .unwrap_err();
     assert!(matches!(
         error.downcast_ref::<AgentDriverError>(),
         Some(AgentDriverError::WarpDriveSyncFailed)
     ));
-    assert_eq!(
-        client.calls(),
-        [Call::Status(PrewarmedSandboxState::Failed)]
-    );
 }
 
 #[test]
-fn expiry_cancels_in_flight_preparation_without_reporting_ready() {
-    block_on(async {
-        let (events_tx, events) = async_channel::unbounded();
-        let client = FakeClient {
-            events: Some(events_tx),
-            ..Default::default()
-        };
-        let (started_tx, started_rx) = oneshot::channel();
-        let (prepared_tx, prepared_rx) = oneshot::channel();
-        let (expire_tx, expire_rx) = oneshot::channel();
-        let (ticks_tx, ticks) = futures::channel::mpsc::unbounded();
-        let lifecycle = maintain_sandbox(
-            &client,
-            "sandbox",
-            "abc123",
-            async {
-                started_tx.send(()).unwrap();
-                prepared_rx.await.unwrap()
-            },
-            expire_rx.map(|_| StandbyExit::Expired),
-            ticks,
-        );
-        let exercise = async {
-            started_rx.await.unwrap();
-            ticks_tx.unbounded_send(()).unwrap();
-            assert_eq!(events.recv().await.unwrap(), Call::Heartbeat);
-            expire_tx.send(()).unwrap();
-        };
-        let (result, ()) = futures::future::join(lifecycle, exercise)
-            .with_timeout(Duration::from_secs(5))
-            .await
-            .expect("expiry must cancel unfinished preparation");
-        result.unwrap();
-        assert!(prepared_tx.is_canceled());
-        assert_eq!(client.calls(), [Call::Heartbeat]);
-    });
-}
-
-#[test]
-fn expiry_wins_when_preparation_completes_at_the_deadline() {
-    block_on(async {
-        let client = FakeClient::default();
-        let (started_tx, started_rx) = oneshot::channel();
-        let (prepared_tx, prepared_rx) = oneshot::channel();
-        let (expire_tx, expire_rx) = oneshot::channel();
-        let lifecycle = maintain_sandbox(
-            &client,
-            "sandbox",
-            "abc123",
-            async {
-                started_tx.send(()).unwrap();
-                prepared_rx.await.unwrap()
-            },
-            expire_rx.map(|_| StandbyExit::Expired),
-            stream::pending(),
-        );
-        let exercise = async {
-            started_rx.await.unwrap();
-            prepared_tx
-                .send(Ok(PreparedSandbox {
-                    generation: "abc123".to_string(),
-                    harness_working_dir: PathBuf::from("/workspace"),
-                    deferred_repositories: Vec::new(),
-                }))
-                .unwrap();
-            expire_tx.send(()).unwrap();
-        };
-        let (result, ()) = futures::future::join(lifecycle, exercise)
-            .with_timeout(Duration::from_secs(5))
-            .await
-            .expect("expiry must take precedence over readiness");
-        result.unwrap();
-        assert!(client.calls().is_empty());
-    });
-}
-
-#[test]
-fn heartbeats_and_expiry_cover_in_flight_status_reports() {
-    for state in [PrewarmedSandboxState::Ready, PrewarmedSandboxState::Failed] {
-        block_on(async {
-            let (events_tx, events) = async_channel::unbounded();
-            let (release_tx, release_rx) = oneshot::channel();
-            let client = FakeClient {
-                state: Mutex::new(FakeClientState {
-                    status_release: Some(release_rx),
-                    ..Default::default()
-                }),
-                events: Some(events_tx),
-            };
-            let preparation = match state {
-                PrewarmedSandboxState::Ready => Ok(PreparedSandbox {
-                    generation: "abc123".to_string(),
-                    harness_working_dir: PathBuf::from("/workspace"),
-                    deferred_repositories: Vec::new(),
-                }),
-                PrewarmedSandboxState::Failed => Err(AgentDriverError::WarpDriveSyncFailed),
-            };
-            let (ticks_tx, ticks) = futures::channel::mpsc::unbounded();
-            let (expire_tx, expire_rx) = oneshot::channel();
-            let lifecycle = maintain_sandbox(
-                &client,
-                "sandbox",
-                "abc123",
-                future::ready(preparation),
-                expire_rx.map(|_| StandbyExit::Expired),
-                ticks,
-            );
-            let exercise = async {
-                assert_eq!(events.recv().await.unwrap(), Call::Status(state));
-                ticks_tx.unbounded_send(()).unwrap();
-                assert_eq!(events.recv().await.unwrap(), Call::Heartbeat);
-                expire_tx.send(()).unwrap();
-            };
-            let (result, ()) = futures::future::join(lifecycle, exercise)
-                .with_timeout(Duration::from_secs(5))
-                .await
-                .expect("a blocked status report must not block heartbeats or expiry");
-            result.unwrap();
-            assert!(release_tx.is_canceled());
-            assert_eq!(client.calls(), [Call::Status(state), Call::Heartbeat]);
-        });
-    }
-}
-
-#[test]
-fn ready_report_failure_ends_standby() {
-    let client = FakeClient::default();
-    client.state.lock().unwrap().fail_status = true;
-    let error = block_on(
-        maintain_sandbox(
-            &client,
-            "sandbox",
-            "abc123",
-            future::ready(Ok(PreparedSandbox {
-                generation: "abc123".to_string(),
-                harness_working_dir: PathBuf::from("/workspace"),
-                deferred_repositories: Vec::new(),
-            })),
-            future::pending(),
-            stream::pending(),
-        )
-        .with_timeout(Duration::from_secs(5)),
+fn stalled_connection_times_out_without_losing_preparation() {
+    let clock = TestClock::new();
+    let hooks = Hooks::default();
+    let (connect_tx, connections) = async_channel::unbounded();
+    let (standby, standby_server) = connection();
+    let (assigned, assigned_server) = connection();
+    exercise(
+        drive(future::ready(Ok(7)), connections, &clock, &hooks, 600),
+        async {
+            clock.advance(20).await;
+            connect_tx.try_send(standby).unwrap();
+            connect_tx.try_send(assigned).unwrap();
+            clock.advance(1).await;
+            hooks.expect(Call::Connected).await;
+            standby_server.send(assignment("chosen", &clock));
+            hooks.expect(Call::Install).await;
+            hooks.expect(Call::Connected).await;
+            assigned_server.send(assignment("chosen", &clock));
+            hooks.expect(Call::Run).await;
+        },
     )
-    .expect("failed readiness reporting must not leave standby idle")
-    .unwrap_err();
-    assert!(
-        error
-            .to_string()
-            .contains("workload token acquisition failed")
-    );
-    assert_eq!(client.calls(), [Call::Status(PrewarmedSandboxState::Ready)]);
+    .unwrap();
+    assert_eq!(hooks.count(Call::Install), 1);
 }
 
 #[test]
-fn heartbeats_cover_preparation_and_idle_time_and_recover_after_timeouts() {
-    block_on(async {
-        let (events_tx, events) = async_channel::unbounded();
-        let client = FakeClient {
-            events: Some(events_tx),
-            ..Default::default()
-        };
-        let (ticks_tx, ticks) = futures::channel::mpsc::unbounded();
-        let (prepared_tx, prepared_rx) = oneshot::channel();
-        let (expire_tx, expire_rx) = oneshot::channel();
-        let lifecycle = maintain_sandbox(
-            &client,
-            "sandbox",
-            "abc123",
-            async { prepared_rx.await.unwrap() },
-            expire_rx.map(|_| StandbyExit::Expired),
-            ticks,
-        );
-        let exercise = async {
-            client.state.lock().unwrap().fail_heartbeat = true;
-            for _ in 0..3 {
-                ticks_tx.unbounded_send(()).unwrap();
-                assert_eq!(events.recv().await.unwrap(), Call::Heartbeat);
-            }
-            client.state.lock().unwrap().fail_heartbeat = false;
-            prepared_tx
-                .send(Ok(PreparedSandbox {
-                    generation: "abc123".to_string(),
-                    harness_working_dir: PathBuf::from("/workspace"),
-                    deferred_repositories: Vec::new(),
-                }))
-                .unwrap();
-            assert_eq!(
-                events.recv().await.unwrap(),
-                Call::Status(PrewarmedSandboxState::Ready)
-            );
-            ticks_tx.unbounded_send(()).unwrap();
-            assert_eq!(events.recv().await.unwrap(), Call::Heartbeat);
-            expire_tx.send(()).unwrap();
-        };
-        let (result, ()) = futures::join!(lifecycle, exercise);
-        result.unwrap();
-        assert_eq!(
-            client.calls(),
-            [
-                Call::Heartbeat,
-                Call::Heartbeat,
-                Call::Heartbeat,
-                Call::Status(PrewarmedSandboxState::Ready),
-                Call::Heartbeat,
-            ]
-        );
-    });
+fn config_gone_does_not_fail_a_committed_assignment() {
+    let clock = TestClock::new();
+    let hooks = Hooks::default();
+    let (connections, incoming) = async_channel::unbounded();
+    let (standby_connection, standby) = connection();
+    let (assigned_connection, assigned) = connection();
+    connections.try_send(standby_connection).unwrap();
+    connections.try_send(assigned_connection).unwrap();
+    let (gone_tx, gone_rx) = oneshot::channel();
+    let mut info = PlatformErrorInfo::new(PlatformErrorCode::OperationNotSupported, false);
+    info.http_status = Some(410);
+    info.metadata
+        .insert("reason".into(), "prewarmed_sandbox_unavailable".into());
+    let error = TaskGitCredentialsError::Platform {
+        message: "Standby configuration is unavailable".into(),
+        detail: None,
+        info: Box::new(info),
+    };
+    let result = exercise(
+        drive_with_renewal(async { Ok(7) }, incoming, &clock, &hooks, 600, async {
+            gone_rx.await.unwrap();
+            wait_after_standby_config_rejection(error.into()).await
+        }),
+        async {
+            hooks.expect(Call::Connected).await;
+            gone_tx.send(()).unwrap();
+            clock.advance(HEARTBEAT_INTERVAL.as_secs() as i64).await;
+            standby.expect_heartbeat("abc123").await;
+            standby.send(assignment("42", &clock));
+            hooks.expect(Call::Install).await;
+            hooks.expect(Call::Connected).await;
+            assigned.send(assignment("42", &clock));
+            hooks.expect(Call::Run).await;
+        },
+    );
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(hooks.count(Call::Install), 1);
+    assert_eq!(hooks.count(Call::Run), 1);
 }

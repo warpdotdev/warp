@@ -14,6 +14,7 @@ use crate::ai::agent_sdk::driver::OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV;
 use crate::ai::agent_sdk::driver::harness::claude_transcript::{
     encode_cwd, read_envelope_with_diagnostics, write_session_index_entry,
 };
+use crate::ai::agent_sdk::test_support::EnvVarGuard;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::ai::{AIClient, MockAIClient, ReadAgentMessageResponse};
 
@@ -58,7 +59,15 @@ fn write_surfaced_parent_bridge_message(state_dir: &Path, record: &MessageBridge
 #[test]
 fn claude_command_uses_session_id_when_not_resuming() {
     let uuid = Uuid::new_v4();
-    let cmd = claude_command("claude", &uuid, "/tmp/prompt.txt", None, None, false);
+    let cmd = claude_command(
+        "claude",
+        &uuid,
+        "/tmp/prompt.txt",
+        None,
+        None,
+        false,
+        ShellType::Bash,
+    );
     assert!(
         cmd.contains(&format!("--session-id {uuid}")),
         "expected --session-id flag in non-resume command, got: {cmd}"
@@ -72,7 +81,15 @@ fn claude_command_uses_session_id_when_not_resuming() {
 #[test]
 fn claude_command_uses_resume_flag_when_resuming() {
     let uuid = Uuid::new_v4();
-    let cmd = claude_command("claude", &uuid, "/tmp/prompt.txt", None, None, true);
+    let cmd = claude_command(
+        "claude",
+        &uuid,
+        "/tmp/prompt.txt",
+        None,
+        None,
+        true,
+        ShellType::Bash,
+    );
     assert!(
         cmd.contains(&format!("--resume {uuid}")),
         "expected --resume flag in resume command, got: {cmd}"
@@ -93,6 +110,7 @@ fn claude_command_pipes_prompt_path() {
         None,
         None,
         true,
+        ShellType::Bash,
     );
     assert!(
         cmd.contains("< '/tmp/prompt with spaces.txt'"),
@@ -102,6 +120,57 @@ fn claude_command_pipes_prompt_path() {
         cmd.contains("--dangerously-skip-permissions"),
         "expected --dangerously-skip-permissions, got: {cmd}"
     );
+}
+
+#[test]
+fn claude_command_uses_powershell_prompt_pipeline() {
+    let uuid = Uuid::new_v4();
+    for resuming in [false, true] {
+        let cmd = claude_command(
+            "claude",
+            &uuid,
+            r"C:\Users\O'Brien\[工作]\prompt.txt",
+            Some(r"C:\O'Brien\system prompt.txt"),
+            Some(r"C:\O'Brien\mcp config.json"),
+            resuming,
+            ShellType::PowerShell,
+        );
+        let flag = if resuming { "--resume" } else { "--session-id" };
+        assert_eq!(
+            cmd,
+            format!(
+                "& {{ $OutputEncoding = [System.Text.UTF8Encoding]::new($false); \
+                 Get-Content -LiteralPath 'C:\\Users\\O''Brien\\[工作]\\prompt.txt' \
+                 -Raw -Encoding UTF8 | claude {flag} {uuid} --dangerously-skip-permissions \
+                 --append-system-prompt-file 'C:\\O''Brien\\system prompt.txt' \
+                 --mcp-config 'C:\\O''Brien\\mcp config.json' }}"
+            )
+        );
+    }
+}
+
+#[test]
+fn claude_command_quotes_prompt_paths_for_posix_shells() {
+    let uuid = Uuid::new_v4();
+    for (shell, prompt) in [
+        (ShellType::Bash, r#"'/tmp/a'"'"'b/prompt.txt'"#),
+        (ShellType::Zsh, r#"'/tmp/a'"'"'b/prompt.txt'"#),
+        (ShellType::Fish, r"'/tmp/a\'b/prompt.txt'"),
+    ] {
+        let cmd = claude_command(
+            "claude",
+            &uuid,
+            "/tmp/a'b/prompt.txt",
+            None,
+            None,
+            false,
+            shell,
+        );
+        assert_eq!(
+            cmd,
+            format!("claude --session-id {uuid} --dangerously-skip-permissions < {prompt}")
+        );
+    }
 }
 
 #[test]
@@ -682,12 +751,8 @@ fn prepare_claude_config_none_suffix_preserves_existing_responses() {
 #[serial_test::serial]
 fn prepare_claude_environment_config_without_config_dir_uses_home_global_config() {
     let home_dir = TempDir::new().unwrap();
-    let old_home = std::env::var_os("HOME");
-    let old_config_dir = std::env::var_os("CLAUDE_CONFIG_DIR");
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("HOME", home_dir.path()) };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::remove_var("CLAUDE_CONFIG_DIR") };
+    let _home = EnvVarGuard::set("HOME", home_dir.path());
+    let _config_dir = EnvVarGuard::remove("CLAUDE_CONFIG_DIR");
 
     let working_dir = home_dir.path().join("workspace/project");
     prepare_claude_environment_config(
@@ -715,19 +780,6 @@ fn prepare_claude_environment_config_without_config_dir_uses_home_global_config(
             .join(CLAUDE_JSON_FILE_NAME)
             .exists()
     );
-
-    match old_home {
-        // TODO: Audit that the environment access only happens in single-threaded code.
-        Some(home) => unsafe { std::env::set_var("HOME", home) },
-        // TODO: Audit that the environment access only happens in single-threaded code.
-        None => unsafe { std::env::remove_var("HOME") },
-    }
-    match old_config_dir {
-        // TODO: Audit that the environment access only happens in single-threaded code.
-        Some(dir) => unsafe { std::env::set_var("CLAUDE_CONFIG_DIR", dir) },
-        // TODO: Audit that the environment access only happens in single-threaded code.
-        None => unsafe { std::env::remove_var("CLAUDE_CONFIG_DIR") },
-    }
 }
 
 #[test]
@@ -735,12 +787,8 @@ fn prepare_claude_environment_config_without_config_dir_uses_home_global_config(
 fn prepare_claude_environment_config_with_config_dir_uses_dir_global_config() {
     let home_dir = TempDir::new().unwrap();
     let claude_config_dir = TempDir::new().unwrap();
-    let old_home = std::env::var_os("HOME");
-    let old_config_dir = std::env::var_os("CLAUDE_CONFIG_DIR");
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("HOME", home_dir.path()) };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("CLAUDE_CONFIG_DIR", claude_config_dir.path()) };
+    let _home = EnvVarGuard::set("HOME", home_dir.path());
+    let _config_dir = EnvVarGuard::set("CLAUDE_CONFIG_DIR", claude_config_dir.path());
 
     let working_dir = home_dir.path().join("workspace/project");
     prepare_claude_environment_config(
@@ -766,19 +814,6 @@ fn prepare_claude_environment_config_with_config_dir_uses_dir_global_config() {
             .exists()
     );
     assert!(!home_dir.path().join(CLAUDE_JSON_FILE_NAME).exists());
-
-    match old_home {
-        // TODO: Audit that the environment access only happens in single-threaded code.
-        Some(home) => unsafe { std::env::set_var("HOME", home) },
-        // TODO: Audit that the environment access only happens in single-threaded code.
-        None => unsafe { std::env::remove_var("HOME") },
-    }
-    match old_config_dir {
-        // TODO: Audit that the environment access only happens in single-threaded code.
-        Some(dir) => unsafe { std::env::set_var("CLAUDE_CONFIG_DIR", dir) },
-        // TODO: Audit that the environment access only happens in single-threaded code.
-        None => unsafe { std::env::remove_var("CLAUDE_CONFIG_DIR") },
-    }
 }
 
 #[test]
@@ -1028,4 +1063,69 @@ fn prepare_claude_settings_merges_existing_settings() {
         claude_settings["skipDangerousModePermissionPrompt"],
         Value::Bool(true)
     );
+}
+
+#[test]
+fn sets_manual_permission_mode_when_settings_file_is_missing() {
+    let tmp = TempDir::new().unwrap();
+    let claude_settings_path = tmp.path().join(".claude/settings.json");
+
+    set_manual_permission_mode_if_unset(&claude_settings_path).unwrap();
+
+    let claude_settings: Value =
+        serde_json::from_slice(&fs::read(claude_settings_path).unwrap()).unwrap();
+    assert_eq!(
+        claude_settings,
+        serde_json::json!({"permissions": {"defaultMode": "default"}})
+    );
+}
+
+#[test]
+fn sets_manual_permission_mode_alongside_existing_settings() {
+    let tmp = TempDir::new().unwrap();
+    let claude_settings_path = tmp.path().join("settings.json");
+    fs::write(
+        &claude_settings_path,
+        r#"{"skipDangerousModePermissionPrompt":true,"permissions":{"allow":["Bash(ls:*)"]}}"#,
+    )
+    .unwrap();
+
+    set_manual_permission_mode_if_unset(&claude_settings_path).unwrap();
+
+    let claude_settings: Value =
+        serde_json::from_slice(&fs::read(claude_settings_path).unwrap()).unwrap();
+    assert_eq!(
+        claude_settings,
+        serde_json::json!({
+            "skipDangerousModePermissionPrompt": true,
+            "permissions": {"allow": ["Bash(ls:*)"], "defaultMode": "default"},
+        })
+    );
+}
+
+#[test]
+fn keeps_a_configured_permission_mode() {
+    let tmp = TempDir::new().unwrap();
+    let claude_settings_path = tmp.path().join("settings.json");
+    let configured = r#"{"permissions":{"defaultMode":"acceptEdits"}}"#;
+    fs::write(&claude_settings_path, configured).unwrap();
+
+    set_manual_permission_mode_if_unset(&claude_settings_path).unwrap();
+
+    assert_eq!(
+        fs::read_to_string(claude_settings_path).unwrap(),
+        configured
+    );
+}
+
+#[test]
+fn leaves_settings_alone_when_permissions_is_not_an_object() {
+    let tmp = TempDir::new().unwrap();
+    let claude_settings_path = tmp.path().join("settings.json");
+    let malformed = r#"{"permissions":"allow-all"}"#;
+    fs::write(&claude_settings_path, malformed).unwrap();
+
+    set_manual_permission_mode_if_unset(&claude_settings_path).unwrap();
+
+    assert_eq!(fs::read_to_string(claude_settings_path).unwrap(), malformed);
 }

@@ -87,12 +87,17 @@ pub(crate) struct BridgeLaunch {
     /// Presented before any protocol traffic so the driver can tell the bridge from any other
     /// local client that found the endpoint.
     pub token: String,
-    /// The agent command line.
+    /// The agent command line, naming the preferred program.
     pub agent: Vec<String>,
+    /// Other names the program may be installed under, tried in order when the preferred one
+    /// is not on the shell's `PATH`.
+    #[serde(default)]
+    pub alternates: Vec<String>,
 }
 
 /// Builds the shell command that launches the agent described by `launch_file` through the
-/// bridge. The bridge is this same executable, so the command names it by path.
+/// bridge. The bridge is this same executable, so the command names it by path. Under
+/// PowerShell the bridge's output is piped into the host so the shell waits for it to exit.
 pub(crate) fn bridge_command(launch_file: &Path, shell_family: ShellFamily) -> Result<String> {
     let executable = std::env::current_exe()
         .context("Failed to locate the running executable for the ACP bridge")?;
@@ -110,25 +115,39 @@ fn render_bridge_command(
 ) -> String {
     let executable = executable.display().to_string();
     let executable = shell_family.shell_escape(&executable);
-    let invocation = match shell_family {
-        ShellFamily::Posix => executable,
-        ShellFamily::PowerShell => format!("& {executable}").into(),
-    };
-    format!(
-        "{invocation} acp-bridge --launch-file {}",
-        shell_family.shell_escape(&launch_file.display().to_string())
-    )
+    let launch_file = launch_file.display().to_string();
+    let launch_file = shell_family.shell_escape(&launch_file);
+    match shell_family {
+        ShellFamily::Posix => format!("{executable} acp-bridge --launch-file {launch_file}"),
+        // The release Windows CLI is a GUI-subsystem binary, and PowerShell only waits for one
+        // when its output is consumed by the pipeline; otherwise the block ends as soon as the
+        // bridge is spawned and the driver treats the harness as exited. The bridge's stdout is
+        // not the protocol stream on Windows (that goes over the loopback socket), only
+        // diagnostics, so piping it into the host both makes the shell wait and surfaces bridge
+        // errors in the block.
+        ShellFamily::PowerShell => {
+            format!("& {executable} acp-bridge --launch-file {launch_file} | Out-Host")
+        }
+    }
 }
 
 /// Worker-side entry point. Only returns on failure; on success the agent's exit status becomes
 /// this process's.
 pub(crate) fn run_bridge(launch_file: &Path) -> Result<()> {
     let launch = read_launch(launch_file)?;
-    let (program, args) = launch
+    let (preferred, args) = launch
         .agent
         .split_first()
         .ok_or_else(|| anyhow!("The ACP launch file names no agent command"))?;
     let stream = connect_with_token(&launch.endpoint, &launch.token)?;
+    // Resolved here, in the shell's environment, rather than by the driver: the driver's `PATH`
+    // need not match the shell's once environment setup commands have run.
+    let path_env = std::env::var_os("PATH").unwrap_or_default();
+    let program = select_agent_program(preferred, &launch.alternates, &path_env)?;
+    if program != *preferred {
+        eprintln!("oz: `{preferred}` is not on PATH, launching the ACP agent as `{program}`");
+    }
+    let program = program.as_str();
     #[cfg(unix)]
     {
         use command::unix::CommandExt as _;
@@ -141,6 +160,28 @@ pub(crate) fn run_bridge(launch_file: &Path) -> Result<()> {
         let status = relay_agent(stream, program, args, AGENT_EXIT_GRACE)?;
         std::process::exit(status.code().unwrap_or(1))
     }
+}
+
+/// The first of `preferred` and `alternates` installed on `path_env`.
+fn select_agent_program(
+    preferred: &str,
+    alternates: &[String],
+    path_env: &std::ffi::OsStr,
+) -> Result<String> {
+    let candidates = std::iter::once(preferred).chain(alternates.iter().map(String::as_str));
+    candidates
+        .clone()
+        .find(|candidate| {
+            warp_util::path::resolve_executable_in_path(candidate, path_env).is_some()
+        })
+        .map(str::to_owned)
+        .ok_or_else(|| {
+            let names = candidates
+                .map(|candidate| format!("`{candidate}`"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            anyhow!("No ACP agent found on PATH; tried {names}")
+        })
 }
 
 fn read_launch(launch_file: &Path) -> Result<BridgeLaunch> {
@@ -439,8 +480,12 @@ pub(crate) struct BridgeListener {
 
 impl BridgeListener {
     /// Starts listening and writes the launch file, with a fresh token, for the agent command
-    /// `program` `args`.
-    pub(crate) fn bind(program: &str, args: &[String]) -> Result<Self> {
+    /// `programs[0]` `args`, where the rest of `programs` are other names the bridge may find
+    /// the same agent under.
+    pub(crate) fn bind(programs: &[&str], args: &[String]) -> Result<Self> {
+        let (program, alternates) = programs
+            .split_first()
+            .ok_or_else(|| anyhow!("No ACP agent program to launch"))?;
         // The token is only as private as this directory, and on Unix so is the socket.
         // `tempfile` creates it mode 0700 there; on Windows it inherits the ACL of `%TEMP%`,
         // which is per-user by default.
@@ -453,9 +498,10 @@ impl BridgeListener {
         let launch = BridgeLaunch {
             endpoint: endpoint.clone(),
             token: token.clone(),
-            agent: std::iter::once(program.to_owned())
+            agent: std::iter::once((*program).to_owned())
                 .chain(args.iter().cloned())
                 .collect(),
+            alternates: alternates.iter().map(|name| (*name).to_owned()).collect(),
         };
         let launch_file = dir.path().join(LAUNCH_FILE_NAME);
         std::fs::write(&launch_file, serde_json::to_vec(&launch)?).with_context(|| {

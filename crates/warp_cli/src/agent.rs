@@ -481,6 +481,13 @@ pub struct RunCloudStandbyArgs {
     /// UID of the pre-warmed sandbox row this container was allocated for.
     #[arg(long = "standby-id", value_name = "ID")]
     pub standby_id: String,
+    /// Override the pre-warmed sandbox control origin.
+    #[arg(
+        long = "prewarmed-sandbox-control-url",
+        hide = true,
+        env = "WARP_PREWARMED_SANDBOX_CONTROL_URL"
+    )]
+    pub prewarmed_sandbox_control_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -569,11 +576,10 @@ pub struct RunAgentArgs {
     )]
     pub idle_on_complete: Option<humantime::Duration>,
 
-    /// Keep the agent's session open after the conversation ends in a terminal error, so a human
-    /// can attach to the failed run and debug in it. The agent process is the shared-session
-    /// sharer, so without this the session dies with the process.
+    /// Keep the session open for inspection if environment setup fails before an agent turn starts.
+    /// Runtime conversation and harness failures exit immediately.
     ///
-    /// An idle window, not a fixed one: a follow-up cancels the pending exit.
+    /// Viewer input refreshes the inspection window. Debug turns hold it open until they settle.
     ///
     /// Deliberately separate from `--idle-on-complete`, which covers the success/blocked/cancelled
     /// lifecycle. Neither flag is a fallback for the other.

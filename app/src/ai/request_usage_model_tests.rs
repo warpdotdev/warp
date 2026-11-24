@@ -2,8 +2,11 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use ai::LLMProvider;
-use ai::api_keys::{ApiKeyManager, AwsCredentials, AwsCredentialsState, GrokTokens};
-use chrono::Duration;
+use ai::api_keys::{
+    ApiKeyManager, AwsCredentials, AwsCredentialsState, CustomEndpoint, CustomEndpointDefinitions,
+    CustomEndpointModel, GrokTokens,
+};
+use chrono::{Duration, TimeZone};
 use warp_core::features::FeatureFlag;
 use warp_core::telemetry::testing::MockTelemetryContextProvider;
 use warp_graphql::billing::{AddonCreditsOption, OveragesPricing, PricingInfo};
@@ -13,6 +16,7 @@ use super::*;
 use crate::ai::credit_availability::{AICreditAvailability, AICreditDenialReason, AICreditSource};
 use crate::auth::AuthStateProvider;
 use crate::pricing::PricingInfoModel;
+use crate::server::ids::ServerId;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::ai::MockAIClient;
 use crate::server::server_api::team::MockTeamClient;
@@ -22,9 +26,10 @@ use crate::workspaces::user_workspaces::{
     TeamContextForOperation, TeamlessScopeForTest, UserWorkspaces,
 };
 use crate::workspaces::workspace::{
-    AiOverages, ByoApiKeyPolicy, CustomerType, EnterpriseCreditsAutoReloadPolicy,
-    EnterprisePayAsYouGoPolicy, HostEnablementSetting, LlmHostSettings, ManagedByokByoePolicy,
-    PurchaseAddOnCreditsPolicy, TeamByoSettings, Workspace, WorkspaceUid,
+    AiOverages, ByoApiKeyPolicy, ByoEndpointPolicy, CustomerType,
+    EnterpriseCreditsAutoReloadPolicy, EnterprisePayAsYouGoPolicy, HostEnablementSetting,
+    LlmHostSettings, ManagedByokByoePolicy, PurchaseAddOnCreditsPolicy, TeamByoSettings, Workspace,
+    WorkspaceUid,
 };
 
 fn create_test_workspace() -> (WorkspaceUid, Workspace) {
@@ -99,6 +104,40 @@ fn add_request_usage_model_without_auth(app: &mut App) -> ModelHandle<AIRequestU
     app.add_singleton_model(|ctx| {
         AIRequestUsageModel::new_for_test(ServerApiProvider::as_ref(ctx).get_ai_client(), ctx)
     })
+}
+
+/// Current-format endpoint: definition and secret are stored separately, and the secret is written
+/// only through `persist_custom_endpoint_keys`. `add_custom_endpoint` would also fill the legacy
+/// `keys.custom_endpoints` vector, which is the list the credit gate used to read.
+fn install_current_format_custom_endpoint(app: &mut App, secret: Option<&str>) {
+    let legacy = vec![CustomEndpoint {
+        name: "Endpoint".to_string(),
+        url: "https://api.example.com/v1".to_string(),
+        api_key: "endpoint-secret".to_string(),
+        schema: Default::default(),
+        models: vec![CustomEndpointModel {
+            name: "model".to_string(),
+            alias: None,
+            config_key: "config-key".to_string(),
+        }],
+    }];
+    let (definitions, mut keys) = CustomEndpointDefinitions::from_legacy(&legacy)
+        .expect("legacy endpoint should convert to a current-format definition");
+    let id = definitions.id_at(0).expect("one endpoint").clone();
+    match secret {
+        Some(secret) => {
+            keys.insert(id, secret.to_string());
+        }
+        None => {
+            keys.remove(&id);
+        }
+    }
+    ApiKeyManager::handle(app)
+        .update(app, |manager, ctx| {
+            manager.set_custom_endpoint_definitions(definitions, ctx);
+            manager.persist_custom_endpoint_keys(keys, ctx)
+        })
+        .expect("noop secure storage should persist the endpoint secret");
 }
 
 /// Registers the request usage model backed by an explicit AI client so tests
@@ -1828,6 +1867,39 @@ fn test_server_unavailable_overrides_local_byo_key() {
 }
 
 #[test]
+fn test_out_of_credits_refined_by_current_format_custom_endpoint() {
+    App::test((), |mut app| async move {
+        // The secret is stored only via `persist_custom_endpoint_keys`, so
+        // `keys.custom_endpoints` stays empty while requests already send the resolved endpoint.
+        let (_uid, mut workspace) = create_test_workspace();
+        workspace.billing_metadata.tier.byo_endpoint_policy =
+            Some(ByoEndpointPolicy { enabled: true });
+        add_user_workspaces_with_workspace(&mut app, workspace);
+        let request_usage_model = add_request_usage_model(&mut app);
+        install_current_format_custom_endpoint(&mut app, Some("endpoint-secret"));
+
+        request_usage_model.update(&mut app, |model, ctx| {
+            model.apply_server_availability(
+                Ok(AICreditAvailability::unavailable(
+                    AICreditDenialReason::OutOfCredits,
+                )),
+                ctx,
+            );
+            let manager = ApiKeyManager::as_ref(ctx);
+            assert!(
+                manager.keys().custom_endpoints.is_empty(),
+                "current-format secrets must not land on the legacy endpoint vector",
+            );
+            assert_eq!(manager.custom_endpoints()[0].api_key, "endpoint-secret");
+            assert!(
+                model.has_any_ai_remaining(&TeamlessScopeForTest, ctx),
+                "resolved custom endpoint secrets should refine out-of-credits",
+            );
+        });
+    });
+}
+
+#[test]
 fn test_availability_refresh_coalesces_concurrent_fetches() {
     App::test((), |mut app| async move {
         app.add_singleton_model(|_| AuthStateProvider::new_for_test());
@@ -1884,6 +1956,144 @@ fn test_availability_refresh_skipped_when_logged_out() {
 
         request_usage_model.read(&app, |model, _| {
             assert_eq!(model.server_availability(), None);
+        });
+    });
+}
+
+fn workspace_uid(workspace: i64) -> WorkspaceUid {
+    WorkspaceUid::from(ServerId::from(workspace))
+}
+
+fn allowances() -> Vec<WorkspaceIncludedUsage> {
+    let mut second = pool();
+    second.included_usage_credits = 2000.0;
+    vec![
+        WorkspaceIncludedUsage {
+            workspace_uid: workspace_uid(1),
+            info: pool(),
+        },
+        WorkspaceIncludedUsage {
+            workspace_uid: workspace_uid(2),
+            info: second,
+        },
+    ]
+}
+
+fn pool() -> WorkspaceIncludedUsageInfo {
+    WorkspaceIncludedUsageInfo {
+        included_usage_credits: 1234.75,
+        usage_credits_used_since_last_refresh: 250.125,
+        included_usage_cents: 10_000.0,
+        usage_cents_used_since_last_refresh: 1250.25,
+        next_refresh_time: (Utc.with_ymd_and_hms(2026, 11, 6, 0, 0, 0).unwrap()
+            + Duration::days(1))
+        .into(),
+    }
+}
+
+#[test]
+fn included_usage_refreshes_with_grants_and_selects_cached_workspaces() {
+    App::test((), |mut app| async move {
+        app.update(crate::settings::init_and_register_user_preferences);
+        app.add_singleton_model(crate::settings::PrivacySettings::mock);
+        app.add_singleton_model(crate::settings::AISettings::new_with_defaults);
+        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+        app.add_singleton_model(|ctx| {
+            let workspaces = [1, 2, 3]
+                .into_iter()
+                .map(|id| {
+                    let mut workspace = Workspace::from_local_cache(
+                        workspace_uid(id),
+                        format!("Scale {id}"),
+                        None,
+                        None,
+                    );
+                    workspace.billing_metadata.customer_type = if id == 2 {
+                        CustomerType::Business
+                    } else {
+                        CustomerType::Scale
+                    };
+                    workspace
+                })
+                .collect();
+            UserWorkspaces::mock(
+                Arc::new(MockTeamClient::new()),
+                Arc::new(MockWorkspaceClient::new()),
+                workspaces,
+                ctx,
+            )
+        });
+        let mut client = MockAIClient::new();
+        let mut sequence = mockall::Sequence::new();
+        client
+            .expect_get_request_limit_info()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|| {
+                Ok(RequestUsageInfo {
+                    request_limit_info: RequestLimitInfo::default(),
+                    bonus_grants: vec![],
+                    workspace_allowances: allowances(),
+                })
+            });
+        client
+            .expect_get_request_limit_info()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|| Err(anyhow::anyhow!("Refresh failed")));
+        client
+            .expect_get_request_limit_info()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|| {
+                Ok(RequestUsageInfo {
+                    request_limit_info: RequestLimitInfo::default(),
+                    bonus_grants: vec![],
+                    workspace_allowances: Vec::new(),
+                })
+            });
+        let model =
+            app.add_singleton_model(|ctx| AIRequestUsageModel::new_for_test(Arc::new(client), ctx));
+        assert!(
+            model
+                .update(&mut app, |model, ctx| model.refresh_request_usage(ctx))
+                .await
+                .unwrap()
+                .is_some()
+        );
+        for (id, expected) in [(2, Some(2000.0)), (1, Some(1234.75)), (3, None)] {
+            UserWorkspaces::handle(&app).update(&mut app, |workspaces, ctx| {
+                workspaces.set_current_workspace_uid(workspace_uid(id), ctx);
+            });
+            model.read(&app, |model, ctx| {
+                match (model.workspace_included_usage(ctx), expected) {
+                    (Some(info), Some(expected)) => {
+                        assert_eq!(info.included_usage_credits, expected);
+                    }
+                    (None, None) => {}
+                    _ => panic!("Workspace selection should read the cached allowance"),
+                }
+            });
+        }
+        assert!(
+            model
+                .update(&mut app, |model, ctx| model.refresh_request_usage(ctx))
+                .await
+                .unwrap()
+                .is_none()
+        );
+        model.read(&app, |model, _| {
+            assert_eq!(model.workspace_allowances.len(), 2)
+        });
+        assert!(
+            model
+                .update(&mut app, |model, ctx| model.refresh_request_usage(ctx))
+                .await
+                .unwrap()
+                .is_some()
+        );
+        model.read(&app, |model, _| {
+            assert!(model.workspace_allowances.is_empty())
         });
     });
 }

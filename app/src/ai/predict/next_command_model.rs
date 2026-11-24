@@ -800,11 +800,9 @@ pub async fn is_command_valid(
     // We assume the command is valid on parse error because
     // 1. Our completion specs are not always comprehensive (unknown args/options cause parse error)
     // 2. Our parsing logic has some bugs that need to be investigated (INT-816)
-    if classified_command.error.is_some() {
+    if let Some(error) = classified_command.error.as_ref() {
         log::debug!(
-            "Assuming command `{}` is valid because it failed to parse: {:?}",
-            expanded_command_line,
-            classified_command.error.unwrap()
+            "Assuming command `{expanded_command_line}` is valid because it failed to parse: {error:?}"
         );
         return true;
     }

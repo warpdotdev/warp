@@ -97,7 +97,7 @@ impl CloudAgentCapacityModal {
         match variant {
             CloudAgentCapacityModalVariant::ConcurrentLimit => !matches!(
                 customer_type,
-                CustomerType::Business | CustomerType::Enterprise
+                CustomerType::Business | CustomerType::Enterprise | CustomerType::Scale
             ),
             CloudAgentCapacityModalVariant::OutOfCredits => {
                 matches!(customer_type, CustomerType::Free | CustomerType::Unknown)
@@ -461,3 +461,7 @@ pub enum CloudAgentCapacityModalAction {
     Close,
     Upgrade,
 }
+
+#[cfg(test)]
+#[path = "mod_tests.rs"]
+mod tests;

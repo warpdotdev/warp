@@ -1,10 +1,22 @@
+use std::collections::HashMap;
+use std::ffi::OsString;
+use std::path::PathBuf;
+
 use chrono::{DateTime, Local};
 use instant::Instant;
+use uuid::Uuid;
 use warp_terminal::event::ObservedExitStatus;
 
 use crate::ai::agent::AIAgentActionId;
 use crate::terminal::model::block::BlockId;
 use crate::terminal::model::session::SessionId;
+
+#[derive(Clone)]
+pub struct ShellReplacementRequest {
+    pub id: Uuid,
+    pub working_directory: PathBuf,
+    pub env_vars: HashMap<OsString, OsString>,
+}
 
 #[cfg_attr(target_family = "wasm", allow(dead_code))]
 const CLOUD_SHELL_RECOVERY_GUIDANCE: &str = "This command terminated the persistent cloud shell. Warp started a replacement shell and did not replay the command. Some shell state might be lost. Do not use `exit`, `logout`, `exec`, `kill $$`, or source a script that exits. Run risky exit logic in a subshell, and use the tool result to inspect its exit code. Check the reported restored state and partial side effects before retrying.";

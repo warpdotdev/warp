@@ -350,9 +350,8 @@ impl ConversationUsageView {
         let total_usage_display_unit = effective_usage_unit(total_cost_in_cents_value, app);
 
         if self.display_mode == DisplayMode::Footer
-            && self.usage_info.credits_spent_for_last_block.is_some()
+            && let Some(last_block_credits) = self.usage_info.credits_spent_for_last_block
         {
-            let last_block_credits = self.usage_info.credits_spent_for_last_block.unwrap();
             let last_block_usage_display_unit =
                 effective_usage_unit(self.usage_info.cost_in_cents_for_last_block, app);
             labels.push(render_label_text(

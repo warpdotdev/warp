@@ -65,8 +65,8 @@ pub struct IssueTokenArgs {
 #[command(name = "issue-gcp-token")]
 pub struct IssueGcpTokenArgs {
     /// The run ID to issue the token for.
-    #[arg(long = "run-id")]
-    pub run_id: String,
+    #[arg(long = "run-id", env = crate::OZ_RUN_ID_ENV)]
+    pub run_id: Option<String>,
 
     /// Requested token lifetime (e.g. "1h", "30m").
     #[arg(long = "duration", default_value = "1h")]

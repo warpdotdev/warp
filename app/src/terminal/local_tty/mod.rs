@@ -27,3 +27,7 @@ impl event_loop::ActiveTerminal for crate::terminal::TerminalModel {
         crate::terminal::TerminalModel::exit(self, reason);
     }
 }
+
+#[cfg(test)]
+#[path = "event_loop_tests.rs"]
+mod event_loop_tests;

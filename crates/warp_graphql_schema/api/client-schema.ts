@@ -49,6 +49,7 @@ const clientMutations = [
   'removeObjectLinkPermissions',
   'removeUserFromTeam',
   'renameTeam',
+  'reportHarnessTransport',
   'resetInviteLinks',
   'sendOnboardingSurveyResponses',
   'sendReferralInviteEmails',

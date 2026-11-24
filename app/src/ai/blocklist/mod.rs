@@ -10,6 +10,7 @@ pub(crate) mod conversation_selection;
 pub(crate) mod diff_storage;
 pub(crate) mod diff_types;
 pub(crate) mod handoff;
+pub(crate) mod hooks;
 
 pub(crate) mod local_agent_task_sync_model;
 pub(crate) mod orchestration_child_tracker;
@@ -144,7 +145,7 @@ pub use persistence::maybe_build_ai_query_upsert_event;
 pub(crate) use persistence::{PersistedAIInput, SerializedBlockListItem};
 pub(crate) use queued_query::{
     AutofireAction, QueuedPromptDeliveryMode, QueuedQuery, QueuedQueryId, QueuedQueryOrigin,
-    is_lrc_auto_queue_active,
+    is_lrc_auto_queue_active, is_prompt_steering_enabled,
 };
 #[cfg_attr(not(feature = "tui"), allow(unused_imports))]
 pub use queued_query::{QueuedQueryEvent, QueuedQueryModel};

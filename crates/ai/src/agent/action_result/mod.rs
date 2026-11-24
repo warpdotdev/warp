@@ -109,6 +109,12 @@ pub enum AIAgentActionResultType {
     /// Result of the client-side wait_for_events watchdog or inbound
     /// resume.
     WaitForEvents(WaitForEventsResult),
+
+    /// An agent hook denied the action before it ran. Unlike the other variants this is not tied
+    /// to one tool: any action can finish with it. `reason` is shown to the model.
+    DeniedByHook {
+        reason: String,
+    },
 }
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 pub struct ReadFilesFailedFile {
@@ -188,6 +194,9 @@ impl Display for AIAgentActionResultType {
             AIAgentActionResultType::AskUserQuestion(result) => result.fmt(f),
             AIAgentActionResultType::RunAgents(result) => result.fmt(f),
             AIAgentActionResultType::WaitForEvents(result) => result.fmt(f),
+            AIAgentActionResultType::DeniedByHook { reason } => {
+                write!(f, "Denied by an agent hook: {reason}")
+            }
             AIAgentActionResultType::OpenCodeReview | AIAgentActionResultType::InitProject => {
                 Ok(())
             }
@@ -906,6 +915,9 @@ impl AIAgentActionResultType {
             AIAgentActionResultType::WaitForEvents(_) => {
                 "The local watchdog timed out while waiting for inbound events"
             }
+            AIAgentActionResultType::DeniedByHook { .. } => {
+                "The reason an agent hook denied the action"
+            }
         }
     }
 
@@ -966,6 +978,7 @@ impl AIAgentActionResultType {
             | Self::FileGlobV2(FileGlobV2Result::Error(_))
             | Self::ReadMCPResource(ReadMCPResourceResult::Error(_))
             | Self::CallMCPTool(CallMCPToolResult::Error(_))
+            | Self::ReadSkill(ReadSkillResult::Error(_))
             | Self::ReadDocuments(ReadDocumentsResult::Error(_))
             | Self::EditDocuments(EditDocumentsResult::Error(_))
             | Self::CreateDocuments(CreateDocumentsResult::Error(_))
@@ -983,9 +996,8 @@ impl AIAgentActionResultType {
             | Self::TransferShellCommandControlToUser(
                 TransferShellCommandControlToUserResult::Error(_),
             )
-            | Self::RunAgents(RunAgentsResult::Failure { .. } | RunAgentsResult::Denied { .. }) => {
-                true
-            }
+            | Self::RunAgents(RunAgentsResult::Failure { .. } | RunAgentsResult::Denied { .. })
+            | Self::DeniedByHook { .. } => true,
             Self::RunAgents(RunAgentsResult::Launched { agents, .. }) => agents
                 .iter()
                 .all(|agent| matches!(agent.kind, RunAgentsAgentOutcomeKind::Failed { .. })),
