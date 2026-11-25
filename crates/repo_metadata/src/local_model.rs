@@ -947,7 +947,7 @@ impl LocalRepoMetadataModel {
             );
             if let Some(ref watcher) = self.watcher {
                 let watch_path = local_path.clone();
-                // Build the gitignore set (root + global) and force-included
+                // Build the gitignore set and force-included
                 // path list so the descend filter prunes gitignored subtrees
                 // while still watching registered force-included paths (e.g.
                 // skills).

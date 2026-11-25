@@ -1,10 +1,15 @@
 use std::fs;
 use std::future::Future;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use ignore::gitignore::Gitignore;
+use virtual_fs::{Stub, VirtualFS};
 
-use super::{Entry, IgnoredPathStrategy, matches_gitignores};
+use super::{
+    Entry, IgnoredPathStrategy, gitignores_for_directory, matches_gitignores,
+    should_watch_repo_directory,
+};
 #[cfg(unix)]
 use crate::StandingQueryContent;
 use crate::{StandingQueryDefinitions, StandingQueryResults};
@@ -1317,4 +1322,104 @@ fn build_tree_fail_fast_succeeds_within_budget() {
         super::BudgetExceededBehavior::FailFast,
     ));
     assert!(result.is_ok(), "FailFast must succeed when within budget");
+}
+
+fn is_ignored(path: &Path, gitignores: &[Arc<Gitignore>]) -> bool {
+    matches_gitignores(path, path.is_dir(), gitignores, true)
+}
+
+#[test]
+fn gitignores_for_directory_reads_git_info_exclude() {
+    VirtualFS::test("info_exclude", |dirs, mut vfs| {
+        vfs.mkdir(".git/info")
+            .mkdir("excluded-dir")
+            .mkdir("src")
+            .with_files(vec![Stub::FileWithContent(
+                ".git/info/exclude",
+                "excluded-dir/",
+            )]);
+        let root = dirs.tests();
+
+        let gitignores = gitignores_for_directory(root);
+        assert!(is_ignored(&root.join("excluded-dir"), &gitignores));
+        assert!(is_ignored(
+            &root.join("excluded-dir/nested/file.rs"),
+            &gitignores
+        ));
+        assert!(!is_ignored(&root.join("src"), &gitignores));
+    });
+}
+
+#[test]
+fn gitignores_for_directory_ignores_info_exclude_outside_a_repository() {
+    VirtualFS::test("info_exclude_outside_repo", |dirs, mut vfs| {
+        vfs.mkdir("info")
+            .mkdir("excluded-dir")
+            .with_files(vec![Stub::FileWithContent("info/exclude", "excluded-dir/")]);
+        let root = dirs.tests();
+
+        assert!(!is_ignored(
+            &root.join("excluded-dir"),
+            &gitignores_for_directory(root)
+        ));
+    });
+}
+
+/// A linked worktree shares the main repository's `info/exclude` (via its gitfile and
+/// `commondir`), and each working tree matches it relative to its own root.
+#[test]
+fn gitignores_for_directory_reads_shared_info_exclude_from_linked_worktree() {
+    VirtualFS::test("info_exclude_linked_worktree", |dirs, mut vfs| {
+        vfs.mkdir("main/.git/info")
+            .mkdir("main/.git/worktrees/linked")
+            .mkdir("main/build")
+            .mkdir("linked/build")
+            .mkdir("linked/src")
+            .with_files(vec![
+                Stub::FileWithContent("main/.git/info/exclude", "build/"),
+                Stub::FileWithContent("main/.git/worktrees/linked/commondir", "../.."),
+                Stub::FileWithContent("linked/.git", "gitdir: ../main/.git/worktrees/linked"),
+            ]);
+        let main = dirs.tests().join("main");
+        let linked = dirs.tests().join("linked");
+
+        assert!(is_ignored(
+            &main.join("build"),
+            &gitignores_for_directory(&main)
+        ));
+        let linked_gitignores = gitignores_for_directory(&linked);
+        assert!(is_ignored(&linked.join("build"), &linked_gitignores));
+        assert!(!is_ignored(&linked.join("src"), &linked_gitignores));
+    });
+}
+
+/// Mirrors a checkout that keeps agent worktrees under `.claude/worktrees` and ignores `.claude`
+/// only through `info/exclude`: the watcher must not descend into those worktrees, while the
+/// force-included `.claude/skills` is still watched.
+#[test]
+fn repo_watcher_prunes_directories_excluded_by_git_info_exclude() {
+    VirtualFS::test("info_exclude_watch", |dirs, mut vfs| {
+        vfs.mkdir(".git/info")
+            .mkdir(".claude/worktrees/feature/src")
+            .mkdir(".claude/skills/my-skill")
+            .mkdir("src")
+            .with_files(vec![Stub::FileWithContent(".git/info/exclude", ".claude")]);
+        let root = dirs.tests();
+
+        let gitignores = gitignores_for_directory(root);
+        let force_included_paths = [PathBuf::from(".claude/skills")];
+        let should_watch = |relative: &str| {
+            should_watch_repo_directory(
+                &root.join(relative),
+                root,
+                &gitignores,
+                &force_included_paths,
+            )
+        };
+
+        assert!(should_watch("src"));
+        assert!(!should_watch(".claude/worktrees"));
+        assert!(!should_watch(".claude/worktrees/feature/src"));
+        assert!(should_watch(".claude/skills/my-skill"));
+    });
 }

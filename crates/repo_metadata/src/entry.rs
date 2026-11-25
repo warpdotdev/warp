@@ -1070,7 +1070,7 @@ fn is_within_symlink(path: &Path, repo_root: &Path) -> bool {
 /// force-included paths) so the recursive walk does not register watches on
 /// gitignored subtrees.
 ///
-/// `gitignores` should be the repo's root + global gitignores (as produced by
+/// `gitignores` should be the repo root's ignore set (as produced by
 /// [`gitignores_for_directory`]), matching `Repository::check_gitignore_status`
 /// so descend decisions and the downstream `is_ignored` tagging stay
 /// consistent. Nested per-directory `.gitignore` files are not consulted here
@@ -1097,17 +1097,55 @@ pub fn is_file_parsable(path: &Path) -> Result<bool, io::Error> {
     std::fs::metadata(path).map(|metadata| (metadata.len() as usize) < MAX_FILE_SIZE)
 }
 
+/// Returns the ignore matchers that apply to `directory_path` as a whole: its own `.gitignore`,
+/// the repository's `info/exclude` when `directory_path` is the root of a git working tree, and
+/// the user's global gitignore.
+///
+/// Nested per-directory `.gitignore` files are not included.
 pub fn gitignores_for_directory(directory_path: &Path) -> Vec<Arc<Gitignore>> {
     let mut gitignores = Vec::new();
     let gitignore_path = directory_path.join(".gitignore");
     if gitignore_path.exists() {
         gitignores.push(gitignore_cache::get_or_parse(&gitignore_path));
     }
+    gitignores.extend(git_info_exclude_for_directory(directory_path));
     let (global_gitignore, _) = Gitignore::global();
     if !global_gitignore.is_empty() {
         gitignores.push(Arc::new(global_gitignore));
     }
     gitignores
+}
+
+/// Returns a matcher for the `info/exclude` file of the git repository whose working tree root is
+/// `working_tree`, if there is one. Its patterns are relative to the working tree, not to the git
+/// directory the file lives in.
+pub fn git_info_exclude_for_directory(working_tree: &Path) -> Option<Arc<Gitignore>> {
+    git_info_exclude_path(working_tree)
+        .map(|exclude_path| gitignore_cache::get_or_parse_rooted(&exclude_path, working_tree))
+}
+
+/// Linked worktrees share the main repository's `info/exclude`, found through the `commondir` file
+/// (relative to the worktree's git directory).
+fn git_info_exclude_path(working_tree: &Path) -> Option<PathBuf> {
+    let dot_git = working_tree.join(".git");
+    let git_dir = if dot_git.is_dir() {
+        dot_git
+    } else {
+        parse_gitfile(&std::fs::read_to_string(&dot_git).ok()?, working_tree)?
+    };
+    let common_dir = match std::fs::read_to_string(git_dir.join("commondir")) {
+        Ok(commondir) => git_dir.join(commondir.trim()),
+        Err(_) => git_dir,
+    };
+    let exclude_path = common_dir.join("info").join("exclude");
+    exclude_path.is_file().then_some(exclude_path)
+}
+
+/// Parses the contents of a `.git` gitfile (`gitdir: <path>`), as used by linked worktrees and
+/// submodules, resolving a relative path against `working_tree`.
+pub(crate) fn parse_gitfile(contents: &str, working_tree: &Path) -> Option<PathBuf> {
+    let gitdir = contents.trim().strip_prefix("gitdir:")?.trim();
+    Some(working_tree.join(gitdir))
 }
 
 #[derive(Debug, Clone)]
