@@ -51,8 +51,7 @@ fn rereads_worker_credentials_for_the_bound_run() {
                     "execution_id": 42,
                     "port": 3000,
                 })))
-                .with_status(200)
-                .with_body(allowed_response().to_string())
+                .with_status(204)
                 .create()
         };
 
@@ -83,7 +82,6 @@ async fn authorize(server: &mockito::ServerGuard) -> Result<()> {
     send_ingress_validation(
         Url::parse(&format!("{}/authorize", server.url())).unwrap(),
         headers,
-        PREVIEW_ID,
         IngressRequest {
             ingress_token: "Bearer ingress",
             execution_id: 42,
@@ -91,16 +89,6 @@ async fn authorize(server: &mockito::ServerGuard) -> Result<()> {
         },
     )
     .await
-}
-
-fn allowed_response() -> serde_json::Value {
-    json!({
-        "allowed": true,
-        "preview_id": PREVIEW_ID,
-        "execution_id": 42,
-        "port": 3000,
-        "valid_until": "2100-01-01T00:00:00Z",
-    })
 }
 
 #[tokio::test]
@@ -117,8 +105,7 @@ async fn separates_worker_headers_from_ingress_token_body() {
             "execution_id": 42,
             "port": 3000,
         })))
-        .with_status(200)
-        .with_body(allowed_response().to_string())
+        .with_status(204)
         .create_async()
         .await;
 
@@ -139,8 +126,7 @@ async fn rejects_same_origin_redirects_without_resending_ingress_tokens() {
     let recipient = server
         .mock("POST", "/credential-recipient")
         .expect(0)
-        .with_status(200)
-        .with_body(allowed_response().to_string())
+        .with_status(204)
         .create_async()
         .await;
 
@@ -151,50 +137,19 @@ async fn rejects_same_origin_redirects_without_resending_ingress_tokens() {
 }
 
 #[tokio::test]
-async fn rejects_unbound_denied_expired_or_malformed_responses() {
+async fn rejects_every_status_except_no_content() {
     let mut server = mockito::Server::new_async().await;
-    let valid = allowed_response();
-    for (field, value) in [
-        ("allowed", json!(false)),
-        ("preview_id", json!(Uuid::nil())),
-        ("execution_id", json!(43)),
-        ("port", json!(3001)),
-        ("valid_until", json!("2000-01-01T00:00:00Z")),
+    for status in [
+        200, 201, 202, 206, 301, 307, 400, 401, 403, 404, 429, 500, 503,
     ] {
-        let mut body = valid.clone();
-        body[field] = value;
         let response = server
             .mock("POST", "/authorize")
-            .with_status(200)
-            .with_body(body.to_string())
+            .with_status(status)
             .create_async()
             .await;
 
-        assert!(authorize(&server).await.is_err(), "{field}");
-
+        assert!(authorize(&server).await.is_err(), "{status}");
+        response.assert_async().await;
         response.remove_async().await;
     }
-    let malformed = server
-        .mock("POST", "/authorize")
-        .with_status(200)
-        .with_body("{}")
-        .create_async()
-        .await;
-    assert!(authorize(&server).await.is_err());
-    malformed.assert_async().await;
-}
-
-#[tokio::test]
-async fn bounds_callback_response_size() {
-    let mut server = mockito::Server::new_async().await;
-    let response = server
-        .mock("POST", "/authorize")
-        .with_status(200)
-        .with_body(" ".repeat(MAX_RESPONSE_BYTES + 1))
-        .create_async()
-        .await;
-
-    assert!(authorize(&server).await.is_err());
-
-    response.assert_async().await;
 }

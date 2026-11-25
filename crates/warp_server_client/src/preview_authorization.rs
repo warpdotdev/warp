@@ -2,17 +2,14 @@ use std::sync::LazyLock;
 use std::time::Duration;
 
 use anyhow::{Context, Result, ensure};
-use chrono::{DateTime, Utc};
-use futures::StreamExt;
 use http::HeaderValue;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use url::Url;
 use uuid::Uuid;
 use warp_core::channel::ChannelState;
 
 use super::{AMBIENT_WORKLOAD_TOKEN_HEADER, AmbientHeaderPolicy, BaseClient};
 
-const MAX_RESPONSE_BYTES: usize = 4096;
 static AUTHORIZATION_CLIENT: LazyLock<Result<reqwest::Client, reqwest::Error>> =
     LazyLock::new(|| {
         reqwest::Client::builder()
@@ -26,15 +23,6 @@ struct IngressRequest<'a> {
     ingress_token: &'a str,
     execution_id: i64,
     port: u16,
-}
-
-#[derive(Deserialize)]
-struct IngressResponse {
-    allowed: bool,
-    preview_id: Uuid,
-    execution_id: i64,
-    port: u16,
-    valid_until: DateTime<Utc>,
 }
 
 impl BaseClient {
@@ -111,7 +99,6 @@ impl BaseClient {
         send_ingress_validation(
             url,
             headers,
-            preview_id,
             IngressRequest {
                 ingress_token,
                 execution_id,
@@ -125,7 +112,6 @@ impl BaseClient {
 async fn send_ingress_validation(
     url: Url,
     headers: reqwest::header::HeaderMap,
-    preview_id: Uuid,
     body: IngressRequest<'_>,
 ) -> Result<()> {
     let client = AUTHORIZATION_CLIENT
@@ -139,28 +125,7 @@ async fn send_ingress_validation(
         .await
         .map_err(|_| anyhow::anyhow!("Preview ingress validation request failed"))?;
     ensure!(
-        response.status() == reqwest::StatusCode::OK,
-        "Ingress token rejected"
-    );
-    let mut bytes = Vec::new();
-    let mut stream = response.bytes_stream();
-    while let Some(chunk) = stream.next().await {
-        let chunk =
-            chunk.map_err(|_| anyhow::anyhow!("Invalid preview ingress validation response"))?;
-        ensure!(
-            bytes.len() + chunk.len() <= MAX_RESPONSE_BYTES,
-            "Ingress validation response too large"
-        );
-        bytes.extend_from_slice(&chunk);
-    }
-    let response: IngressResponse = serde_json::from_slice(&bytes)
-        .map_err(|_| anyhow::anyhow!("Invalid preview ingress validation response"))?;
-    ensure!(
-        response.allowed
-            && response.preview_id == preview_id
-            && response.execution_id == body.execution_id
-            && response.port == body.port
-            && response.valid_until > Utc::now(),
+        response.status() == reqwest::StatusCode::NO_CONTENT,
         "Ingress token rejected"
     );
     Ok(())
