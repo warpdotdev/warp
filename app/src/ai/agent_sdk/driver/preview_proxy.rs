@@ -4,7 +4,7 @@ use std::thread::JoinHandle;
 
 #[cfg(not(target_family = "wasm"))]
 use ::preview_proxy::IngressTokenValidation;
-use ::preview_proxy::{CredentialPolicy, PortSource, PreviewRecord, Proxy};
+use ::preview_proxy::{PortSource, PreviewRecord, Proxy};
 use anyhow::Context as _;
 use tokio_util::sync::CancellationToken;
 use url::Url;
@@ -31,12 +31,10 @@ fn listener_port(value: &str) -> anyhow::Result<u16> {
     Ok(port)
 }
 
-fn credential_policy(platform: Option<IsolationPlatformType>) -> anyhow::Result<CredentialPolicy> {
+fn validate_platform(platform: Option<IsolationPlatformType>) -> anyhow::Result<()> {
     match platform {
         #[cfg(not(target_family = "wasm"))]
-        Some(IsolationPlatformType::Namespace) => Ok(CredentialPolicy::Namespace),
-        #[cfg(not(target_family = "wasm"))]
-        Some(IsolationPlatformType::DockerSandbox) => Ok(CredentialPolicy::DockerSandbox),
+        Some(IsolationPlatformType::Namespace | IsolationPlatformType::DockerSandbox) => Ok(()),
         #[cfg(not(target_family = "wasm"))]
         Some(IsolationPlatformType::Docker | IsolationPlatformType::Kubernetes) => {
             anyhow::bail!("Preview proxy requires a supported hosted sandbox")
@@ -51,7 +49,7 @@ impl Manager {
         execution_id: Option<&str>,
         client: Arc<dyn AIClient>,
     ) -> anyhow::Result<Self> {
-        let policy = credential_policy(warp_isolation_platform::detect())?;
+        validate_platform(warp_isolation_platform::detect())?;
         let execution_id = execution_id
             .context("Preview proxy requires an execution ID")?
             .parse::<i64>()
@@ -79,9 +77,7 @@ impl Manager {
                         execution_id,
                         client,
                     });
-                    let mut proxy = match Proxy::bind_with_policy(port, Arc::clone(&source), policy)
-                        .await
-                    {
+                    let mut proxy = match Proxy::bind(port, Arc::clone(&source)).await {
                         Ok(proxy) => proxy,
                         Err(error) => {
                             log::error!(

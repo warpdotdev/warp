@@ -28,18 +28,12 @@ async fn proxy_route_discovery_advertises_authorization() {
 
 #[test]
 #[cfg(not(target_family = "wasm"))]
-fn only_docker_sandbox_requires_ingress_tokens() {
-    assert!(matches!(
-        credential_policy(Some(IsolationPlatformType::DockerSandbox)).unwrap(),
-        CredentialPolicy::DockerSandbox
-    ));
-    assert!(matches!(
-        credential_policy(Some(IsolationPlatformType::Namespace)).unwrap(),
-        CredentialPolicy::Namespace
-    ));
-    assert!(credential_policy(Some(IsolationPlatformType::Docker)).is_err());
-    assert!(credential_policy(Some(IsolationPlatformType::Kubernetes)).is_err());
-    assert!(credential_policy(None).is_err());
+fn only_hosted_sandboxes_support_preview_proxy() {
+    assert!(validate_platform(Some(IsolationPlatformType::DockerSandbox)).is_ok());
+    assert!(validate_platform(Some(IsolationPlatformType::Namespace)).is_ok());
+    assert!(validate_platform(Some(IsolationPlatformType::Docker)).is_err());
+    assert!(validate_platform(Some(IsolationPlatformType::Kubernetes)).is_err());
+    assert!(validate_platform(None).is_err());
 }
 
 #[test]
