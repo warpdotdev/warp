@@ -1,0 +1,80 @@
+name: Sync fork with upstream
+
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: sync-upstream
+
+jobs:
+  sync:
+    # Fork-only: never run in warpdotdev/warp if this file leaks into an upstream PR.
+    if: github.repository == 'enizvk/ekwarp'
+    runs-on: ubuntu-latest
+    env:
+      REPO: ${{ github.repository }}
+      BRANCH: master
+    steps:
+      - name: Merge upstream
+        id: merge
+        env:
+          # GITHUB_TOKEN can't push upstream changes to .github/workflows, so this needs a PAT.
+          GH_TOKEN: ${{ secrets.UPSTREAM_SYNC_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::Secret UPSTREAM_SYNC_TOKEN is not set."
+            exit 1
+          fi
+          before=$(gh api "repos/$REPO/commits/$BRANCH" --jq .sha)
+          result=$(gh api -X POST "repos/$REPO/merge-upstream" -f branch="$BRANCH")
+          after=$(gh api "repos/$REPO/commits/$BRANCH" --jq .sha)
+          {
+            echo "before=$before"
+            echo "after=$after"
+            echo "merge_type=$(jq -r .merge_type <<<"$result")"
+            echo "message=$(jq -r .message <<<"$result")"
+          } >> "$GITHUB_OUTPUT"
+          jq -r .message <<<"$result"
+
+      - name: Notify
+        if: steps.merge.outputs.merge_type != 'none'
+        env:
+          # Bot author on purpose: GitHub doesn't notify you about issues you create yourself.
+          GH_TOKEN: ${{ github.token }}
+          BEFORE: ${{ steps.merge.outputs.before }}
+          AFTER: ${{ steps.merge.outputs.after }}
+          MESSAGE: ${{ steps.merge.outputs.message }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          compare=$(gh api "repos/$REPO/compare/$BEFORE...$AFTER")
+          total=$(jq .total_commits <<<"$compare")
+          compare_url="$GITHUB_SERVER_URL/$REPO/compare/$BEFORE...$AFTER"
+
+          # Fenced block keeps upstream "#123" refs and @mentions from linking or pinging anyone.
+          {
+            echo "**$total new commits** on \`$BRANCH\`. $MESSAGE"
+            echo
+            echo "[View diff]($compare_url) · cc @$OWNER"
+            echo
+            echo '```text'
+            jq -r '.commits | reverse | .[:100][] | "\(.sha[0:8]) \(.commit.message | split("\n")[0])"' <<<"$compare"
+            if [ "$total" -gt 100 ]; then echo "... and $((total - 100)) more"; fi
+            echo '```'
+          } > body.md
+
+          gh label create upstream-sync --repo "$REPO" --color 0E8A16 \
+            --description "Upstream sync notifications" --force > /dev/null
+          issue=$(gh issue list --repo "$REPO" --label upstream-sync --state open \
+            --limit 1 --json number --jq '.[0].number // empty')
+          if [ -n "$issue" ]; then
+            gh issue comment "$issue" --repo "$REPO" --body-file body.md
+          else
+            gh issue create --repo "$REPO" --title "Upstream changes synced" \
+              --label upstream-sync --body-file body.md
+          fi
