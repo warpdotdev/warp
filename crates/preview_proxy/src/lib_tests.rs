@@ -37,19 +37,17 @@ impl PortSource for IngressPorts {
 }
 
 #[tokio::test]
-async fn docker_validates_ingress_token_before_each_http_request_and_upgrade() {
+async fn validates_ingress_token_before_each_http_request_and_upgrade() {
     let (app_port, app_task) = app().await;
     let source = Arc::new(IngressPorts {
         port: app_port,
         allowed: AtomicBool::new(true),
     });
-    let mut proxy = Proxy::bind_with_policy(0, source.clone(), CredentialPolicy::DockerSandbox)
-        .await
-        .unwrap();
-    let mut stream = request(
+    let mut proxy = Proxy::bind(0, source.clone()).await.unwrap();
+    let mut stream = request_without_default_token(
         proxy.port(),
         app_port,
-        "Connection: close\r\nX-Warp-Preview-Ingress-Token: Bearer ingress\r\nX-Warp-Preview-Authorization: Bearer viewer\r\nAuthorization: Bearer application\r\nCookie: app=visible; __Host-warp_preview_viewer=hidden\r\n",
+        "Connection: close\r\nX-Warp-Preview-Ingress-Token: Bearer ingress\r\nX-Warp-Preview-Authorization: Bearer viewer\r\nX-Nsc-Ingress-Auth: Bearer namespace-secret\r\nAuthorization: Bearer application\r\nCookie: app=visible; __Host-warp_preview_viewer=hidden; __Host-warp_preview_warp_ingress=warp-cookie\r\n",
     )
     .await;
     let mut response = String::new();
@@ -59,18 +57,20 @@ async fn docker_validates_ingress_token_before_each_http_request_and_upgrade() {
     assert!(response.contains("app=visible"), "{response}");
     assert!(!response.contains("Bearer viewer"), "{response}");
     assert!(!response.contains("Bearer ingress"), "{response}");
+    assert!(!response.contains("namespace-secret"), "{response}");
+    assert!(!response.contains("warp-cookie"), "{response}");
     assert!(!response.contains("hidden"), "{response}");
     assert!(!response.contains("x-warp-preview-"), "{response}");
 
     source.allowed.store(false, Ordering::SeqCst);
-    let mut stream = request(
+    let mut stream = request_without_default_token(
         proxy.port(),
         app_port,
         "Connection: close\r\nX-Warp-Preview-Ingress-Token: Bearer ingress\r\n",
     )
     .await;
     assert!(headers(&mut stream).await.starts_with("HTTP/1.1 403"));
-    let mut upgrade = request(
+    let mut upgrade = request_without_default_token(
         proxy.port(),
         app_port,
         "Connection: upgrade\r\nUpgrade: websocket\r\nX-Warp-Preview-Ingress-Token: Bearer ingress\r\n",
@@ -82,19 +82,19 @@ async fn docker_validates_ingress_token_before_each_http_request_and_upgrade() {
 }
 
 #[tokio::test]
-async fn docker_rejects_missing_malformed_and_duplicate_ingress_tokens() {
+async fn rejects_missing_malformed_and_duplicate_ingress_tokens() {
     let target = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
     let app_port = target.local_addr().unwrap().port();
     let source = Arc::new(IngressPorts {
         port: app_port,
         allowed: AtomicBool::new(true),
     });
-    let mut proxy = Proxy::bind_with_policy(0, source, CredentialPolicy::DockerSandbox)
-        .await
-        .unwrap();
+    let mut proxy = Proxy::bind(0, source).await.unwrap();
     for extra in [
         "",
         "X-Warp-Preview-Authorization: Bearer viewer\r\n",
+        "X-Nsc-Ingress-Auth: Bearer namespace\r\n",
+        "Connection: upgrade\r\nUpgrade: websocket\r\n",
         "X-Warp-Preview-Ingress-Token:\r\n",
         "X-Warp-Preview-Ingress-Token: Basic ingress\r\n",
         "X-Warp-Preview-Ingress-Token: Bearer\r\n",
@@ -103,16 +103,16 @@ async fn docker_rejects_missing_malformed_and_duplicate_ingress_tokens() {
         "X-Warp-Preview-Ingress-Token: Bearer ingress\r\nX-Warp-Preview-Ingress-Token: Bearer ingress\r\n",
         "X-Warp-Preview-Ingress-Token: Bearer wrong-ingress\r\n",
     ] {
-        let mut stream = request(proxy.port(), app_port, extra).await;
+        let mut stream = request_without_default_token(proxy.port(), app_port, extra).await;
         assert!(headers(&mut stream).await.starts_with("HTTP/1.1 403"));
     }
     let oversized = format!(
         "X-Warp-Preview-Ingress-Token: Bearer {}\r\n",
         "a".repeat(MAX_INGRESS_TOKEN_BYTES)
     );
-    let mut stream = request(proxy.port(), app_port, &oversized).await;
+    let mut stream = request_without_default_token(proxy.port(), app_port, &oversized).await;
     assert!(headers(&mut stream).await.starts_with("HTTP/1.1 403"));
-    let mut nominated = request(
+    let mut nominated = request_without_default_token(
         proxy.port(),
         app_port,
         "Connection: x-warp-preview-ingress-token\r\nX-Warp-Preview-Ingress-Token: Bearer ingress\r\n",
@@ -127,11 +127,20 @@ async fn docker_rejects_missing_malformed_and_duplicate_ingress_tokens() {
 }
 
 #[tokio::test]
-async fn namespace_rejects_supplied_ingress_tokens_when_validator_is_unavailable() {
+async fn rejects_ingress_tokens_when_validator_is_unavailable() {
+    struct UnavailableValidator(u16);
+
+    impl PortSource for UnavailableValidator {
+        async fn previews(&self) -> Result<Vec<PreviewRecord>> {
+            Ok(vec![preview(self.0)])
+        }
+    }
     let target = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
     let app_port = target.local_addr().unwrap().port();
-    let mut proxy = Proxy::bind(0, Ports::new(vec![app_port])).await.unwrap();
-    let mut stream = request(
+    let mut proxy = Proxy::bind(0, Arc::new(UnavailableValidator(app_port)))
+        .await
+        .unwrap();
+    let mut stream = request_without_default_token(
         proxy.port(),
         app_port,
         "X-Warp-Preview-Ingress-Token: Bearer ingress\r\n",
@@ -166,6 +175,13 @@ pub(super) fn preview(port: u16) -> PreviewRecord {
 }
 
 impl PortSource for Ports {
+    async fn validate_ingress_token(&self, request: IngressTokenValidation<'_>) -> Result<()> {
+        anyhow::ensure!(
+            request.ingress_token == "Bearer ingress",
+            "Ingress token rejected"
+        );
+        Ok(())
+    }
     async fn previews(&self) -> Result<Vec<PreviewRecord>> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         if self.pause.load(Ordering::SeqCst) {
@@ -207,6 +223,20 @@ pub(super) async fn request_with_origin(
     origin: Option<&str>,
     extra: &str,
 ) -> TcpStream {
+    let extra = format!("X-Warp-Preview-Ingress-Token: Bearer ingress\r\n{extra}");
+    request_with_headers(proxy_port, app_port, origin, &extra).await
+}
+
+async fn request_without_default_token(proxy_port: u16, app_port: u16, extra: &str) -> TcpStream {
+    request_with_headers(proxy_port, app_port, None, extra).await
+}
+
+async fn request_with_headers(
+    proxy_port: u16,
+    app_port: u16,
+    origin: Option<&str>,
+    extra: &str,
+) -> TcpStream {
     let mut stream = TcpStream::connect((Ipv4Addr::LOCALHOST, proxy_port))
         .await
         .unwrap();
@@ -239,7 +269,8 @@ async fn request_with_identity(
         .write_all(
             format!(
                 "GET /path?q=preserved HTTP/1.1\r\nHost: ingress.invalid\r\n\
-                 X-Warp-Preview-ID: {id}\r\nX-Warp-Preview-Port: {route_port}\r\n{extra}\r\n"
+                 X-Warp-Preview-ID: {id}\r\nX-Warp-Preview-Port: {route_port}\r\n\
+                 X-Warp-Preview-Ingress-Token: Bearer ingress\r\n{extra}\r\n"
             )
             .as_bytes(),
         )
@@ -396,6 +427,7 @@ async fn translates_same_origin_uuid_post_and_rejects_foreign_origin() {
             format!(
                 "POST /submit HTTP/1.1\r\nHost: ingress.invalid\r\n\
                  X-Warp-Preview-ID: {id}\r\nX-Warp-Preview-Port: {app_port}\r\n\
+                 X-Warp-Preview-Ingress-Token: Bearer ingress\r\n\
                  Origin: {public_origin}\r\nX-Connections-HMR: 1\r\n\
                  Content-Length: {}\r\nConnection: close\r\n\r\n",
                 body.len()
@@ -542,7 +574,7 @@ async fn rejects_missing_ambiguous_or_unknown_preview_identity() {
             .unwrap();
         stream
             .write_all(
-                format!("GET / HTTP/1.1\r\nHost: ingress.invalid\r\n{request_headers}\r\n")
+                format!("GET / HTTP/1.1\r\nHost: ingress.invalid\r\nX-Warp-Preview-Ingress-Token: Bearer ingress\r\n{request_headers}\r\n")
                     .as_bytes(),
             )
             .await
@@ -607,7 +639,7 @@ async fn rejects_arbitrary_destination_requests() {
         stream
             .write_all(
                 format!(
-                    "{target} HTTP/1.1\r\nHost: ingress.invalid\r\nX-Warp-Preview-ID: {id}\r\nX-Warp-Preview-Port: 12345\r\n\r\n"
+                    "{target} HTTP/1.1\r\nHost: ingress.invalid\r\nX-Warp-Preview-ID: {id}\r\nX-Warp-Preview-Port: 12345\r\nX-Warp-Preview-Ingress-Token: Bearer ingress\r\n\r\n"
                 )
                 .as_bytes(),
             )
@@ -715,7 +747,7 @@ async fn rejects_missing_invalid_and_control_ports() {
         };
         stream
             .write_all(
-                format!("GET / HTTP/1.1\r\nHost: ingress.invalid\r\n{port_header}\r\n").as_bytes(),
+                format!("GET / HTTP/1.1\r\nHost: ingress.invalid\r\nX-Warp-Preview-Ingress-Token: Bearer ingress\r\n{port_header}\r\n").as_bytes(),
             )
             .await
             .unwrap();
@@ -866,7 +898,6 @@ async fn concurrent_cache_misses_share_successful_and_failed_refreshes() {
         let routing = Routing {
             listener_port: 0,
             source: source.clone(),
-            credential_policy: CredentialPolicy::Namespace,
             ingress_capacity: Semaphore::new(MAX_INGRESS_VALIDATIONS),
             upstream: upstream::new_client(cancel.clone()),
             cache: RwLock::new(PreviewCache::default()),

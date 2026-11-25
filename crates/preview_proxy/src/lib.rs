@@ -66,12 +66,6 @@ pub struct IngressTokenValidation<'a> {
     pub ingress_token: &'a str,
 }
 
-#[derive(Clone, Copy)]
-pub enum CredentialPolicy {
-    Namespace,
-    DockerSandbox,
-}
-
 #[derive(Default)]
 struct PreviewCache {
     previews: Vec<PreviewRecord>,
@@ -107,7 +101,6 @@ struct AuthorizedRoute {
 struct Routing<S> {
     listener_port: u16,
     source: Arc<S>,
-    credential_policy: CredentialPolicy,
     ingress_capacity: Semaphore,
     upstream: UpstreamClient,
     cache: RwLock<PreviewCache>,
@@ -116,10 +109,8 @@ struct Routing<S> {
 
 impl<S: PortSource> Routing<S> {
     async fn validate_ingress_token(&self, route: &ParsedRoute, headers: &HeaderMap) -> bool {
-        let ingress_token = match parse_ingress_token(headers) {
-            Ok(Some(ingress_token)) => ingress_token,
-            Ok(None) => return matches!(self.credential_policy, CredentialPolicy::Namespace),
-            Err(()) => return false,
+        let Ok(ingress_token) = parse_ingress_token(headers) else {
+            return false;
         };
         let Ok(_permit) = self.ingress_capacity.try_acquire() else {
             return false;
@@ -289,10 +280,8 @@ fn parse_route(headers: &HeaderMap, listener_port: u16) -> Option<ParsedRoute> {
     Some(ParsedRoute { port, id, origin })
 }
 
-fn parse_ingress_token(headers: &HeaderMap) -> std::result::Result<Option<&str>, ()> {
-    let Some(value) = unique_header(headers, "x-warp-preview-ingress-token")? else {
-        return Ok(None);
-    };
+fn parse_ingress_token(headers: &HeaderMap) -> std::result::Result<&str, ()> {
+    let value = unique_header(headers, "x-warp-preview-ingress-token")?.ok_or(())?;
     let ingress_token = value.to_str().map_err(|_| ())?;
     if ingress_token.len() > MAX_INGRESS_TOKEN_BYTES {
         return Err(());
@@ -307,7 +296,7 @@ fn parse_ingress_token(headers: &HeaderMap) -> std::result::Result<Option<&str>,
     {
         return Err(());
     }
-    Ok(Some(ingress_token))
+    Ok(ingress_token)
 }
 
 fn connection_nominates_identity(headers: &HeaderMap) -> bool {
@@ -357,14 +346,6 @@ impl Drop for Proxy {
 
 impl Proxy {
     pub async fn bind(port: u16, source: Arc<impl PortSource + 'static>) -> Result<Self> {
-        Self::bind_with_policy(port, source, CredentialPolicy::Namespace).await
-    }
-
-    pub async fn bind_with_policy(
-        port: u16,
-        source: Arc<impl PortSource + 'static>,
-        credential_policy: CredentialPolicy,
-    ) -> Result<Self> {
         let listener = TcpListener::bind((Ipv4Addr::UNSPECIFIED, port))
             .await
             .context("Failed to bind preview listener")?;
@@ -373,7 +354,6 @@ impl Proxy {
         let routing = Arc::new(Routing {
             listener_port: port,
             source,
-            credential_policy,
             ingress_capacity: Semaphore::new(MAX_INGRESS_VALIDATIONS),
             upstream: upstream::new_client(cancel.clone()),
             cache: RwLock::new(PreviewCache::default()),
