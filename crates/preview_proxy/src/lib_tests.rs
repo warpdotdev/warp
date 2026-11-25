@@ -898,7 +898,7 @@ async fn concurrent_cache_misses_share_successful_and_failed_refreshes() {
         let routing = Routing {
             listener_port: 0,
             source: source.clone(),
-            ingress_capacity: Semaphore::new(MAX_INGRESS_VALIDATIONS),
+            ingress_capacity: Semaphore::new(MAX_CONCURRENT_INGRESS_VALIDATIONS),
             upstream: upstream::new_client(cancel.clone()),
             cache: RwLock::new(PreviewCache::default()),
             refreshing: Mutex::new(()),

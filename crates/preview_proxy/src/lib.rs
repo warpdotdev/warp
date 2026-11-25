@@ -38,7 +38,7 @@ const MISS_REFRESH_BACKOFF: Duration = Duration::from_secs(1);
 const ACCEPT_RETRY_DELAY: Duration = Duration::from_millis(100);
 const MAX_CONNECTIONS: usize = 256;
 const INGRESS_VALIDATION_TIMEOUT: Duration = Duration::from_secs(5);
-const MAX_INGRESS_VALIDATIONS: usize = 32;
+const MAX_CONCURRENT_INGRESS_VALIDATIONS: usize = 32;
 const MAX_INGRESS_TOKEN_BYTES: usize = 8192;
 
 type Body = BoxBody<Bytes, hyper::Error>;
@@ -354,7 +354,7 @@ impl Proxy {
         let routing = Arc::new(Routing {
             listener_port: port,
             source,
-            ingress_capacity: Semaphore::new(MAX_INGRESS_VALIDATIONS),
+            ingress_capacity: Semaphore::new(MAX_CONCURRENT_INGRESS_VALIDATIONS),
             upstream: upstream::new_client(cancel.clone()),
             cache: RwLock::new(PreviewCache::default()),
             refreshing: Mutex::new(()),
@@ -563,15 +563,6 @@ fn prepare_headers(headers: &mut HeaderMap, port: u16, translated_origin: Option
         headers.insert(CONNECTION, HeaderValue::from_static("te"));
     }
     strip_credentials(headers);
-    for name in [
-        "x-warp-cloud-agent-id",
-        "x-warp-ambient-task-token",
-        "x-warp-ambient-workload-token",
-        "x-warp-prewarmed-sandbox-id",
-        "x-warp-prewarmed-sandbox-workload-token",
-    ] {
-        headers.remove(name);
-    }
     for name in [
         "forwarded",
         "x-original-host",
