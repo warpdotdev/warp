@@ -1,7 +1,7 @@
 [package]
 name = "preview_proxy"
 edition = "2024"
-description = "Run-scoped loopback reverse proxy for Namespace previews"
+description = "Run-scoped loopback reverse proxy for sandbox previews"
 publish.workspace = true
 license.workspace = true
 

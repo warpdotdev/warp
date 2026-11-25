@@ -63,7 +63,7 @@ impl Manager {
                         execution_id,
                         client,
                     });
-                    let mut proxy = match Proxy::bind(port, Arc::clone(&source)).await {
+                    let mut proxy = match Proxy::bind(port, source).await {
                         Ok(proxy) => proxy,
                         Err(error) => {
                             log::error!(
@@ -72,22 +72,7 @@ impl Manager {
                             return;
                         }
                     };
-                    loop {
-                        tokio::select! {
-                            biased;
-                            _ = task_cancel.cancelled() => break,
-                            result = source.previews() => {
-                                if result.is_ok() {
-                                    task_cancel.cancelled().await;
-                                    break;
-                                }
-                            }
-                        }
-                        tokio::select! {
-                            _ = task_cancel.cancelled() => break,
-                            _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {}
-                        }
-                    }
+                    task_cancel.cancelled().await;
                     proxy.shutdown().await;
                 });
             })
