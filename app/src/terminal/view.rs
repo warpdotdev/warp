@@ -13090,34 +13090,6 @@ impl TerminalView {
                             },
                             ctx
                         );
-
-                        // On dogfood only, we're interested in the block commands, durations,
-                        // and exit codes to trial Warp Analytics.
-                        if ChannelState::channel().is_dogfood() {
-                            send_telemetry_from_ctx!(
-                                TelemetryEvent::BlockCompletedOnDogfoodOnly {
-                                    block_finished_to_precmd_delay_ms: delay_ms,
-                                    honor_ps1_enabled,
-                                    num_secrets_redacted: *num_secrets_obfuscated,
-                                    num_output_lines: user_block_completed.num_output_lines,
-                                    num_output_lines_truncated: user_block_completed
-                                        .num_output_lines_truncated,
-                                    command: user_block_completed
-                                        .command
-                                        .get_with(|compute| {
-                                            let model = self.model.lock();
-                                            compute(model.block_list())
-                                        })
-                                        .to_owned(),
-                                    duration: self
-                                        .block_duration(serialized_block)
-                                        .unwrap_or_default(),
-                                    exit_code: serialized_block.exit_code,
-                                    terminal_session_id: serialized_block.session_id,
-                                },
-                                ctx
-                            );
-                        }
                     }
                 }
                 let active_session_id = self.active_block_session_id();

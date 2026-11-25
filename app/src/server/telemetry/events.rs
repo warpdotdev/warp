@@ -6,7 +6,6 @@ use session_sharing_protocol::common::{ParticipantId, Role, SessionId as SharedS
 use session_sharing_protocol::sharer::{SessionEndedReason, SessionSourceType};
 use strum_macros::{EnumDiscriminants, EnumIter};
 use warp_completer::completer::MatchType;
-use warp_core::command::ExitCode;
 use warp_core::interval_timer::TimingDataPoint;
 use warp_core::telemetry::{
     EnablementState, TelemetryEvent as TelemetryEventTrait, TelemetryEventDesc,
@@ -1278,25 +1277,6 @@ pub enum TelemetryEvent {
         is_udi_enabled: bool,
         /// Whether the command was executed while in an active agent view.
         is_in_agent_view: bool,
-    },
-    /// This is identical to the `BlockCompleted` event, but includes extra fields for
-    /// the command run / time it took the block to complete / exit code.
-    /// That sort of telemetry should *NEVER* be sent in production, so
-    /// DO NOT SEND THIS IN NON-DOGFOOD ENVIRONMENTS!
-    BlockCompletedOnDogfoodOnly {
-        block_finished_to_precmd_delay_ms: u64,
-        honor_ps1_enabled: bool,
-        num_secrets_redacted: usize,
-        /// The number of lines in the block's output grid when it was
-        /// finished.
-        num_output_lines: u64,
-        /// The number of lines of output that were truncated while the block
-        /// was active and receiving output.
-        num_output_lines_truncated: u64,
-        command: String,
-        duration: Duration,
-        exit_code: ExitCode,
-        terminal_session_id: Option<SessionId>,
     },
     /// A new block of background output was started and added to the block list.
     BackgroundBlockStarted,
@@ -3037,27 +3017,6 @@ impl TelemetryEvent {
             TelemetryEvent::ToggleFocusPaneOnHover { enabled } => Some(json!({
                 "enabled": enabled,
             })),
-            TelemetryEvent::BlockCompletedOnDogfoodOnly {
-                block_finished_to_precmd_delay_ms,
-                honor_ps1_enabled,
-                num_secrets_redacted,
-                num_output_lines,
-                num_output_lines_truncated,
-                command,
-                duration,
-                exit_code,
-                terminal_session_id,
-            } => Some(json!({
-                "block_finished_to_precmd_delay_ms": block_finished_to_precmd_delay_ms,
-                "honor_ps1_enabled": honor_ps1_enabled,
-                "num_secrets_redacted": num_secrets_redacted,
-                "num_output_lines": num_output_lines,
-                "num_output_lines_truncated": num_output_lines_truncated,
-                "command": command,
-                "duration": duration,
-                "exit_code": exit_code,
-                "terminal_session_id": terminal_session_id,
-            })),
             TelemetryEvent::BootstrappingSucceeded(info) => Some(json!(info)),
             TelemetryEvent::SSHBootstrapAttempt(remote_shell) => {
                 Some(json!({ "shell": remote_shell.as_str() }))
@@ -4790,7 +4749,6 @@ impl TelemetryEvent {
             | TelemetryEvent::ShowedSuggestedAgentModeWorkflowChip { .. }
             | TelemetryEvent::AISuggestedAgentModeWorkflowAdded { .. }
             | TelemetryEvent::BlockCompleted { .. }
-            | TelemetryEvent::BlockCompletedOnDogfoodOnly { .. }
             | TelemetryEvent::BackgroundBlockStarted
             | TelemetryEvent::SessionCreation
             | TelemetryEvent::Login
@@ -5574,9 +5532,6 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::EnvVarCollectionInvoked | Self::EnvVarWorkflowParameterization => {
                 EnablementState::Always
             }
-            Self::BlockCompletedOnDogfoodOnly => EnablementState::ChannelSpecific {
-                channels: vec![Channel::Local, Channel::Dev],
-            },
             Self::CompletedSettingsImport
             | Self::SettingsImportConfigFocused
             | Self::SettingsImportResetButtonClicked
@@ -5772,7 +5727,6 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             // when it's created, we are still naming it "Block Creation" to
             // preserve our historical telemetry data.
             Self::BlockCompleted => "Block Creation",
-            Self::BlockCompletedOnDogfoodOnly => "Block Completed (dogfood only)",
             Self::BackgroundBlockStarted => "Background Block Started",
             Self::SessionCreation => "Tab Creation",
             Self::Login => "Logged in to native app",
@@ -6319,9 +6273,6 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             }
             Self::AgentModeRewindExecuted { .. } => {
                 "User executed a rewind to a previous conversation state"
-            }
-            Self::BlockCompletedOnDogfoodOnly => {
-                "Completed a block, with extra information for dogfood only"
             }
             Self::InitiateAnonymousUserSignup => "An anonymous user initiated the sign up flow",
             Self::AnonymousUserExpirationLockout => {
