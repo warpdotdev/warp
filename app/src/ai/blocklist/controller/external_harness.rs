@@ -37,6 +37,8 @@ pub(in crate::ai) struct ExternalHarnessPrompt {
     /// The `Request.Input.UserQuery` warp-server injected with the prompt, when it sent one.
     /// Its attribution is copied onto the user query echoed into the conversation.
     pub base: Option<BaseUserQuery>,
+    /// Signalled only after ACP accepts the prompt, not when the conversation queues it.
+    pub accepted: Option<async_channel::Sender<()>>,
 }
 
 impl ExternalHarnessPrompt {
@@ -59,6 +61,7 @@ impl ExternalHarnessPrompt {
             attachments,
             participant_id,
             base: Some(base),
+            accepted: None,
         }
     }
 }

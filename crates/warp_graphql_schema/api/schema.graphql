@@ -4032,7 +4032,7 @@ type Task {
   """
   Configuration for the active cloud execution. Requires the execution's workload token.
   """
-  executionConfig(executionId: ID!, supportsDeferredRepositories: Boolean = false, supportsAgentHooks: Boolean = false): ExecutionConfiguration!
+  executionConfig(executionId: ID!, supportsDeferredRepositories: Boolean = false, supportsAgentHooks: Boolean = false, supportsSessionAgentMessages: Boolean = false): ExecutionConfiguration!
 
   """The ID of the task."""
   taskId: ID!
@@ -5414,6 +5414,7 @@ type InferenceProviderClientConfigs {
 }
 
 type ExecutionConfiguration {
+  sessionAgentMessages: Boolean!
   taskId: ID!
   executionId: ID!
   conversationId: ID
