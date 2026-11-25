@@ -1,4 +1,29 @@
-use warp_core::telemetry::TelemetryEventDesc;
+use warp_core::telemetry::{TelemetryEvent as _, TelemetryEventDesc};
+
+use super::TelemetryEvent;
+
+#[test]
+fn retired_terminal_events_are_not_registered() {
+    let events = TelemetryEvent::event_descs()
+        .map(|event| event.name())
+        .filter(|name| {
+            matches!(
+                *name,
+                "Bootstrap Slow Contents"
+                    | "Agent Predict"
+                    | "AgentMode.ChangedInputType"
+                    | "AgentMode.PotentialAutoDetectionFalsePositive"
+            )
+        })
+        .collect::<Vec<_>>();
+
+    assert!(events.is_empty(), "retired events: {events:?}");
+}
+
+#[test]
+fn slow_bootstrap_metadata_event_is_registered() {
+    assert!(TelemetryEvent::event_descs().any(|event| event.name() == "Bootstrapping Slow"));
+}
 
 #[derive(Debug)]
 enum TelemetryEventPropertyError {

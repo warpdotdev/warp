@@ -30,10 +30,6 @@ use crate::ai::blocklist::{
 };
 use crate::ai::execution_profiles::AskUserQuestionPermission;
 use crate::ai::mcp::TemplateVariable;
-use crate::ai::predict::generate_ai_input_suggestions::{
-    GenerateAIInputSuggestionsRequest, GenerateAIInputSuggestionsResponseV2,
-};
-use crate::ai::predict::next_command_model::HistoryBasedAutosuggestionState;
 use crate::auth::auth_manager::LoginGatedFeature;
 use crate::channel::Channel;
 use crate::cloud_object::model::generic_string_model::GenericStringObjectId;
@@ -106,18 +102,6 @@ pub struct BootstrappingInfo {
     pub warp_attributed_bootstrap_duration_seconds: Option<f64>,
     pub shell_version: Option<String>,
     pub terminal_session_id: Option<SessionId>,
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-pub struct SlowBootstrapInfo {
-    pub shell: &'static str,
-    pub is_ssh: bool,
-    pub is_subshell: bool,
-    pub is_wsl: bool,
-    pub is_msys2: bool,
-    /// Contents of the bootstrap block when the slow bootstrap was detected.
-    /// This includes both command and output content from the block.
-    pub bootstrap_block_contents: String,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -897,17 +881,6 @@ pub enum AgentModeAutoDetectionSettingOrigin {
     SlashCommand,
 }
 
-/// Payload for the [`AgentModePotentialAutodetectionFalsePositive`] event.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum AgentModeAutoDetectionFalsePositivePayload {
-    /// Payload includes input text for dogfood channels.
-    InternalDogfoodUsers { input_text: String },
-
-    /// Do not include the misclassified input text in stable channels due to privacy concerns.
-    ExternalUsers,
-}
-
 /// How the user triggered the [`AgentModeCodeFilesNavigated`] event.
 #[derive(Clone, Copy, Debug, Serialize)]
 pub enum AgentModeCodeFileNavigationSource {
@@ -1317,7 +1290,6 @@ pub enum TelemetryEvent {
     },
     BlockSelection(BlockSelectionDetails),
     BootstrappingSlow(BootstrappingInfo),
-    BootstrappingSlowContents(SlowBootstrapInfo),
     /// Logged when a pending session is abandoned before it hits Bootstrapped.
     SessionAbandonedBeforeBootstrap {
         pending_shell: Option<ShellType>,
@@ -1931,39 +1903,6 @@ pub enum TelemetryEvent {
     AgentModeToggleAutoDetectionSetting {
         is_autodetection_enabled: bool,
         origin: AgentModeAutoDetectionSettingOrigin,
-    },
-
-    /// Emitted when the input type is changed from one type to new_input_type.
-    AgentModeChangedInputType {
-        input: Option<String>,
-        buffer_length: usize,
-        is_manually_changed: bool,
-        new_input_type: InputType,
-        active_block_id: BlockId,
-        /// Whether or not Universal Developer Input mode is enabled
-        is_udi_enabled: bool,
-    },
-
-    /// Emitted when the user manually toggles the terminal input from AI mode to shell mode when
-    /// the current input text has been auto-detected as AI input -- this is likely a natural
-    /// language auto-detection false-positive.
-    AgentModePotentialAutoDetectionFalsePositive(AgentModeAutoDetectionFalsePositivePayload),
-
-    /// This is a telemetry event used to help track performance of Agent Predict in Warp,
-    /// by keeping track of the context given and the predictions generated.
-    AgentModePrediction {
-        was_suggestion_accepted: bool,
-        request_duration_ms: i64,
-        is_from_ai: bool,
-        does_actual_command_match_prediction: bool,
-        does_actual_command_match_history_prediction: bool,
-        history_prediction_likelihood: f64,
-        total_history_count: usize,
-        // The below fields are only collected if telemetry is enabled.
-        actual_next_command_run: Option<String>,
-        history_based_autosuggestion_state: Option<HistoryBasedAutosuggestionState>,
-        generate_ai_input_suggestions_request: Option<GenerateAIInputSuggestionsRequest>,
-        generate_ai_input_suggestions_response: Option<GenerateAIInputSuggestionsResponseV2>,
     },
 
     /// Keeps track of number of times the user is presented with a Prompt Suggestions banner.
@@ -2980,7 +2919,6 @@ impl TelemetryEvent {
                 num_blocks_reverted,
             } => Some(json!({"num_blocks_reverted": num_blocks_reverted})),
             TelemetryEvent::BootstrappingSlow(info) => Some(json!(info)),
-            TelemetryEvent::BootstrappingSlowContents(info) => Some(json!(info)),
             TelemetryEvent::ToggleSettingsSync {
                 is_settings_sync_enabled,
             } => Some(json!({ "is_settings_sync_enabled": is_settings_sync_enabled })),
@@ -3519,57 +3457,6 @@ impl TelemetryEvent {
             TelemetryEvent::ToggleVoiceInputSetting {
                 is_voice_input_enabled,
             } => Some(json!({"is_voice_input_enabled": is_voice_input_enabled})),
-            TelemetryEvent::AgentModePotentialAutoDetectionFalsePositive(
-                AgentModeAutoDetectionFalsePositivePayload::InternalDogfoodUsers { input_text },
-            ) => Some(json!({"input_text": input_text})),
-            TelemetryEvent::AgentModeChangedInputType {
-                input,
-                buffer_length,
-                is_manually_changed,
-                new_input_type,
-                active_block_id,
-                is_udi_enabled,
-            } => Some(
-                json!({"input": input, "buffer_length": buffer_length, "is_manually_changed": is_manually_changed, "new_input_type": new_input_type, "active_block_id": active_block_id, "is_udi_enabled": is_udi_enabled}),
-            ),
-            TelemetryEvent::AgentModePrediction {
-                was_suggestion_accepted,
-                request_duration_ms,
-                is_from_ai,
-                does_actual_command_match_prediction,
-                does_actual_command_match_history_prediction,
-                history_prediction_likelihood,
-                total_history_count,
-                actual_next_command_run,
-                history_based_autosuggestion_state,
-                generate_ai_input_suggestions_request,
-                generate_ai_input_suggestions_response,
-            } => {
-                let (history_command_prediction, history_command_prediction_likelihood) =
-                    if let Some(state) = history_based_autosuggestion_state {
-                        (
-                            Some(state.history_command_prediction.clone()),
-                            Some(state.history_command_prediction_likelihood),
-                        )
-                    } else {
-                        (None, None)
-                    };
-
-                Some(json!({
-                    "was_suggestion_accepted": was_suggestion_accepted,
-                    "request_duration_ms": request_duration_ms,
-                    "is_from_ai": is_from_ai,
-                    "does_actual_command_match_prediction": does_actual_command_match_prediction,
-                    "does_actual_command_match_history_prediction": does_actual_command_match_history_prediction,
-                    "history_prediction_likelihood": history_prediction_likelihood,
-                    "total_history_count": total_history_count,
-                    "actual_next_command_run": actual_next_command_run,
-                    "generate_ai_input_suggestions_request": generate_ai_input_suggestions_request,
-                    "generate_ai_input_suggestions_response": generate_ai_input_suggestions_response,
-                    "history_command_prediction": history_command_prediction,
-                    "history_command_prediction_likelihood": history_command_prediction_likelihood,
-                }))
-            }
             TelemetryEvent::PromptSuggestionShown {
                 id,
                 request_duration_ms,
@@ -4098,9 +3985,6 @@ impl TelemetryEvent {
             | TelemetryEvent::PaneDragInitiated
             | TelemetryEvent::SharedObjectLimitHitBannerViewPlansButtonClicked
             | TelemetryEvent::SharedSessionModalUpgradePressed
-            | TelemetryEvent::AgentModePotentialAutoDetectionFalsePositive(
-                AgentModeAutoDetectionFalsePositivePayload::ExternalUsers,
-            )
             | TelemetryEvent::SettingsImportResetButtonClicked
             | TelemetryEvent::ITermMultipleHotkeys
             | TelemetryEvent::DriveSharingOnboardingBlockShown
@@ -4717,34 +4601,12 @@ impl TelemetryEvent {
     pub fn contains_ugc(&self) -> bool {
         match self {
             TelemetryEvent::GrepToolFailed { .. } => true,
-            TelemetryEvent::BootstrappingSlowContents { .. } => true,
             TelemetryEvent::AIInputNotSent { .. } => true,
             TelemetryEvent::AgentExitedShellProcess { .. } => true,
             TelemetryEvent::CreateProjectPromptSubmitted { .. } => false,
             TelemetryEvent::CreateProjectPromptSubmittedContent { .. } => true,
             TelemetryEvent::InputBufferSubmitted { .. } => false,
-            TelemetryEvent::AgentModePrediction {
-                actual_next_command_run,
-                history_based_autosuggestion_state,
-                generate_ai_input_suggestions_request,
-                generate_ai_input_suggestions_response,
-                ..
-            } => {
-                // These fields can contain UGC, so if any are set, assume this event contains UGC.
-                actual_next_command_run.is_some()
-                    || history_based_autosuggestion_state.is_some()
-                    || generate_ai_input_suggestions_request.is_some()
-                    || generate_ai_input_suggestions_response.is_some()
-            }
-            TelemetryEvent::AgentModeChangedInputType { input, .. } => input.is_some(),
             TelemetryEvent::UnitTestSuggestionAccepted { query, .. } => query.is_some(),
-            TelemetryEvent::AgentModePotentialAutoDetectionFalsePositive(payload) => {
-                // For internal dogfood users, the payload contains UGC.
-                matches!(
-                    payload,
-                    AgentModeAutoDetectionFalsePositivePayload::InternalDogfoodUsers { .. }
-                )
-            }
             TelemetryEvent::ShowedSuggestedAgentModeWorkflowModal { .. }
             | TelemetryEvent::ShowedSuggestedAgentModeWorkflowChip { .. }
             | TelemetryEvent::AISuggestedAgentModeWorkflowAdded { .. }
@@ -5280,7 +5142,6 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             | Self::AnonymousUserAttemptLoginGatedFeature
             | Self::AnonymousUserHitCloudObjectLimit => EnablementState::Always,
 
-            Self::AgentModeChangedInputType => EnablementState::Always,
             Self::StartedSharingCurrentSession
             | Self::StoppedSharingCurrentSession
             | Self::SharedSessionModalUpgradePressed => {
@@ -5313,7 +5174,6 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::GenerateBlockSharingLink => EnablementState::Always,
             Self::BlockSelection => EnablementState::Always,
             Self::BootstrappingSlow => EnablementState::Always,
-            Self::BootstrappingSlowContents => EnablementState::Always,
             Self::SessionAbandonedBeforeBootstrap => EnablementState::Always,
             Self::BootstrappingSucceeded => EnablementState::Always,
             Self::CopyInviteLink => EnablementState::Always,
@@ -5525,8 +5385,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::TransientMemorySpike => EnablementState::Always,
             Self::AgentModeClickedEntrypoint
             | Self::AgentModeAttachedBlockContext
-            | Self::AgentModeToggleAutoDetectionSetting
-            | Self::AgentModePotentialAutoDetectionFalsePositive => {
+            | Self::AgentModeToggleAutoDetectionSetting => {
                 EnablementState::Flag(FeatureFlag::AgentMode)
             }
             Self::EnvVarCollectionInvoked | Self::EnvVarWorkflowParameterization => {
@@ -5536,9 +5395,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             | Self::SettingsImportConfigFocused
             | Self::SettingsImportResetButtonClicked
             | Self::ITermMultipleHotkeys => EnablementState::Always,
-            Self::ToggleIntelligentAutosuggestionsSetting | Self::AgentModePrediction => {
-                EnablementState::Always
-            }
+            Self::ToggleIntelligentAutosuggestionsSetting => EnablementState::Always,
             Self::PromptSuggestionShown
             | Self::SuggestedCodeDiffBannerShown
             | Self::SuggestedCodeDiffFailed
@@ -5748,7 +5605,6 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::GenerateBlockSharingLink => "Generate Block Sharing Link",
             Self::BlockSelection => "Block Selection",
             Self::BootstrappingSlow => "Bootstrapping Slow",
-            Self::BootstrappingSlowContents => "Bootstrap Slow Contents",
             Self::ObjectLinkCopied => "Object Link Copied",
             Self::FileTreeToggled => "File Tree Toggled",
             Self::FileTreeItemAttachedAsContext => "FileTree.AttachedAsContext",
@@ -6023,11 +5879,6 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::MemoryUsageHigh => "perf_metrics.memory_usage_high",
             Self::TransientMemorySpike => "perf_metrics.transient_memory_spike",
             Self::AgentModeToggleAutoDetectionSetting => "AgentMode.ToggleAutoDetectionSetting",
-            Self::AgentModePotentialAutoDetectionFalsePositive => {
-                "AgentMode.PotentialAutoDetectionFalsePositive"
-            }
-            Self::AgentModeChangedInputType => "AgentMode.ChangedInputType",
-            Self::AgentModePrediction => "Agent Predict",
             // Agent Mode Query Suggestions is the legacy name for Prompt Suggestions - we avoid renaming
             // the event to avoid breaking historical telemetry data.
             Self::PromptSuggestionShown => "Agent Mode Query Suggestions Banner Shown",
@@ -6339,9 +6190,6 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::GenerateBlockSharingLink => "Generated Block sharing link",
             Self::BlockSelection => "Selected Block",
             Self::BootstrappingSlow => "Slow bootstrap on session startup",
-            Self::BootstrappingSlowContents => {
-                "Contents of the bootstrap block if bootstrapping is slow"
-            }
             Self::SessionAbandonedBeforeBootstrap => {
                 "Abandoned session before the bootstrapping completes"
             }
@@ -6741,13 +6589,6 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::AgentModeToggleAutoDetectionSetting => {
                 "Toggled the setting that enables or disables natural language auto-detection in the input. "
             }
-            Self::AgentModePotentialAutoDetectionFalsePositive => {
-                "Manually toggled input to shell mode after input was auto-detected as natural language."
-            }
-            Self::AgentModeChangedInputType => {
-                "The input type was changed from shell -> AI or AI -> shell"
-            }
-            Self::AgentModePrediction => "Completed an Agent Predict prediction",
             Self::ToggleIntelligentAutosuggestionsSetting => {
                 "Toggled on/off the intelligent autosuggestions setting"
             }
