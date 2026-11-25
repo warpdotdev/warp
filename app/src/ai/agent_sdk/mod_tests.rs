@@ -66,6 +66,98 @@ use crate::workspaces::workspace::{ChargeUnit, UserTier, Workspace, WorkspaceUid
 const TASK_ID: &str = "00000000-0000-0000-0000-000000000001";
 
 #[test]
+fn git_identity_bootstrap_covers_empty_credentials_and_skipped_authentication() {
+    for scenario in ["empty", "refresh-disabled", "no-workload-token"] {
+        let home = tempfile::tempdir().unwrap();
+        let output = ProcessCommand::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "ai::agent_sdk::tests::git_identity_bootstrap_subprocess",
+                "--nocapture",
+            ])
+            .current_dir(home.path())
+            .env("WARP_TEST_GIT_IDENTITY_BOOTSTRAP", scenario)
+            .env("HOME", home.path())
+            .env("XDG_CONFIG_HOME", home.path().join(".config"))
+            .env("GIT_CONFIG_GLOBAL", home.path().join(".gitconfig"))
+            .env("WARP_GITHUB_CREDENTIAL_MODE", "legacy")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("WARP_ISOLATION_PLATFORM", "docker")
+            .env(
+                "WARP_WORKLOAD_TOKEN",
+                if scenario == "no-workload-token" {
+                    ""
+                } else {
+                    "test-workload-token"
+                },
+            )
+            .env_remove("GIT_CONFIG_COUNT")
+            .env_remove("GIT_CONFIG_PARAMETERS")
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{scenario}: {}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+#[test]
+fn git_identity_bootstrap_subprocess() {
+    let Ok(scenario) = std::env::var("WARP_TEST_GIT_IDENTITY_BOOTSTRAP") else {
+        return;
+    };
+    let mut server = warp_core::channel::ChannelState::mock_server();
+    let credentials = server
+        .mock("POST", "/graphql/v2")
+        .match_query(Matcher::UrlEncoded(
+            "op".into(),
+            "TaskGitCredentials".into(),
+        ))
+        .with_status(200)
+        .with_body(
+            json!({"data": {"taskGitCredentials": {
+                "__typename": "TaskGitCredentialsOutput", "credentials": [], "failedHosts": []
+            }}})
+            .to_string(),
+        )
+        .expect(usize::from(scenario == "empty"))
+        .create();
+    App::test((), |mut app| async move {
+        let _refresh =
+            FeatureFlag::GitCredentialRefresh.override_enabled(scenario != "refresh-disabled");
+        app.add_singleton_model(|_| ServerApiProvider::new_for_test());
+        let runner = app.add_singleton_model(|_| AgentDriverRunner);
+        let foreground = runner.update(&mut app, |_, ctx| ctx.spawner());
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _enter = runtime.enter();
+
+        AgentDriverRunner::bootstrap_git_credentials_for_task(
+            &foreground,
+            TASK_ID,
+            false,
+            false,
+            super::GitHubCredentialMode::Legacy,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            super::driver::git_credentials::global_git_identity(),
+            Some(("Warp".into(), "agent@warp.dev".into()))
+        );
+    });
+    credentials.assert();
+}
+
+#[test]
 fn paired_execution_launch_keeps_inventory_separate_from_eager_membership() {
     let sha = "0123456789abcdef0123456789abcdef01234567";
     App::test((), |mut app| async move {
@@ -385,6 +477,7 @@ fn an_unknown_hook_value_fails_the_execution() {
 #[test]
 fn paired_execution_keeps_captured_capability_after_runtime_flag_changes() {
     for scenario in ["eager", "deferred", "empty", "non-factory", "missing"] {
+        let home = tempfile::tempdir().unwrap();
         let output = ProcessCommand::new(std::env::current_exe().unwrap())
             .args([
                 "--exact",
@@ -392,6 +485,9 @@ fn paired_execution_keeps_captured_capability_after_runtime_flag_changes() {
                 "--nocapture",
             ])
             .env("WARP_TEST_DEFERRED_CAPABILITY_BOOTSTRAP", scenario)
+            .env("HOME", home.path())
+            .env("GIT_CONFIG_GLOBAL", home.path().join(".gitconfig"))
+            .env("WARP_GITHUB_CREDENTIAL_MODE", "legacy")
             .env(
                 "WARP_FACTORY_ID",
                 if scenario == "non-factory" {
