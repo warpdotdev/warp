@@ -282,10 +282,17 @@ macro_rules! define_operation {
                 Box::pin(async move { $crate::client::send_graphql_request(&client, req?).await })
             }
         }
+
+        #[cfg(test)]
+        #[test]
+        #[allow(non_snake_case, clippy::extra_unused_lifetimes)]
+        fn $func<$($($generics)*)?>() {
+            $crate::client::tests::assert_valid_operation::<$query, $vars>();
+        }
     };
 }
 pub(crate) use define_operation;
 
 #[cfg(test)]
 #[path = "client_tests.rs"]
-mod tests;
+pub(crate) mod tests;

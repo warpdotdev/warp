@@ -34,6 +34,7 @@ graphql-ws-client = {workspace = true, features = ["client-cynic", "ws_stream_wa
 ws_stream_wasm = "0.7"
 
 [dev-dependencies]
+apollo-compiler = "1.32.0"
 http_client = { workspace = true, features = ["test-util"] }
 serde_json.workspace = true
 
