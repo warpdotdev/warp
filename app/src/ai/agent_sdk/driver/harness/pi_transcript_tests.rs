@@ -12,8 +12,9 @@ use super::super::transcript_persistence::JSONL_LIMITS;
 use super::*;
 
 #[test]
-fn restored_pi_usage_includes_earlier_executions_per_model() {
+fn relocated_pi_usage_includes_earlier_executions_per_model() {
     let root = TempDir::new().unwrap();
+    let previous_cwd = TempDir::new().unwrap();
     let cwd = TempDir::new().unwrap();
     let map_dir = TempDir::new().unwrap();
     let map_path = map_dir.path().join("session-map.json");
@@ -25,7 +26,10 @@ fn restored_pi_usage_includes_earlier_executions_per_model() {
     .unwrap();
     let native_id = Uuid::new_v4();
     let mut transcript = entries_to_jsonl(&[
-        json!({"type": "session", "version": 3, "id": native_id, "cwd": cwd.path()}),
+        json!({
+            "type": "session", "version": 3, "id": native_id, "cwd": previous_cwd.path(),
+            "timestamp": "2026-11-24T00:00:00Z", "custom": {"keep": true}
+        }),
         json!({
             "type": "message", "id": "first", "parentId": null,
             "message": {
@@ -48,9 +52,28 @@ fn restored_pi_usage_includes_earlier_executions_per_model() {
     let path = Path::new(entry["sessionFile"].as_str().unwrap());
     assert!(path.starts_with(root.path().canonicalize().unwrap()));
     let restored = fs::read(path).unwrap();
-    assert_eq!(&restored[..restored.len() - 1], transcript);
+    let restored_header_end = restored.iter().position(|byte| *byte == b'\n').unwrap();
+    let (restored_header, restored_body) = restored.split_at(restored_header_end);
+    let original_header_end = transcript.iter().position(|byte| *byte == b'\n').unwrap();
+    let (original_header, original_body) = transcript.split_at(original_header_end);
+    let mut expected_header: Value = serde_json::from_slice(original_header).unwrap();
+    expected_header["cwd"] = json!(cwd.path());
+    assert_eq!(
+        serde_json::from_slice::<Value>(restored_header).unwrap(),
+        expected_header
+    );
+    assert_eq!(&restored_body[..restored_body.len() - 1], original_body);
     assert!(restored.ends_with(b"\n"));
     assert_eq!(session_header(path, cwd.path()), Some(native_id));
+    assert_eq!(session_header(path, previous_cwd.path()), None);
+    assert_eq!(
+        find_session_file(root.path(), cwd.path(), acp_id),
+        Some(path.to_path_buf())
+    );
+    assert_eq!(
+        find_session_file(root.path(), previous_cwd.path(), acp_id),
+        None
+    );
 
     let mut file = OpenOptions::new().append(true).open(path).unwrap();
     file.write_all(
@@ -106,13 +129,29 @@ fn restored_pi_usage_includes_earlier_executions_per_model() {
 }
 
 #[test]
+fn restoring_pi_in_the_same_directory_preserves_transcript_bytes() {
+    let root = TempDir::new().unwrap();
+    let cwd = Path::new("/workspace");
+    let map_path = root.path().join("map.json");
+    let transcript = b"{ \"type\": \"session\", \"id\": \"be60268a-4b1e-4d97-9387-c8dd2d66311f\", \"cwd\": \"/workspace\" }\n";
+
+    let acp_id = rehydrate_pi_transcript(transcript, root.path(), cwd, &map_path).unwrap();
+
+    let map: Value = serde_json::from_slice(&fs::read(map_path).unwrap()).unwrap();
+    let path = map["sessions"][acp_id.to_string()]["sessionFile"]
+        .as_str()
+        .unwrap();
+    assert_eq!(fs::read(path).unwrap(), transcript);
+}
+
+#[test]
 fn invalid_pi_headers_do_not_write_session_state() {
     let root = TempDir::new().unwrap();
     let map_path = root.path().join("map.json");
     let cwd = Path::new("/workspace");
     for header in [
         json!({"type": "session", "id": "../escape", "cwd": cwd}),
-        json!({"type": "session", "id": Uuid::new_v4(), "cwd": "/elsewhere"}),
+        json!({"type": "session", "id": Uuid::new_v4()}),
         json!({"type": "message", "id": Uuid::new_v4(), "cwd": cwd}),
         Value::Null,
     ] {

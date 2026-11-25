@@ -92,12 +92,23 @@ pub(super) fn rehydrate_pi_transcript(
     cwd: &Path,
     map_path: &Path,
 ) -> Result<Uuid> {
-    let header = transcript
-        .split(|byte| *byte == b'\n')
-        .next()
-        .unwrap_or_default();
-    let native_id = parse_session_header(header, cwd)
-        .ok_or_else(|| anyhow!("Invalid Pi session header or mismatched working directory"))?;
+    let header_end = transcript
+        .iter()
+        .position(|byte| *byte == b'\n')
+        .unwrap_or(transcript.len());
+    let mut header: Value =
+        serde_json::from_slice(&transcript[..header_end]).context("Invalid Pi session header")?;
+    ensure!(
+        header["type"] == "session" && header["cwd"].is_string(),
+        "Invalid Pi session header"
+    );
+    let native_id = header["id"]
+        .as_str()
+        .and_then(|id| Uuid::parse_str(id).ok())
+        .context("Invalid Pi session id")?;
+    let relocated = header["cwd"]
+        .as_str()
+        .is_some_and(|path| Path::new(path) != cwd);
     let mut map: Value = match fs::read(map_path) {
         Ok(bytes) => serde_json::from_slice(&bytes).context("Invalid pi-acp session map")?,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -116,7 +127,13 @@ pub(super) fn rehydrate_pi_transcript(
         .canonicalize()?
         .join(format!("{native_id}.jsonl"));
     let mut file = NamedTempFile::new_in(&session_dir)?;
-    file.write_all(transcript)?;
+    if relocated {
+        header["cwd"] = json!(cwd);
+        serde_json::to_writer(&mut file, &header)?;
+        file.write_all(&transcript[header_end..])?;
+    } else {
+        file.write_all(transcript)?;
+    }
     if !transcript.ends_with(b"\n") {
         file.write_all(b"\n")?;
     }
