@@ -3,7 +3,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use warp_core::features::FeatureFlag;
-use warp_isolation_platform::IsolationPlatformType;
 use warpui::r#async::executor::Background;
 use warpui::r#async::{BoxFuture, FutureExt as _, Timer};
 
@@ -12,15 +11,6 @@ use crate::server::server_api::ai::{AIClient, ListRunPreviewsResponse};
 
 const PREVIEW_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
 const PREVIEW_RECHECK_INTERVAL: Duration = Duration::from_secs(60);
-pub(super) fn supports_preview_retention(platform: Option<IsolationPlatformType>) -> bool {
-    match platform {
-        #[cfg(not(target_family = "wasm"))]
-        Some(IsolationPlatformType::Namespace | IsolationPlatformType::DockerSandbox) => true,
-        #[cfg(not(target_family = "wasm"))]
-        Some(IsolationPlatformType::Docker | IsolationPlatformType::Kubernetes) => false,
-        None => false,
-    }
-}
 
 #[derive(Clone)]
 pub(super) struct PreviewRetention {

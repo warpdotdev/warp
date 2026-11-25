@@ -9,7 +9,6 @@ use anyhow::Context as _;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 use uuid::Uuid;
-use warp_isolation_platform::IsolationPlatformType;
 
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::server::server_api::ai::{AIClient, ListRunPreviewsResponse};
@@ -31,25 +30,12 @@ fn listener_port(value: &str) -> anyhow::Result<u16> {
     Ok(port)
 }
 
-fn validate_platform(platform: Option<IsolationPlatformType>) -> anyhow::Result<()> {
-    match platform {
-        #[cfg(not(target_family = "wasm"))]
-        Some(IsolationPlatformType::Namespace | IsolationPlatformType::DockerSandbox) => Ok(()),
-        #[cfg(not(target_family = "wasm"))]
-        Some(IsolationPlatformType::Docker | IsolationPlatformType::Kubernetes) => {
-            anyhow::bail!("Preview proxy requires a supported hosted sandbox")
-        }
-        None => anyhow::bail!("Preview proxy requires a supported hosted sandbox"),
-    }
-}
-
 impl Manager {
     pub(super) fn start(
         task_id: AmbientAgentTaskId,
         execution_id: Option<&str>,
         client: Arc<dyn AIClient>,
     ) -> anyhow::Result<Self> {
-        validate_platform(warp_isolation_platform::detect())?;
         let execution_id = execution_id
             .context("Preview proxy requires an execution ID")?
             .parse::<i64>()

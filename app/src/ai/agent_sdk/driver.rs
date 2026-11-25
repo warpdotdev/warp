@@ -1564,7 +1564,7 @@ impl AgentDriver {
         ctx: &ModelContext<Self>,
     ) -> IdleTimeoutSender<T> {
         let mut sender = IdleTimeoutSender::new(tx);
-        if preview_retention::supports_preview_retention(warp_isolation_platform::detect())
+        if std::env::var("WARP_PREVIEW_PROXY_ENABLED").as_deref() == Ok("1")
             && let Some(task_id) = self.task_id
         {
             sender.preview_retention = PreviewRetention::new(

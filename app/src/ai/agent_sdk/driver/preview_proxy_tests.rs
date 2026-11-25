@@ -27,16 +27,6 @@ async fn proxy_route_discovery_advertises_authorization() {
 }
 
 #[test]
-#[cfg(not(target_family = "wasm"))]
-fn only_hosted_sandboxes_support_preview_proxy() {
-    assert!(validate_platform(Some(IsolationPlatformType::DockerSandbox)).is_ok());
-    assert!(validate_platform(Some(IsolationPlatformType::Namespace)).is_ok());
-    assert!(validate_platform(Some(IsolationPlatformType::Docker)).is_err());
-    assert!(validate_platform(Some(IsolationPlatformType::Kubernetes)).is_err());
-    assert!(validate_platform(None).is_err());
-}
-
-#[test]
 fn parses_listener_port_configuration() {
     assert_eq!(listener_port("1").unwrap(), 1);
     assert_eq!(listener_port("65535").unwrap(), 65535);
