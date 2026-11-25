@@ -2833,7 +2833,7 @@ impl AIClient for ServerApi {
                 }
                 Ok(node_results)
             }
-            UpdateMerkleTreeResult::UpdateMerkleTreeError(e) => Err(anyhow!(e.error)),
+            UpdateMerkleTreeResult::UpdateMerkleTreeError(e) => Err(anyhow!(e.message)),
             UpdateMerkleTreeResult::UserFacingError(e) => {
                 Err(anyhow!(get_user_facing_error_message(e)))
             }
@@ -2869,7 +2869,7 @@ impl AIClient for ServerApi {
                 }
                 Ok(results)
             }
-            GenerateCodeEmbeddingsResult::GenerateCodeEmbeddingsError(e) => Err(anyhow!(e.error)),
+            GenerateCodeEmbeddingsResult::GenerateCodeEmbeddingsError(e) => Err(anyhow!(e.message)),
             GenerateCodeEmbeddingsResult::UserFacingError(e) => {
                 Err(anyhow!(get_user_facing_error_message(e)))
             }
@@ -4471,7 +4471,7 @@ impl StoreClient for ServerApi {
                 }
                 Ok(node_results)
             }
-            SyncMerkleTreeResult::SyncMerkleTreeError(e) => Err(anyhow!(e.error).into()),
+            SyncMerkleTreeResult::SyncMerkleTreeError(e) => Err(anyhow!(e.message).into()),
             SyncMerkleTreeResult::UserFacingError(e) => {
                 Err(anyhow!(get_user_facing_error_message(e)).into())
             }
@@ -4498,7 +4498,7 @@ impl StoreClient for ServerApi {
                 .into_iter()
                 .map(|fragment| fragment.try_into())
                 .collect::<Result<Vec<_>, _>>()?),
-            RerankFragmentsResult::RerankFragmentsError(e) => Err(anyhow!(e.error).into()),
+            RerankFragmentsResult::RerankFragmentsError(e) => Err(anyhow!(e.message).into()),
             RerankFragmentsResult::UserFacingError(e) => {
                 Err(anyhow!(get_user_facing_error_message(e)).into())
             }
@@ -4533,7 +4533,7 @@ impl StoreClient for ServerApi {
                 Err(anyhow!(get_user_facing_error_message(e)).into())
             }
             GetRelevantFragmentsResult::GetRelevantFragmentsError(e) => {
-                Err(anyhow!(e.error).into())
+                Err(anyhow!(e.message).into())
             }
             GetRelevantFragmentsResult::Unknown => {
                 Err(anyhow!("failed to get relevant fragments").into())

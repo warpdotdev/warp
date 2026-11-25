@@ -29,7 +29,8 @@ crate::client::define_operation! {
 
 #[derive(cynic::QueryFragment, Debug)]
 pub struct RerankFragmentsError {
-    pub error: String,
+    #[cynic(rename = "error", alias)]
+    pub message: String,
 }
 
 #[derive(cynic::QueryFragment, Debug)]
