@@ -4609,6 +4609,8 @@ input UpdateAgentTaskInput {
 
   """If set, the task is associated with this shared session."""
   sessionId: ID
+  """Client occurrence time for establishing sessionId. Ignored when sessionId is absent or null."""
+  sessionStartedAt: Time
 
   """
   Optional status message about the task (e.g., progress update, error message, completion summary).

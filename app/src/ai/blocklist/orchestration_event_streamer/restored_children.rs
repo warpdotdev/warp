@@ -438,6 +438,7 @@ impl OrchestrationEventStreamer {
                         Some(AgentTaskState::Error),
                         None,
                         None,
+                        None,
                         Some(TaskStatusUpdate::message(message)),
                         None,
                         None,

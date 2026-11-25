@@ -464,6 +464,7 @@ impl LocalAgentTaskSyncModel {
                         task_id,
                         task_state,
                         session_id,
+                        None,
                         server_conversation_token.clone(),
                         status_message,
                         None,

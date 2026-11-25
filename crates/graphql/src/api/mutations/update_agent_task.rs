@@ -24,6 +24,8 @@ pub struct UpdateAgentTaskInput {
     #[cynic(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<cynic::Id>,
     #[cynic(skip_serializing_if = "Option::is_none")]
+    pub session_started_at: Option<crate::scalars::Time>,
+    #[cynic(skip_serializing_if = "Option::is_none")]
     pub conversation_id: Option<cynic::Id>,
     #[cynic(skip_serializing_if = "Option::is_none")]
     pub status_message: Option<AgentTaskStatusMessageInput>,
@@ -70,3 +72,7 @@ pub enum UpdateAgentTaskResult {
 pub struct UpdateAgentTaskOutput {
     pub response_context: ResponseContext,
 }
+
+#[cfg(test)]
+#[path = "update_agent_task_tests.rs"]
+mod tests;

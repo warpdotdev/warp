@@ -2105,6 +2105,7 @@ impl AgentDriver {
                             None,
                             None,
                             None,
+                            None,
                         )
                         .await
                         .context("Failed to update agent task state to InProgress")
@@ -2371,6 +2372,7 @@ impl AgentDriver {
             .update_agent_task(
                 task_id,
                 Some(AgentTaskState::Succeeded),
+                None,
                 None,
                 None,
                 None,
@@ -3093,6 +3095,7 @@ impl AgentDriver {
                         None,
                         None,
                         None,
+                        None,
                         Some(deadline),
                         debug_agent_active,
                     )
@@ -3136,6 +3139,7 @@ impl AgentDriver {
             .update_agent_task(
                 task_id,
                 Some(AgentTaskState::Failed),
+                None,
                 None,
                 None,
                 Some(status),
@@ -5043,6 +5047,7 @@ impl AgentDriver {
             TerminalDriverEvent::EstablishedSharedSession {
                 session_id,
                 join_url,
+                established_at,
             } => {
                 tracing::event!(
                     tracing::Level::INFO,
@@ -5056,6 +5061,7 @@ impl AgentDriver {
                 if let Some(task_id) = self.task_id {
                     let server_api = ServerApiProvider::as_ref(ctx).get_ai_client();
                     let session_id = *session_id;
+                    let established_at = *established_at;
                     ctx.spawn(
                         async move {
                             report_if_error!(
@@ -5064,6 +5070,7 @@ impl AgentDriver {
                                         task_id,
                                         None,
                                         Some(session_id),
+                                        Some(established_at),
                                         None,
                                         None,
                                         None,
@@ -5462,6 +5469,7 @@ pub(super) async fn report_driver_error(
         .update_agent_task(
             task_id,
             Some(state),
+            None,
             None,
             None,
             Some(status_update),
