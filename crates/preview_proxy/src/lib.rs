@@ -51,6 +51,10 @@ pub struct PreviewRecord {
 
 pub trait PortSource: Send + Sync {
     fn previews(&self) -> impl Future<Output = Result<Vec<PreviewRecord>>> + Send;
+    /// Disable only when the upstream ingress provides authentication.
+    fn requires_ingress_token(&self) -> bool {
+        true
+    }
 
     fn validate_ingress_token(
         &self,
@@ -109,6 +113,9 @@ struct Routing<S> {
 
 impl<S: PortSource> Routing<S> {
     async fn validate_ingress_token(&self, route: &ParsedRoute, headers: &HeaderMap) -> bool {
+        if !self.source.requires_ingress_token() {
+            return true;
+        }
         let Ok(ingress_token) = parse_ingress_token(headers) else {
             return false;
         };

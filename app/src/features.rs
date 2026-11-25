@@ -323,6 +323,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::FactoryMcp,
         #[cfg(feature = "preview_urls_mcp")]
         FeatureFlag::PreviewUrlsMcp,
+        #[cfg(feature = "preview_urls_docker_sandbox_support")]
+        FeatureFlag::PreviewUrlsDockerSandboxSupport,
         #[cfg(feature = "web_search_ui")]
         FeatureFlag::WebSearchUI,
         #[cfg(feature = "web_fetch_ui")]
