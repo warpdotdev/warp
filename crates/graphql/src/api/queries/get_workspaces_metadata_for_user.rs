@@ -41,7 +41,6 @@ query GetWorkspacesMetadataForUser($requestContext: RequestContext!) {
           teams {
             uid
             name
-            inviteLink
             members {
               uid
               email
@@ -140,7 +139,6 @@ query GetWorkspacesMetadataForUser($requestContext: RequestContext!) {
           }
           settings {
             isDiscoverable
-            isInviteLinkEnabled
             llmSettings {
               enabled
             }
@@ -184,10 +182,6 @@ query GetWorkspacesMetadataForUser($requestContext: RequestContext!) {
             expired
             teamUid
           }
-          inviteLinkDomainRestrictions {
-            uid
-            domain
-          }
           stripeCustomerId
           isEligibleForDiscovery
         }
@@ -221,6 +215,7 @@ query GetWorkspacesMetadataForUser($requestContext: RequestContext!) {
     }
   }
 }
+
 */
 
 #[derive(cynic::QueryVariables, Debug)]

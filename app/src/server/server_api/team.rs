@@ -3,16 +3,8 @@ use async_trait::async_trait;
 use cynic::{MutationBuilder, QueryBuilder};
 #[cfg(test)]
 use mockall::{automock, predicate::*};
-use warp_graphql::mutations::add_invite_link_domain_restriction::{
-    AddInviteLinkDomainRestriction, AddInviteLinkDomainRestrictionInput,
-    AddInviteLinkDomainRestrictionResult, AddInviteLinkDomainRestrictionVariables,
-};
 use warp_graphql::mutations::create_team::{
     CreateTeam, CreateTeamInput, CreateTeamResult, CreateTeamVariables,
-};
-use warp_graphql::mutations::delete_invite_link_domain_restriction::{
-    DeleteInviteLinkDomainRestriction, DeleteInviteLinkDomainRestrictionInput,
-    DeleteInviteLinkDomainRestrictionResult, DeleteInviteLinkDomainRestrictionVariables,
 };
 use warp_graphql::mutations::delete_team_invite::{
     DeleteTeamInvite, DeleteTeamInviteInput, DeleteTeamInviteResult, DeleteTeamInviteVariables,
@@ -36,16 +28,9 @@ use warp_graphql::mutations::remove_user_from_team::{
 use warp_graphql::mutations::rename_team::{
     RenameTeam, RenameTeamInput, RenameTeamResult, RenameTeamVariables,
 };
-use warp_graphql::mutations::reset_invite_links::{
-    ResetInviteLinks, ResetInviteLinksInput, ResetInviteLinksResult, ResetInviteLinksVariables,
-};
 use warp_graphql::mutations::send_team_invite_email::{
     SendTeamInviteEmail, SendTeamInviteEmailInput, SendTeamInviteEmailResult,
     SendTeamInviteEmailVariables,
-};
-use warp_graphql::mutations::set_is_invite_link_enabled::{
-    SetIsInviteLinkEnabled, SetIsInviteLinkEnabledInput, SetIsInviteLinkEnabledResult,
-    SetIsInviteLinkEnabledVariables,
 };
 use warp_graphql::mutations::set_team_discoverability::{
     SetTeamDiscoverability, SetTeamDiscoverabilityInput, SetTeamDiscoverabilityResult,
@@ -80,18 +65,6 @@ use crate::workspaces::workspace::{Workspace, WorkspaceUid};
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
 pub trait TeamClient: 'static + Send + Sync {
     async fn workspaces_metadata(&self) -> Result<WorkspacesMetadataWithPricing>;
-
-    async fn add_invite_link_domain_restriction(
-        &self,
-        team_uid: ServerId,
-        domain: String,
-    ) -> Result<WorkspacesMetadataWithPricing>;
-
-    async fn delete_invite_link_domain_restriction(
-        &self,
-        team_uid: ServerId,
-        domain_uid: ServerId,
-    ) -> Result<WorkspacesMetadataWithPricing>;
 
     /// Creates a team and returns the result from the server with the newly created team.
     async fn create_team(
@@ -153,15 +126,6 @@ pub trait TeamClient: 'static + Send + Sync {
         team_uid: ServerId,
     ) -> Result<WorkspacesMetadataWithPricing>;
 
-    async fn reset_invite_links(&self, team_uid: ServerId)
-    -> Result<WorkspacesMetadataWithPricing>;
-
-    async fn set_is_invite_link_enabled(
-        &self,
-        team_uid: ServerId,
-        new_value: bool,
-    ) -> Result<WorkspacesMetadataWithPricing>;
-
     async fn set_team_discoverability(
         &self,
         team_uid: ServerId,
@@ -212,83 +176,6 @@ impl TeamClient for ServerApi {
             metadata,
             pricing_info,
         })
-    }
-
-    async fn add_invite_link_domain_restriction(
-        &self,
-        team_uid: ServerId,
-        domain: String,
-    ) -> Result<WorkspacesMetadataWithPricing> {
-        let variables = AddInviteLinkDomainRestrictionVariables {
-            input: AddInviteLinkDomainRestrictionInput {
-                team_uid: team_uid.into(),
-                domain,
-            },
-            request_context: get_request_context(),
-        };
-
-        let operation = AddInviteLinkDomainRestriction::build(variables);
-        let result = self
-            .send_graphql_request(operation, None)
-            .await?
-            .add_invite_link_domain_restriction;
-
-        match result {
-            AddInviteLinkDomainRestrictionResult::AddInviteLinkDomainRestrictionOutput(result) => {
-                if !result.success {
-                    return Err(anyhow!("failed to add invite link domain restriction"));
-                }
-            }
-            AddInviteLinkDomainRestrictionResult::UserFacingError(user_facing_error) => {
-                return Err(anyhow!(get_user_facing_error_message(user_facing_error)));
-            }
-            AddInviteLinkDomainRestrictionResult::Unknown => {
-                return Err(anyhow!(
-                    "unknown error while adding invite link domain restriction"
-                ));
-            }
-        }
-
-        self.workspaces_metadata().await
-    }
-
-    async fn delete_invite_link_domain_restriction(
-        &self,
-        team_uid: ServerId,
-        domain_uid: ServerId,
-    ) -> Result<WorkspacesMetadataWithPricing> {
-        let variables = DeleteInviteLinkDomainRestrictionVariables {
-            input: DeleteInviteLinkDomainRestrictionInput {
-                uid: domain_uid.into(),
-                team_uid: team_uid.into(),
-            },
-            request_context: get_request_context(),
-        };
-        let operation = DeleteInviteLinkDomainRestriction::build(variables);
-        let result = self
-            .send_graphql_request(operation, None)
-            .await?
-            .delete_invite_link_domain_restriction;
-
-        match result {
-            DeleteInviteLinkDomainRestrictionResult::DeleteInviteLinkDomainRestrictionOutput(
-                result,
-            ) => {
-                if !result.success {
-                    return Err(anyhow!("failed to delete invite link domain restriction"));
-                }
-            }
-            DeleteInviteLinkDomainRestrictionResult::UserFacingError(user_facing_error) => {
-                return Err(anyhow!(get_user_facing_error_message(user_facing_error)));
-            }
-            DeleteInviteLinkDomainRestrictionResult::Unknown => {
-                return Err(anyhow!(
-                    "unknown error while deleting invite link domain restriction"
-                ));
-            }
-        }
-
-        self.workspaces_metadata().await
     }
 
     async fn create_team(
@@ -641,76 +528,6 @@ impl TeamClient for ServerApi {
                 Err(anyhow!(get_user_facing_error_message(user_facing_error)))
             }
             RenameTeamResult::Unknown => Err(anyhow!("unknown error while renaming team")),
-        }
-    }
-
-    async fn reset_invite_links(
-        &self,
-        team_uid: ServerId,
-    ) -> Result<WorkspacesMetadataWithPricing> {
-        let variables = ResetInviteLinksVariables {
-            input: ResetInviteLinksInput {
-                team_uid: team_uid.into(),
-            },
-            request_context: get_request_context(),
-        };
-
-        let operation = ResetInviteLinks::build(variables);
-        let result = self
-            .send_graphql_request(operation, None)
-            .await?
-            .reset_invite_links;
-
-        match result {
-            ResetInviteLinksResult::ResetInviteLinksOutput(output) => {
-                if output.success {
-                    self.workspaces_metadata().await
-                } else {
-                    Err(anyhow!("failed to reset invite links"))
-                }
-            }
-            ResetInviteLinksResult::UserFacingError(user_facing_error) => {
-                Err(anyhow!(get_user_facing_error_message(user_facing_error)))
-            }
-            ResetInviteLinksResult::Unknown => {
-                Err(anyhow!("unknown error while resetting invite links"))
-            }
-        }
-    }
-
-    async fn set_is_invite_link_enabled(
-        &self,
-        team_uid: ServerId,
-        new_value: bool,
-    ) -> Result<WorkspacesMetadataWithPricing> {
-        let variables = SetIsInviteLinkEnabledVariables {
-            input: SetIsInviteLinkEnabledInput {
-                team_uid: team_uid.into(),
-                new_value,
-            },
-            request_context: get_request_context(),
-        };
-
-        let operation = SetIsInviteLinkEnabled::build(variables);
-        let result = self
-            .send_graphql_request(operation, None)
-            .await?
-            .set_is_invite_link_enabled;
-
-        match result {
-            SetIsInviteLinkEnabledResult::SetIsInviteLinkEnabledOutput(output) => {
-                if output.success {
-                    self.workspaces_metadata().await
-                } else {
-                    Err(anyhow!("failed to set invite link enabled"))
-                }
-            }
-            SetIsInviteLinkEnabledResult::UserFacingError(user_facing_error) => {
-                Err(anyhow!(get_user_facing_error_message(user_facing_error)))
-            }
-            SetIsInviteLinkEnabledResult::Unknown => {
-                Err(anyhow!("unknown error while setting invite link enabled"))
-            }
         }
     }
 

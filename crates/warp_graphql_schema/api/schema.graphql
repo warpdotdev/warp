@@ -3427,7 +3427,7 @@ type DeleteRunnerOutput implements Response {
 union DeleteRunnerResult = DeleteRunnerOutput | UserFacingError
 
 type RootMutation {
-  addInviteLinkDomainRestriction(input: AddInviteLinkDomainRestrictionInput!, requestContext: RequestContext!): AddInviteLinkDomainRestrictionResult!
+  addInviteLinkDomainRestriction(input: AddInviteLinkDomainRestrictionInput!, requestContext: RequestContext!): AddInviteLinkDomainRestrictionResult! @deprecated(reason: "Invite links have been removed. Use email invitations.")
   addObjectGuests(input: AddObjectGuestsInput!, requestContext: RequestContext!): AddObjectGuestsResult!
   bulkCreateObjects(input: BulkCreateObjectsInput!, requestContext: RequestContext!): BulkCreateObjectsResult!
   confirmFileArtifactUpload(input: ConfirmFileArtifactUploadInput!, requestContext: RequestContext!): ConfirmFileArtifactUploadResult!
@@ -3449,7 +3449,7 @@ type RootMutation {
   createWorkflow(input: CreateWorkflowInput!, requestContext: RequestContext!): CreateWorkflowResult!
   deleteConversation(input: DeleteConversationInput!, requestContext: RequestContext!): DeleteConversationResult!
   deleteRunner(input: DeleteRunnerInput!, requestContext: RequestContext!): DeleteRunnerResult!
-  deleteInviteLinkDomainRestriction(input: DeleteInviteLinkDomainRestrictionInput!, requestContext: RequestContext!): DeleteInviteLinkDomainRestrictionResult!
+  deleteInviteLinkDomainRestriction(input: DeleteInviteLinkDomainRestrictionInput!, requestContext: RequestContext!): DeleteInviteLinkDomainRestrictionResult! @deprecated(reason: "Invite links have been removed. Use email invitations.")
   deleteManagedSecret(input: DeleteManagedSecretInput!, requestContext: RequestContext!): DeleteManagedSecretResult!
   deleteObject(input: DeleteObjectInput!, requestContext: RequestContext!): DeleteObjectResult!
   deleteTeamInvite(input: DeleteTeamInviteInput!, requestContext: RequestContext!): DeleteTeamInviteResult!
@@ -3506,11 +3506,11 @@ type RootMutation {
   current execution's credentials.
   """
   reportHarnessTransport(input: ReportHarnessTransportInput!, requestContext: RequestContext!): ReportHarnessTransportResult!
-  resetInviteLinks(input: ResetInviteLinksInput!, requestContext: RequestContext!): ResetInviteLinksResult!
+  resetInviteLinks(input: ResetInviteLinksInput!, requestContext: RequestContext!): ResetInviteLinksResult! @deprecated(reason: "Invite links have been removed. Use email invitations.")
   sendOnboardingSurveyResponses(input: SendOnboardingSurveyResponsesInput!, requestContext: RequestContext!): SendOnboardingSurveyResponsesResult!
   sendReferralInviteEmails(input: SendReferralInviteEmailsInput!, requestContext: RequestContext!): SendReferralInviteEmailsResult!
   sendTeamInviteEmail(input: SendTeamInviteEmailInput!, requestContext: RequestContext!): SendTeamInviteEmailResult!
-  setIsInviteLinkEnabled(input: SetIsInviteLinkEnabledInput!, requestContext: RequestContext!): SetIsInviteLinkEnabledResult!
+  setIsInviteLinkEnabled(input: SetIsInviteLinkEnabledInput!, requestContext: RequestContext!): SetIsInviteLinkEnabledResult! @deprecated(reason: "Invite links have been removed. Use email invitations.")
   setObjectLinkPermissions(input: SetObjectLinkPermissionsInput!, requestContext: RequestContext!): SetObjectLinkPermissionsResult!
   setTeamDiscoverability(input: SetTeamDiscoverabilityInput!, requestContext: RequestContext!): SetTeamDiscoverabilityResult!
   setTeamMemberRole(input: SetTeamMemberRoleInput!, requestContext: RequestContext!): SetTeamMemberRoleResult!
@@ -4184,12 +4184,9 @@ type Team {
   featureModelChoice: FeatureModelChoice!
 
   """
-  inviteLink is the server-owned invite-by-link URL for this team. It is null
-  only when invite links are disabled for this team (`is_invite_link_enabled`
-  is false). A caller who lacks visibility into the team does not get null:
-  the query raises a NotAuthorized error instead.
+  Invite links have been removed. Returns null.
   """
-  inviteLink: String
+  inviteLink: String @deprecated(reason: "Invite links have been removed. Use email invitations.")
   managedSecrets: ManagedSecretConfig
   memberSpendLimits: [MemberSpendLimit!]
   members: [TeamMember!]!
@@ -5245,7 +5242,7 @@ type Workspace {
   """
   hasBillingHistory: Boolean!
   includedUsageInfo: WorkspaceIncludedUsageInfo
-  inviteLinkDomainRestrictions: [InviteLinkDomainRestriction!]!
+  inviteLinkDomainRestrictions: [InviteLinkDomainRestriction!]! @deprecated(reason: "Invite links have been removed. Use email invitations.")
   isEligibleForDiscovery: Boolean!
   memberSpendLimits: [MemberSpendLimit!]
   members: [WorkspaceMember!]!
@@ -5318,7 +5315,7 @@ type WorkspaceSettings {
   enterpriseBillingSettings: EnterpriseBillingSettings
   harnessSettings: HarnessSettings
   isDiscoverable: Boolean!
-  isInviteLinkEnabled: Boolean!
+  isInviteLinkEnabled: Boolean! @deprecated(reason: "Invite links have been removed. Use email invitations.")
   linkSharingSettings: LinkSharingSettings!
   llmSettings: LlmSettings!
   sandboxedAgentSettings: SandboxedAgentSettings

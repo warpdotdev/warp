@@ -4,8 +4,8 @@ use crate::response_context::ResponseContext;
 use crate::schema;
 use crate::workspace::WorkspaceSettings;
 
-// Note that `isInviteLinkEnabled` and `IsDiscoverable` aren't fetchable from this mutation;
-// they don't come from the same code path as fetching org settings. We could change this
+// Note that `isDiscoverable` isn't fetchable from this mutation;
+// it doesn't come from the same code path as fetching org settings. We could change this
 // but it's not something the server will populate at the moment.
 
 /*

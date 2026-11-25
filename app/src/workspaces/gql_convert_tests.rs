@@ -618,18 +618,7 @@ mod team_visibility_conversion {
 
     #[test]
     fn fails_closed_on_unrecognized_value() {
-        // An unrecognized value must never be treated as Open, since that
-        // would surface the invite-by-link control the server doesn't
-        // actually support for it.
         let visibility = TeamVisibility::from(GqlTeamVisibility::Other("future-value".to_string()));
         assert_eq!(visibility, TeamVisibility::Private);
-        assert!(!visibility.supports_invite_link());
-    }
-
-    #[test]
-    fn only_open_supports_invite_link() {
-        assert!(TeamVisibility::Open.supports_invite_link());
-        assert!(!TeamVisibility::Private.supports_invite_link());
-        assert!(!TeamVisibility::Hidden.supports_invite_link());
     }
 }

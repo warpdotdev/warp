@@ -21,7 +21,6 @@ mutation CreateTeam($input: CreateTeamInput!, $request_context: RequestContext!)
         teams {
           uid
           name
-          inviteLink
           members {
             uid
             email
@@ -83,7 +82,6 @@ mutation CreateTeam($input: CreateTeamInput!, $request_context: RequestContext!)
         }
         settings {
           isDiscoverable
-          isInviteLinkEnabled
           llmSettings {
             enabled
           }
@@ -100,10 +98,6 @@ mutation CreateTeam($input: CreateTeamInput!, $request_context: RequestContext!)
           email
           expired
           teamUid
-        }
-        inviteLinkDomainRestrictions {
-          uid
-          domain
         }
         stripeCustomerId
         isEligibleForDiscovery

@@ -55,7 +55,6 @@ pub struct Workspace {
     pub settings: WorkspaceSettings,
     /// The resolved-teamless model catalog -- fallback to this when teams[x].feature_model_choice isn't available
     pub feature_model_choice: ModelsByFeature,
-    pub invite_link_domain_restrictions: Vec<InviteLinkDomainRestriction>,
     pub pending_email_invites: Vec<EmailInvite>,
     // If the team is eligible for discovery, then show toggle for setting discoverability to the team's admin
     pub is_eligible_for_discovery: bool,
@@ -90,7 +89,6 @@ impl Workspace {
             has_billing_history: false,
             settings: Default::default(), // TODO: persistence wrapper instead of default
             feature_model_choice: feature_model_choice.unwrap_or_default(),
-            invite_link_domain_restrictions: Default::default(),
             pending_email_invites: Default::default(),
             is_eligible_for_discovery: false,
             members: Default::default(),
@@ -270,24 +268,6 @@ impl PartialOrd for EmailInvite {
 impl Ord for EmailInvite {
     fn cmp(&self, other: &Self) -> Ordering {
         self.invitee_email.cmp(&other.invitee_email)
-    }
-}
-
-#[derive(Clone, Eq, PartialEq, Debug)]
-pub struct InviteLinkDomainRestriction {
-    pub uid: ServerId,
-    pub domain: String,
-}
-
-impl PartialOrd for InviteLinkDomainRestriction {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for InviteLinkDomainRestriction {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.domain.cmp(&other.domain)
     }
 }
 
@@ -1121,7 +1101,6 @@ pub struct WorkspaceSettings {
     pub secret_redaction_settings: SecretRedactionSettings,
     pub ai_permissions_settings: AiPermissionsSettings,
     pub ai_autonomy_settings: AiAutonomySettings,
-    pub is_invite_link_enabled: bool,
     pub is_discoverable: bool,
     pub usage_based_pricing_settings: UsageBasedPricingSettings,
     pub addon_credits_settings: AddonCreditsSettings,
@@ -1270,8 +1249,7 @@ pub struct TeamSandboxedAgentSettings {
 /// `is_enforced_by_workspace` / workspace-vs-team split metadata (via
 /// [`EnforceableSetting`] / [`SplitListSetting`]) so future admin UI can recover
 /// those details. Unlike `WorkspaceSettings`, it does not carry the
-/// workspace-scoped `is_invite_link_enabled` / `is_discoverable` flags (those
-/// remain on [`WorkspaceSettings`] and are read from the current workspace).
+/// workspace-scoped `is_discoverable` flag (which remains on [`WorkspaceSettings`]).
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct TeamSettings {
     pub ugc_collection: EnforceableSetting<UgcCollectionEnablementSetting>,
