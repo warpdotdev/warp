@@ -193,6 +193,9 @@ impl ToolProjection {
             // the content rendered from it.
             Self::Mcp { .. } => match mcp_projection::outcome(raw_output) {
                 Some(Err(message)) => mcp_error(message),
+                // An adapter may pass through only the result's content, leaving the call's
+                // status as the one sign that the text is an error.
+                Some(Ok(text)) if failed => mcp_error(text),
                 Some(Ok(text)) => mcp_success(text),
                 None if failed => mcp_error(output),
                 None => mcp_success(output),

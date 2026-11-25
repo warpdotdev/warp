@@ -208,3 +208,20 @@ fn outcome_reads_results_errors_blocks_and_text() {
         Some(Ok(serde_json::to_string_pretty(&image_only).unwrap()))
     );
 }
+
+#[test]
+fn outcome_reads_a_result_flagged_is_error_as_the_error_it_reported() {
+    let flagged = json!({ "content": [{ "type": "text", "text": "boom" }], "isError": true });
+    assert_eq!(outcome(Some(&flagged)), Some(Err("boom".to_owned())));
+    assert_eq!(
+        outcome(Some(&json!({ "result": flagged, "error": null }))),
+        Some(Err("boom".to_owned()))
+    );
+    assert_eq!(
+        outcome(Some(&json!({
+            "content": [{ "type": "text", "text": "posted" }],
+            "isError": false
+        }))),
+        Some(Ok("posted".to_owned()))
+    );
+}

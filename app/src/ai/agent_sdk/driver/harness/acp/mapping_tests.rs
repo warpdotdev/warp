@@ -65,6 +65,16 @@ fn mcp_result_text(result: &ToolResult) -> &str {
     }
 }
 
+fn mcp_error_message(result: &ToolResult) -> &str {
+    let ToolResult::CallMcpTool(mcp) = result else {
+        panic!("expected CallMcpTool result, got {result:?}");
+    };
+    match &mcp.result {
+        Some(call_mcp_tool_result::Result::Error(error)) => &error.message,
+        other => panic!("expected an MCP error, got {other:?}"),
+    }
+}
+
 fn added_messages(action: &warp_multi_agent_api::ClientAction) -> &[warp_multi_agent_api::Message] {
     match &action.action {
         Some(Action::AddMessagesToTask(add)) => &add.messages,
@@ -675,6 +685,132 @@ fn mcp_errors_in_the_result_envelope_become_mcp_errors() {
         }
         other => panic!("expected an MCP error, got {other:?}"),
     }
+}
+
+const RECORDING_UPLOAD_FAILURE: &str = "Uploading the recording failed (exit status: 1): You are \
+    not logged in. Please log in again with `oz-dev login` to continue. The recording was kept \
+    at /tmp/warp-recording.mp4.";
+
+/// The result reported for a computer use call announced by `announce` and finished by `finish`.
+fn computer_use_result(announce: serde_json::Value, finish: serde_json::Value) -> ToolResult {
+    let mut mapper = mapper_with_servers(vec![KnownMcpServer {
+        name: COMPUTER_USE_MCP_SERVER_NAME.to_owned(),
+        installation_id: COMPUTER_USE_MCP_INSTALLATION_UUID,
+        warp_id: None,
+    }]);
+    mapper.map_update(update(announce));
+    let finished = mapper.map_update(update(finish));
+    reported_result(&finished[1]).1
+}
+
+fn codex_stop_recording_call() -> serde_json::Value {
+    json!({
+        "sessionUpdate": "tool_call",
+        "toolCallId": "exec-1",
+        "title": "mcp.warp-computer-use.stop_recording",
+        "kind": "execute",
+        "status": "in_progress",
+        "rawInput": {
+            "server": "warp-computer-use",
+            "tool": "stop_recording",
+            "arguments": { "recording_id": "recording-1" }
+        }
+    })
+}
+
+/// A recording whose upload failed, as Codex reports it: the call is marked failed and its
+/// result carries the error as text content flagged `isError`, which reaches the driver either
+/// inside codex-acp's `{result, error}` envelope or bare.
+#[test]
+fn a_failed_recording_upload_is_recorded_as_an_mcp_error() {
+    let result = json!({
+        "content": [{ "type": "text", "text": RECORDING_UPLOAD_FAILURE }],
+        "isError": true
+    });
+    for raw_output in [json!({ "result": result, "error": null }), result] {
+        let reported = computer_use_result(
+            codex_stop_recording_call(),
+            json!({
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "exec-1",
+                "status": "failed",
+                "rawOutput": raw_output
+            }),
+        );
+        assert_eq!(
+            mcp_error_message(&reported),
+            RECORDING_UPLOAD_FAILURE,
+            "{raw_output}"
+        );
+    }
+}
+
+#[test]
+fn an_mcp_result_flagged_is_error_is_an_error_even_when_the_call_completed() {
+    let reported = computer_use_result(
+        codex_stop_recording_call(),
+        json!({
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "exec-1",
+            "status": "completed",
+            "rawOutput": {
+                "result": {
+                    "content": [{ "type": "text", "text": "No recording is in progress." }],
+                    "isError": true
+                },
+                "error": null
+            }
+        }),
+    );
+    assert_eq!(mcp_error_message(&reported), "No recording is in progress.");
+}
+
+/// claude-code-acp passes only a tool result's content through as the output, so the call's
+/// status is all that marks the text as an error.
+#[test]
+fn an_mcp_call_marked_failed_is_an_error_carrying_its_output_text() {
+    let reported = computer_use_result(
+        json!({
+            "sessionUpdate": "tool_call",
+            "toolCallId": "toolu_1",
+            "title": "mcp__warp-computer-use__stop_recording",
+            "kind": "other",
+            "status": "pending",
+            "rawInput": { "recording_id": "recording-1" }
+        }),
+        json!({
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "toolu_1",
+            "status": "failed",
+            "rawOutput": [{ "type": "text", "text": RECORDING_UPLOAD_FAILURE }],
+            "content": [{
+                "type": "content",
+                "content": { "type": "text", "text": RECORDING_UPLOAD_FAILURE }
+            }],
+            "_meta": { "claudeCode": { "toolName": "mcp__warp-computer-use__stop_recording" } }
+        }),
+    );
+    assert_eq!(mcp_error_message(&reported), RECORDING_UPLOAD_FAILURE);
+}
+
+#[test]
+fn a_completed_mcp_call_whose_result_is_not_an_error_stays_a_success() {
+    let reported = computer_use_result(
+        codex_stop_recording_call(),
+        json!({
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "exec-1",
+            "status": "completed",
+            "rawOutput": {
+                "result": {
+                    "content": [{ "type": "text", "text": "Recording uploaded." }],
+                    "isError": false
+                },
+                "error": null
+            }
+        }),
+    );
+    assert_eq!(mcp_result_text(&reported), "Recording uploaded.");
 }
 
 /// claude-code-acp also names the tool in `name` and `_meta.claudeCode.toolName`; either
