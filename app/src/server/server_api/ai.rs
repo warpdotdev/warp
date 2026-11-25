@@ -1605,7 +1605,6 @@ pub trait AIClient: 'static + Send + Sync {
     async fn list_run_previews(
         &self,
         task_id: &AmbientAgentTaskId,
-        advertise_authorization: bool,
     ) -> anyhow::Result<ListRunPreviewsResponse>;
     async fn generate_commands_from_natural_language(
         &self,
@@ -2420,7 +2419,6 @@ impl AIClient for ServerApi {
     async fn list_run_previews(
         &self,
         task_id: &AmbientAgentTaskId,
-        advertise_authorization: bool,
     ) -> anyhow::Result<ListRunPreviewsResponse> {
         let auth_token = self.get_or_refresh_access_token().await?;
         let url = format!(
@@ -2437,9 +2435,6 @@ impl AIClient for ServerApi {
         }
         for (name, value) in self.ambient_agent_headers_for_task(task_id).await? {
             request = request.header(name, value);
-        }
-        if advertise_authorization {
-            request = request.header("X-Warp-Preview-Authorization-Version", "1");
         }
         let response = request.send().await?;
         if !response.status().is_success() {

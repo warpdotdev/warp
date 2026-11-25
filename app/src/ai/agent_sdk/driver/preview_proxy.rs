@@ -117,7 +117,7 @@ impl PortSource for Client {
     }
 
     async fn previews(&self) -> anyhow::Result<Vec<PreviewRecord>> {
-        let response = self.client.list_run_previews(&self.task_id, true).await?;
+        let response = self.client.list_run_previews(&self.task_id).await?;
         preview_records(response, self.execution_id)
     }
 }
