@@ -67,8 +67,11 @@ fn relocated_pi_usage_includes_earlier_executions_per_model() {
     assert_eq!(session_header(path, cwd.path()), Some(native_id));
     assert_eq!(session_header(path, previous_cwd.path()), None);
     assert_eq!(
-        find_session_file(root.path(), cwd.path(), acp_id),
-        Some(path.to_path_buf())
+        find_session_file(root.path(), cwd.path(), acp_id)
+            .unwrap()
+            .canonicalize()
+            .unwrap(),
+        path.to_path_buf()
     );
     assert_eq!(
         find_session_file(root.path(), previous_cwd.path(), acp_id),
