@@ -1047,32 +1047,6 @@ impl TuiTerminalSessionView {
             },
             ctx
         );
-        if ChannelState::channel().is_dogfood() {
-            let duration = match (serialized_block.start_ts, serialized_block.completed_ts) {
-                (Some(start), Some(completed)) => (completed - start).to_std().unwrap_or_default(),
-                (None, _) | (_, None) => Duration::default(),
-            };
-            warp::send_telemetry_from_ctx!(
-                TelemetryEvent::BlockCompletedOnDogfoodOnly {
-                    block_finished_to_precmd_delay_ms: delay.as_millis() as u64,
-                    honor_ps1_enabled,
-                    num_secrets_redacted: completed.num_secrets_obfuscated,
-                    num_output_lines: user_block.num_output_lines,
-                    num_output_lines_truncated: user_block.num_output_lines_truncated,
-                    command: user_block
-                        .command_with_obfuscated_secrets
-                        .get_with(|compute| {
-                            let model = self.terminal_model.lock();
-                            compute(model.block_list())
-                        })
-                        .to_owned(),
-                    duration,
-                    exit_code: serialized_block.exit_code,
-                    terminal_session_id: serialized_block.session_id,
-                },
-                ctx
-            );
-        }
     }
     fn handle_accepted_mcp_install_action(
         &mut self,
