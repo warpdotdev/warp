@@ -384,7 +384,7 @@ async fn normalizes_host_and_forwarded_headers_without_rewriting_application_cre
     let mut proxy = Proxy::bind(0, Ports::new(vec![app_port])).await.unwrap();
     let port = proxy.port();
     let mut stream = request(port, app_port,
-        "Connection: close, x-remove-me\r\nX-Remove-Me: hidden\r\nAuthorization: Bearer application\r\nCookie: __session=secret; app=visible; __Host-warp_preview_ingress=secret\r\nX-Nsc-Other: secret\r\nX-Warp-Ambient-Workload-Token: secret\r\nX-Forwarded-Host: preview.example\r\nX-Forwarded-Proto: https\r\nX-Forwarded-Port: 443\r\n").await;
+        "Connection: close, x-remove-me\r\nX-Remove-Me: hidden\r\nAuthorization: Bearer application\r\nCookie: __session=secret; app=visible; __Host-warp_preview_ingress=secret\r\nX-Nsc-Other: secret\r\nX-Warp-Ambient-Workload-Token: sandbox-header\r\nX-Forwarded-Host: preview.example\r\nX-Forwarded-Proto: https\r\nX-Forwarded-Port: 443\r\n").await;
     let mut response = String::new();
     stream.read_to_string(&mut response).await.unwrap();
     assert!(response.starts_with("HTTP/1.1 200"));
@@ -393,6 +393,7 @@ async fn normalizes_host_and_forwarded_headers_without_rewriting_application_cre
         "Bearer application",
         "app=visible",
         "\"x-forwarded-proto\": \"http\"",
+        "\"x-warp-ambient-workload-token\": \"sandbox-header\"",
     ] {
         assert!(response.contains(expected), "{expected}: {response}");
     }
