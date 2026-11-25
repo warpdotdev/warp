@@ -7,7 +7,6 @@ use anyhow::Context as _;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 use uuid::Uuid;
-use warp_core::features::FeatureFlag;
 
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::server::server_api::ai::{AIClient, ListRunPreviewsResponse};
@@ -53,7 +52,6 @@ impl Manager {
             .context("Failed to create preview proxy runtime")?;
         let cancel = CancellationToken::new();
         let task_cancel = cancel.clone();
-        let require_ingress_token = FeatureFlag::PreviewUrlsDockerSandboxSupport.is_enabled();
         let thread = std::thread::Builder::new()
             .name("preview-proxy".into())
             .spawn(move || {
@@ -62,7 +60,6 @@ impl Manager {
                         task_id,
                         execution_id,
                         client,
-                        require_ingress_token,
                     });
                     let mut proxy = match Proxy::bind(port, source).await {
                         Ok(proxy) => proxy,
@@ -86,9 +83,6 @@ impl Manager {
 }
 
 impl PortSource for Client {
-    fn requires_ingress_token(&self) -> bool {
-        self.require_ingress_token
-    }
     async fn previews(&self) -> anyhow::Result<Vec<PreviewRecord>> {
         let response = self.client.list_run_previews(&self.task_id).await?;
         preview_records(response, self.execution_id)
@@ -164,7 +158,6 @@ struct Client {
     task_id: AmbientAgentTaskId,
     execution_id: i64,
     client: Arc<dyn AIClient>,
-    require_ingress_token: bool,
 }
 
 #[cfg(test)]

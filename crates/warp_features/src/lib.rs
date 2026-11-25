@@ -974,8 +974,6 @@ pub enum FeatureFlag {
     /// Attaches the Warp-hosted preview URLs MCP server (`/api/v1/mcp/preview-urls`)
     /// to agent runs, so a cloud run can expose a sandbox port as a preview URL.
     PreviewUrlsMcp,
-    /// Enables server-validated ingress tokens for the Docker sandbox preview rollout.
-    PreviewUrlsDockerSandboxSupport,
 
     /// Enables periodic workspace-handoff checkpoints during a cloud agent run,
     /// rather than only uploading a workspace snapshot once at end-of-run.
@@ -1106,7 +1104,6 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::AgentPromptSteering,
     FeatureFlag::CwdScopedCloudSkills,
     FeatureFlag::SessionAgentMessages,
-    FeatureFlag::PreviewUrlsDockerSandboxSupport,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).

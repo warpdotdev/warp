@@ -507,7 +507,6 @@ well_known_mcp_ids = []
 managed_mcp_credential_refresh = []
 factory_mcp = []
 preview_urls_mcp = []
-preview_urls_docker_sandbox_support = []
 default = [
     "agent_mode",
     "osc_hyperlinks",

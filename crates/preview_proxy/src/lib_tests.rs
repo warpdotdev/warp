@@ -37,48 +37,6 @@ impl PortSource for IngressPorts {
 }
 
 #[tokio::test]
-async fn upstream_authenticated_ingress_does_not_require_a_warp_token() {
-    struct UpstreamAuthenticatedPort(u16);
-
-    impl PortSource for UpstreamAuthenticatedPort {
-        fn requires_ingress_token(&self) -> bool {
-            false
-        }
-
-        async fn previews(&self) -> Result<Vec<PreviewRecord>> {
-            Ok(vec![preview(self.0)])
-        }
-    }
-
-    let (app_port, app_task) = app().await;
-    let mut proxy = Proxy::bind(0, Arc::new(UpstreamAuthenticatedPort(app_port)))
-        .await
-        .unwrap();
-    let mut stream = request_without_default_token(
-        proxy.port(),
-        app_port,
-        "Connection: close\r\nX-Nsc-Ingress-Auth: Bearer platform-credential\r\nCookie: __session=platform-cookie; app=visible\r\n",
-    )
-    .await;
-    let mut response = String::new();
-    stream.read_to_string(&mut response).await.unwrap();
-    assert!(response.starts_with("HTTP/1.1 200"), "{response}");
-    assert!(response.contains("app=visible"), "{response}");
-    assert!(!response.contains("platform-credential"), "{response}");
-    assert!(!response.contains("platform-cookie"), "{response}");
-
-    let mut unknown_preview =
-        request_with_identity(proxy.port(), app_port, Uuid::nil(), "Connection: close\r\n").await;
-    assert!(
-        headers(&mut unknown_preview)
-            .await
-            .starts_with("HTTP/1.1 403")
-    );
-    proxy.shutdown().await;
-    app_task.abort();
-}
-
-#[tokio::test]
 async fn validates_ingress_token_before_each_http_request_and_upgrade() {
     let (app_port, app_task) = app().await;
     let source = Arc::new(IngressPorts {
