@@ -20,7 +20,7 @@ use uuid::Uuid;
 use warp_cli::agent::Harness;
 use warp_cli::mcp::MCPSpec;
 use warp_cli::{
-    SERVER_ROOT_URL_OVERRIDE_ENV, SESSION_SHARING_SERVER_URL_OVERRIDE_ENV,
+    OZ_RUN_ID_ENV, SERVER_ROOT_URL_OVERRIDE_ENV, SESSION_SHARING_SERVER_URL_OVERRIDE_ENV,
     WS_SERVER_URL_OVERRIDE_ENV,
 };
 use warp_core::execution_mode::AppExecutionMode;
@@ -1592,9 +1592,13 @@ const COMPUTER_USE_MCP_ENV_VARS: &[&str] = &[
 ];
 
 /// Variables the computer use MCP server needs from the harness's environment: the Warp CLI that
-/// uploads recordings authenticates with the API key and honors the server URL overrides.
+/// uploads recordings authenticates with the API key, proves it belongs to the run with the
+/// workload token on platforms that supply one through the environment, only reaches a server
+/// behind IAP as the run it finds in its environment, and honors the server URL overrides.
 const COMPUTER_USE_MCP_FORWARDED_ENV_VARS: &[&str] = &[
     "WARP_API_KEY",
+    "WARP_WORKLOAD_TOKEN",
+    OZ_RUN_ID_ENV,
     SERVER_ROOT_URL_OVERRIDE_ENV,
     WS_SERVER_URL_OVERRIDE_ENV,
     SESSION_SHARING_SERVER_URL_OVERRIDE_ENV,

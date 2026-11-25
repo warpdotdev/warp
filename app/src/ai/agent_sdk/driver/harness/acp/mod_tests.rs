@@ -1,9 +1,11 @@
+use std::fmt::{Debug, Display};
 use std::fs;
 
 use async_io::Async;
 use base64::Engine as _;
 use futures::io::{AsyncBufReadExt as _, AsyncRead, AsyncWrite, AsyncWriteExt as _, BufReader};
 use serde_json::json;
+use static_assertions::assert_not_impl_any;
 use tempfile::TempDir;
 use url::Url;
 use warp_cli::agent::HarnessTransport;
@@ -11,10 +13,10 @@ use warpui::App;
 use warpui::r#async::FutureExt as _;
 
 use super::attachments::ResolvedFile;
-use super::protocol::{ContentBlock, PromptCapabilities};
+use super::protocol::{ContentBlock, EnvVariable, HttpHeader, PromptCapabilities};
 use super::resume::{ReopenMethod, ResumeMiss};
 use super::*;
-use crate::ai::agent_sdk::driver::harness::{HarnessKind, harness_kind};
+use crate::ai::agent_sdk::driver::harness::{HarnessKind, HarnessMcpSettings, harness_kind};
 use crate::server::server_api::ServerApiProvider;
 use crate::terminal::History;
 use crate::terminal::model::block::BlockMetadata;
@@ -343,4 +345,193 @@ fn a_resumed_session_is_not_sent_the_system_prompt_again() {
     );
 
     assert_eq!(fresh, "recovery\n\ncontext\n\nsystem\n\ninspect these");
+}
+
+// The session request carries credentials in these (forwarded API keys, MCP auth headers).
+// Without `Debug` or `Display`, formatting the request into a log line or an error cannot
+// print them.
+assert_not_impl_any!(McpServer: Debug, Display);
+assert_not_impl_any!(EnvVariable: Debug, Display);
+assert_not_impl_any!(HttpHeader: Debug, Display);
+
+/// A run's MCP servers: one stdio server, `computer`, whose config sets `DISPLAY` and whose
+/// settings ask for `forwarded_env_vars` from the harness's environment.
+fn servers_forwarding(forwarded_env_vars: &[&str]) -> ResolvedMCPServers {
+    let mut servers = ResolvedMCPServers::default();
+    servers.configs.insert(
+        "computer".to_owned(),
+        JSONMCPServer {
+            transport_type: JSONTransportType::CLIServer {
+                command: "/opt/oz".to_owned(),
+                args: vec!["computer-use-mcp".to_owned()],
+                env: HashMap::from([("DISPLAY".to_owned(), ":99".to_owned())]),
+                working_directory: None,
+            },
+        },
+    );
+    servers.harness_settings.insert(
+        "computer".to_owned(),
+        HarnessMcpSettings {
+            forwarded_env_vars: forwarded_env_vars
+                .iter()
+                .map(|name| (*name).to_owned())
+                .collect(),
+            ..Default::default()
+        },
+    );
+    servers
+}
+
+fn environment(variables: &[(&str, &str)]) -> HashMap<OsString, OsString> {
+    variables
+        .iter()
+        .map(|(name, value)| (OsString::from(name), OsString::from(value)))
+        .collect()
+}
+
+/// The `env` of the only server in `servers`, as the session request serializes it.
+fn sent_env(servers: &[McpServer]) -> Value {
+    assert_eq!(servers.len(), 1);
+    serde_json::to_value(servers).unwrap()[0]["env"].clone()
+}
+
+#[test]
+fn codex_stdio_servers_are_sent_the_variables_they_ask_to_have_forwarded() {
+    let servers = servers_forwarding(&["WARP_API_KEY", "OZ_RUN_ID"]);
+    let run_env = environment(&[
+        ("WARP_API_KEY", "run-key"),
+        ("OZ_RUN_ID", "run-1"),
+        ("OTHER_SECRET", "not-asked-for"),
+    ]);
+
+    let sent = mcp_servers_for_acp(Harness::Codex, &servers, &run_env, |_| None);
+
+    assert_eq!(
+        serde_json::to_value(&sent).unwrap(),
+        json!([{
+            "name": "computer",
+            "command": "/opt/oz",
+            "args": ["computer-use-mcp"],
+            "env": [
+                {"name": "DISPLAY", "value": ":99"},
+                {"name": "WARP_API_KEY", "value": "run-key"},
+                {"name": "OZ_RUN_ID", "value": "run-1"},
+            ],
+        }])
+    );
+}
+
+#[test]
+fn forwarded_variables_that_are_unset_are_left_off_the_server() {
+    let servers = servers_forwarding(&["WARP_API_KEY", "WARP_SERVER_ROOT_URL"]);
+    let run_env = environment(&[("WARP_API_KEY", "run-key")]);
+
+    let sent = mcp_servers_for_acp(Harness::Codex, &servers, &run_env, |_| None);
+
+    assert_eq!(
+        sent_env(&sent),
+        json!([
+            {"name": "DISPLAY", "value": ":99"},
+            {"name": "WARP_API_KEY", "value": "run-key"},
+        ])
+    );
+}
+
+#[test]
+fn forwarded_variables_come_from_the_run_environment_before_the_process_environment() {
+    let servers = servers_forwarding(&["WARP_API_KEY", "WARP_SERVER_ROOT_URL"]);
+    let run_env = environment(&[("WARP_API_KEY", "run-key")]);
+    let process_env = environment(&[
+        ("WARP_API_KEY", "standby-key"),
+        ("WARP_SERVER_ROOT_URL", "https://process.example"),
+    ]);
+
+    let sent = mcp_servers_for_acp(Harness::Codex, &servers, &run_env, |name| {
+        process_env.get(OsStr::new(name)).cloned()
+    });
+
+    assert_eq!(
+        sent_env(&sent),
+        json!([
+            {"name": "DISPLAY", "value": ":99"},
+            {"name": "WARP_API_KEY", "value": "run-key"},
+            {"name": "WARP_SERVER_ROOT_URL", "value": "https://process.example"},
+        ])
+    );
+}
+
+#[test]
+fn a_harness_that_passes_on_its_environment_is_not_sent_forwarded_variables() {
+    let servers = servers_forwarding(&["WARP_API_KEY"]);
+    let run_env = environment(&[("WARP_API_KEY", "run-key")]);
+
+    let sent = mcp_servers_for_acp(Harness::Claude, &servers, &run_env, |_| None);
+
+    assert_eq!(
+        sent_env(&sent),
+        json!([{"name": "DISPLAY", "value": ":99"}])
+    );
+}
+
+#[test]
+fn a_server_that_asks_for_no_forwarded_variables_is_sent_none() {
+    let mut servers = servers_forwarding(&[]);
+    servers.harness_settings.clear();
+    let run_env = environment(&[("WARP_API_KEY", "run-key")]);
+
+    let sent = mcp_servers_for_acp(Harness::Codex, &servers, &run_env, |_| None);
+
+    assert_eq!(
+        sent_env(&sent),
+        json!([{"name": "DISPLAY", "value": ":99"}])
+    );
+}
+
+#[test]
+fn a_variable_the_server_config_sets_is_not_replaced_by_the_harness_environment() {
+    let servers = servers_forwarding(&["DISPLAY"]);
+    let run_env = environment(&[("DISPLAY", ":0")]);
+
+    let sent = mcp_servers_for_acp(Harness::Codex, &servers, &run_env, |_| None);
+
+    assert_eq!(
+        sent_env(&sent),
+        json!([{"name": "DISPLAY", "value": ":99"}])
+    );
+}
+
+#[test]
+fn remote_servers_are_sent_no_forwarded_variables() {
+    let mut servers = servers_forwarding(&["WARP_API_KEY"]);
+    servers.configs.insert(
+        "computer".to_owned(),
+        JSONMCPServer {
+            transport_type: JSONTransportType::SSEServer {
+                url: "https://example.com/mcp".to_owned(),
+                headers: HashMap::new(),
+            },
+        },
+    );
+    let run_env = environment(&[("WARP_API_KEY", "run-key")]);
+
+    let sent = mcp_servers_for_acp(Harness::Codex, &servers, &run_env, |_| None);
+
+    assert_eq!(
+        serde_json::to_value(&sent).unwrap(),
+        json!([{
+            "type": "http",
+            "name": "computer",
+            "url": "https://example.com/mcp",
+            "headers": [],
+        }])
+    );
+}
+
+#[test]
+fn pi_is_handed_no_mcp_servers_when_its_session_opens() {
+    let servers = servers_forwarding(&["WARP_API_KEY"]);
+
+    let sent = mcp_servers_for_acp(Harness::Pi, &servers, &HashMap::new(), |_| None);
+
+    assert!(sent.is_empty());
 }

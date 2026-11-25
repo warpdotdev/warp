@@ -32,7 +32,7 @@ mod turn_driver;
 mod turn_failure;
 
 use std::collections::{HashMap, VecDeque};
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
@@ -453,12 +453,12 @@ impl ThirdPartyHarness for AcpHarness {
             client: server_api,
             terminal_driver,
             attachments: Arc::new(attachments),
-            mcp_servers: resolved_mcp_servers
-                .configs
-                .iter()
-                .filter(|_| self.harness != Harness::Pi)
-                .map(|(name, server)| mcp_server_for_acp(name, server))
-                .collect(),
+            mcp_servers: mcp_servers_for_acp(
+                self.harness,
+                resolved_mcp_servers,
+                resolved_env_vars,
+                |name| std::env::var_os(name),
+            ),
             known_mcp_servers: KnownMcpServers::from_resolved(resolved_mcp_servers),
             conversation: OnceLock::new(),
             boundary_snapshot: Arc::default(),
@@ -1721,6 +1721,78 @@ async fn write_text_file(context: &AgentRequestContext, params: Value) -> Result
         Ok(Value::Null)
     })
     .await
+}
+
+/// The MCP servers `harness` is handed when its session opens. A harness that withholds its
+/// environment from stdio servers has each variable a server's settings ask to be forwarded set
+/// on that server instead, read the way the harness's own environment was built: the run's
+/// resolved environment over this process's.
+fn mcp_servers_for_acp(
+    harness: Harness,
+    resolved: &ResolvedMCPServers,
+    resolved_env_vars: &HashMap<OsString, OsString>,
+    process_env: impl Fn(&str) -> Option<OsString>,
+) -> Vec<McpServer> {
+    resolved
+        .configs
+        .iter()
+        .filter(|_| harness != Harness::Pi)
+        .map(|(name, server)| {
+            let mut server = mcp_server_for_acp(name, server);
+            if let Some(settings) = resolved.harness_settings.get(name)
+                && withholds_environment_from_mcp_servers(harness)
+            {
+                set_forwarded_env_vars(&mut server, &settings.forwarded_env_vars, |name| {
+                    resolved_env_vars
+                        .get(OsStr::new(name))
+                        .cloned()
+                        .or_else(|| process_env(name))
+                });
+            }
+            server
+        })
+        .collect()
+}
+
+/// Whether `harness` is known to launch stdio MCP servers without its own environment. ACP can
+/// only set a server's variables by value, which copies them into the session request, so they
+/// are sent to no harness that would have passed them on itself.
+fn withholds_environment_from_mcp_servers(harness: Harness) -> bool {
+    match harness {
+        // Codex passes on an allowlist of its environment.
+        Harness::Codex => true,
+        Harness::Claude
+        | Harness::Gemini
+        | Harness::Pi
+        | Harness::Oz
+        | Harness::OpenCode
+        | Harness::Unknown => false,
+    }
+}
+
+/// Sets each of `names` that `harness_env` holds on a stdio `server`, leaving a variable the
+/// server's own config sets as configured.
+fn set_forwarded_env_vars(
+    server: &mut McpServer,
+    names: &[String],
+    harness_env: impl Fn(&str) -> Option<OsString>,
+) {
+    match server {
+        McpServer::Stdio { env, .. } => {
+            for name in names {
+                if env.iter().any(|variable| variable.name == *name) {
+                    continue;
+                }
+                if let Some(value) = harness_env(name).and_then(|value| value.into_string().ok()) {
+                    env.push(protocol::EnvVariable {
+                        name: name.clone(),
+                        value,
+                    });
+                }
+            }
+        }
+        McpServer::Remote { .. } => {}
+    }
 }
 
 fn mcp_server_for_acp(name: &str, server: &JSONMCPServer) -> McpServer {

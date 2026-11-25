@@ -2545,6 +2545,8 @@ fn configured_servers_take_precedence_over_the_computer_use_mcp() {
         settings.forwarded_env_vars,
         [
             "WARP_API_KEY",
+            "WARP_WORKLOAD_TOKEN",
+            "OZ_RUN_ID",
             "WARP_SERVER_ROOT_URL",
             "WARP_WS_SERVER_URL",
             "WARP_SESSION_SHARING_SERVER_URL"
