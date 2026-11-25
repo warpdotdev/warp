@@ -84,6 +84,56 @@ use crate::workspace::view::tests::initialize_app as initialize_workspace_test_a
 // ── IdleTimeoutSender tests ──────────────────────────────────────────────────────
 
 #[test]
+fn delayed_shared_session_report_preserves_occurrence_time() {
+    App::test((), |mut app| async move {
+        let established_at = chrono::Utc::now() - chrono::Duration::minutes(1);
+        let session_id = session_sharing_protocol::common::SessionId::new();
+        let request = {
+            let mut server = ChannelState::mock_server();
+            server
+                .mock("POST", "/graphql/v2?op=UpdateAgentTask")
+                .match_body(Matcher::PartialJson(json!({
+                    "variables": {"input": {
+                        "taskId": HOOK_TASK_ID,
+                        "sessionId": session_id.to_string(),
+                        "sessionStartedAt": established_at,
+                    }}
+                })))
+                .with_body(
+                    json!({"data": {"updateAgentTask": {
+                        "__typename": "UpdateAgentTaskOutput",
+                        "responseContext": {"serverVersion": null}
+                    }}})
+                    .to_string(),
+                )
+                .expect(1)
+                .create()
+        };
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let driver = app.add_model(|ctx| {
+            let terminal_driver =
+                super::terminal::TerminalDriver::create_from_existing_view(terminal, ctx);
+            let mut driver = AgentDriver::new_for_test(PathBuf::new(), terminal_driver, ctx);
+            driver.task_id = Some(HOOK_TASK_ID.parse().unwrap());
+            driver
+        });
+        driver.update(&mut app, |driver, ctx| {
+            driver.handle_terminal_driver_event(
+                &super::TerminalDriverEvent::EstablishedSharedSession {
+                    session_id,
+                    join_url: "https://app.warp.dev/session/test".into(),
+                    established_at,
+                },
+                ctx,
+            );
+        });
+        assert_eventually!(request.matched(), "session report was not delivered");
+        request.assert();
+    });
+}
+
+#[test]
 fn sandbox_deadline_preserves_only_a_settled_latest_turn() {
     if std::env::var_os("WARP_TEST_SANDBOX_DEADLINE").is_none() {
         let output = ProcessCommand::new(std::env::current_exe().unwrap())

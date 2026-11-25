@@ -59,7 +59,7 @@ fn prepare_local_child_with_fetch_failures(
     let reported_errors = Arc::new(AtomicUsize::new(0));
     client.expect_update_agent_task().returning({
         let reported_errors = reported_errors.clone();
-        move |_, state, _, _, status, _, _| {
+        move |_, state, _, _, _, status, _, _| {
             assert_eq!(state, Some(warp_graphql::ai::AgentTaskState::Error));
             assert!(status.is_some());
             reported_errors.fetch_add(1, Ordering::SeqCst);

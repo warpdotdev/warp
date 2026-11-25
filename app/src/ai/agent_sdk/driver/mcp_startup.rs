@@ -1242,6 +1242,7 @@ impl AgentDriver {
                     None,
                     None,
                     None,
+                    None,
                     Some(TaskStatusUpdate::message(message)),
                     None,
                     None,

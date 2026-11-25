@@ -251,14 +251,14 @@ fn restored_local_child_transcript_error() {
             client
                 .expect_update_agent_task()
                 .times(1)
-                .withf(move |id, state, _, _, status, _, _| {
+                .withf(move |id, state, _, _, _, status, _, _| {
                     *id == task_id
                         && *state == Some(warp_graphql::ai::AgentTaskState::Error)
                         && status.is_some()
                 })
                 .returning({
                     let reported_error = reported_error.clone();
-                    move |_, _, _, _, _, _, _| {
+                    move |_, _, _, _, _, _, _, _| {
                         reported_error.store(true, std::sync::atomic::Ordering::SeqCst);
                         Ok(())
                     }
@@ -361,7 +361,7 @@ fn restored_local_child_exhausted_transcript_fetch_retries() {
         client
             .expect_update_agent_task()
             .times(1)
-            .returning(|_, _, _, _, _, _, _| Ok(()));
+            .returning(|_, _, _, _, _, _, _, _| Ok(()));
         let server_api = ServerApiProvider::new_for_test().get();
         let streamer = app.add_singleton_model(|ctx| {
             OrchestrationEventStreamer::new_with_clients_for_test(Arc::new(client), server_api, ctx)

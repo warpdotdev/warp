@@ -8,6 +8,7 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 
 use anyhow::Context as _;
+use chrono::{DateTime, Utc};
 use futures::channel::oneshot;
 use instant::Instant;
 use session_sharing_protocol::common::{Role, SessionId};
@@ -145,6 +146,7 @@ pub(crate) enum TerminalDriverEvent {
     EstablishedSharedSession {
         session_id: session_sharing_protocol::common::SessionId,
         join_url: String,
+        established_at: DateTime<Utc>,
     },
     /// A shared-session viewer sent input into this session: a command run in it, raw PTY bytes,
     /// or an edit to the shared input. Emitted regardless of whether anything is listening.
@@ -1076,6 +1078,7 @@ impl TerminalDriver {
                 ctx.emit(TerminalDriverEvent::SlowBootstrap);
             }
             crate::terminal::view::Event::EstablishedSharedSession { session_id } => {
+                let established_at = Utc::now();
                 self.shared_session_id = Some(*session_id);
                 if let Some(tx) = self.session_share_tx.take() {
                     let _ = tx.send(Ok(()));
@@ -1087,6 +1090,7 @@ impl TerminalDriver {
                 ctx.emit(TerminalDriverEvent::EstablishedSharedSession {
                     session_id: *session_id,
                     join_url: shared_session::join_link(session_id),
+                    established_at,
                 });
             }
             crate::terminal::view::Event::FailedToShareSession { reason, cause } => {

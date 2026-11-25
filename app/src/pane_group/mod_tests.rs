@@ -324,7 +324,7 @@ fn restored_local_child_subtree_setup_failure() {
         let reported = Arc::new(AtomicBool::new(false));
         client.expect_update_agent_task().times(1).returning({
             let reported = reported.clone();
-            move |_, state, _, _, status, _, _| {
+            move |_, state, _, _, _, status, _, _| {
                 assert_eq!(state, Some(warp_graphql::ai::AgentTaskState::Error));
                 assert!(status.is_some());
                 reported.store(true, Ordering::SeqCst);

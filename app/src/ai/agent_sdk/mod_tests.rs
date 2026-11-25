@@ -1032,7 +1032,7 @@ fn legacy_execution_launch_skips_bootstrap_and_reports_team_metadata_refresh_fai
             .withf(
                 |task_id,
                  task_state,
-                 session_id,
+                 session_id, _,
                  conversation_id,
                  status_message,
                  session_debug_until,
@@ -1049,7 +1049,7 @@ fn legacy_execution_launch_skips_bootstrap_and_reports_team_metadata_refresh_fai
                         && debug_agent_active.is_none()
                 },
             )
-            .returning(|_, _, _, _, _, _, _| Ok(()));
+            .returning(|_, _, _, _, _, _, _, _| Ok(()));
         let ai_client: Arc<dyn AIClient> = Arc::new(ai_client);
 
         let runner = app.add_singleton_model(|_| AgentDriverRunner);

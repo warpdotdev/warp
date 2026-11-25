@@ -74,12 +74,30 @@ fn prewarmed_binding_updates_controller_and_waits_for_real_sharing() {
             Some(task_id.to_string().as_str())
         );
         let shared = driver.update(&mut app, |driver, _| driver.wait_for_session_shared());
+        let established_at = Rc::new(RefCell::new(None));
+        app.update(|ctx| {
+            let established_at = established_at.clone();
+            ctx.subscribe_to_model(&driver, move |_, event, _| {
+                if let super::TerminalDriverEvent::EstablishedSharedSession {
+                    established_at: timestamp,
+                    ..
+                } = event
+                {
+                    *established_at.borrow_mut() = Some(*timestamp);
+                }
+            });
+        });
+        let before_establishment = chrono::Utc::now();
         terminal.update(&mut app, |_, ctx| {
             ctx.emit(Event::EstablishedSharedSession {
                 session_id: session_sharing_protocol::common::SessionId::new(),
             })
         });
+        let after_establishment = chrono::Utc::now();
         shared.await.unwrap();
+        let established_at = established_at.borrow().expect("establishment event");
+        assert!(established_at >= before_establishment);
+        assert!(established_at <= after_establishment);
         driver.read(&app, |driver, _| {
             assert!(driver.shared_session_id.is_some())
         });
