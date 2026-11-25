@@ -256,7 +256,7 @@ pub(super) fn outcome(raw_output: Option<&Value>) -> Option<Result<String, Strin
         return result_text(raw).map(Ok);
     };
     if !fields.contains_key("result") && !fields.contains_key("error") {
-        return result_text(raw).map(Ok);
+        return call_tool_result(raw);
     }
     if let Some(error) = fields.get("error").filter(|error| !error.is_null()) {
         let message = string_field(error, "message")
@@ -264,7 +264,14 @@ pub(super) fn outcome(raw_output: Option<&Value>) -> Option<Result<String, Strin
             .unwrap_or_else(|| error.to_string());
         return Some(Err(message));
     }
-    fields.get("result").and_then(result_text).map(Ok)
+    fields.get("result").and_then(call_tool_result)
+}
+
+/// The text of a `CallToolResult`, which is the error the tool reported when `isError` is set.
+fn call_tool_result(result: &Value) -> Option<Result<String, String>> {
+    let text = result_text(result)?;
+    let is_error = result.get("isError").and_then(Value::as_bool) == Some(true);
+    Some(if is_error { Err(text) } else { Ok(text) })
 }
 
 fn result_text(value: &Value) -> Option<String> {
