@@ -1291,7 +1291,7 @@ pub fn handle_incoming_uri(url: &Url, ctx: &mut AppContext) {
 /// Gets the primary window ID, and returns `None` if it does not exist.
 /// A primary window is the foregrounded window, or one of the inactive non-quake windows.
 /// A closed quake window is not counted.
-fn get_primary_window(
+pub(crate) fn get_primary_window(
     active_window_id: Option<WindowId>,
     ctx: &mut AppContext,
 ) -> Option<WindowId> {

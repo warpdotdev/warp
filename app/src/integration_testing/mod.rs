@@ -15,6 +15,7 @@ pub mod codebase_context;
 pub mod command_palette;
 pub mod command_search;
 pub mod context_chips;
+pub mod external_session;
 pub mod find;
 pub mod goto_line;
 pub mod input;

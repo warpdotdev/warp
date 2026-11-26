@@ -4214,3 +4214,414 @@ fn report_external_reference_missing_reference_type_fails() {
         "missing --reference-type should fail to parse"
     );
 }
+
+#[test]
+fn external_session_preserves_child_flags_after_e() {
+    let argv = [
+        "warp", "-e", "python3", "-m", "debugpy", "--listen", "5678", "--debug", "--help",
+    ];
+
+    let parsed = Args::try_parse_app_from(argv).unwrap();
+
+    assert!(parsed.command().is_none());
+    assert!(!parsed.debug());
+    assert_eq!(
+        parsed.app_args().external_session.resolved_command_spec(),
+        Some(ExternalCommandSpec::Argv(vec![
+            "python3".to_owned(),
+            "-m".to_owned(),
+            "debugpy".to_owned(),
+            "--listen".to_owned(),
+            "5678".to_owned(),
+            "--debug".to_owned(),
+            "--help".to_owned(),
+        ]))
+    );
+}
+
+#[test]
+fn external_session_parses_working_directory_flag() {
+    let argv = ["warp", "--working-directory=/tmp/proj"];
+
+    let parsed = Args::try_parse_app_from(argv).unwrap();
+
+    let ext = &parsed.app_args().external_session;
+    assert!(ext.has_session_options());
+    assert_eq!(
+        ext.working_directory.as_deref(),
+        Some(Path::new("/tmp/proj"))
+    );
+}
+
+#[test]
+fn external_session_parses_explicit_wait_after_command_flag() {
+    let argv = ["warp", "--wait-after-command=true", "-e", "echo", "hi"];
+
+    let parsed = Args::try_parse_app_from(argv).unwrap();
+
+    let ext = &parsed.app_args().external_session;
+    assert_eq!(ext.wait_after_command, Some(true));
+    assert_eq!(
+        ext.resolved_command_spec(),
+        Some(ExternalCommandSpec::Argv(vec![
+            "echo".to_owned(),
+            "hi".to_owned(),
+        ]))
+    );
+}
+
+#[test]
+fn external_session_parses_cwd_alias() {
+    let argv = ["warp", "--cwd", "/workspace/app"];
+
+    let parsed = Args::try_parse_app_from(argv).unwrap();
+
+    assert_eq!(
+        parsed
+            .app_args()
+            .external_session
+            .working_directory
+            .as_deref(),
+        Some(Path::new("/workspace/app"))
+    );
+}
+
+#[test]
+fn external_session_parses_new_window_flag() {
+    let argv = ["warp", "--new-window"];
+
+    let parsed = Args::try_parse_app_from(argv).unwrap();
+
+    assert!(parsed.app_args().external_session.new_window);
+}
+
+#[test]
+fn external_session_parses_short_title_flag() {
+    let argv = ["warp", "-T", "VS Code Console"];
+
+    let parsed = Args::try_parse_app_from(argv).unwrap();
+
+    assert_eq!(
+        parsed.app_args().external_session.title.as_deref(),
+        Some("VS Code Console")
+    );
+}
+
+#[test]
+fn external_session_parses_bare_wait_after_command_flag() {
+    let argv = ["warp", "--wait-after-command", "-e", "echo"];
+
+    let parsed = Args::try_parse_app_from(argv).unwrap();
+
+    assert_eq!(
+        parsed.app_args().external_session.wait_after_command,
+        Some(true)
+    );
+}
+
+#[test]
+fn external_session_parses_inline_long_command() {
+    let argv = ["warp", "--command=node", "--inspect=9229", "index.js"];
+
+    let parsed = Args::try_parse_app_from(argv).unwrap();
+
+    assert_eq!(
+        parsed.app_args().external_session.resolved_command_spec(),
+        Some(ExternalCommandSpec::Argv(vec![
+            "node".to_owned(),
+            "--inspect=9229".to_owned(),
+            "index.js".to_owned(),
+        ]))
+    );
+}
+
+#[test]
+fn external_session_parses_linux_vscode_bash_command() {
+    let argv = ["warp", "-e", "bash", "-c", "''python main.py; read -n1''"];
+
+    let parsed = Args::try_parse_app_from(argv).unwrap();
+
+    assert_eq!(
+        parsed.app_args().external_session.resolved_command_spec(),
+        Some(ExternalCommandSpec::Argv(vec![
+            "bash".to_owned(),
+            "-c".to_owned(),
+            "''python main.py; read -n1''".to_owned(),
+        ]))
+    );
+}
+
+#[test]
+fn external_session_parses_attached_short_e_flag() {
+    let argv = ["warp", "-ebash", "-c", "echo hi"];
+
+    let parsed = Args::try_parse_app_from(argv).unwrap();
+
+    assert_eq!(
+        parsed.app_args().external_session.resolved_command_spec(),
+        Some(ExternalCommandSpec::Argv(vec![
+            "bash".to_owned(),
+            "-c".to_owned(),
+            "echo hi".to_owned(),
+        ]))
+    );
+}
+
+#[test]
+fn external_session_parses_windows_slash_c_command() {
+    let argv = ["warp.exe", "/c", "\"python.exe\" \"launcher.py\" & pause"];
+
+    let parsed = Args::try_parse_from_iter_with_options(argv, true).unwrap();
+
+    let ext = &parsed.app_args().external_session;
+    assert!(ext.has_session_options());
+    assert_eq!(
+        ext.resolved_command_spec(),
+        Some(ExternalCommandSpec::WindowsCmdLine(
+            "\"python.exe\" \"launcher.py\" & pause".to_owned(),
+        ))
+    );
+}
+
+#[test]
+fn external_session_title_value_matching_flag_does_not_split_early() {
+    let argv = ["warp", "--title", "-e", "-e", "echo", "hi"];
+
+    let parsed = Args::try_parse_app_from(argv).unwrap();
+
+    let ext = &parsed.app_args().external_session;
+    assert_eq!(ext.title.as_deref(), Some("-e"));
+    assert_eq!(
+        ext.resolved_command_spec(),
+        Some(ExternalCommandSpec::Argv(vec![
+            "echo".to_owned(),
+            "hi".to_owned()
+        ]))
+    );
+}
+
+#[test]
+fn external_session_missing_command_after_e_fails() {
+    let argv = ["warp", "-e"];
+
+    let parsed = Args::try_parse_app_from(argv);
+
+    assert!(parsed.is_err());
+}
+
+#[test]
+fn external_session_missing_command_after_long_command_fails() {
+    let argv = ["warp", "--command"];
+
+    let parsed = Args::try_parse_app_from(argv);
+
+    assert!(parsed.is_err());
+}
+
+#[test]
+fn external_session_missing_command_after_windows_slash_c_fails() {
+    let argv = ["warp.exe", "/c"];
+
+    let parsed = Args::try_parse_from_iter_with_options(argv, true);
+
+    assert!(parsed.is_err());
+}
+
+#[test]
+fn agent_subcommand_remains_unaffected_by_external_command_splitting() {
+    let argv = ["warp", "agent", "run", "--prompt", "hi", "--debug"];
+
+    let parsed = Args::try_parse_app_from(argv).unwrap();
+
+    assert!(matches!(
+        parsed.command(),
+        Some(Command::CommandLine(cmd)) if matches!(cmd.as_ref(), CliCommand::Agent(_))
+    ));
+    assert!(parsed.debug());
+}
+
+#[test]
+fn worker_command_remains_unaffected_by_external_command_splitting() {
+    let argv = ["warp", "minidump-server", "/tmp/sock"];
+
+    let parsed = Args::try_parse_app_from(argv).unwrap();
+
+    assert!(matches!(
+        parsed.command(),
+        Some(Command::Worker(WorkerCommand::MinidumpServer { .. }))
+    ));
+}
+
+#[test]
+fn dump_debug_info_long_flag_subcommand_does_not_split_trailing_e() {
+    let argv = ["warp", "--dump-debug-info", "-e", "echo"];
+
+    let parsed = Args::try_parse_app_from(argv);
+
+    assert!(
+        parsed.is_err(),
+        "long-flag subcommand should not split trailing -e as an external command"
+    );
+}
+
+#[test]
+fn external_session_windows_slash_c_preserves_quotes_around_spaced_executable_paths() {
+    let argv = [
+        "warp.exe",
+        "/c",
+        r"C:\Users\alexa\AppData\Local\Author Software\nvm\.nodejs\node.exe",
+        r"C:\Users\alexa\My Project\index.js",
+        "&",
+        "pause",
+    ];
+
+    let parsed = Args::try_parse_from_iter_with_options(argv, true).unwrap();
+
+    assert_eq!(
+        parsed.app_args().external_session.resolved_command_spec(),
+        Some(ExternalCommandSpec::WindowsCmdLine(
+            r#""C:\Users\alexa\AppData\Local\Author Software\nvm\.nodejs\node.exe" "C:\Users\alexa\My Project\index.js" & pause"#
+                .to_owned(),
+        ))
+    );
+}
+
+#[test]
+fn external_session_windows_slash_c_escapes_internal_quotes_in_spaced_args() {
+    let argv = ["warp.exe", "/c", "cmd.exe", r#"say "hi there""#];
+
+    let parsed = Args::try_parse_from_iter_with_options(argv, true).unwrap();
+
+    assert_eq!(
+        parsed.app_args().external_session.resolved_command_spec(),
+        Some(ExternalCommandSpec::WindowsCmdLine(
+            r#"cmd.exe "say \"hi there\"""#.to_owned(),
+        ))
+    );
+}
+
+#[test]
+fn external_session_windows_raw_cmdline_preserves_spaced_paths() {
+    let wt_cmdline = r#""C:\Program Files\Warp\warp-oss.exe" --title "Debug" /c "C:\Users\alexa\AppData\Local\Author Software\nvm\.nodejs\node.exe" "C:\Users\alexa\My Project\index.js" & pause"#;
+    let argv = [
+        r"C:\Program Files\Warp\warp-oss.exe",
+        "--title",
+        "Debug",
+        "/c",
+        r"C:\Users\alexa\AppData\Local\Author Software\nvm\.nodejs\node.exe",
+        r"C:\Users\alexa\My Project\index.js",
+        "&",
+        "pause",
+    ];
+
+    let parsed = Args::try_parse_from_iter_with_raw_cmdline(argv, true, Some(wt_cmdline)).unwrap();
+
+    assert_eq!(
+        parsed.app_args().external_session.resolved_command_spec(),
+        Some(ExternalCommandSpec::WindowsCmdLine(
+            r#""C:\Users\alexa\AppData\Local\Author Software\nvm\.nodejs\node.exe" "C:\Users\alexa\My Project\index.js" & pause"#
+                .to_owned(),
+        ))
+    );
+}
+
+#[test]
+fn external_session_windows_raw_cmdline_unwraps_double_outer_quotes() {
+    let fallback_cmdline = r#"warp-oss.exe /c ""C:\Users\alexa\AppData\Local\Author Software\nvm\.nodejs\node.exe" "index.js" & pause""#;
+    let argv = [
+        "warp-oss.exe",
+        "/c",
+        r"C:\Users\alexa\AppData\Local\Author",
+        r#"Software\nvm\.nodejs\node.exe""#,
+        "index.js",
+        "&",
+        "pause",
+    ];
+
+    let parsed =
+        Args::try_parse_from_iter_with_raw_cmdline(argv, true, Some(fallback_cmdline)).unwrap();
+
+    assert_eq!(
+        parsed.app_args().external_session.resolved_command_spec(),
+        Some(ExternalCommandSpec::WindowsCmdLine(
+            r#""C:\Users\alexa\AppData\Local\Author Software\nvm\.nodejs\node.exe" "index.js" & pause"#
+                .to_owned(),
+        ))
+    );
+}
+
+#[test]
+fn external_session_windows_raw_cmdline_handles_escaped_trailing_backslash_in_quoted_flag() {
+    let raw_cmdline = r#"warp.exe --working-directory "C:\My Dir\\" /c "python.exe" "app.py""#;
+    let argv = [
+        "warp.exe",
+        "--working-directory",
+        r"C:\My Dir\",
+        "/c",
+        "python.exe",
+        "app.py",
+    ];
+
+    let parsed = Args::try_parse_from_iter_with_raw_cmdline(argv, true, Some(raw_cmdline)).unwrap();
+
+    let ext = &parsed.app_args().external_session;
+    assert_eq!(
+        ext.working_directory.as_deref(),
+        Some(Path::new(r"C:\My Dir\"))
+    );
+    assert_eq!(
+        ext.resolved_command_spec(),
+        Some(ExternalCommandSpec::WindowsCmdLine(
+            r#""python.exe" "app.py""#.to_owned(),
+        ))
+    );
+}
+
+#[test]
+#[serial_test::serial]
+fn clap_command_shows_external_session_flags_by_default() {
+    let previous = std::env::var_os("WARP_CLI_MODE");
+    restore_env_var("WARP_CLI_MODE", None);
+
+    let mut command = Args::clap_command();
+    let help = command.render_long_help().to_string();
+
+    restore_env_var("WARP_CLI_MODE", previous);
+
+    for flag in [
+        "--working-directory",
+        "--new-window",
+        "--title",
+        "--wait-after-command",
+        "--command",
+    ] {
+        assert!(
+            help.contains(flag),
+            "default help should display {flag}:\n{help}"
+        );
+    }
+}
+
+#[test]
+#[serial_test::serial]
+fn clap_command_hides_external_session_flags_in_oz_mode() {
+    let previous = set_env_var("WARP_CLI_MODE", "1");
+
+    let mut command = Args::clap_command();
+    let help = command.render_long_help().to_string();
+
+    restore_env_var("WARP_CLI_MODE", previous);
+
+    for flag in [
+        "--working-directory",
+        "--new-window",
+        "--title",
+        "--wait-after-command",
+        "--command",
+    ] {
+        assert!(
+            !help.contains(flag),
+            "oz CLI help should hide {flag}:\n{help}"
+        );
+    }
+}

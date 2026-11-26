@@ -86,6 +86,11 @@ impl AppExecutionMode {
         }
     }
 
+    /// Returns the execution mode that Warp is running under.
+    pub fn execution_mode(&self) -> ExecutionMode {
+        self.mode
+    }
+
     /// True if running as an interactive app client.
     fn is_app(&self) -> bool {
         matches!(self.mode, ExecutionMode::App | ExecutionMode::Tui)
