@@ -217,18 +217,6 @@ enum ActionType {
   EXECUTED
 }
 
-input AddInviteLinkDomainRestrictionInput {
-  domain: String!
-  teamUid: ID!
-}
-
-type AddInviteLinkDomainRestrictionOutput implements Response {
-  responseContext: ResponseContext!
-  success: Boolean!
-}
-
-union AddInviteLinkDomainRestrictionResult = AddInviteLinkDomainRestrictionOutput | UserFacingError
-
 input AddObjectGuestsInput {
   accessLevel: AccessLevel!
   objectUid: ID!
@@ -1226,18 +1214,6 @@ type DeleteConversationOutput implements Response {
 
 union DeleteConversationResult = DeleteConversationOutput | UserFacingError
 
-input DeleteInviteLinkDomainRestrictionInput {
-  teamUid: ID!
-  uid: ID!
-}
-
-type DeleteInviteLinkDomainRestrictionOutput implements Response {
-  responseContext: ResponseContext!
-  success: Boolean!
-}
-
-union DeleteInviteLinkDomainRestrictionResult = DeleteInviteLinkDomainRestrictionOutput | UserFacingError
-
 input DeleteManagedSecretInput {
   name: String!
   owner: Owner!
@@ -2092,11 +2068,6 @@ type InvalidSecretError implements UserFacingErrorInterface {
 """Returned when the provided user code is no longer valid."""
 type InvalidUserCodeError implements UserFacingErrorInterface {
   message: String!
-}
-
-type InviteLinkDomainRestriction {
-  domain: String!
-  uid: ID!
 }
 
 """Input for the issueTaskIdentityToken mutation."""
@@ -3257,16 +3228,6 @@ type RerankFragmentsOutput implements Response {
 
 union RerankFragmentsResult = RerankFragmentsError | RerankFragmentsOutput | UserFacingError
 
-input ResetInviteLinksInput {
-  teamUid: ID!
-}
-
-type ResetInviteLinksOutput implements Response {
-  responseContext: ResponseContext!
-  success: Boolean!
-}
-
-union ResetInviteLinksResult = ResetInviteLinksOutput | UserFacingError
 type TuiOnboardingMarkersOutput implements Response {
   firstZeroStateShown: Boolean!
   firstCreditGateShown: Boolean!
@@ -3427,7 +3388,6 @@ type DeleteRunnerOutput implements Response {
 union DeleteRunnerResult = DeleteRunnerOutput | UserFacingError
 
 type RootMutation {
-  addInviteLinkDomainRestriction(input: AddInviteLinkDomainRestrictionInput!, requestContext: RequestContext!): AddInviteLinkDomainRestrictionResult! @deprecated(reason: "Invite links have been removed. Use email invitations.")
   addObjectGuests(input: AddObjectGuestsInput!, requestContext: RequestContext!): AddObjectGuestsResult!
   bulkCreateObjects(input: BulkCreateObjectsInput!, requestContext: RequestContext!): BulkCreateObjectsResult!
   confirmFileArtifactUpload(input: ConfirmFileArtifactUploadInput!, requestContext: RequestContext!): ConfirmFileArtifactUploadResult!
@@ -3449,7 +3409,6 @@ type RootMutation {
   createWorkflow(input: CreateWorkflowInput!, requestContext: RequestContext!): CreateWorkflowResult!
   deleteConversation(input: DeleteConversationInput!, requestContext: RequestContext!): DeleteConversationResult!
   deleteRunner(input: DeleteRunnerInput!, requestContext: RequestContext!): DeleteRunnerResult!
-  deleteInviteLinkDomainRestriction(input: DeleteInviteLinkDomainRestrictionInput!, requestContext: RequestContext!): DeleteInviteLinkDomainRestrictionResult! @deprecated(reason: "Invite links have been removed. Use email invitations.")
   deleteManagedSecret(input: DeleteManagedSecretInput!, requestContext: RequestContext!): DeleteManagedSecretResult!
   deleteObject(input: DeleteObjectInput!, requestContext: RequestContext!): DeleteObjectResult!
   deleteTeamInvite(input: DeleteTeamInviteInput!, requestContext: RequestContext!): DeleteTeamInviteResult!
@@ -3506,11 +3465,9 @@ type RootMutation {
   current execution's credentials.
   """
   reportHarnessTransport(input: ReportHarnessTransportInput!, requestContext: RequestContext!): ReportHarnessTransportResult!
-  resetInviteLinks(input: ResetInviteLinksInput!, requestContext: RequestContext!): ResetInviteLinksResult! @deprecated(reason: "Invite links have been removed. Use email invitations.")
   sendOnboardingSurveyResponses(input: SendOnboardingSurveyResponsesInput!, requestContext: RequestContext!): SendOnboardingSurveyResponsesResult!
   sendReferralInviteEmails(input: SendReferralInviteEmailsInput!, requestContext: RequestContext!): SendReferralInviteEmailsResult!
   sendTeamInviteEmail(input: SendTeamInviteEmailInput!, requestContext: RequestContext!): SendTeamInviteEmailResult!
-  setIsInviteLinkEnabled(input: SetIsInviteLinkEnabledInput!, requestContext: RequestContext!): SetIsInviteLinkEnabledResult! @deprecated(reason: "Invite links have been removed. Use email invitations.")
   setObjectLinkPermissions(input: SetObjectLinkPermissionsInput!, requestContext: RequestContext!): SetObjectLinkPermissionsResult!
   setTeamDiscoverability(input: SetTeamDiscoverabilityInput!, requestContext: RequestContext!): SetTeamDiscoverabilityResult!
   setTeamMemberRole(input: SetTeamMemberRoleInput!, requestContext: RequestContext!): SetTeamMemberRoleResult!
@@ -3774,18 +3731,6 @@ type SessionSharingPolicy {
   maxConcurrentViewers: Int!
   maxSessionBytesSize: Int!
 }
-
-input SetIsInviteLinkEnabledInput {
-  newValue: Boolean!
-  teamUid: ID!
-}
-
-type SetIsInviteLinkEnabledOutput implements Response {
-  responseContext: ResponseContext!
-  success: Boolean!
-}
-
-union SetIsInviteLinkEnabledResult = SetIsInviteLinkEnabledOutput | UserFacingError
 
 input SetObjectLinkPermissionsInput {
   accessLevel: AccessLevel!
@@ -4182,11 +4127,6 @@ type Team {
   """
   domain: String
   featureModelChoice: FeatureModelChoice!
-
-  """
-  Invite links have been removed. Returns null.
-  """
-  inviteLink: String @deprecated(reason: "Invite links have been removed. Use email invitations.")
   managedSecrets: ManagedSecretConfig
   memberSpendLimits: [MemberSpendLimit!]
   members: [TeamMember!]!
@@ -5242,7 +5182,6 @@ type Workspace {
   """
   hasBillingHistory: Boolean!
   includedUsageInfo: WorkspaceIncludedUsageInfo
-  inviteLinkDomainRestrictions: [InviteLinkDomainRestriction!]! @deprecated(reason: "Invite links have been removed. Use email invitations.")
   isEligibleForDiscovery: Boolean!
   memberSpendLimits: [MemberSpendLimit!]
   members: [WorkspaceMember!]!
@@ -5252,7 +5191,7 @@ type Workspace {
 
   """
   settings is the equivalent of the v1 organizationSettings field in the Team type with
-  additional fields v1 fields (team.isDiscoverable, team.isInviteLinkEnabled).
+  additional workspace discovery settings.
   """
   settings: WorkspaceSettings!
   stripeCustomerId: ID
@@ -5315,7 +5254,6 @@ type WorkspaceSettings {
   enterpriseBillingSettings: EnterpriseBillingSettings
   harnessSettings: HarnessSettings
   isDiscoverable: Boolean!
-  isInviteLinkEnabled: Boolean! @deprecated(reason: "Invite links have been removed. Use email invitations.")
   linkSharingSettings: LinkSharingSettings!
   llmSettings: LlmSettings!
   sandboxedAgentSettings: SandboxedAgentSettings
