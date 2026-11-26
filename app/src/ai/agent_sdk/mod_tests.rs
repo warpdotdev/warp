@@ -69,7 +69,10 @@ const TASK_ID: &str = "00000000-0000-0000-0000-000000000001";
 fn git_identity_bootstrap_covers_empty_credentials_and_skipped_authentication() {
     for scenario in ["empty", "refresh-disabled", "no-workload-token"] {
         let home = tempfile::tempdir().unwrap();
-        let output = ProcessCommand::new(std::env::current_exe().unwrap())
+        let mut command = ProcessCommand::new(std::env::current_exe().unwrap());
+        #[cfg(windows)]
+        command.creation_flags(0);
+        let output = command
             .args([
                 "--exact",
                 "ai::agent_sdk::tests::git_identity_bootstrap_subprocess",
