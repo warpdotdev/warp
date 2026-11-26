@@ -700,6 +700,7 @@ fn update_assignment_git_identity(credentials: &[GitCredential], repositories: &
             }
         }
     }
+    ensure_git_identity_if_unset(replacement);
 }
 
 pub(crate) fn clear_standby_provider_credentials() -> Result<()> {
@@ -822,6 +823,45 @@ pub(crate) fn configure_git_identity(credentials: &[GitCredential]) {
     run_git_config("user.email", &email);
 }
 
+pub(crate) fn ensure_default_git_identity() {
+    ensure_git_identity_if_unset(identity_of(None));
+}
+
+fn ensure_git_identity_if_unset((name, email): (String, String)) {
+    let configured = ["--global", "--system"].map(|scope| {
+        let output = BlockingCommand::new("git")
+            .args([
+                "config",
+                scope,
+                "--null",
+                "--get-regexp",
+                r"^user\.(name|email)$",
+            ])
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        Some(
+            String::from_utf8_lossy(&output.stdout)
+                .split('\0')
+                .filter(|entry| !entry.is_empty())
+                .map(|entry| entry.split_once('\n').unwrap_or((entry, "")))
+                .map(|(key, value)| (key.to_owned(), value.trim().to_owned()))
+                .collect::<HashMap<_, _>>(),
+        )
+    });
+    for (key, value) in [("user.name", name), ("user.email", email)] {
+        if !configured
+            .iter()
+            .flatten()
+            .any(|config| config.get(key).is_some_and(|value| !value.is_empty()))
+        {
+            run_git_config(key, &value);
+        }
+    }
+}
+
 #[derive(Clone)]
 struct HostIdentity {
     host: String,
@@ -894,9 +934,8 @@ fn configure_repository_git_identity(repository_dir: &std::path::Path, host: &st
     run_repository_git_config(repository_dir, "user.email", &email);
 }
 
-/// Where to read a git identity from: either the process-wide `--global`
-/// config, or a specific repository's effective config (local over global
-/// over system, exactly as git resolves it for a commit there).
+/// Where to read a git identity from: either the global config or a specific repository's effective
+/// config (local over global over system, exactly as git resolves it for a commit there).
 ///
 /// `--global` is an option to the `config` subcommand, while `-C` is a
 /// top-level git option that must come *before* the subcommand, so the two

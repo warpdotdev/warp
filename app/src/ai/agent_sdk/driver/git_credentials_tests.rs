@@ -31,12 +31,18 @@ fn with_assignment_git_home(test_name: &str, test: impl FnOnce(&Path) -> Result<
         .env("WARP_TEST_ASSIGNMENT_GIT_HOME", home.path())
         .env("HOME", home.path())
         .env("GH_CONFIG_DIR", home.path().join("gh"))
+        .env("XDG_CONFIG_HOME", home.path().join(".config"))
         .env("GIT_CONFIG_GLOBAL", home.path().join(".gitconfig"))
-        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_SYSTEM", home.path().join("system.gitconfig"))
+        .env_remove("GIT_CONFIG_NOSYSTEM")
         .env_remove("GIT_CONFIG_COUNT")
         .env_remove("GIT_CONFIG_PARAMETERS")
         .env_remove("GIT_DIR")
         .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_AUTHOR_NAME")
+        .env_remove("GIT_AUTHOR_EMAIL")
+        .env_remove("GIT_COMMITTER_NAME")
+        .env_remove("GIT_COMMITTER_EMAIL")
         .output()?;
     assert!(
         output.status.success(),
@@ -45,6 +51,209 @@ fn with_assignment_git_home(test_name: &str, test: impl FnOnce(&Path) -> Result<
         String::from_utf8_lossy(&output.stderr)
     );
     Ok(())
+}
+
+#[test]
+fn default_git_identity_preserves_global_identity() -> Result<()> {
+    with_assignment_git_home("default_git_identity_preserves_global_identity", |_| {
+        run_git_config("user.name", "Customer");
+        run_git_config("user.email", "customer@example.com");
+
+        ensure_default_git_identity();
+
+        assert_eq!(
+            global_git_identity(),
+            Some(("Customer".into(), "customer@example.com".into()))
+        );
+        Ok(())
+    })
+}
+
+#[test]
+fn default_git_identity_ignores_repository_identity() -> Result<()> {
+    with_assignment_git_home("default_git_identity_ignores_repository_identity", |home| {
+        init_repo(home);
+        run_repository_git_config(home, "user.name", "Repository Customer");
+        run_repository_git_config(home, "user.email", "repository@example.com");
+
+        ensure_default_git_identity();
+
+        assert_eq!(
+            global_git_identity(),
+            Some(("Warp".into(), "agent@warp.dev".into()))
+        );
+        assert_eq!(
+            repository_git_identity(home),
+            Some((
+                "Repository Customer".into(),
+                "repository@example.com".into()
+            ))
+        );
+        Ok(())
+    })
+}
+
+#[test]
+fn default_git_identity_uses_last_value_per_scope() -> Result<()> {
+    with_assignment_git_home("default_git_identity_uses_last_value_per_scope", |home| {
+        std::fs::write(
+            home.join("system.gitconfig"),
+            "[user]\nname = System Customer\nname\nemail = system@example.com\n",
+        )?;
+
+        ensure_default_git_identity();
+
+        assert_eq!(
+            read_git_config(&GitIdentityScope::Global, "user.name"),
+            Some("Warp".into())
+        );
+        Ok(())
+    })
+}
+
+#[test]
+fn default_git_identity_fills_missing_email() -> Result<()> {
+    with_assignment_git_home("default_git_identity_fills_missing_email", |_| {
+        run_git_config("user.name", "Customer");
+
+        ensure_default_git_identity();
+
+        assert_eq!(
+            global_git_identity(),
+            Some(("Customer".into(), "agent@warp.dev".into()))
+        );
+        Ok(())
+    })
+}
+
+#[test]
+fn default_git_identity_fills_missing_name() -> Result<()> {
+    with_assignment_git_home("default_git_identity_fills_missing_name", |_| {
+        run_git_config("user.email", "customer@example.com");
+
+        ensure_default_git_identity();
+
+        assert_eq!(
+            global_git_identity(),
+            Some(("Warp".into(), "customer@example.com".into()))
+        );
+        Ok(())
+    })
+}
+
+#[test]
+fn default_git_identity_preserves_system_identity() -> Result<()> {
+    with_assignment_git_home("default_git_identity_preserves_system_identity", |home| {
+        std::fs::write(
+            home.join("system.gitconfig"),
+            "[user]\nname = System Customer\nemail = system@example.com\n",
+        )?;
+
+        ensure_default_git_identity();
+
+        assert_eq!(global_git_identity(), None);
+        Ok(())
+    })
+}
+
+#[test]
+fn default_git_identity_preserves_credential_identity() -> Result<()> {
+    with_assignment_git_home("default_git_identity_preserves_credential_identity", |_| {
+        let credential = GitCredential {
+            username: Some("creator".into()),
+            email: Some("creator@example.com".into()),
+            ..github_credential()
+        };
+        configure_git_credentials(&[credential])?;
+
+        ensure_default_git_identity();
+
+        assert_eq!(
+            global_git_identity(),
+            Some(("creator".into(), "creator@example.com".into()))
+        );
+        Ok(())
+    })
+}
+
+#[test]
+fn setup_git_identity_overrides_default_for_commits() -> Result<()> {
+    with_assignment_git_home("setup_git_identity_overrides_default_for_commits", |home| {
+        configure_git_credentials(&[])?;
+        ensure_default_git_identity();
+        let baseline = global_git_identity();
+        assert_eq!(baseline, Some(("Warp".into(), "agent@warp.dev".into())));
+        init_repo(home);
+        configure_repository_git_identity_if_unset(home, GITHUB_HOST, baseline.clone());
+        run_git_config("user.name", "Customer");
+        run_git_config("user.email", "customer@example.com");
+
+        configure_repository_git_identity_if_unset(home, GITHUB_HOST, baseline);
+        let output = BlockingCommand::new("git")
+            .args([
+                "commit",
+                "--allow-empty",
+                "--no-gpg-sign",
+                "-m",
+                "Test commit",
+            ])
+            .current_dir(home)
+            .output()?;
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let output = BlockingCommand::new("git")
+            .args(["log", "-1", "--format=%an <%ae>%n%cn <%ce>"])
+            .current_dir(home)
+            .output()?;
+        assert_eq!(
+            String::from_utf8(output.stdout)?.trim(),
+            "Customer <customer@example.com>\nCustomer <customer@example.com>"
+        );
+        Ok(())
+    })
+}
+
+#[test]
+fn assignment_after_empty_standby_uses_credential_identity() -> Result<()> {
+    with_assignment_git_home(
+        "assignment_after_empty_standby_uses_credential_identity",
+        |_| {
+            configure_git_credentials(&[])?;
+            assert_eq!(global_git_identity(), None);
+            let credential = GitCredential {
+                username: Some("creator".into()),
+                email: Some("creator@example.com".into()),
+                ..github_credential()
+            };
+
+            configure_assignment_git_credentials(&[credential], &[])?;
+
+            assert_eq!(
+                global_git_identity(),
+                Some(("creator".into(), "creator@example.com".into()))
+            );
+            Ok(())
+        },
+    )
+}
+
+#[test]
+fn assignment_without_any_credentials_sets_default_identity() -> Result<()> {
+    with_assignment_git_home(
+        "assignment_without_any_credentials_sets_default_identity",
+        |_| {
+            configure_assignment_git_credentials(&[], &[])?;
+
+            assert_eq!(
+                global_git_identity(),
+                Some(("Warp".into(), "agent@warp.dev".into()))
+            );
+            Ok(())
+        },
+    )
 }
 
 #[test]

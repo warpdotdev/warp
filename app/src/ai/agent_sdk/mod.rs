@@ -1332,6 +1332,25 @@ impl AgentDriverRunner {
         use_factory_repositories: bool,
         github_credential_mode: GitHubCredentialMode,
     ) -> Result<(), AgentDriverError> {
+        Self::bootstrap_task_git_authentication(
+            foreground,
+            task_id_str,
+            configure_git_credentials_with_github,
+            use_factory_repositories,
+            github_credential_mode,
+        )
+        .await?;
+        driver::git_credentials::ensure_default_git_identity();
+        Ok(())
+    }
+
+    async fn bootstrap_task_git_authentication<E: Entity>(
+        foreground: &ModelSpawner<E>,
+        task_id_str: &str,
+        configure_git_credentials_with_github: bool,
+        use_factory_repositories: bool,
+        github_credential_mode: GitHubCredentialMode,
+    ) -> Result<(), AgentDriverError> {
         if github_credential_mode == GitHubCredentialMode::RestrictedInstallation {
             let ai_client = foreground
                 .spawn(|_, ctx| ServerApiProvider::as_ref(ctx).get_ai_client())
