@@ -611,9 +611,7 @@ pub(crate) async fn install_assignment_credentials(
         use_factory_repositories,
         Some(repositories),
     )
-    .await?;
-    super::ensure_default_git_identity();
-    Ok(())
+    .await
 }
 
 async fn bootstrap_task(

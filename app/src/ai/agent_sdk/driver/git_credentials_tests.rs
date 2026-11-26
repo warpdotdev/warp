@@ -70,6 +70,48 @@ fn default_git_identity_preserves_global_identity() -> Result<()> {
 }
 
 #[test]
+fn default_git_identity_ignores_repository_identity() -> Result<()> {
+    with_assignment_git_home("default_git_identity_ignores_repository_identity", |home| {
+        init_repo(home);
+        run_repository_git_config(home, "user.name", "Repository Customer");
+        run_repository_git_config(home, "user.email", "repository@example.com");
+
+        ensure_default_git_identity();
+
+        assert_eq!(
+            global_git_identity(),
+            Some(("Warp".into(), "agent@warp.dev".into()))
+        );
+        assert_eq!(
+            repository_git_identity(home),
+            Some((
+                "Repository Customer".into(),
+                "repository@example.com".into()
+            ))
+        );
+        Ok(())
+    })
+}
+
+#[test]
+fn default_git_identity_uses_last_value_per_scope() -> Result<()> {
+    with_assignment_git_home("default_git_identity_uses_last_value_per_scope", |home| {
+        std::fs::write(
+            home.join("system.gitconfig"),
+            "[user]\nname = System Customer\nname\nemail = system@example.com\n",
+        )?;
+
+        ensure_default_git_identity();
+
+        assert_eq!(
+            read_git_config(&GitIdentityScope::Global, "user.name"),
+            Some("Warp".into())
+        );
+        Ok(())
+    })
+}
+
+#[test]
 fn default_git_identity_fills_missing_email() -> Result<()> {
     with_assignment_git_home("default_git_identity_fills_missing_email", |_| {
         run_git_config("user.name", "Customer");
@@ -110,10 +152,6 @@ fn default_git_identity_preserves_system_identity() -> Result<()> {
         ensure_default_git_identity();
 
         assert_eq!(global_git_identity(), None);
-        assert_eq!(
-            read_git_identity(&GitIdentityScope::System),
-            Some(("System Customer".into(), "system@example.com".into()))
-        );
         Ok(())
     })
 }

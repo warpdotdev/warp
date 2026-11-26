@@ -657,9 +657,7 @@ pub(crate) fn configure_assignment_git_credentials(
     update_assignment_git_identity(&credentials, repositories);
     setup_git_config(&credentials);
     record_host_identities(&credentials);
-    write_git_credentials(&credentials)?;
-    ensure_default_git_identity();
-    Ok(())
+    write_git_credentials(&credentials)
 }
 
 fn update_assignment_git_identity(credentials: &[GitCredential], repositories: &[(PathBuf, &str)]) {
@@ -702,9 +700,7 @@ fn update_assignment_git_identity(credentials: &[GitCredential], repositories: &
             }
         }
     }
-    if !credentials.is_empty() {
-        ensure_git_identity_if_unset(replacement);
-    }
+    ensure_git_identity_if_unset(replacement);
 }
 
 pub(crate) fn clear_standby_provider_credentials() -> Result<()> {
@@ -832,9 +828,34 @@ pub(crate) fn ensure_default_git_identity() {
 }
 
 fn ensure_git_identity_if_unset((name, email): (String, String)) {
+    let configured = ["--global", "--system"].map(|scope| {
+        let output = BlockingCommand::new("git")
+            .args([
+                "config",
+                scope,
+                "--null",
+                "--get-regexp",
+                r"^user\.(name|email)$",
+            ])
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        Some(
+            String::from_utf8_lossy(&output.stdout)
+                .split('\0')
+                .filter(|entry| !entry.is_empty())
+                .map(|entry| entry.split_once('\n').unwrap_or((entry, "")))
+                .map(|(key, value)| (key.to_owned(), value.trim().to_owned()))
+                .collect::<HashMap<_, _>>(),
+        )
+    });
     for (key, value) in [("user.name", name), ("user.email", email)] {
-        if read_git_config(&GitIdentityScope::Global, key).is_none()
-            && read_git_config(&GitIdentityScope::System, key).is_none()
+        if !configured
+            .iter()
+            .flatten()
+            .any(|config| config.get(key).is_some_and(|value| !value.is_empty()))
         {
             run_git_config(key, &value);
         }
@@ -913,8 +934,8 @@ fn configure_repository_git_identity(repository_dir: &std::path::Path, host: &st
     run_repository_git_config(repository_dir, "user.email", &email);
 }
 
-/// Where to read a git identity from: the global or system config, or a specific repository's
-/// effective config (local over global over system, exactly as git resolves it for a commit there).
+/// Where to read a git identity from: either the global config or a specific repository's effective
+/// config (local over global over system, exactly as git resolves it for a commit there).
 ///
 /// `--global` is an option to the `config` subcommand, while `-C` is a
 /// top-level git option that must come *before* the subcommand, so the two
@@ -922,7 +943,6 @@ fn configure_repository_git_identity(repository_dir: &std::path::Path, host: &st
 /// placement correct in one place rather than repeated at call sites.
 enum GitIdentityScope<'a> {
     Global,
-    System,
     Repository(&'a std::path::Path),
 }
 
@@ -932,9 +952,6 @@ fn read_git_config(scope: &GitIdentityScope, key: &str) -> Option<String> {
     let output = match scope {
         GitIdentityScope::Global => BlockingCommand::new("git")
             .args(["config", "--global", "--get", key])
-            .output(),
-        GitIdentityScope::System => BlockingCommand::new("git")
-            .args(["config", "--system", "--get", key])
             .output(),
         GitIdentityScope::Repository(dir) => {
             let dir = dir.to_string_lossy();
