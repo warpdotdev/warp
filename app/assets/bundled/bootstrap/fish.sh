@@ -882,9 +882,16 @@ if test "$WARP_IS_LOCAL_SHELL_SESSION" = "1"
         # determine what shell is the login shell on the remote machine.  We perform a preliminary check to see if
         # the remote shell is the Bourne shell to avoid asking it to parse later lines that use syntax it doesn't
         # support.
+        # The first line is a guard for Windows OpenSSH servers whose default shell is cmd.exe or
+        # PowerShell, which would otherwise fail on this script and drop the connection. POSIX shells
+        # see a no-op. cmd.exe fails the `set` silently and starts an interactive cmd.exe. PowerShell
+        # opens a block comment that ends at the `#>` on the final `exit` line and starts an interactive
+        # PowerShell, so the POSIX body must not contain `#>`. `#>` must not start a line because the
+        # bootstrap loader strips lines that start with `#`.
         command ssh -o ControlMaster=$control_master_mode -o ControlPath="$control_path" \
         -t $argv \
 "
+set -- `# '\"' <# \" 2>nul` || %COMSPEC%
 export TERM_PROGRAM='WarpTerminal'
 test -n '$WARP_CLIENT_VERSION' && export WARP_CLIENT_VERSION='$WARP_CLIENT_VERSION'
 # Only forward the protocol version if it was set locally (i.e. the HOANotifications feature flag is on).
@@ -951,6 +958,8 @@ fi
 TMPPREFIX="'$HOME/.zshtmp-'" WARP_SSH_RCFILES="'${ZDOTDIR:-$HOME}'" ZDOTDIR="'$WARP_TMP_DIR'" exec -l zsh -g $TRACE_FLAG_IF_WARP_SHELL_DEBUG_MODE
     ;;
 esac
+exit #>
+iex '& (Get-Process -Id \$PID).Path -NoLogo'
 "
     end
 
