@@ -19,6 +19,13 @@ impl AdminActions {
         format!("{}/admin/workspace/teams", ChannelState::server_root_url())
     }
 
+    pub fn workspace_members_admin_panel_link() -> String {
+        format!(
+            "{}/admin/workspace/members",
+            ChannelState::server_root_url()
+        )
+    }
+
     /// Open the admin panel for a specific team
     pub fn open_admin_panel(team_uid: ServerId, ctx: &mut AppContext) {
         let url = Self::admin_panel_link_for_team(team_uid);
