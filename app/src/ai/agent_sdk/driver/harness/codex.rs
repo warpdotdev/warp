@@ -124,7 +124,7 @@ impl ThirdPartyHarness for CodexHarness {
         })))
     }
 
-    fn build_runner(
+    async fn build_runner(
         &self,
         prompt: &str,
         system_prompt: Option<&str>,
@@ -136,6 +136,7 @@ impl ThirdPartyHarness for CodexHarness {
         _task_id: Option<AmbientAgentTaskId>,
         server_api: Arc<ServerApi>,
         terminal_driver: ModelHandle<TerminalDriver>,
+        _: &ModelSpawner<AgentDriver>,
         resume: Option<ResumePayload>,
         resolved_env_vars: &HashMap<OsString, OsString>,
         skill_dirs: &[PathBuf],

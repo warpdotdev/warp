@@ -1591,6 +1591,18 @@ impl AgentDriver {
         options: AgentDriverOptions,
         ctx: &mut AppContext,
     ) -> Result<ModelHandle<Self>, AgentDriverError> {
+        Self::create_with_terminal_factory(options, ctx, terminal::TerminalDriver::create)
+    }
+
+    fn create_with_terminal_factory(
+        options: AgentDriverOptions,
+        ctx: &mut AppContext,
+        create_terminal: impl FnOnce(
+            terminal::TerminalDriverOptions<'_>,
+            &mut AppContext,
+        )
+            -> Result<ModelHandle<terminal::TerminalDriver>, AgentDriverError>,
+    ) -> Result<ModelHandle<Self>, AgentDriverError> {
         // If we're not logged in, the root view will go to an auth screen, and all subsequent steps will fail.
         // This should be impossible, since we enforce login before reaching this point.
         if !AuthStateProvider::as_ref(ctx).get().is_logged_in() {
@@ -1616,7 +1628,7 @@ impl AgentDriver {
             )
         );
 
-        let terminal_driver = terminal::TerminalDriver::create(
+        let terminal_driver = create_terminal(
             terminal::TerminalDriverOptions {
                 working_dir: working_dir.clone(),
                 env_vars: HashMap::clone(&config.resolved_env_vars),
@@ -3633,6 +3645,7 @@ impl AgentDriver {
                 task_id,
                 server_api.clone(),
                 terminal_driver,
+                foreground,
                 resume,
                 &resolved_env_vars,
                 &skill_dirs,
@@ -3640,7 +3653,8 @@ impl AgentDriver {
                 &secrets_for_harness,
                 &resolved_mcp_servers,
                 third_party_harness_model_config.as_ref(),
-            )?
+            )
+            .await?
             .into();
         runner
             .persistence()
