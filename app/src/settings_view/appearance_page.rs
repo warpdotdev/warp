@@ -18,7 +18,7 @@ use warpui::elements::{
 use warpui::fonts::{FamilyId, FontInfo, Weight};
 use warpui::keymap::{ContextPredicate, FixedBinding};
 use warpui::platform::{
-    Cursor, FilePickerConfiguration, GraphicsBackend, SystemTheme, WindowBackdrop,
+    AcrylicTintColor, Cursor, FilePickerConfiguration, GraphicsBackend, SystemTheme, WindowBackdrop,
 };
 use warpui::rendering::ThinStrokes;
 use warpui::ui_components::button::ButtonVariant;
@@ -86,7 +86,8 @@ use crate::util::bindings;
 use crate::view_components::action_button::{ActionButton, ButtonSize, NakedTheme};
 use crate::view_components::{Dropdown, DropdownItem, FilterableDropdown};
 use crate::window_settings::{
-    BackgroundBackdrop, BackgroundBlurRadius, BackgroundOpacity, LeftPanelVisibilityAcrossTabs,
+    BackgroundBackdrop, BackgroundBackdropTintColor, BackgroundBackdropTintOpacity,
+    BackgroundBlurRadius, BackgroundOpacity, LeftPanelVisibilityAcrossTabs,
     OpenWindowsAtCustomSize, WindowSettings, WindowSettingsChangedEvent, ZoomLevel,
 };
 use crate::workspace::WorkspaceAction;
@@ -497,6 +498,9 @@ pub enum AppearancePageAction {
     ToggleUseLatestUserPromptAsConversationTitleInTabNames,
     ToggleLigatureRendering,
     SetWindowBackdrop(WindowBackdrop),
+    SetAcrylicTintColor(AcrylicTintColor),
+    SetAcrylicTintOpacity(f32),
+    AcrylicTintOpacitySliderDragged(f32),
     ToggleLeftPanelVisibility,
     ToggleToolsPanelProjectExplorer,
     ToggleToolsPanelGlobalSearch,
@@ -541,6 +545,8 @@ pub struct AppearanceSettingsPageView {
     enforce_min_contrast_dropdown: ViewHandle<Dropdown<AppearancePageAction>>,
     input_mode_dropdown: ViewHandle<Dropdown<AppearancePageAction>>,
     window_backdrop_dropdown: ViewHandle<Dropdown<AppearancePageAction>>,
+    acrylic_tint_color_dropdown: ViewHandle<Dropdown<AppearancePageAction>>,
+    acrylic_tint_opacity_slider_state: SliderStateHandle,
     input_type_radio_state: RadioButtonStateHandle,
     app_icon_dropdown: ViewHandle<Dropdown<AppearancePageAction>>,
     workspace_decorations_dropdown: ViewHandle<Dropdown<AppearancePageAction>>,
@@ -627,6 +633,11 @@ impl TypedActionView for AppearanceSettingsPageView {
             ToggleAllAvailableFonts => self.toggle_all_available_fonts(ctx),
             ToggleDimInactivePanes => self.toggle_dim_inactive_panes(ctx),
             SetWindowBackdrop(backdrop) => self.set_window_backdrop(*backdrop, ctx),
+            SetAcrylicTintColor(tint_color) => self.set_acrylic_tint_color(*tint_color, ctx),
+            SetAcrylicTintOpacity(value) => self.set_acrylic_tint_opacity(*value, true, ctx),
+            AcrylicTintOpacitySliderDragged(value) => {
+                self.set_acrylic_tint_opacity(*value, false, ctx)
+            }
             ToggleLeftPanelVisibility => self.toggle_left_panel_visibility(ctx),
             ToggleToolsPanelProjectExplorer => {
                 CodeSettings::handle(ctx).update(ctx, |settings, ctx| {
@@ -1016,6 +1027,19 @@ impl AppearanceSettingsPageView {
                         );
                     });
                 }
+                WindowSettingsChangedEvent::BackgroundBackdropTintColor { .. } => {
+                    let tint_color = *WindowSettings::as_ref(ctx).background_backdrop_tint_color;
+                    me.acrylic_tint_color_dropdown.update(ctx, |dropdown, ctx| {
+                        dropdown.set_selected_by_action(
+                            AppearancePageAction::SetAcrylicTintColor(tint_color),
+                            ctx,
+                        );
+                    });
+                }
+                WindowSettingsChangedEvent::BackgroundBackdropTintOpacity { .. } => {
+                    // Reset the slider state so that it uses the current opacity value on the next render.
+                    me.acrylic_tint_opacity_slider_state.reset_offset();
+                }
                 WindowSettingsChangedEvent::ZoomLevel { .. } => {
                     let zoom_level = *WindowSettings::as_ref(ctx).zoom_level;
 
@@ -1326,6 +1350,8 @@ impl AppearanceSettingsPageView {
             thin_strokes_dropdown,
             input_mode_dropdown,
             window_backdrop_dropdown: Self::build_window_backdrop_dropdown(ctx),
+            acrylic_tint_color_dropdown: Self::build_acrylic_tint_color_dropdown(ctx),
+            acrylic_tint_opacity_slider_state: Default::default(),
             input_type_radio_state,
             app_icon_dropdown,
             enforce_min_contrast_dropdown,
@@ -2330,6 +2356,39 @@ impl AppearanceSettingsPageView {
         ctx.notify();
     }
 
+    fn set_acrylic_tint_color(
+        &mut self,
+        tint_color: AcrylicTintColor,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        WindowSettings::handle(ctx).update(ctx, |window_settings, ctx| {
+            report_if_error!(
+                window_settings
+                    .background_backdrop_tint_color
+                    .set_value(tint_color, ctx)
+            );
+        });
+        ctx.notify();
+    }
+
+    fn set_acrylic_tint_opacity(
+        &mut self,
+        opacity_value: f32,
+        should_set_defaults: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if should_set_defaults {
+            WindowSettings::handle(ctx).update(ctx, |window_settings, ctx| {
+                report_if_error!(
+                    window_settings
+                        .background_backdrop_tint_opacity
+                        .set_value(opacity_value as u8, ctx)
+                );
+            });
+        }
+        ctx.notify();
+    }
+
     pub fn toggle_left_panel_visibility(&mut self, ctx: &mut ViewContext<Self>) {
         WindowSettings::handle(ctx).update(ctx, |window_settings, ctx| {
             report_if_error!(
@@ -2604,6 +2663,40 @@ impl AppearanceSettingsPageView {
             WindowBackdrop::Mica => "Mica",
             WindowBackdrop::Acrylic => "Acrylic",
             WindowBackdrop::MicaAlt => "Mica Alt",
+        }
+    }
+
+    fn build_acrylic_tint_color_dropdown(
+        ctx: &mut ViewContext<Self>,
+    ) -> ViewHandle<Dropdown<AppearancePageAction>> {
+        ctx.add_typed_action_view(|ctx| {
+            let mut dropdown = Dropdown::new(ctx);
+            dropdown.set_items(
+                AcrylicTintColor::ALL
+                    .into_iter()
+                    .map(|tint_color| {
+                        DropdownItem::new(
+                            Self::acrylic_tint_color_dropdown_item_label(tint_color),
+                            AppearancePageAction::SetAcrylicTintColor(tint_color),
+                        )
+                    })
+                    .collect(),
+                ctx,
+            );
+            dropdown.set_selected_by_action(
+                AppearancePageAction::SetAcrylicTintColor(
+                    *WindowSettings::as_ref(ctx).background_backdrop_tint_color,
+                ),
+                ctx,
+            );
+            dropdown
+        })
+    }
+
+    fn acrylic_tint_color_dropdown_item_label(tint_color: AcrylicTintColor) -> &'static str {
+        match tint_color {
+            AcrylicTintColor::Dark => "Dark",
+            AcrylicTintColor::Light => "Light",
         }
     }
     fn build_workspace_decoration_visibility_dropdown(
@@ -3471,7 +3564,7 @@ impl SettingsWidget for WindowBackdropWidget {
     type View = AppearanceSettingsPageView;
 
     fn search_terms(&self) -> &str {
-        "window backdrop material blur acrylic mica"
+        "window backdrop material blur acrylic mica tint color opacity"
     }
 
     fn render(
@@ -3495,6 +3588,60 @@ impl SettingsWidget for WindowBackdropWidget {
             None,
             &view.window_backdrop_dropdown,
         ));
+        if *WindowSettings::as_ref(app).background_backdrop == WindowBackdrop::Acrylic {
+            col.add_child(render_dropdown_item(
+                appearance,
+                "Acrylic tint",
+                None,
+                None,
+                LocalOnlyIconState::for_setting(
+                    BackgroundBackdropTintColor::storage_key(),
+                    BackgroundBackdropTintColor::sync_to_cloud(),
+                    &mut view.local_only_icon_tooltip_states.borrow_mut(),
+                    app,
+                ),
+                None,
+                &view.acrylic_tint_color_dropdown,
+            ));
+
+            let tint_opacity_value = *WindowSettings::as_ref(app).background_backdrop_tint_opacity;
+            col.add_child(render_body_item::<AppearancePageAction>(
+                format!("Acrylic tint opacity: {tint_opacity_value}"),
+                None,
+                LocalOnlyIconState::for_setting(
+                    BackgroundBackdropTintOpacity::storage_key(),
+                    BackgroundBackdropTintOpacity::sync_to_cloud(),
+                    &mut view.local_only_icon_tooltip_states.borrow_mut(),
+                    app,
+                ),
+                ToggleState::Enabled,
+                appearance,
+                appearance
+                    .ui_builder()
+                    .slider(view.acrylic_tint_opacity_slider_state.clone())
+                    .with_range(
+                        BackgroundBackdropTintOpacity::MIN as f32
+                            ..BackgroundBackdropTintOpacity::MAX as f32,
+                    )
+                    .with_default_value(tint_opacity_value as f32)
+                    .with_style(UiComponentStyles {
+                        width: Some(OPACITY_SLIDER_WIDTH),
+                        margin: Some(Coords::default().top(3.).bottom(3.)),
+                        ..Default::default()
+                    })
+                    .on_drag(|ctx, _, val| {
+                        ctx.dispatch_typed_action(
+                            AppearancePageAction::AcrylicTintOpacitySliderDragged(val),
+                        )
+                    })
+                    .on_change(|ctx, _, val| {
+                        ctx.dispatch_typed_action(AppearancePageAction::SetAcrylicTintOpacity(val))
+                    })
+                    .build()
+                    .finish(),
+                None,
+            ));
+        }
         if let Some(window) = app.windows().platform_window(view.window_id)
             && !window.supports_transparency()
             && window.graphics_backend() != GraphicsBackend::Gl
