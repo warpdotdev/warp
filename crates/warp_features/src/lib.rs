@@ -278,9 +278,6 @@ pub enum FeatureFlag {
     /// Allows AI to call the file retrieval tools.
     FileRetrievalTools,
 
-    /// Reload files in an AI conversation to prevent stale files.
-    ReloadStaleConversationFiles,
-
     /// Auto generate the title when creating a shared block.
     SharedBlockTitleGeneration,
 
