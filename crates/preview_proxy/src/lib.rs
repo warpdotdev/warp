@@ -37,6 +37,9 @@ const PREVIEW_CACHE_TTL: Duration = Duration::from_secs(15 * 60);
 const MISS_REFRESH_BACKOFF: Duration = Duration::from_secs(1);
 const ACCEPT_RETRY_DELAY: Duration = Duration::from_millis(100);
 const MAX_CONNECTIONS: usize = 256;
+const INGRESS_VALIDATION_TIMEOUT: Duration = Duration::from_secs(5);
+const MAX_CONCURRENT_INGRESS_VALIDATIONS: usize = 32;
+const MAX_INGRESS_TOKEN_BYTES: usize = 8192;
 
 type Body = BoxBody<Bytes, hyper::Error>;
 #[derive(Clone, Debug)]
@@ -48,6 +51,19 @@ pub struct PreviewRecord {
 
 pub trait PortSource: Send + Sync {
     fn previews(&self) -> impl Future<Output = Result<Vec<PreviewRecord>>> + Send;
+
+    fn validate_ingress_token(
+        &self,
+        _: IngressTokenValidation<'_>,
+    ) -> impl Future<Output = Result<()>> + Send {
+        async { bail!("Ingress token validation is unavailable") }
+    }
+}
+
+pub struct IngressTokenValidation<'a> {
+    pub preview_id: Uuid,
+    pub port: u16,
+    pub ingress_token: &'a str,
 }
 
 #[derive(Default)]
@@ -85,12 +101,34 @@ struct AuthorizedRoute {
 struct Routing<S> {
     listener_port: u16,
     source: Arc<S>,
+    ingress_capacity: Semaphore,
     upstream: UpstreamClient,
     cache: RwLock<PreviewCache>,
     refreshing: Mutex<()>,
 }
 
 impl<S: PortSource> Routing<S> {
+    async fn validate_ingress_token(&self, route: &ParsedRoute, headers: &HeaderMap) -> bool {
+        let Ok(ingress_token) = parse_ingress_token(headers) else {
+            return false;
+        };
+        let Ok(_permit) = self.ingress_capacity.try_acquire() else {
+            return false;
+        };
+        matches!(
+            timeout(
+                INGRESS_VALIDATION_TIMEOUT,
+                self.source.validate_ingress_token(IngressTokenValidation {
+                    preview_id: route.id,
+                    port: route.port,
+                    ingress_token,
+                }),
+            )
+            .await,
+            Ok(Ok(()))
+        )
+    }
+
     async fn authorize(&self, route: &ParsedRoute) -> Option<AuthorizedRoute> {
         let refresh_generation = self.cache.read().await.refresh_generation;
         if let Some(authorized) = self.authorize_from_cache(route).await {
@@ -242,8 +280,27 @@ fn parse_route(headers: &HeaderMap, listener_port: u16) -> Option<ParsedRoute> {
     Some(ParsedRoute { port, id, origin })
 }
 
+fn parse_ingress_token(headers: &HeaderMap) -> std::result::Result<&str, ()> {
+    let value = unique_header(headers, "x-warp-preview-ingress-token")?.ok_or(())?;
+    let ingress_token = value.to_str().map_err(|_| ())?;
+    if ingress_token.len() > MAX_INGRESS_TOKEN_BYTES {
+        return Err(());
+    }
+    let Some(token) = ingress_token.strip_prefix("Bearer ") else {
+        return Err(());
+    };
+    if token.is_empty()
+        || !token
+            .bytes()
+            .all(|byte| byte.is_ascii_graphic() && byte != b',')
+    {
+        return Err(());
+    }
+    Ok(ingress_token)
+}
+
 fn connection_nominates_identity(headers: &HeaderMap) -> bool {
-    const IDENTITY_HEADERS: [&str; 11] = [
+    const IDENTITY_HEADERS: [&str; 12] = [
         "host",
         "origin",
         "forwarded",
@@ -255,6 +312,7 @@ fn connection_nominates_identity(headers: &HeaderMap) -> bool {
         "x-original-uri",
         "x-warp-preview-id",
         "x-warp-preview-port",
+        "x-warp-preview-ingress-token",
     ];
     for value in headers.get_all(CONNECTION).iter() {
         let Ok(value) = value.to_str() else {
@@ -296,6 +354,7 @@ impl Proxy {
         let routing = Arc::new(Routing {
             listener_port: port,
             source,
+            ingress_capacity: Semaphore::new(MAX_CONCURRENT_INGRESS_VALIDATIONS),
             upstream: upstream::new_client(cancel.clone()),
             cache: RwLock::new(PreviewCache::default()),
             refreshing: Mutex::new(()),
@@ -404,6 +463,12 @@ async fn forward<S: PortSource + 'static>(
     let Some(authorized) = routing.authorize(&route).await else {
         return Ok(empty(StatusCode::FORBIDDEN));
     };
+    if !routing
+        .validate_ingress_token(&route, request.headers())
+        .await
+    {
+        return Ok(empty(StatusCode::FORBIDDEN));
+    }
     let app_port = authorized.port;
     let downstream_upgrade = upgrade.as_ref().map(|_| hyper::upgrade::on(&mut request));
     prepare_headers(
@@ -498,9 +563,6 @@ fn prepare_headers(headers: &mut HeaderMap, port: u16, translated_origin: Option
         headers.insert(CONNECTION, HeaderValue::from_static("te"));
     }
     strip_credentials(headers);
-    for name in ["x-warp-cloud-agent-id", "x-warp-ambient-task-token"] {
-        headers.remove(name);
-    }
     for name in [
         "forwarded",
         "x-original-host",
