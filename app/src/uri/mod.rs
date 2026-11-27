@@ -901,6 +901,19 @@ fn parse_positive_usize_query_param(url: &Url, name: &str) -> Result<Option<usiz
     Ok(Some(value))
 }
 
+fn parse_session_uuid_query_param(url: &Url) -> Result<Option<Vec<u8>>> {
+    let Some(raw) = url
+        .query_pairs()
+        .find(|(k, _)| k == "session")
+        .map(|(_, v)| v)
+    else {
+        return Ok(None);
+    };
+    decode_uuid_hex(&raw)
+        .map(Some)
+        .ok_or_else(|| anyhow!("`session` must be a 32-character hex UUID"))
+}
+
 fn parse_open_file_editor_url(url: &Url) -> Result<(PathBuf, Option<LineAndColumnArg>)> {
     let raw_path = url
         .query_pairs()
@@ -949,6 +962,8 @@ enum Action {
     OpenFileEditor {
         path: PathBuf,
         line_col: Option<LineAndColumnArg>,
+        /// Terminal session UUID whose tab should receive the file.
+        session_uuid: Option<Vec<u8>>,
     },
     Docker,
     OpenRepo,
@@ -971,7 +986,12 @@ impl Action {
             "/new_window" => Ok(Self::NewWindow),
             "/open_file_editor" => {
                 let (path, line_col) = parse_open_file_editor_url(url)?;
-                Ok(Self::OpenFileEditor { path, line_col })
+                let session_uuid = parse_session_uuid_query_param(url)?;
+                Ok(Self::OpenFileEditor {
+                    path,
+                    line_col,
+                    session_uuid,
+                })
             }
             "/docker/open_subshell" => Ok(Self::Docker),
             "/open-repo" => Ok(Self::OpenRepo),
@@ -1013,12 +1033,22 @@ impl Action {
                 };
                 open_file(window_id, path, ctx);
             }
-            Self::OpenFileEditor { path, line_col } => {
+            Self::OpenFileEditor {
+                path,
+                line_col,
+                session_uuid,
+            } => {
                 #[cfg(feature = "local_fs")]
-                open_file_editor(primary_window_id, path.clone(), *line_col, ctx);
+                open_file_editor(
+                    primary_window_id,
+                    path.clone(),
+                    *line_col,
+                    session_uuid.as_deref(),
+                    ctx,
+                );
                 #[cfg(not(feature = "local_fs"))]
                 {
-                    let _ = (path, line_col);
+                    let _ = (path, line_col, session_uuid);
                     log::warn!("open_file_editor action requires local_fs support");
                 }
             }
@@ -1477,6 +1507,7 @@ fn open_file_editor(
     primary_window_id: Option<WindowId>,
     path: PathBuf,
     line_col: Option<LineAndColumnArg>,
+    session_uuid: Option<&[u8]>,
     ctx: &mut AppContext,
 ) {
     #[cfg(feature = "local_fs")]
@@ -1493,6 +1524,40 @@ fn open_file_editor(
 
         let editor_settings = EditorSettings::as_ref(ctx);
         let target = resolve_file_target_to_open_in_warp(&path, editor_settings, None);
+
+        if let Some(uuid) = session_uuid {
+            let tab = WorkspaceRegistry::as_ref(ctx)
+                .all_workspaces(ctx)
+                .iter()
+                .find_map(|(win_id, workspace)| {
+                    workspace.as_ref(ctx).tab_views().find_map(|pane_group| {
+                        pane_group
+                            .as_ref(ctx)
+                            .find_terminal_pane_by_session_uuid(uuid)?;
+                        Some((*win_id, workspace.clone(), pane_group.id()))
+                    })
+                });
+            let Some((_, workspace, pane_group_id)) = tab else {
+                log::warn!("open_file_editor could not find a tab with the given session UUID");
+                return;
+            };
+            workspace.update(ctx, |workspace, ctx| {
+                let source = CodeSource::Link {
+                    path: path.clone(),
+                    range_start: line_col,
+                    range_end: None,
+                };
+                workspace.open_file_with_target_in_tab(
+                    pane_group_id,
+                    path,
+                    target,
+                    line_col,
+                    source,
+                    ctx,
+                );
+            });
+            return;
+        }
 
         let window_id = if let Some((wid, _)) = primary_window_id.and_then(|window_id| {
             ctx.root_view_id(window_id)
