@@ -467,6 +467,22 @@ pub fn init(app: &mut AppContext) {
         )
         .with_context_predicate(text_entry.clone())
         .with_mac_key_binding("shift-ctrl-E"),
+        EditableBinding::new(
+            "editor_view:move_to_and_select_buffer_start",
+            "Select and move to the top",
+            CodeEditorViewAction::SelectToBufferStart,
+        )
+        .with_context_predicate(text_entry.clone())
+        .with_mac_key_binding("cmd-shift-up")
+        .with_linux_or_windows_key_binding("ctrl-shift-home"),
+        EditableBinding::new(
+            "editor_view:move_to_and_select_buffer_end",
+            "Select and move to the bottom",
+            CodeEditorViewAction::SelectToBufferEnd,
+        )
+        .with_context_predicate(text_entry.clone())
+        .with_mac_key_binding("cmd-shift-down")
+        .with_linux_or_windows_key_binding("ctrl-shift-end"),
         // `shift-end` is registered on all platforms for this action.
         EditableBinding::new(
             "editor_view:select_to_line_end",
@@ -636,6 +652,8 @@ pub enum CodeEditorViewAction {
     SelectForwardsByWord,
     SelectToLineStart,
     SelectToLineEnd,
+    SelectToBufferStart,
+    SelectToBufferEnd,
     SelectAll,
     ToggleDiffNav(Option<Range<LineCount>>),
     HiddenSectionExpansion {
@@ -775,6 +793,8 @@ impl CodeEditorViewAction {
             | Self::SelectForwardsByWord
             | Self::SelectToLineStart
             | Self::SelectToLineEnd
+            | Self::SelectToBufferStart
+            | Self::SelectToBufferEnd
             | Self::SelectAll
             | Self::ToggleDiffNav(_)
             | Self::MoveUp
@@ -910,6 +930,12 @@ impl TypedActionView for CodeEditorView {
             }),
             SelectToLineEnd => self.model.update(ctx, |model, ctx| {
                 model.select_to_paragraph_end(ctx);
+            }),
+            SelectToBufferStart => self.model.update(ctx, |model, ctx| {
+                model.select_to_buffer_start(ctx);
+            }),
+            SelectToBufferEnd => self.model.update(ctx, |model, ctx| {
+                model.select_to_buffer_end(ctx);
             }),
             SelectAll => self.model.update(ctx, |model, ctx| {
                 model.select_all(ctx);
