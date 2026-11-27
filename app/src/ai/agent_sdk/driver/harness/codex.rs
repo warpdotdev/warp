@@ -891,10 +891,8 @@ fn set_codex_check_for_update_on_startup(doc: &mut toml_edit::DocumentMut, enabl
 }
 
 fn disable_codex_native_orchestration(doc: &mut toml_edit::DocumentMut) {
-    // Native children bypass Oz's task tracking. Model-selected multi-agent v2 ignores the legacy
-    // feature toggle, so both the agents setting and feature overrides must be disabled.
+    // Native children bypass Oz's task tracking. V2 can override agents.enabled, so disable both.
     doc["agents"]["enabled"] = toml_edit::value(false);
-    doc["features"]["multi_agent"] = toml_edit::value(false);
     doc["features"]["multi_agent_v2"] = toml_edit::value(false);
 }
 

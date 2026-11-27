@@ -110,6 +110,11 @@ fn delayed_shared_session_report_preserves_occurrence_time() {
                 .create()
         };
         initialize_app_for_terminal_view(&mut app);
+        app.read(|ctx| {
+            ServerApiProvider::as_ref(ctx)
+                .get()
+                .set_ambient_workload_token_for_test("test-workload-token".to_string(), None);
+        });
         let terminal = add_window_with_terminal(&mut app, None);
         let driver = app.add_model(|ctx| {
             let terminal_driver =
