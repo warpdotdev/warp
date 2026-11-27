@@ -126,13 +126,14 @@ runs:
     - name: Run Warp agent
       shell: bash
       env:
+        WARP_CHANNEL: ${{ inputs.warp_channel }}
         WARP_API_KEY: ${{ inputs.warp_api_key }}
         GH_TOKEN: ${{ inputs.github_token }}
         PROFILE_ID: ${{ inputs.profile_id }}
       run: |
         set -euo pipefail
         # Determine the CLI command name based on channel suffix
-        case "${{ inputs.warp_channel }}" in
+        case "${WARP_CHANNEL}" in
           stable|stable_release|"") suffix="" ;;
           preview|preview_release) suffix="-preview" ;;
           dev|dev_release) suffix="-dev" ;;
