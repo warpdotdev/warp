@@ -211,7 +211,7 @@ fn test_history_data_source_reflects_live_exit_status_update() {
         let mixer = app.add_model(|_| CommandSearchMixer::new());
         mixer.update(&mut app, |mixer, ctx| {
             mixer.add_async_source(
-                history_data_source_for_session(session_id),
+                history_data_source_for_session(session_id, None),
                 HashSet::from([QueryFilter::History]),
                 AddAsyncSourceOptions {
                     debounce_interval: None,
@@ -248,6 +248,186 @@ fn test_history_data_source_reflects_live_exit_status_update() {
              source was never rebuilt, proving it re-reads live History state per query rather \
              than a snapshot captured once when the source was created"
         );
+    });
+}
+
+#[test]
+fn history_data_source_reflects_live_execution_frequency() {
+    let _flag = FeatureFlag::HistorySearchRankingV2.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        crate::test_util::terminal::initialize_app_for_terminal_view(&mut app);
+
+        let session = Arc::new(Session::new(
+            SessionInfo::new_for_test().with_id(0),
+            Arc::new(TestCommandExecutor::default()),
+        ));
+        let session_id = session.id();
+
+        let history_handle = History::handle(&app);
+        history_handle.update(&mut app, |history, ctx| {
+            history.init_session_with(session.clone(), async { vec![] }, ctx);
+        });
+        assert_eventually!(
+            history_handle.read(&app, |history, _ctx| history.is_queryable(&session_id)),
+            "history should become queryable once the (empty) histfile read completes"
+        );
+
+        // Same timestamp for both, so only the frequency prior can separate them; same length
+        // and shared "npm run " prefix so the query matches both with equal quality (the
+        // differing trailing character falls outside the matched region).
+        let start_ts = Local::now();
+        let make_entry = |command: &str| {
+            let mut entry = HistoryEntry::command_only(command.to_owned());
+            entry.session_id = Some(session_id);
+            entry.start_ts = Some(start_ts);
+            entry
+        };
+
+        // Repeated executions of the same command dedupe to a single visible entry (see
+        // `History::commands`), with the repeat count folded into its execution stats. The
+        // 20-execution command is appended (and so occupies the tiebreak-losing position) before
+        // the single-execution one, so a tie would rank it *below* -- only a real frequency
+        // contribution can move it above.
+        history_handle.update(&mut app, |history, _ctx| {
+            for _ in 0..20 {
+                history.append_commands(session_id, vec![make_entry("npm run flap")]);
+            }
+            history.append_commands(session_id, vec![make_entry("npm run flag")]);
+        });
+
+        let mixer = app.add_model(|_| CommandSearchMixer::new());
+        mixer.update(&mut app, |mixer, ctx| {
+            mixer.add_async_source(
+                history_data_source_for_session(session_id, None),
+                HashSet::from([QueryFilter::History]),
+                AddAsyncSourceOptions {
+                    debounce_interval: None,
+                    run_in_zero_state: false,
+                    run_when_unfiltered: true,
+                },
+                ctx,
+            );
+            mixer.run_query("npm run".into(), ctx);
+        });
+        assert_eventually!(
+            app.read(|app| !mixer.as_ref(app).is_loading()),
+            "the query should finish loading"
+        );
+
+        app.read(|app| {
+            let results = mixer.as_ref(app).results();
+            assert_eq!(results.len(), 2);
+
+            // Highest-ranked result is ordered last (`SearchResultOrdering::BottomUp`).
+            assert!(
+                matches!(
+                    results.last().map(|result| result.accept_result()),
+                    Some(CommandSearchItemAction::AcceptHistory(AcceptedHistoryItem {
+                        command,
+                        linked_workflow_data: None,
+                    })) if command == "npm run flap"
+                ),
+                "the command run 20 times should outrank the one run once despite an \
+                 unfavorable tiebreak, proving the frequency prior is wired through \
+                 `history_data_source_for_session`'s live `command_execution_stats` lookup, not \
+                 just the `rank.rs` formula in isolation"
+            );
+        });
+    });
+}
+
+#[test]
+fn history_data_source_reflects_current_working_directory() {
+    let _flag = FeatureFlag::HistorySearchRankingV2.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        crate::test_util::terminal::initialize_app_for_terminal_view(&mut app);
+
+        let session = Arc::new(Session::new(
+            SessionInfo::new_for_test().with_id(0),
+            Arc::new(TestCommandExecutor::default()),
+        ));
+        let session_id = session.id();
+
+        let history_handle = History::handle(&app);
+        history_handle.update(&mut app, |history, ctx| {
+            history.init_session_with(session.clone(), async { vec![] }, ctx);
+        });
+        assert_eventually!(
+            history_handle.read(&app, |history, _ctx| history.is_queryable(&session_id)),
+            "history should become queryable once the (empty) histfile read completes"
+        );
+
+        let current_cwd = "/home/user/project".to_owned();
+        let other_cwd = "/home/user/other".to_owned();
+
+        // Same timestamp and a single execution each, so only the cwd prior can separate them;
+        // same length and shared "npm run " prefix so the query matches both with equal
+        // quality (the differing trailing character falls outside the matched region).
+        let start_ts = Local::now();
+        let make_entry = |command: &str, pwd: &str| {
+            let mut entry = HistoryEntry::command_only(command.to_owned());
+            entry.session_id = Some(session_id);
+            entry.start_ts = Some(start_ts);
+            entry.pwd = Some(pwd.to_owned());
+            entry
+        };
+
+        // The command that was run from `current_cwd` is appended *first*, so it occupies the
+        // tiebreak-losing position (see `history_data_source_reflects_live_execution_frequency`
+        // for why tiebreaks favor later-appended entries) -- only a real cwd-affinity
+        // contribution can move it above the other command.
+        history_handle.update(&mut app, |history, _ctx| {
+            history.append_commands(
+                session_id,
+                vec![make_entry("npm run flap", current_cwd.as_str())],
+            );
+            history.append_commands(
+                session_id,
+                vec![make_entry("npm run flag", other_cwd.as_str())],
+            );
+        });
+
+        let mixer = app.add_model(|_| CommandSearchMixer::new());
+        mixer.update(&mut app, |mixer, ctx| {
+            mixer.add_async_source(
+                history_data_source_for_session(session_id, Some(current_cwd.clone())),
+                HashSet::from([QueryFilter::History]),
+                AddAsyncSourceOptions {
+                    debounce_interval: None,
+                    run_in_zero_state: false,
+                    run_when_unfiltered: true,
+                },
+                ctx,
+            );
+            mixer.run_query("npm run".into(), ctx);
+        });
+        assert_eventually!(
+            app.read(|app| !mixer.as_ref(app).is_loading()),
+            "the query should finish loading"
+        );
+
+        app.read(|app| {
+            let results = mixer.as_ref(app).results();
+            assert_eq!(results.len(), 2);
+
+            // Highest-ranked result is ordered last (`SearchResultOrdering::BottomUp`).
+            assert!(
+                matches!(
+                    results.last().map(|result| result.accept_result()),
+                    Some(CommandSearchItemAction::AcceptHistory(AcceptedHistoryItem {
+                        command,
+                        linked_workflow_data: None,
+                    })) if command == "npm run flap"
+                ),
+                "the command executed in the current working directory should outrank the one \
+                 executed elsewhere despite an unfavorable tiebreak, proving that `current_cwd` \
+                 is captured by `history_data_source_for_session` and propagated into each \
+                 candidate's live `command_execution_stats` lookup, not just the `rank.rs` \
+                 formula in isolation"
+            );
+        });
     });
 }
 
