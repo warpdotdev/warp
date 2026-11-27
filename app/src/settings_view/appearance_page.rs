@@ -92,10 +92,11 @@ use crate::window_settings::{
 use crate::workspace::WorkspaceAction;
 use crate::workspace::header_toolbar_editor::HeaderToolbarInlineEditor;
 use crate::workspace::tab_settings::{
-    DirectoryTabColor, HideTitleBarSearchBarInVerticalTabs, PreserveActiveTabColor,
-    ShowIndicatorsButton, ShowVerticalTabPanelInRestoredWindows, TabCloseButtonPosition,
-    TabSettings, TabSettingsChangedEvent, UseLatestUserPromptAsConversationTitleInTabNames,
-    UseVerticalTabs, WorkspaceDecorationVisibility, canonical_directory_key,
+    CompactHorizontalTabs, DirectoryTabColor, HideTitleBarSearchBarInVerticalTabs,
+    PreserveActiveTabColor, ShowIndicatorsButton, ShowVerticalTabPanelInRestoredWindows,
+    TabCloseButtonPosition, TabSettings, TabSettingsChangedEvent,
+    UseLatestUserPromptAsConversationTitleInTabNames, UseVerticalTabs,
+    WorkspaceDecorationVisibility, canonical_directory_key,
 };
 use crate::{send_telemetry_from_ctx, themes};
 
@@ -290,6 +291,15 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
         )),
         context,
         flags::MATCH_NOTEBOOK_FONT_SIZE_TO_TERMINAL_FONT_SIZE_FLAG,
+    ));
+
+    toggle_binding_pairs.push(ToggleSettingActionPair::new(
+        "compact horizontal tabs",
+        builder(SettingsAction::AppearancePageToggle(
+            AppearancePageAction::ToggleCompactHorizontalTabs,
+        )),
+        context,
+        flags::COMPACT_HORIZONTAL_TABS_FLAG,
     ));
 
     toggle_binding_pairs.push(
@@ -489,6 +499,7 @@ pub enum AppearancePageAction {
     ToggleMatchNotebookToMonospaceFontSize,
     ToggleMatchAIToTerminalFontFamily,
     ToggleTabIndicators,
+    ToggleCompactHorizontalTabs,
     ToggleShowCodeReviewButton,
     TogglePreserveActiveTabColor,
     ToggleVerticalTabs,
@@ -672,6 +683,7 @@ impl TypedActionView for AppearanceSettingsPageView {
                 ctx.open_url(url);
             }
             ToggleTabIndicators => self.toggle_tab_indicators(ctx),
+            ToggleCompactHorizontalTabs => self.toggle_compact_horizontal_tabs(ctx),
             ToggleShowCodeReviewButton => self.toggle_show_code_review_button(ctx),
             TogglePreserveActiveTabColor => self.toggle_preserve_active_tab_color(ctx),
             ToggleVerticalTabs => self.toggle_vertical_tabs(ctx),
@@ -1500,8 +1512,10 @@ impl AppearanceSettingsPageView {
         ));
 
         let tab_settings = TabSettings::as_ref(ctx);
-        let mut tab_settings_widgets: Vec<Box<dyn SettingsWidget<View = Self>>> =
-            vec![Box::new(TabIndicatorWidget::default())];
+        let mut tab_settings_widgets: Vec<Box<dyn SettingsWidget<View = Self>>> = vec![
+            Box::new(TabIndicatorWidget::default()),
+            Box::new(CompactHorizontalTabsWidget::default()),
+        ];
         if FeatureFlag::FullScreenZenMode.is_enabled()
             && tab_settings
                 .workspace_decoration_visibility
@@ -2436,6 +2450,13 @@ impl AppearanceSettingsPageView {
     fn toggle_all_available_fonts(&mut self, ctx: &mut ViewContext<Self>) {
         self.view_font_type = self.view_font_type.toggle();
         self.update_font_dropdown(ctx);
+    }
+
+    fn toggle_compact_horizontal_tabs(&mut self, ctx: &mut ViewContext<Self>) {
+        TabSettings::handle(ctx).update(ctx, |tab_settings, ctx| {
+            let enabled = !*tab_settings.compact_horizontal_tabs;
+            report_if_error!(tab_settings.compact_horizontal_tabs.set_value(enabled, ctx));
+        });
     }
 
     fn toggle_tab_indicators(&mut self, ctx: &mut ViewContext<Self>) {
@@ -4838,6 +4859,49 @@ impl SettingsWidget for TabCloseButtonPositionWidget {
 }
 
 #[derive(Default)]
+struct CompactHorizontalTabsWidget {
+    switch_state: SwitchStateHandle,
+}
+
+impl SettingsWidget for CompactHorizontalTabsWidget {
+    type View = AppearanceSettingsPageView;
+
+    fn search_terms(&self) -> &str {
+        "compact horizontal tabs small rounded height width density"
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        render_body_item::<AppearancePageAction>(
+            "Compact horizontal tabs".into(),
+            None,
+            LocalOnlyIconState::for_setting(
+                CompactHorizontalTabs::storage_key(),
+                CompactHorizontalTabs::sync_to_cloud(),
+                &mut view.local_only_icon_tooltip_states.borrow_mut(),
+                app,
+            ),
+            ToggleState::Enabled,
+            appearance,
+            appearance
+                .ui_builder()
+                .switch(self.switch_state.clone())
+                .check(*TabSettings::as_ref(app).compact_horizontal_tabs)
+                .build()
+                .on_click(|ctx, _, _| {
+                    ctx.dispatch_typed_action(AppearancePageAction::ToggleCompactHorizontalTabs);
+                })
+                .finish(),
+            Some("Use smaller, rounded tabs in the horizontal tab bar.".into()),
+        )
+    }
+}
+
+#[derive(Default)]
 struct TabIndicatorWidget {
     switch_state: SwitchStateHandle,
 }
@@ -5600,3 +5664,7 @@ impl From<ViewHandle<AppearanceSettingsPageView>> for SettingsPageViewHandle {
         SettingsPageViewHandle::Appearance(view_handle)
     }
 }
+
+#[cfg(test)]
+#[path = "appearance_page_tests.rs"]
+mod tests;

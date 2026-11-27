@@ -457,6 +457,16 @@ settings::macros::implement_setting_for_enum!(
 );
 
 define_settings_group!(TabSettings, settings: [
+    compact_horizontal_tabs: CompactHorizontalTabs {
+        type: bool,
+        default: false,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
+        private: false,
+        toml_path: "appearance.tabs.compact_horizontal_tabs",
+        description: "Whether to use smaller, rounded horizontal tabs.",
+    },
     show_indicators: ShowIndicatorsButton {
         type: bool,
         default: true,
