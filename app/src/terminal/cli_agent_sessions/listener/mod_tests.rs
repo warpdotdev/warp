@@ -324,6 +324,20 @@ fn muse_is_supported_via_default_listener() {
 }
 
 #[test]
+fn devin_is_supported_via_default_listener() {
+    assert!(is_agent_supported(&CLIAgent::Devin));
+    let mut handler = create_handler(&CLIAgent::Devin).expect("Devin should support OSC 777");
+
+    let stop_body = r#"{"v":1,"agent":"devin","event":"stop"}"#;
+    let parsed_stop = handler
+        .try_parse(Some(CLI_AGENT_NOTIFICATION_SENTINEL), stop_body, false)
+        .expect("should parse devin stop");
+    assert_eq!(parsed_stop.agent, CLIAgent::Devin);
+    assert_eq!(parsed_stop.event, CLIAgentEventType::Stop);
+    assert!(handler.handle_event(parsed_stop).is_some());
+}
+
+#[test]
 fn warp_tui_notifications_are_supported() {
     assert!(is_agent_supported(&CLIAgent::WarpTui));
     let mut handler = create_handler(&CLIAgent::WarpTui).expect("should create handler");
