@@ -15,6 +15,7 @@ use crate::servers::clangd::ClangdCandidate;
 use crate::servers::go::GoPlsCandidate;
 use crate::servers::pyright::PyrightCandidate;
 use crate::servers::rust::RustAnalyzerCandidate;
+use crate::servers::solidity_language_server::SolidityLanguageServerCandidate;
 use crate::servers::typescript_language_server::TypeScriptLanguageServerCandidate;
 use crate::{LanguageId, LanguageServerCandidate};
 
@@ -43,6 +44,7 @@ pub enum LSPServerType {
     Pyright,
     TypeScriptLanguageServer,
     Clangd,
+    SolidityLanguageServer,
 }
 
 /// Provides server-specific configuration for each LSP server type.
@@ -110,6 +112,9 @@ impl LSPServerType {
                     binary_path: path,
                     prepend_args: vec![],
                 }),
+            LSPServerType::SolidityLanguageServer => {
+                SolidityLanguageServerCandidate::find_installed_binary_config(path_env_var).await
+            }
         }
     }
 
@@ -133,6 +138,7 @@ impl LSPServerType {
             LSPServerType::Pyright => "pyright-langserver",
             LSPServerType::TypeScriptLanguageServer => "typescript-language-server",
             LSPServerType::Clangd => "clangd",
+            LSPServerType::SolidityLanguageServer => "nomicfoundation-solidity-language-server",
         }
     }
 
@@ -141,7 +147,9 @@ impl LSPServerType {
     fn args(&self) -> Vec<&'static str> {
         match self {
             LSPServerType::RustAnalyzer | LSPServerType::GoPls | LSPServerType::Clangd => vec![],
-            LSPServerType::Pyright | LSPServerType::TypeScriptLanguageServer => vec!["--stdio"],
+            LSPServerType::Pyright
+            | LSPServerType::TypeScriptLanguageServer
+            | LSPServerType::SolidityLanguageServer => vec!["--stdio"],
         }
     }
 
@@ -155,6 +163,7 @@ impl LSPServerType {
             LSPServerType::Pyright => vec!["--stdio"],
             LSPServerType::TypeScriptLanguageServer => vec!["--stdio"],
             LSPServerType::Clangd => vec![],
+            LSPServerType::SolidityLanguageServer => vec!["--stdio"],
         }
     }
 
@@ -173,6 +182,7 @@ impl LSPServerType {
                 ]
             }
             LSPServerType::Clangd => vec![LanguageId::C, LanguageId::Cpp],
+            LSPServerType::SolidityLanguageServer => vec![LanguageId::Solidity],
         }
     }
 
@@ -206,6 +216,9 @@ impl LSPServerType {
                 Box::new(TypeScriptLanguageServerCandidate::new(client))
             }
             LSPServerType::Clangd => Box::new(ClangdCandidate::new(client)),
+            LSPServerType::SolidityLanguageServer => {
+                Box::new(SolidityLanguageServerCandidate::new(client))
+            }
         }
     }
 
