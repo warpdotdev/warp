@@ -13,6 +13,13 @@ const TREE_BASE: usize = 2;
 #[cfg(not(feature = "test-util"))]
 const TREE_BASE: usize = 6;
 
+/// Item slots in every leaf.
+///
+/// The `test-util` feature lowers `TREE_BASE`, so a build with it enabled has 4 slots where a
+/// production build has 12. Anything measuring how densely items pack into leaves has to read this
+/// rather than assume the production figure.
+pub const ITEMS_PER_LEAF: usize = 2 * TREE_BASE;
+
 pub trait Item: Clone + fmt::Debug {
     type Summary: for<'a> AddAssign<&'a Self::Summary> + Default + Clone + fmt::Debug;
 
@@ -151,15 +158,20 @@ impl<T: Item> SumTree<T> {
         }
     }
 
+    /// Appends a single item.
+    ///
+    /// The item is handed to [`SumTree::push_tree`] as a bare one-item leaf rather than wrapped in
+    /// an internal node. Wrapping it made `push_tree_recursive` take its `height_delta == 0` branch
+    /// once the destination outgrew a single leaf, which adopts the pushed node's children whole and
+    /// so gave every item a leaf of its own. A bare leaf is underflowing, so it descends to the
+    /// rightmost leaf and merges — the path a partial leaf from [`SumTree::extend`] already takes.
     pub fn push(&mut self, item: T) {
         let summary = item.summary();
-        self.push_tree(SumTree::from_child_trees(vec![SumTree(Arc::new(
-            Node::Leaf {
-                summary: summary.clone(),
-                items: ArrayVec::from_iter(Some(item)),
-                item_summaries: ArrayVec::from_iter(Some(summary)),
-            },
-        ))]))
+        self.push_tree(SumTree(Arc::new(Node::Leaf {
+            summary: summary.clone(),
+            items: ArrayVec::from_iter(Some(item)),
+            item_summaries: ArrayVec::from_iter(Some(summary)),
+        })))
     }
 
     pub fn push_tree(&mut self, other: Self) {
