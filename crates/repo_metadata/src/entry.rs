@@ -1002,10 +1002,17 @@ fn descend_allowlist_matches(suffix: &[Component<'_>]) -> bool {
 /// a watch on) the directory at `path`.
 ///
 /// Directories inside `.git/` follow the watcher allowlist, force-included
-/// paths are always watched even when gitignored, directory symlinks are
-/// pruned to avoid following trees outside the repository, and any other
-/// gitignored directory is pruned so we don't register watches on
-/// `node_modules`, build output, vendored deps, etc.
+/// paths are always watched even when gitignored, and directory symlinks are
+/// pruned to avoid following trees outside the repository.
+///
+/// Other gitignored directories are pruned only on Linux. inotify skips
+/// subtrees this predicate rejects, so pruning avoids watches on
+/// `node_modules`, build output, and vendored deps; an expanded ignored
+/// directory gets its own non-recursive watch. macOS and Windows report
+/// events from the recursive root, so ignored directories and their
+/// descendants stay watchable there and a change beneath them still reaches
+/// repository subscribers. The emit predicate does not apply gitignore;
+/// ignored files stay tagged `is_ignored` downstream.
 pub fn should_watch_repo_directory(
     path: &Path,
     repo_root: &Path,
@@ -1029,12 +1036,18 @@ pub fn should_watch_repo_directory(
         return should_watch_directory_in_git_path(path);
     }
 
-    !matches_gitignores(
-        path,
-        path.is_dir(),
-        gitignores,
-        /* check_ancestors */ true,
-    )
+    // Linux rejects the subtree at registration time. Other backends deliver
+    // events from the recursive root, so keep the ignored directory.
+    if cfg!(target_os = "linux") {
+        !matches_gitignores(
+            path,
+            path.is_dir(),
+            gitignores,
+            /* check_ancestors */ true,
+        )
+    } else {
+        true
+    }
 }
 
 /// Returns whether `path` is a symlink or is below one.
@@ -1066,9 +1079,11 @@ fn is_within_symlink(path: &Path, repo_root: &Path) -> bool {
 /// existing behavior.
 ///
 /// Descend predicate: see [`should_watch_repo_directory`]. In addition to the
-/// `.git/` allowlist, it prunes gitignored directories (honoring registered
-/// force-included paths) so the recursive walk does not register watches on
-/// gitignored subtrees.
+/// `.git/` allowlist, on Linux it prunes gitignored directories (honoring
+/// registered force-included paths) so the recursive walk does not register
+/// watches on gitignored subtrees. Other platforms keep those directories on
+/// the recursive root watch. Ignored events are still emitted and tagged
+/// `is_ignored` downstream.
 ///
 /// `gitignores` should be the repo's root + global gitignores (as produced by
 /// [`gitignores_for_directory`]), matching `Repository::check_gitignore_status`
