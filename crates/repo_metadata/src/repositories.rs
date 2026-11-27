@@ -371,22 +371,14 @@ async fn find_git_repo(path: &Path) -> Option<GitRepoInfo> {
                 }
             } else if dot_git_type.is_file() {
                 // A potential gitfile, used by worktrees and submodules.
-                if let Ok(contents) = async_fs::read_to_string(&dot_git_path).await {
-                    // Typical format: "gitdir: <path>\n"
-                    if let Some(rest) = contents.trim().strip_prefix("gitdir:") {
-                        let gitdir_path = PathBuf::from(rest.trim());
-                        let resolved_gitdir = if gitdir_path.is_absolute() {
-                            gitdir_path
-                        } else {
-                            current.join(gitdir_path)
-                        };
-                        if is_valid_git_dir(&resolved_gitdir).await {
-                            return Some(GitRepoInfo {
-                                working_tree_path: Some(current.clone()),
-                                git_dir_path: resolved_gitdir,
-                            });
-                        }
-                    }
+                if let Ok(contents) = async_fs::read_to_string(&dot_git_path).await
+                    && let Some(resolved_gitdir) = crate::entry::parse_gitfile(&contents, &current)
+                    && is_valid_git_dir(&resolved_gitdir).await
+                {
+                    return Some(GitRepoInfo {
+                        working_tree_path: Some(current.clone()),
+                        git_dir_path: resolved_gitdir,
+                    });
                 }
             }
         }

@@ -359,7 +359,7 @@ impl DirectoryWatcher {
         let local_path = directory_path.to_local_path();
         let registration_future = if let Some(ref watcher) = self.watcher {
             if let Some(local_path) = local_path.clone() {
-                // `gitignores` are the repo's cached root + global gitignores,
+                // `gitignores` are the repo's cached gitignores,
                 // threaded in from `Repository::start_watching` so we neither
                 // re-read `.gitignore` from disk nor re-enter the (already
                 // borrowed) `Repository` model here.

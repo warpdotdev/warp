@@ -1,16 +1,14 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
-use std::sync::Arc;
 
 use anyhow::anyhow;
 use arborium::tree_sitter::{Parser, Query, QueryCursor, Tree};
 use futures::channel::oneshot;
-use ignore::gitignore::Gitignore;
 use itertools::Itertools;
 use rayon::prelude::*;
-use repo_metadata::RepositoryUpdate;
 use repo_metadata::entry::{BudgetExceededBehavior, IgnoredPathStrategy, is_file_parsable};
+use repo_metadata::{RepositoryUpdate, gitignores_for_directory};
 use streaming_iterator::StreamingIterator;
 use syntax_tree::TextSlice;
 use warp_errors::report_error;
@@ -32,19 +30,7 @@ pub async fn build_outline(
     max_num_files_limit: Option<usize>,
 ) -> anyhow::Result<Outline> {
     const MAX_DEPTH: usize = 200;
-    let mut gitignores = vec![];
-
-    // Add global gitignore, if it exists
-    let (global_gitignore, _) = Gitignore::global();
-    if !global_gitignore.is_empty() {
-        gitignores.push(Arc::new(global_gitignore));
-    }
-
-    let gitignore_path = path.join(".gitignore");
-    if gitignore_path.exists() {
-        let (gitignore, _) = Gitignore::new(gitignore_path);
-        gitignores.push(Arc::new(gitignore));
-    }
+    let mut gitignores = gitignores_for_directory(path);
 
     // First traverse the repo path to retrieve all files we want to parse.
     let mut files = Vec::new();

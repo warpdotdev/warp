@@ -918,6 +918,7 @@ impl CodebaseIndex {
                 gitignores.push(Arc::new(gitignore));
             }
         }
+        gitignores.extend(repo_metadata::git_info_exclude_for_directory(repo_path));
 
         gitignores
     }

@@ -23,7 +23,7 @@ use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock};
 
-use ignore::gitignore::Gitignore;
+use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use parking_lot::Mutex;
 
 /// Total `.gitignore` source bytes the cache may hold before evicting least-recently-used
@@ -45,9 +45,13 @@ struct CacheEntry {
     last_used: u64,
 }
 
+/// An ignore file's path and the root its patterns are relative to. The root isn't derivable from
+/// the path: linked worktrees share one `info/exclude`, each rooted at its own working tree.
+type CacheKey = (PathBuf, PathBuf);
+
 #[derive(Default)]
 struct Cache {
-    entries: HashMap<PathBuf, CacheEntry>,
+    entries: HashMap<CacheKey, CacheEntry>,
     total_source_bytes: u64,
     /// Recency counter, only ever accessed while `CACHE`'s mutex is held.
     next_tick: u64,
@@ -60,28 +64,28 @@ impl Cache {
         tick
     }
 
-    /// Returns the cached matcher for `path` if its content digest matches `content_digest`.
-    fn lookup(&mut self, path: &Path, content_digest: u64) -> Option<Arc<Gitignore>> {
-        if self.entries.get(path)?.content_digest != content_digest {
+    /// Returns the cached matcher for `key` if its content digest matches `content_digest`.
+    fn lookup(&mut self, key: &CacheKey, content_digest: u64) -> Option<Arc<Gitignore>> {
+        if self.entries.get(key)?.content_digest != content_digest {
             return None;
         }
         let tick = self.next_tick();
-        let entry = self.entries.get_mut(path)?;
+        let entry = self.entries.get_mut(key)?;
         entry.last_used = tick;
         Some(entry.gitignore.clone())
     }
 
-    /// Inserts a freshly parsed matcher for `path`, replacing any previous entry.
+    /// Inserts a freshly parsed matcher for `key`, replacing any previous entry.
     fn insert(
         &mut self,
-        path: PathBuf,
+        key: CacheKey,
         content_digest: u64,
         gitignore: Arc<Gitignore>,
         source_len: u64,
     ) {
         let last_used = self.next_tick();
         if let Some(previous) = self.entries.insert(
-            path,
+            key,
             CacheEntry {
                 content_digest,
                 gitignore,
@@ -101,17 +105,17 @@ impl Cache {
         if self.total_source_bytes <= MAX_CACHED_SOURCE_BYTES {
             return;
         }
-        let mut by_last_used: Vec<(PathBuf, u64, u64)> = self
+        let mut by_last_used: Vec<(CacheKey, u64, u64)> = self
             .entries
             .iter()
-            .map(|(path, entry)| (path.clone(), entry.last_used, entry.source_len))
+            .map(|(key, entry)| (key.clone(), entry.last_used, entry.source_len))
             .collect();
         by_last_used.sort_by_key(|(_, last_used, _)| *last_used);
-        for (path, _, source_len) in by_last_used {
+        for (key, _, source_len) in by_last_used {
             if self.total_source_bytes <= MAX_CACHED_SOURCE_BYTES {
                 break;
             }
-            self.entries.remove(&path);
+            self.entries.remove(&key);
             self.total_source_bytes -= source_len;
         }
     }
@@ -125,34 +129,56 @@ fn content_digest(content: &[u8]) -> u64 {
     hasher.finish()
 }
 
-/// Returns a cached, parsed `.gitignore` matcher for `gitignore_path`, reusing the previous
-/// parse when the file's content is unchanged and re-parsing (and caching the fresh result)
-/// otherwise.
+/// Parses the ignore file at `path` with its patterns rooted at `root`.
+///
+/// Returns the matcher and whether it fully represents the file. The matcher is incomplete when
+/// the file couldn't be read or one of its lines failed to parse; like [`Gitignore::new`], this
+/// fails open by returning whatever could be parsed (or an empty matcher).
+fn parse(path: &Path, root: &Path) -> (Gitignore, bool) {
+    let mut builder = GitignoreBuilder::new(root);
+    let add_error = builder.add(path);
+    match builder.build() {
+        Ok(gitignore) => (gitignore, add_error.is_none()),
+        Err(_) => (Gitignore::empty(), false),
+    }
+}
+
+/// Returns a cached, parsed `.gitignore` matcher for `gitignore_path`, rooted at the file's
+/// parent directory. See [`get_or_parse_rooted`].
+pub(crate) fn get_or_parse(gitignore_path: &Path) -> Arc<Gitignore> {
+    let root = gitignore_path.parent().unwrap_or(Path::new("/"));
+    get_or_parse_rooted(gitignore_path, root)
+}
+
+/// Returns a cached, parsed matcher for the ignore file at `ignore_path` whose patterns are
+/// matched relative to `root`, reusing the previous parse when the file's content is unchanged
+/// and re-parsing (and caching the fresh result) otherwise.
 ///
 /// Never caches a result that doesn't reflect the file's current, complete contents: a
 /// transient read failure or a parse error is returned directly without touching the cache, so
 /// a stale or partial result can never shadow a later, successful parse (e.g. after a
 /// permissions fix or an edit that corrects a malformed glob line).
-pub(crate) fn get_or_parse(gitignore_path: &Path) -> Arc<Gitignore> {
-    let Ok(content) = std::fs::read(gitignore_path) else {
-        // Can't fingerprint a file we can't read right now. Parse directly — `Gitignore::new`
-        // fails open the same way on an unreadable file — without disturbing any existing
-        // cache entry, so a later, readable call still finds (or repopulates) a correct entry.
-        let (gitignore, _) = Gitignore::new(gitignore_path);
+pub(crate) fn get_or_parse_rooted(ignore_path: &Path, root: &Path) -> Arc<Gitignore> {
+    let Ok(content) = std::fs::read(ignore_path) else {
+        // Can't fingerprint a file we can't read right now. Parse directly without disturbing
+        // any existing cache entry, so a later, readable call still finds (or repopulates) a
+        // correct entry.
+        let (gitignore, _) = parse(ignore_path, root);
         return Arc::new(gitignore);
     };
     let content_digest = content_digest(&content);
+    let key = (ignore_path.to_path_buf(), root.to_path_buf());
 
-    if let Some(gitignore) = CACHE.lock().lookup(gitignore_path, content_digest) {
+    if let Some(gitignore) = CACHE.lock().lookup(&key, content_digest) {
         return gitignore;
     }
 
-    // Parse outside the lock (`Gitignore::new` does its own blocking file I/O) so a slow parse
-    // doesn't block unrelated cache lookups. A concurrent caller parsing the same path at the
-    // same time is a harmless, rare race: the last insert wins and both callers still get a
-    // valid, usable matcher.
-    let (gitignore, error) = Gitignore::new(gitignore_path);
-    if error.is_some() {
+    // Parse outside the lock (`parse` does its own blocking file I/O) so a slow parse doesn't
+    // block unrelated cache lookups. A concurrent caller parsing the same path at the same time
+    // is a harmless, rare race: the last insert wins and both callers still get a valid, usable
+    // matcher.
+    let (gitignore, complete) = parse(ignore_path, root);
+    if !complete {
         // A parse error (e.g. one malformed glob line) means this instance doesn't fully
         // represent the file. Don't cache it, so a later call — after the file is fixed, but
         // with the same content otherwise — isn't shadowed by this partial result.
@@ -161,12 +187,9 @@ pub(crate) fn get_or_parse(gitignore_path: &Path) -> Arc<Gitignore> {
     let gitignore = Arc::new(gitignore);
     let source_len = content.len() as u64;
 
-    CACHE.lock().insert(
-        gitignore_path.to_path_buf(),
-        content_digest,
-        gitignore.clone(),
-        source_len,
-    );
+    CACHE
+        .lock()
+        .insert(key, content_digest, gitignore.clone(), source_len);
     gitignore
 }
 
