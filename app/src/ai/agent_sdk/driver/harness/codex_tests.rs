@@ -266,12 +266,6 @@ fn prepare_codex_config_toml_writes_fresh_config() {
     let cfg = read_codex_config(&config_path);
     assert_eq!(cfg["check_for_update_on_startup"].as_bool(), Some(false));
     assert_eq!(cfg["agents"]["enabled"].as_bool(), Some(false));
-    assert!(
-        !cfg["features"]
-            .as_table()
-            .unwrap()
-            .contains_key("multi_agent")
-    );
     assert_eq!(cfg["features"]["multi_agent_v2"].as_bool(), Some(false));
     assert_eq!(
         cfg["projects"][&key]["trust_level"].as_str(),
@@ -311,12 +305,6 @@ web_search = true
 
     let cfg = read_codex_config(&config_path);
     assert_eq!(cfg["agents"]["enabled"].as_bool(), Some(false));
-    assert!(
-        !cfg["features"]
-            .as_table()
-            .unwrap()
-            .contains_key("multi_agent")
-    );
     assert_eq!(cfg["features"]["multi_agent_v2"].as_bool(), Some(false));
     assert_eq!(cfg["agents"]["max_threads"].as_integer(), Some(8));
     assert_eq!(cfg["features"]["web_search"].as_bool(), Some(true));

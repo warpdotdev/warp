@@ -891,13 +891,9 @@ fn set_codex_check_for_update_on_startup(doc: &mut toml_edit::DocumentMut, enabl
 }
 
 fn disable_codex_native_orchestration(doc: &mut toml_edit::DocumentMut) {
-    // Native children bypass Oz's task tracking. V2 can override agents.enabled, while the deprecated
-    // V1 feature flag emits a warning even when false.
+    // Native children bypass Oz's task tracking. V2 can override agents.enabled, so disable both.
     doc["agents"]["enabled"] = toml_edit::value(false);
     doc["features"]["multi_agent_v2"] = toml_edit::value(false);
-    if let Some(features) = doc["features"].as_table_like_mut() {
-        features.remove("multi_agent");
-    }
 }
 
 fn set_codex_model_reasoning_effort(
