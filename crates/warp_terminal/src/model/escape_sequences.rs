@@ -235,6 +235,9 @@ pub trait ToEscapeSequence<T> {
 pub struct KeystrokeWithDetails<'a> {
     pub keystroke: &'a Keystroke,
     pub key_without_modifiers: Option<&'a str>,
+    /// The character the pressed physical key produces on the standard PC-101 layout, reported
+    /// to applications as the Kitty protocol's base layout key.
+    pub base_layout_key: Option<char>,
     /// The text that this key event would insert, as provided by the OS input system.
     /// Used for the REPORT_ASSOCIATED_TEXT enhancement (Kitty flag 16).
     pub chars: Option<&'a str>,
@@ -245,6 +248,7 @@ impl<T: ModeProvider> ToEscapeSequence<T> for KeystrokeWithDetails<'_> {
         if let Some(csi_u) = maybe_convert_keystroke_to_csi_u(
             self.keystroke,
             self.key_without_modifiers,
+            self.base_layout_key,
             self.chars,
             mode_provider,
         ) {

@@ -67,6 +67,9 @@ pub struct KeyEventDetails {
     pub right_alt: bool,
     /// The key that would have been produced without any modifiers (including Shift).
     pub key_without_modifiers: Option<String>,
+    /// The character the pressed physical key produces on the standard PC-101 layout, when
+    /// the platform can report it. See [`crate::platform::keyboard::KeyCode::base_layout_key`].
+    pub base_layout_key: Option<char>,
 }
 
 #[derive(Copy, Clone, Debug, Default)]
