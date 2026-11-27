@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[cfg(feature = "local_fs")]
 use chrono::Utc;
@@ -15,6 +16,49 @@ use super::{
 use crate::index::full_source_code_embedding::SnapshotStorage;
 use crate::index::full_source_code_embedding::store_client::MockStoreClient;
 use crate::workspace::WorkspaceMetadata;
+
+struct SnapshotCleanupLogger(AtomicUsize);
+
+impl log::Log for SnapshotCleanupLogger {
+    fn enabled(&self, metadata: &log::Metadata) -> bool {
+        metadata.level() == log::Level::Warn
+    }
+
+    fn log(&self, record: &log::Record) {
+        if record.level() == log::Level::Warn
+            && record
+                .args()
+                .to_string()
+                .starts_with("Failed to remove codebase index snapshot file")
+        {
+            self.0.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    fn flush(&self) {}
+}
+
+#[test]
+fn snapshot_cleanup_warns_only_for_unexpected_errors() {
+    static LOGGER: SnapshotCleanupLogger = SnapshotCleanupLogger(AtomicUsize::new(0));
+    log::set_logger(&LOGGER).unwrap();
+    log::set_max_level(log::LevelFilter::Warn);
+    let snapshots = tempfile::tempdir().unwrap();
+    let root = snapshots.path().join("repo");
+
+    futures::executor::block_on(CodebaseIndexManager::drop_index_snapshot(
+        snapshots.path(),
+        &root,
+    ));
+    assert_eq!(LOGGER.0.load(Ordering::Relaxed), 0);
+
+    std::fs::create_dir(super::snapshot_path(snapshots.path(), &root)).unwrap();
+    futures::executor::block_on(CodebaseIndexManager::drop_index_snapshot(
+        snapshots.path(),
+        &root,
+    ));
+    assert_eq!(LOGGER.0.load(Ordering::Relaxed), 1);
+}
 
 fn workspace_metadata(path: impl Into<PathBuf>) -> WorkspaceMetadata {
     WorkspaceMetadata {

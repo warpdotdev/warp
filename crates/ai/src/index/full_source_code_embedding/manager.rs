@@ -547,7 +547,9 @@ impl CodebaseIndexManager {
     }
 
     async fn drop_index_snapshot(snapshot_dir: &Path, codebase_root: &Path) {
-        if let Err(err) = std::fs::remove_file(snapshot_path(snapshot_dir, codebase_root)) {
+        if let Err(err) = std::fs::remove_file(snapshot_path(snapshot_dir, codebase_root))
+            && err.kind() != std::io::ErrorKind::NotFound
+        {
             log::warn!(
                 "Failed to remove codebase index snapshot file for {codebase_root:?}: {err:#?}"
             );
