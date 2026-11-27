@@ -76,6 +76,7 @@ use crate::util::tooltips::{
 };
 use crate::view_components::DismissibleToast;
 use crate::workspace::WorkspaceAction;
+use crate::workspace::tab_settings::TabSettings;
 
 #[cfg(test)]
 #[path = "view_tests.rs"]
@@ -83,6 +84,26 @@ mod tests;
 
 const SCROLLBAR_WIDTH: ScrollbarWidth = ScrollbarWidth::Auto;
 const MAX_EDITOR_TIP_WIDTH: f32 = 300.;
+
+/// Context flag inserted on an editable [`RichTextEditorView`] when the bold
+/// chord (`cmd-b`) must be yielded to the workspace "toggle vertical tabs panel"
+/// shortcut. See [`should_yield_bold_chord_to_vertical_tabs_panel`] and the
+/// Bold binding registration in [`init`].
+const VERTICAL_TABS_PANEL_CHORD_RESERVED: &str = "VerticalTabsPanelChordReserved";
+
+/// Returns whether an editable rich-text editor should yield its bold chord
+/// (`cmd-b`) to the workspace "toggle vertical tabs panel" shortcut.
+///
+/// Only macOS binds the panel toggle to `cmd-b` (via `cmd_or_ctrl_shift("b")`),
+/// which collides with the editor's `cmdorctrl-b` Bold binding. On Linux/Windows
+/// the panel toggle is `ctrl-shift-B`, which does not collide with `ctrl-b`
+/// bold, so the editor keeps the chord there.
+fn should_yield_bold_chord_to_vertical_tabs_panel(
+    os: OperatingSystem,
+    vertical_tabs_enabled: bool,
+) -> bool {
+    os.is_mac() && vertical_tabs_enabled
+}
 
 /// Width of the left gutter, which holds the block insertion menu.
 const GUTTER_WIDTH: f32 = ICON_DIMENSIONS + 4.;
@@ -240,7 +261,12 @@ pub fn init(app: &mut AppContext) {
         FixedBinding::new(
             "cmdorctrl-b",
             EditorViewAction::Bold,
-            text_entry.clone() & id!("EditorIsEditable"),
+            // On macOS the workspace "toggle vertical tabs panel" shortcut is
+            // `cmd-b`, which collides with this Bold binding. Since key dispatch
+            // walks the responder chain leaf-first, Bold would otherwise always
+            // win and the panel toggle would never reach the workspace. Yield
+            // the chord when the editor marks it reserved (see `keymap_context`).
+            text_entry.clone() & id!("EditorIsEditable") & !id!(VERTICAL_TABS_PANEL_CHORD_RESERVED),
         ),
         FixedBinding::new("cmdorctrl-i", EditorViewAction::Italic, text_entry.clone()),
         FixedBinding::custom(
@@ -2780,6 +2806,21 @@ impl View for RichTextEditorView {
 
         if self.can_execute_shell_commands {
             context.set.insert("CanExecuteShellCommands");
+        }
+
+        // When vertical tabs are enabled, yield the `cmd-b` bold chord to the
+        // workspace "toggle vertical tabs panel" shortcut on macOS so it isn't
+        // swallowed by this editor (see `VERTICAL_TABS_PANEL_CHORD_RESERVED`).
+        // Both checks short-circuit before reading `TabSettings`, so editors
+        // hosted where that optional setting isn't registered are unaffected.
+        if FeatureFlag::VerticalTabs.is_enabled()
+            && ctx.has_singleton_model::<TabSettings>()
+            && should_yield_bold_chord_to_vertical_tabs_panel(
+                OperatingSystem::get(),
+                *TabSettings::as_ref(ctx).use_vertical_tabs,
+            )
+        {
+            context.set.insert(VERTICAL_TABS_PANEL_CHORD_RESERVED);
         }
 
         context
