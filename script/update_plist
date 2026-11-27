@@ -268,6 +268,7 @@ plutil -insert NSRemindersUsageDescription -string "A program in Warp wants to u
 plutil -insert NSRemindersFullAccessUsageDescription -string "A program in Warp wants full access to your reminders." "$WARP_PLIST_PATH"
 plutil -insert NSLocationUsageDescription -string "A program in Warp wants to use your location information." "$WARP_PLIST_PATH"
 plutil -insert NSPhotoLibraryUsageDescription -string "A program in Warp wants to use your photo library." "$WARP_PLIST_PATH"
+plutil -insert NSBluetoothAlwaysUsageDescription -string "A program in Warp wants to use Bluetooth." "$WARP_PLIST_PATH"
 
 echo "Disabling use of Liquid Glass on macOS Tahoe"
 plutil -insert UIDesignRequiresCompatibility -bool true "$WARP_PLIST_PATH"
