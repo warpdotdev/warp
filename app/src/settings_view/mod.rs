@@ -116,7 +116,6 @@ mod set_default_model_modal;
 mod settings_file_footer;
 pub(crate) mod settings_page;
 mod show_blocks_view;
-mod tab_menu;
 mod teams_page;
 mod telemetry;
 mod transfer_ownership_confirmation_modal;
@@ -139,7 +138,7 @@ pub use settings_page::{
     AdditionalInfo, InputListItem, LocalOnlyIconState, ToggleState, render_body_item_label,
     render_info_icon, render_input_list, render_separator,
 };
-pub use teams_page::{OpenTeamsSettingsModalArgs, TeamsInviteOption};
+pub use teams_page::OpenTeamsSettingsModalArgs;
 pub(crate) use warp_agent_page::custom_model_routers_widget_id;
 
 /// Original sidebar width used when the settings-file footer is not

@@ -42,7 +42,6 @@ use warp_graphql::workspace::{
     ByoFirstPartyKey as GqlByoFirstPartyKey,
     ComputerUseAutonomyValue as GqlComputerUseAutonomyValue, EmailInvite as GqlEmailInvite,
     FeatureModelChoice, HostEnablementSetting as GqlHostEnablementSetting,
-    InviteLinkDomainRestriction as GqlInviteLinkDomainRestriction,
     MembershipRole as GqlMembershipRole, StringListSettingInfo as GqlStringListSettingInfo,
     Team as GqlTeam, TeamByoSettings as GqlTeamByoSettings, TeamMember as GqlTeamMember,
     TeamSettings as GqlTeamSettings, TeamVisibility as GqlTeamVisibility,
@@ -62,15 +61,14 @@ use super::workspace::{
     BillingCycleUsageSummary, BillingMetadata, ByoEndpointMetadata, ByoEndpointModelMetadata,
     ByoFirstPartyKey, CloudConversationStorageSettings, CodebaseContextSettings, CustomerType,
     DelinquencyStatus, EmailInvite, EnforceableSetting, EnterpriseSecretRegex,
-    HostEnablementSetting, InstanceShape, InviteLinkDomainRestriction, LinkSharingSettings,
-    LlmSettings, MaxPriorCycles, SandboxedAgentSettings, SecretRedactionSettings,
-    SessionSharingPolicy, SharedNotebooksPolicy, SharedWorkflowsPolicy, SplitListSetting,
-    TeamAiAutonomySettings, TeamAiPermissionsSettings, TeamByoSettings, TeamLinkSharingSettings,
-    TeamSandboxedAgentSettings, TeamSecretRedactionSettings, TeamSettings,
-    TelemetryDataCollectionPolicy, TelemetrySettings, Tier, UgcCollectionEnablementSetting,
-    UgcCollectionSettings, UgcDataCollectionPolicy, UsageBasedPricingPolicy,
-    UsageVisibilityGranularity, UsageVisibilityPolicy, WarpAiPolicy, Workspace, WorkspaceMember,
-    WorkspaceMemberUsageInfo, WorkspaceSettings, WorkspaceSizePolicy,
+    HostEnablementSetting, InstanceShape, LinkSharingSettings, LlmSettings, MaxPriorCycles,
+    SandboxedAgentSettings, SecretRedactionSettings, SessionSharingPolicy, SharedNotebooksPolicy,
+    SharedWorkflowsPolicy, SplitListSetting, TeamAiAutonomySettings, TeamAiPermissionsSettings,
+    TeamByoSettings, TeamLinkSharingSettings, TeamSandboxedAgentSettings,
+    TeamSecretRedactionSettings, TeamSettings, TelemetryDataCollectionPolicy, TelemetrySettings,
+    Tier, UgcCollectionEnablementSetting, UgcCollectionSettings, UgcDataCollectionPolicy,
+    UsageBasedPricingPolicy, UsageVisibilityGranularity, UsageVisibilityPolicy, WarpAiPolicy,
+    Workspace, WorkspaceMember, WorkspaceMemberUsageInfo, WorkspaceSettings, WorkspaceSizePolicy,
 };
 use crate::ai::blocklist::usage::conversation_usage_view::ConversationUsageInfo;
 use crate::ai::execution_profiles::{
@@ -241,8 +239,6 @@ impl From<GqlTeamVisibility> for TeamVisibility {
                     extra: { "value" => %value },
                     warp_errors::ReportErrorLogMode::OncePerRun
                 );
-                // Fail closed: an unrecognized value must not be treated as Open,
-                // since that would surface the invite-by-link control.
                 TeamVisibility::Private
             }
         }
@@ -289,17 +285,6 @@ impl From<GqlEmailInvite> for EmailInvite {
             team_uid: gql_email_invite
                 .team_uid
                 .map(|uid| ServerId::from_string_lossy(uid.into_inner())),
-        }
-    }
-}
-
-impl From<GqlInviteLinkDomainRestriction> for InviteLinkDomainRestriction {
-    fn from(
-        gql_invite_link_domain_restriction: GqlInviteLinkDomainRestriction,
-    ) -> InviteLinkDomainRestriction {
-        InviteLinkDomainRestriction {
-            uid: ServerId::from_string_lossy(gql_invite_link_domain_restriction.uid.inner()),
-            domain: gql_invite_link_domain_restriction.domain,
         }
     }
 }
@@ -1096,7 +1081,6 @@ impl From<GqlWorkspaceSettings> for WorkspaceSettings {
                     })
                     .collect(),
             },
-            is_invite_link_enabled: gql_workspace_settings.is_invite_link_enabled,
             is_discoverable: gql_workspace_settings.is_discoverable,
             ai_autonomy_settings: AiAutonomySettings {
                 apply_code_diffs_setting: gql_workspace_settings
@@ -1425,17 +1409,10 @@ impl Team {
                 .into_iter()
                 .map(|gql_member| gql_member.into())
                 .collect(),
-            invite_link: gql_team.invite_link.clone(),
             pending_email_invites: team_pending_email_invites_from_gql(
                 &gql_workspace.pending_email_invites,
                 &gql_team.uid,
             ),
-            invite_link_domain_restrictions: gql_workspace
-                .invite_link_domain_restrictions
-                .clone()
-                .into_iter()
-                .map(|gql_domain_restriction| gql_domain_restriction.into())
-                .collect(),
             billing_metadata: gql_workspace.billing_metadata.clone().into(),
             stripe_customer_id: gql_workspace
                 .stripe_customer_id
@@ -1490,12 +1467,6 @@ impl From<GqlWorkspace> for Workspace {
             feature_model_choice: feature_model_choice_from_gql(
                 gql_workspace.feature_model_choice.clone(),
             ),
-            invite_link_domain_restrictions: gql_workspace
-                .invite_link_domain_restrictions
-                .clone()
-                .into_iter()
-                .map(|gql_domain_restriction| gql_domain_restriction.into())
-                .collect(),
             pending_email_invites: gql_workspace
                 .pending_email_invites
                 .clone()

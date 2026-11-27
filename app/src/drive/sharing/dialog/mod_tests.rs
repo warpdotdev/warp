@@ -182,10 +182,8 @@ fn team_with_link_sharing(uid: i64, name: &str, permitted: bool) -> Team {
         uid: uid.into(),
         name: name.to_string(),
         color: None,
-        invite_link: None,
         members: vec![],
         pending_email_invites: vec![],
-        invite_link_domain_restrictions: vec![],
         billing_metadata: Default::default(),
         stripe_customer_id: None,
         settings: TeamSettings {
@@ -215,7 +213,6 @@ fn install_workspace_with_teams(app: &mut App, teams: Vec<Team>) {
         has_billing_history: false,
         settings: WorkspaceSettings::default(),
         feature_model_choice: Default::default(),
-        invite_link_domain_restrictions: vec![],
         pending_email_invites: vec![],
         is_eligible_for_discovery: false,
         members: vec![],

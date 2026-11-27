@@ -16,7 +16,6 @@ pub struct Workspace {
     pub settings: WorkspaceSettings,
     pub has_billing_history: bool,
     pub pending_email_invites: Vec<EmailInvite>,
-    pub invite_link_domain_restrictions: Vec<InviteLinkDomainRestriction>,
     pub is_eligible_for_discovery: bool,
     pub feature_model_choice: FeatureModelChoice,
     pub total_requests_used_since_last_refresh: i32,
@@ -142,7 +141,6 @@ pub struct AmbientAgentSettings {
 #[derive(cynic::QueryFragment, Debug, Clone)]
 pub struct WorkspaceSettings {
     pub is_discoverable: bool,
-    pub is_invite_link_enabled: bool,
     pub llm_settings: LlmSettings,
     pub team_byo: Option<TeamByoSettings>,
     pub telemetry_settings: TelemetrySettings,
@@ -305,7 +303,6 @@ pub struct Team {
     pub members: Vec<TeamMember>,
     pub settings: TeamSettings,
     pub color: Option<String>,
-    pub invite_link: Option<String>,
     pub visibility: TeamVisibility,
     pub feature_model_choice: FeatureModelChoice,
 }
@@ -482,12 +479,6 @@ pub struct LlmHostSettingsEntry {
 pub struct LlmSettings {
     pub enabled: bool,
     pub host_configs: Vec<LlmHostSettingsEntry>,
-}
-
-#[derive(cynic::QueryFragment, Debug, Clone)]
-pub struct InviteLinkDomainRestriction {
-    pub uid: cynic::Id,
-    pub domain: String,
 }
 
 #[derive(cynic::QueryFragment, Debug, Clone)]

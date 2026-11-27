@@ -17,7 +17,6 @@ fn workspace_with_customer_type(customer_type: CustomerType) -> Workspace {
         has_billing_history: false,
         settings: Default::default(),
         feature_model_choice: Default::default(),
-        invite_link_domain_restrictions: vec![],
         pending_email_invites: vec![],
         is_eligible_for_discovery: false,
         members: vec![],
