@@ -643,17 +643,6 @@ fn render_grid_without_ligatures<'a>(
         for col in 0..grid.columns() {
             let current_point = Point::new(row_idx, col);
 
-            // Skip the cursor cell when CLI agent rich input is open
-            // AND the agent draws its own cursor (SHOW_CURSOR is off).
-            // When Warp draws the cursor (SHOW_CURSOR on), we keep the cell
-            // and only suppress the draw_cursor call.
-            if hide_cursor_cell
-                && visible_cursor_shape.is_none()
-                && current_point == grid.cursor_render_point()
-            {
-                continue;
-            }
-
             // Determine if we need to override the cell to display the marked text.
             if current_point >= grid.cursor_point() {
                 // Account for a wide char spacer cell if necessary.
@@ -1185,17 +1174,6 @@ fn render_grid_with_ligatures<'a>(
             let mut first_cell_in_secret = FirstCellInSecret::No;
 
             let current_point = Point::new(row_idx, col);
-
-            // Skip the cursor cell when CLI agent rich input is open
-            // AND the agent draws its own cursor (SHOW_CURSOR is off).
-            // When Warp draws the cursor (SHOW_CURSOR on), we keep the cell
-            // and only suppress the draw_cursor call.
-            if hide_cursor_cell
-                && visible_cursor_shape.is_none()
-                && current_point == grid.cursor_render_point()
-            {
-                continue;
-            }
 
             // Determine if we need to override the cell to display the marked text.
             if current_point >= grid.cursor_point() {
