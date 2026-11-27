@@ -187,7 +187,7 @@ labels:
     score: 0
 passingScore: 1
 samplingRate: 25
-model: claude-4-5-haiku
+model: claude-5-5-haiku-low
 ---
 Evaluate whether the agent ran the relevant tests before finishing. Return
 `tests_run` when the transcript contains the command and result; otherwise
