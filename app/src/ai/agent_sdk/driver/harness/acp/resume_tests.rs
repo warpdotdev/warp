@@ -104,14 +104,18 @@ fn error_chain(error: &AgentDriverError) -> String {
 }
 
 #[test]
-fn only_claude_and_codex_transcripts_with_a_located_root_are_restorable() {
+fn native_transcripts_require_a_located_root_to_be_restorable() {
     assert_eq!(
         restorable_transcript(None, true),
         Err(ResumeMiss::Unsupported)
     );
     assert_eq!(
         restorable_transcript(Some(CliTranscriptKind::Pi), true),
-        Err(ResumeMiss::Unsupported)
+        Ok(CliTranscriptKind::Pi)
+    );
+    assert_eq!(
+        restorable_transcript(Some(CliTranscriptKind::Pi), false),
+        Err(ResumeMiss::TranscriptRootUnresolved(CliTranscriptKind::Pi))
     );
     assert_eq!(
         restorable_transcript(Some(CliTranscriptKind::Claude), false),
@@ -135,18 +139,21 @@ fn an_unresolved_transcript_root_names_the_startup_warning() {
 }
 
 #[tokio::test]
-async fn pi_transcripts_are_not_restored() {
-    // No expectations: fetching the transcript would panic.
-    let client = Arc::new(MockHarnessSupportClient::new());
+async fn a_missing_pi_transcript_is_a_miss() {
+    let client = client_answering(|| Err(anyhow::anyhow!("upstream returned status 404")));
     let result = rehydrate_cli_session(
         CliTranscriptKind::Pi,
         &conversation_id(),
         client,
         Path::new("/w"),
+        Path::new("/pi"),
     )
     .await;
     assert!(
-        matches!(result, Err(RehydrateError::Missed(ResumeMiss::Unsupported))),
+        matches!(
+            result,
+            Err(RehydrateError::Missed(ResumeMiss::NoTranscript))
+        ),
         "unexpected result: {result:?}"
     );
 }
@@ -160,6 +167,7 @@ async fn a_missing_transcript_is_a_miss() {
         &conversation_id(),
         client,
         Path::new("/w"),
+        Path::new("/codex"),
     )
     .await;
 
@@ -183,6 +191,7 @@ async fn a_transcript_that_cannot_be_downloaded_fails_the_run() {
             &conversation_id(),
             client,
             Path::new("/w"),
+            Path::new("/codex"),
         )
         .await;
 
@@ -211,6 +220,7 @@ async fn a_claude_session_saved_under_another_directory_fails_the_run() {
         &conversation_id(),
         client,
         Path::new("/different/cwd"),
+        config_dir.path(),
     )
     .await;
 
@@ -236,6 +246,7 @@ async fn a_claude_session_is_written_back_where_the_cli_resumes_it() {
         &conversation_id(),
         client,
         cwd.path(),
+        config_dir.path(),
     )
     .await;
 

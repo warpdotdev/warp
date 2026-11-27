@@ -28,9 +28,6 @@ pub(super) fn capture_transcript_with_usage(
         root: capture.diagnostics,
         ..Default::default()
     };
-    // TODO(vkodithala): Support ACP session/load with retained usage history so cost estimates remain
-    // accurate across executions instead of replacing prior spend with a fresh session's usage.
-    // https://agentclientprotocol.com/rfds/session-resume
     let usage_request = identity.build_usage_request(
         Utc::now(),
         extract_pi(&session_id.to_string(), &capture.entries, &diagnostics),
