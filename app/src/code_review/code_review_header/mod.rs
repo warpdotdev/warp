@@ -118,14 +118,12 @@ impl CodeReviewHeader {
 
         let has_no_changes = state.to_diff_stats().has_no_changes();
 
-        if FeatureFlag::DiscardPerFileAndAllChanges.is_enabled() {
-            right_section_wide.add_child(self.create_discard_button(
-                state,
-                &code_review_header_fields.diff_state_model,
-                appearance,
-                app,
-            ));
-        }
+        right_section_wide.add_child(self.create_discard_button(
+            state,
+            &code_review_header_fields.diff_state_model,
+            appearance,
+            app,
+        ));
 
         if FeatureFlag::DiffSetAsContext.is_enabled() && !has_no_changes {
             if FeatureFlag::FileAndDiffSetComments.is_enabled() {
@@ -197,14 +195,12 @@ impl CodeReviewHeader {
             .with_main_axis_size(MainAxisSize::Min)
             .with_cross_axis_alignment(CrossAxisAlignment::Center);
 
-        if FeatureFlag::DiscardPerFileAndAllChanges.is_enabled() {
-            right_subsection_compact.add_child(self.create_discard_button(
-                state,
-                &code_review_header_fields.diff_state_model,
-                appearance,
-                app,
-            ));
-        }
+        right_subsection_compact.add_child(self.create_discard_button(
+            state,
+            &code_review_header_fields.diff_state_model,
+            appearance,
+            app,
+        ));
 
         let has_no_changes = state.to_diff_stats().has_no_changes();
 
