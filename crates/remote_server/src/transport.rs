@@ -113,11 +113,20 @@ impl Error {
     /// SSH remote-server failed banner, using `stage` to provide
     /// context-appropriate copy.
     pub fn user_facing_error(&self, stage: SetupStage) -> UserFacingError {
+        if matches!(self, Self::TimedOut) {
+            return UserFacingError {
+                body: format!("Timed out while trying to {}", stage.action_description()),
+                detail: Some(
+                    "Warp stopped waiting for the SSH extension to respond. Your SSH session is \
+                    still running, but advanced features are unavailable for now."
+                        .into(),
+                ),
+            };
+        }
+
         let body = format!("Failed to {}", stage.action_description());
         let detail = match self {
-            Self::TimedOut => {
-                Some("The operation timed out — check your network connection".into())
-            }
+            Self::TimedOut => unreachable!("handled above"),
             Self::UnsupportedOs { os } => Some(format!("Unsupported OS: {os}")),
             Self::UnsupportedArch { arch } => Some(format!("Unsupported architecture: {arch}")),
             Self::ScriptFailed { exit_code, stderr } => {
@@ -304,3 +313,7 @@ pub trait RemoteTransport: Send + Sync + std::fmt::Debug {
     /// the reconnect loop entirely.
     fn is_reconnectable(&self, exit_status: Option<&RemoteServerExitStatus>) -> bool;
 }
+
+#[cfg(test)]
+#[path = "transport_tests.rs"]
+mod tests;
