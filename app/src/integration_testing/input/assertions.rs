@@ -1,7 +1,11 @@
 use warpui::integration::AssertionCallback;
-use warpui::{async_assert, async_assert_eq};
+use warpui::{SingletonEntity, async_assert, async_assert_eq};
 
-use crate::integration_testing::view_getters::{input_view, single_input_view_for_tab};
+use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
+use crate::cloud_object::model::generic_string_model::StringModel;
+use crate::integration_testing::view_getters::{
+    input_view, single_input_view_for_tab, single_terminal_view_for_tab,
+};
 use crate::terminal::input::InputSuggestionsMode;
 
 pub fn assert_workflow_info_box_is_open(tab_idx: usize, pane_idx: usize) -> AssertionCallback {
@@ -59,6 +63,21 @@ pub fn input_is_empty(tab_idx: usize) -> AssertionCallback {
     })
 }
 
+pub fn input_cursor_is_at(tab_idx: usize, byte_offset: usize) -> AssertionCallback {
+    Box::new(move |app, window_id| {
+        let input = single_input_view_for_tab(app, window_id, tab_idx);
+        input.read(app, |view, ctx| {
+            async_assert_eq!(
+                view.editor()
+                    .as_ref(ctx)
+                    .start_byte_index_of_last_selection(ctx)
+                    .as_usize(),
+                byte_offset,
+                "Input cursor should be at byte offset {byte_offset}"
+            )
+        })
+    })
+}
 pub fn inline_model_selector_is_open(tab_idx: usize) -> AssertionCallback {
     Box::new(move |app, window_id| {
         let input = single_input_view_for_tab(app, window_id, tab_idx);
@@ -67,6 +86,70 @@ pub fn inline_model_selector_is_open(tab_idx: usize) -> AssertionCallback {
                 view.suggestions_mode_model().as_ref(ctx).mode(),
                 &InputSuggestionsMode::ModelSelector,
                 "Inline model selector should be open"
+            )
+        })
+    })
+}
+
+pub fn profile_selector_is_open(tab_idx: usize) -> AssertionCallback {
+    Box::new(move |app, window_id| {
+        let input = single_input_view_for_tab(app, window_id, tab_idx);
+        input.read(app, |view, ctx| {
+            async_assert!(
+                view.agent_input_footer()
+                    .as_ref(ctx)
+                    .is_model_selector_open(ctx),
+                "Profile selector should be open"
+            )
+        })
+    })
+}
+
+pub fn profile_selector_is_closed_with_active_profile(
+    tab_idx: usize,
+    expected_profile_name: &'static str,
+) -> AssertionCallback {
+    Box::new(move |app, window_id| {
+        let terminal_view_id = single_terminal_view_for_tab(app, window_id, tab_idx).id();
+        let input = single_input_view_for_tab(app, window_id, tab_idx);
+        input.read(app, |view, ctx| {
+            let selector_is_open = view
+                .agent_input_footer()
+                .as_ref(ctx)
+                .is_model_selector_open(ctx);
+            let active_profile_name = AIExecutionProfilesModel::as_ref(ctx)
+                .active_profile(Some(terminal_view_id), ctx)
+                .data()
+                .display_name();
+            async_assert!(
+                !selector_is_open && active_profile_name == expected_profile_name,
+                "Profile selector should be closed and footer chip should display {expected_profile_name:?}, got open={selector_is_open}, profile={active_profile_name:?}"
+            )
+        })
+    })
+}
+
+pub fn slash_commands_menu_is_open(tab_idx: usize) -> AssertionCallback {
+    Box::new(move |app, window_id| {
+        let input = single_input_view_for_tab(app, window_id, tab_idx);
+        input.read(app, |view, ctx| {
+            async_assert_eq!(
+                view.suggestions_mode_model().as_ref(ctx).mode(),
+                &InputSuggestionsMode::SlashCommands,
+                "Slash commands menu should be open"
+            )
+        })
+    })
+}
+
+pub fn suggestions_mode_is_closed(tab_idx: usize) -> AssertionCallback {
+    Box::new(move |app, window_id| {
+        let input = single_input_view_for_tab(app, window_id, tab_idx);
+        input.read(app, |view, ctx| {
+            async_assert_eq!(
+                view.suggestions_mode_model().as_ref(ctx).mode(),
+                &InputSuggestionsMode::Closed,
+                "Input suggestions should be closed"
             )
         })
     })
