@@ -1042,22 +1042,31 @@ impl FileModel {
     }
 
     /// Checks if a repository subscription exists for the given path, and creates one if needed.
-    /// Returns the repository root path if a subscription exists or was created.
+    /// Returns the repository root path if a subscription exists or was created. Returns `None` if
+    /// the repository ignores the file, because its watcher does not report ignored paths.
     fn get_or_create_repo_subscription(
         &mut self,
         file_path: &Path,
         ctx: &mut ModelContext<Self>,
     ) -> Option<PathBuf> {
         // Check if we already have a subscription for a repo containing this path
-        for repo_root in self.repo_subscriptions.keys() {
+        for (repo_root, subscription) in &self.repo_subscriptions {
             if file_path.starts_with(repo_root) {
-                return Some(repo_root.clone());
+                let is_ignored = subscription
+                    .repository
+                    .as_ref(ctx)
+                    .check_gitignore_status(file_path);
+                return (!is_ignored).then(|| repo_root.clone());
             }
         }
 
         // Try to find a repository for this path
         let repository =
             DetectedRepositories::as_ref(ctx).get_local_watched_repo_for_path(file_path, ctx)?;
+
+        if repository.as_ref(ctx).check_gitignore_status(file_path) {
+            return None;
+        }
 
         let repo_root = repository.as_ref(ctx).root_dir().to_local_path_lossy();
 

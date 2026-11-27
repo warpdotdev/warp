@@ -27,4 +27,5 @@ test-util = []
 
 [dev-dependencies]
 async-channel.workspace = true
+repo_metadata = { workspace = true, features = ["local_fs", "test-util"] }
 tempfile.workspace = true
