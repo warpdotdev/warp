@@ -9,7 +9,7 @@ Thanks for helping improve Warp! This guide explains how to open issues, propose
 
 - Bug fixes are welcome once the report is actionable from the provided details or maintainer triage.
 - Feature requests must be marked `ready-to-spec` or `ready-to-implement` before PRs are accepted.
-- Issues marked `warp:reserved-internal` are being handled by the Warp team and are not open for contributor PRs.
+- Issues marked `warp:reserved-internal` or `warp:tracking` are not open for contributor PRs.
 - Specs are the place where technical and design discussion on larger issues happen.
 - Oz automatically triages incoming issues and reviews open PRs.
 - Implementation PRs must include proof of manual testing.
@@ -27,14 +27,27 @@ Warp's contribution model is shaped by [Oz](https://oz.warp.dev), an agent that 
 
 ### Readiness labels
 
-The Warp team applies one of the following labels when an issue is ready for contribution:
+The Warp team applies **readiness labels** to signal where an issue stands and whether it's open for a contributor PR. They fall into three groups.
+
+**Open for a contributor PR** — pick these up and open a PR:
 
 - **`ready-to-spec`** — The problem is understood but the design is open. Open a spec PR with a *product spec* (`product.md`) and a *tech spec* (`tech.md`) under [`specs/`](specs/) — see [Opening a Spec PR](#opening-a-spec-pr) for what goes in each. This label is **reserved for feature requests**.
 - **`ready-to-implement`** — The issue is ready for a code PR. For bugs, this means the report is sufficiently reproducible or actionable and the likely fix does not need a spec, mocks, or deeper investigation.
+
+**Wait for maintainers** — the issue is recognized but not yet open for a PR; hold off until a maintainer applies one of the labels above:
+
 - **`needs-mocks`** — Design mocks are required before implementation can begin. Wait for the Warp team to land them.
-- **`warp:reserved-internal`** — The Warp team is reserving this work for internal implementation or alignment. Do not open a spec or code PR for issues with this label; Oz will reject contributor PRs linked to them with an explanatory comment.
+- **`needs-discussion`** — The design or product direction is still under discussion. Wait until it's settled and a maintainer applies a readiness label before starting work.
+- **`needs-info`** — More detail is needed before the issue can be triaged. If you're the reporter, add the requested information; otherwise wait for triage to complete.
+
+**Not open to contributor PRs** — do not open a spec or code PR for these:
+
+- **`warp:reserved-internal`** — The Warp team is reserving this work for internal implementation or alignment. Oz will reject contributor PRs linked to these issues with an explanatory comment.
+- **`warp:tracking`** — The team hasn't committed to supporting this issue and is tracking it for community engagement. It isn't approved for contribution.
 
 Anyone can pick up a ready issue — readiness labels are not assignments, and the best implementation wins through normal review. If an issue has been sitting un-triaged or you'd like readiness re-evaluated, mention **@oss-maintainers** in a comment to flag it for the team.
+
+Other labels you may see are triage outcomes or automation bookkeeping, not readiness signals: **`duplicate`** marks an issue already tracked elsewhere (follow the linked issue instead), while `triaged`, `warp:auto-triage-review`, `triage-reviewed`, and `auto-implement` are applied by Warp's automation as an issue moves through triage.
 
 ## Contribution Flow
 
