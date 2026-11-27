@@ -649,9 +649,6 @@ pub enum FeatureFlag {
     /// When enabled, we expose LSP as a tool to the agent
     LSPAsATool,
 
-    /// Enables conversation artifacts.
-    ConversationArtifacts,
-
     /// Enables auto-syncing ambient plans to Warp Drive.
     SyncAmbientPlans,
 
