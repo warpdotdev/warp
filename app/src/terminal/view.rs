@@ -362,8 +362,8 @@ use crate::server::telemetry::{
     AnonymousUserSignupEntrypoint, BootstrappingInfo, CloudAgentShellExitDetection,
     CloudAgentShellRecoveryFailureClass, CloudAgentShellRecoveryOutcome, InteractionSource,
     NotificationAgentVariant, NotificationsTurnedOnSource, PaletteSource, PromptSuggestionViewType,
-    SaveAsWorkflowModalSource, SecretInteraction, SharingDialogSource, SlowBootstrapInfo,
-    TelemetryEvent, ToggleBlockFilterSource, WorkflowTelemetryMetadata,
+    SaveAsWorkflowModalSource, SecretInteraction, SharingDialogSource, TelemetryEvent,
+    ToggleBlockFilterSource, WorkflowTelemetryMetadata,
 };
 use crate::session_management::{CommandContext, SessionNavigationPromptElements};
 use crate::settings::ai::FocusedTerminalInfo;
@@ -17042,22 +17042,6 @@ impl TerminalView {
                 rcfiles_duration_seconds: None,
                 warp_attributed_bootstrap_duration_seconds: None,
                 terminal_session_id: None,
-            }),
-            ctx
-        );
-
-        let bootstrap_block_contents = {
-            let model = self.model.lock();
-            model.block_list().bootstrap_block_contents()
-        };
-        send_telemetry_sync_from_ctx!(
-            TelemetryEvent::BootstrappingSlowContents(SlowBootstrapInfo {
-                shell,
-                is_ssh,
-                is_subshell,
-                is_wsl,
-                is_msys2,
-                bootstrap_block_contents,
             }),
             ctx
         );

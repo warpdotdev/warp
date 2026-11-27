@@ -3,7 +3,6 @@ use std::sync::Arc;
 #[cfg(feature = "local_fs")]
 use std::time::Duration;
 
-use chrono::Utc;
 use futures::stream::AbortHandle;
 use itertools::Itertools;
 #[cfg_attr(not(feature = "local_fs"), allow(unused_imports))]
@@ -67,15 +66,6 @@ pub fn is_next_command_enabled(app: &warpui::AppContext) -> bool {
         && UserWorkspaces::as_ref(app).is_next_command_enabled()
 }
 
-/// Information about an autosuggestion that would have been made if purely based off history.
-/// If there was no history, history_command_prediction would be an empty string.
-#[derive(Clone, Default, PartialEq, Debug)]
-pub struct HistoryBasedAutosuggestionState {
-    pub history_command_prediction: String,
-    pub history_command_prediction_likelihood: f64,
-    pub total_history_count: usize,
-}
-
 #[derive(Clone, Default, PartialEq)]
 pub enum NextCommandSuggestionState {
     #[default]
@@ -84,14 +74,11 @@ pub enum NextCommandSuggestionState {
     Ready {
         request: Box<GenerateAIInputSuggestionsRequest>,
         response: GenerateAIInputSuggestionsResponseV2,
-        /// How long the request took to complete, in milliseconds.
-        request_duration_ms: i64,
         /// If true, we made a call to an LLM to generate this.
         /// Otherwise it came from history.
         is_from_ai: bool,
         /// If true, this suggestion came from the user explicitly cycling (is not the initial suggestion).
         is_from_cycle: bool,
-        history_based_autosuggestion_state: HistoryBasedAutosuggestionState,
     },
 }
 
@@ -120,18 +107,13 @@ impl NextCommandSuggestionState {
     }
 }
 
-/// Struct storing the result of the zero-state next command suggestion,
-/// used for telemetry purposes.
+/// Zero-state prediction data used when the next command is submitted.
 #[derive(Clone)]
 pub struct ZeroStateSuggestionInfo {
-    pub request: Box<GenerateAIInputSuggestionsRequest>,
-    pub response: GenerateAIInputSuggestionsResponseV2,
-    /// How long the request took to complete, in milliseconds.
-    pub request_duration_ms: i64,
+    pub predicted_command: String,
     /// If true, we made a call to an LLM to generate this.
     /// Otherwise it came from history.
     pub is_from_ai: bool,
-    pub history_based_autosuggestion_state: HistoryBasedAutosuggestionState,
 }
 
 pub struct NextCommandModel {
@@ -402,10 +384,6 @@ impl NextCommandModel {
         self.next_command_abort_handle = Some(
             ctx.spawn(
                 async move {
-                    let mut history_based_autosuggestion_state =
-                        HistoryBasedAutosuggestionState::default();
-                    let start_ts_ms = Utc::now().timestamp_millis();
-
                     let mut next_command_context =
                         if let Some(cached_next_command_context) = cached_next_command_context {
                             cached_next_command_context
@@ -445,12 +423,6 @@ impl NextCommandModel {
                             }
                             let history_command_prediction_likelihood =
                                 *count as f64 / total_history_count as f64;
-                            history_based_autosuggestion_state = HistoryBasedAutosuggestionState {
-                                history_command_prediction: most_likely_next_command.to_owned(),
-                                history_command_prediction_likelihood,
-                                total_history_count,
-                            };
-
                             // If one command is very likely based on history, skip the LLM call and return it directly.
                             // Use history-based autosuggestion if there are a min number of similar cases in history
                             // AND the same command was run at least skip_llm_confidence_threshold of the time.
@@ -482,8 +454,6 @@ impl NextCommandModel {
                                     }),
                                     request,
                                     false,
-                                    start_ts_ms,
-                                    history_based_autosuggestion_state,
                                     false,
                                     next_command_context,
                                 );
@@ -505,8 +475,6 @@ impl NextCommandModel {
                                 .await,
                             request,
                             true,
-                            start_ts_ms,
-                            history_based_autosuggestion_state,
                             false,
                             next_command_context,
                         );
@@ -520,13 +488,11 @@ impl NextCommandModel {
                             return (
                                 Ok(GenerateAIInputSuggestionsResponseV2 {
                                     commands: vec![reverse_chronological_command.command.clone()],
-                                ai_queries: vec![],
-                                most_likely_action: reverse_chronological_command.command,
-                            }),
-                            request,
-                            false,
-                            start_ts_ms,
-                                history_based_autosuggestion_state,
+                                    ai_queries: vec![],
+                                    most_likely_action: reverse_chronological_command.command,
+                                }),
+                                request,
+                                false,
                                 false,
                                 next_command_context,
                             );
@@ -568,13 +534,11 @@ impl NextCommandModel {
                                 return (
                                     Ok(GenerateAIInputSuggestionsResponseV2 {
                                         commands: vec![autosuggestion.clone()],
-                                    ai_queries: vec![],
-                                    most_likely_action: autosuggestion,
-                                }),
-                                request,
-                                false,
-                                    start_ts_ms,
-                                    history_based_autosuggestion_state,
+                                        ai_queries: vec![],
+                                        most_likely_action: autosuggestion,
+                                    }),
+                                    request,
+                                    false,
                                     false,
                                     next_command_context,
                                 );
@@ -589,8 +553,6 @@ impl NextCommandModel {
                         response,
                         request,
                         true,
-                        start_ts_ms,
-                        history_based_autosuggestion_state,
                         false,
                         next_command_context,
                     )
@@ -607,25 +569,13 @@ impl NextCommandModel {
             Result<GenerateAIInputSuggestionsResponseV2, AIApiError>,
             GenerateAIInputSuggestionsRequest,
             bool,
-            i64,
-            HistoryBasedAutosuggestionState,
             bool,
             NextCommandContext,
         ),
         ctx: &mut ModelContext<Self>,
     ) {
         self.next_command_abort_handle = None;
-        let (
-            result,
-            request,
-            is_from_ai,
-            start_ts_ms,
-            history_based_autosuggestion_state,
-            is_from_cycle,
-            next_command_context,
-        ) = result;
-        let end_ts_ms = Utc::now().timestamp_millis();
-        let request_duration_ms = end_ts_ms - start_ts_ms;
+        let (result, request, is_from_ai, is_from_cycle, next_command_context) = result;
         if request.prefix.is_none() {
             self.cached_zerostate_next_command_context = Some(next_command_context);
         }
@@ -644,22 +594,16 @@ impl NextCommandModel {
                     }
                 } else {
                     self.zerostate_suggestion_info = Some(ZeroStateSuggestionInfo {
-                        request: Box::new(request.clone()),
-                        response: response.clone(),
-                        request_duration_ms,
+                        predicted_command: response.most_likely_action.clone(),
                         is_from_ai,
-                        history_based_autosuggestion_state: history_based_autosuggestion_state
-                            .clone(),
                     });
                 }
 
                 self.next_command_state = NextCommandSuggestionState::Ready {
                     request: Box::new(request),
                     response,
-                    request_duration_ms,
                     is_from_ai,
                     is_from_cycle,
-                    history_based_autosuggestion_state,
                 };
                 ctx.emit(NextCommandModelEvent::NextCommandSuggestionReady);
             }

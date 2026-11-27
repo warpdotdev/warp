@@ -3697,24 +3697,6 @@ impl BlockList {
             .is_some_and(|handle| !handle.as_ref(app).is_finished())
     }
 
-    /// Returns the contents of all blocks associated with bootstrap.
-    pub fn bootstrap_block_contents(&self) -> String {
-        let mut contents = String::new();
-        for block in self.blocks.iter() {
-            match block.bootstrap_stage() {
-                BootstrapStage::WarpInput | BootstrapStage::ScriptExecution => {
-                    contents.push_str(&block.command_to_string());
-                    contents.push('\n');
-                }
-                // We stop at the first block that is after the bootstrapping stage.
-                BootstrapStage::Bootstrapped | BootstrapStage::PostBootstrapPrecmd => break,
-                BootstrapStage::RestoreBlocks => {}
-            }
-        }
-
-        contents.trim().to_string()
-    }
-
     pub(crate) fn removable_blocklist_item_position(
         &self,
         item: &RemovableBlocklistItem,
