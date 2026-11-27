@@ -3,7 +3,6 @@ import { getIntrospectionQuery, buildClientSchema, GraphQLSchema } from 'graphql
 import { filterSchema, pruneSchema } from '@graphql-tools/utils';
 
 const clientMutations = [
-  'addInviteLinkDomainRestriction',
   'addObjectGuests',
   'bulkCreateObjects',
   'confirmFileArtifactUpload',
@@ -18,7 +17,6 @@ const clientMutations = [
   'createTeam',
   'createWorkflow',
   'deleteConversation',
-  'deleteInviteLinkDomainRestriction',
   'deleteManagedSecret',
   'updateManagedSecret',
   'deleteObject',
@@ -50,12 +48,10 @@ const clientMutations = [
   'removeUserFromTeam',
   'renameTeam',
   'reportHarnessTransport',
-  'resetInviteLinks',
   'sendOnboardingSurveyResponses',
   'sendReferralInviteEmails',
   'setObjectLinkPermissions',
   'sendTeamInviteEmail',
-  'setIsInviteLinkEnabled',
   'setTeamDiscoverability',
   'setTeamMemberRole',
   'setUserIsOnboarded',
