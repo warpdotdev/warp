@@ -1064,24 +1064,12 @@ impl TypedActionView for CodeEditorView {
                 ctx.notify();
             }
             RevertDiffHunk { line_range } => {
-                if FeatureFlag::RevertDiffHunk.is_enabled() {
-                    // Convert line range to diff hunk index and revert it
-                    let hunk_index = self
-                        .model
-                        .as_ref(ctx)
-                        .diff()
-                        .as_ref(ctx)
-                        .diff_hunk_count_before_line(line_range.start.as_usize());
-
-                    self.model.update(ctx, |model, ctx| {
-                        model.reverse_diff_by_index(hunk_index, ctx);
+                if self.is_split_baseline() {
+                    ctx.emit(CodeEditorEvent::SplitBaselineRevertRequested {
+                        line_range: line_range.clone(),
                     });
-
-                    // Emit event for parent to handle
-                    ctx.emit(CodeEditorEvent::DiffReverted);
-
-                    // Notify to re-render
-                    ctx.notify();
+                } else {
+                    self.revert_diff_hunk(line_range, ctx);
                 }
             }
             NewCommentOnLine { line: line_info } => {

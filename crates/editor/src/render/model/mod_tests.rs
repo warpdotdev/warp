@@ -28,7 +28,8 @@ use crate::content::text::{
 };
 use crate::render::model::test_utils::{TEST_STYLES, laid_out_paragraph, mock_paragraph};
 use crate::render::model::{
-    ColumnUnit, Height, LayoutSummary, LineCount, RenderedSelection, SoftWrapPoint, TEXT_SPACING,
+    ColumnUnit, HardLineCount, Height, LayoutSummary, LineCount, RenderedSelection, SoftWrapPoint,
+    TEXT_SPACING,
 };
 
 #[test]
@@ -69,6 +70,7 @@ fn test_height() {
             height: 48. + 24. + 24. + 32.,
             width: (17.).into_pixels(),
             lines: LineCount(4),
+            hard_lines: HardLineCount(4),
             item_count: 4,
         }
     );
@@ -144,8 +146,44 @@ fn test_width() {
             height: 24.,
             width: (26.).into_pixels(),
             lines: LineCount(1),
+            hard_lines: HardLineCount(1),
             item_count: 1,
         }
+    );
+}
+
+#[test]
+fn hard_lines_ignore_soft_wrapping() {
+    let mut model =
+        RenderState::new_for_test(TEST_STYLES.clone(), 40.0.into_pixels(), 60.0.into_pixels());
+    let mut content = SumTree::new();
+    // Wraps to 2 rows.
+    content.push(laid_out_paragraph("ABCDEFG\n", &TEST_STYLES, 40.));
+    content.push(laid_out_paragraph("ABCD\n", &TEST_STYLES, 40.));
+    // Wraps to 2 rows.
+    content.push(laid_out_paragraph("ABCDEFG\n", &TEST_STYLES, 40.));
+    content.push(laid_out_paragraph("ABC\n", &TEST_STYLES, 40.));
+    assert_eq!(content.extent::<LineCount>().as_usize(), 6);
+    assert_eq!(content.extent::<HardLineCount>().as_usize(), 4);
+    let first_height = {
+        let mut first = SumTree::new();
+        first.push(laid_out_paragraph("ABCDEFG\n", &TEST_STYLES, 40.));
+        first.extent::<Height>()
+    };
+    model.set_content(content);
+
+    let tree = model.content();
+    // The last entry is the trailing newline that `set_content` appends.
+    assert_eq!(tree.visual_rows_by_hard_line(), vec![2, 1, 2, 1, 1]);
+    // Line 1 starts below both rows of line 0.
+    assert_eq!(
+        tree.y_offset_at_line(LineCount(1)).as_f32() as f64,
+        first_height.0.0
+    );
+    // Line 2 starts at char 13 and is the third buffer line, not the fourth row.
+    assert_eq!(
+        tree.hard_line_range_at_offset(CharOffset::from(13)),
+        Some(LineCount(2)..LineCount(3))
     );
 }
 
