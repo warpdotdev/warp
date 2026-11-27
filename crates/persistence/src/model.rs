@@ -1044,6 +1044,20 @@ pub fn api_task_initial_working_directory(task: &api::Task) -> Option<String> {
         .filter(|pwd| !pwd.is_empty())
 }
 
+/// Current [`AgentConversationSummary`] schema version.
+///
+/// Bump this when a derived field is *added*, so summaries written by older
+/// clients are re-derived from their task snapshot exactly once instead of
+/// being trusted with a field they never carried.
+///
+/// Only additive changes belong here, because
+/// [`AgentConversationSummary::is_current_version`] accepts any version at or
+/// above this one — otherwise two clients on adjacent versions would re-derive
+/// each other's rows forever. Changing what an *existing* field means requires
+/// a new field, not a bump: an older client would keep reading the old field
+/// with its new meaning.
+pub const AGENT_CONVERSATION_SUMMARY_VERSION: u32 = 1;
+
 /// Task-derived conversation metadata, serialized into the `summary` column
 /// of `agent_conversations` at write time.
 ///
@@ -1052,6 +1066,11 @@ pub fn api_task_initial_working_directory(task: &api::Task) -> Option<String> {
 /// (potentially very large) `agent_tasks` blobs.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct AgentConversationSummary {
+    /// Schema version of the derived fields below. Summaries written before
+    /// this field existed deserialize to `0`; see
+    /// [`Self::is_current_version`].
+    #[serde(default)]
+    pub version: u32,
     /// The conversation's initial user query (or passive diff summary).
     /// Empty when the conversation has no root task with a user query.
     #[serde(default)]
@@ -1070,9 +1089,230 @@ pub struct AgentConversationSummary {
     /// history list.
     #[serde(default, skip_serializing_if = "is_false")]
     pub is_unlisted_auto_code_diff: bool,
+    /// Mirror of `AIConversation::is_entirely_passive()` over the persisted
+    /// task snapshot, letting the startup pane-restore filter reject passive
+    /// conversations without loading and decoding their tasks.
+    ///
+    /// `None` means "the persisted snapshot cannot answer this": the root task
+    /// restore would pick is absent or ambiguous, or the root pairs a passive
+    /// request with a message whose rendered input can't be determined from the
+    /// proto alone. Consumers must fall back to a full load rather than
+    /// guessing, so an unknown value is only ever slower, never wrong.
+    #[serde(default)]
+    pub is_entirely_passive: Option<bool>,
+}
+
+/// How a persisted message is rendered once its conversation is restored, as
+/// far as `AIConversation::is_entirely_passive()` is concerned.
+#[derive(Debug, PartialEq, Eq)]
+enum RestoredMessageKind {
+    /// Restores to an input whose `display_query()` is `Some`, which makes the
+    /// containing exchange satisfy `AIAgentExchange::has_user_query()`.
+    UserQuery,
+    /// Restores to a passive request input, which makes the containing
+    /// exchange satisfy `AIAgentExchange::has_passive_request()`.
+    PassiveRequest,
+    /// Restores to neither (agent output, an ordinary tool result, a message
+    /// the client drops on restore, ...).
+    Neither,
+    /// Cannot be classified from the persisted proto alone.
+    Unknown,
+}
+
+/// Classifies a persisted message the way `ConvertToExchanges::into_exchanges`
+/// plus `AIAgentInput::display_query`/`is_passive_request` would.
+///
+/// Every arm mirrors a specific branch of that conversion; keep the two in
+/// sync. Unclassifiable messages return [`RestoredMessageKind::Unknown`] so
+/// callers degrade to a full load instead of a wrong answer.
+///
+/// The exhaustive `match` below only guards against new *proto* variants. It is
+/// silent when the client changes how an existing message renders, which is the
+/// real drift hazard in both directions: editing `into_exchanges` or
+/// `display_query` without editing this function, or the reverse. The
+/// `filter_matches_loaded_behavior_*` tests in
+/// `app/src/ai/restored_conversations_tests.rs` are what catches that — each one
+/// asserts this classifier's verdict against the verdict computed from the
+/// fully restored conversation — so extend them when either side changes.
+fn restored_message_kind(message: &api::Message) -> RestoredMessageKind {
+    use api::message::Message as M;
+    use api::message::system_query::Type as SystemQueryType;
+
+    let Some(message) = &message.message else {
+        return RestoredMessageKind::Neither;
+    };
+
+    match message {
+        M::UserQuery(_) => RestoredMessageKind::UserQuery,
+        M::SystemQuery(system_query) => match &system_query.r#type {
+            // Restored as a `UserQuery`/`CloneRepository` input, both of which
+            // render a display query.
+            Some(SystemQueryType::CreateNewProject(_) | SystemQueryType::CloneRepository(_)) => {
+                RestoredMessageKind::UserQuery
+            }
+            // The only system query restored as a passive request input.
+            Some(SystemQueryType::AutoCodeDiff(_)) => RestoredMessageKind::PassiveRequest,
+            // Never rendered as user input on restore.
+            Some(
+                SystemQueryType::ResumeConversation(_)
+                | SystemQueryType::FetchReviewComments(_)
+                | SystemQueryType::GeneratePassiveSuggestions(_)
+                | SystemQueryType::SummarizeConversation(_)
+                | SystemQueryType::HandoffRehydration(_),
+            )
+            | None => RestoredMessageKind::Neither,
+        },
+        // A restored tool-call result becomes an `ActionResult` input, and the
+        // only `ActionResult` shape that renders a display query is an
+        // accepted `SuggestPrompt`.
+        M::ToolCallResult(tool_call_result) => {
+            let is_accepted_prompt_suggestion = matches!(
+                &tool_call_result.result,
+                Some(api::message::tool_call_result::Result::SuggestPrompt(suggestion))
+                    if matches!(
+                        suggestion.result,
+                        Some(api::suggest_prompt_result::Result::Accepted(_))
+                    )
+            );
+            if is_accepted_prompt_suggestion {
+                RestoredMessageKind::UserQuery
+            } else {
+                RestoredMessageKind::Neither
+            }
+        }
+        // Restored as a `PassiveSuggestionResult` input, which renders a
+        // display query only for a `Prompt` suggestion carrying a trigger (a
+        // result missing either is dropped instead of becoming an input).
+        M::PassiveSuggestionResult(passive_result) => {
+            let renders_prompt = passive_result.result.as_ref().is_some_and(|result| {
+                result.trigger.is_some()
+                    && matches!(
+                        result.suggestion,
+                        Some(api::passive_suggestion_result_type::Suggestion::Prompt(_))
+                    )
+            });
+            if renders_prompt {
+                RestoredMessageKind::UserQuery
+            } else {
+                RestoredMessageKind::Neither
+            }
+        }
+        // Restored as an `InvokeSkill` input — which always renders a display
+        // query — but only when the embedded skill parses, which needs client
+        // state this crate has no access to.
+        M::InvokeSkill(invoke_skill) => {
+            if invoke_skill.skill.is_some() {
+                RestoredMessageKind::Unknown
+            } else {
+                RestoredMessageKind::Neither
+            }
+        }
+        // Restored as an `EventsFromAgents` input, which has no display query.
+        M::EventsFromAgents(_)
+        // Everything below is restored as agent output (or dropped), never as
+        // an exchange input.
+        | M::AgentOutput(_)
+        | M::AgentReasoning(_)
+        | M::Summarization(_)
+        | M::ToolCall(_)
+        | M::ServerEvent(_)
+        | M::UpdateTodos(_)
+        | M::UpdateReviewComments(_)
+        | M::CodeReview(_)
+        | M::WebSearch(_)
+        | M::WebFetch(_)
+        | M::DebugOutput(_)
+        | M::ArtifactEvent(_)
+        | M::MessagesReceivedFromAgents(_)
+        | M::ModelUsed(_)
+        | M::OrchestrationConfigSnapshot(_) => RestoredMessageKind::Neither,
+    }
+}
+
+/// The tasks restore treats as root candidates: those with no `dependencies` at
+/// all, or with `dependencies` whose `parent_task_id` is empty.
+///
+/// Mirrors `TaskExt::parent_id`, which restore filters candidates through, and
+/// matches [`tasks_are_restorable`]'s rule.
+fn parentless_tasks<'a, 'tasks>(
+    tasks: &'tasks [&'a api::Task],
+) -> impl Iterator<Item = &'a api::Task> + 'tasks {
+    tasks.iter().copied().filter(|task| {
+        task.dependencies
+            .as_ref()
+            .is_none_or(|deps| deps.parent_task_id.is_empty())
+    })
+}
+
+/// Picks the task that restore would use as the conversation's root, mirroring
+/// `AIConversation::new_restored_synthesizing_on_empty`: candidates are the
+/// [`parentless_tasks`], and one carrying messages wins over an empty stub.
+///
+/// Returns `None` when restore's own pick would be ambiguous (several
+/// message-bearing parentless tasks, resolved there by hash iteration order)
+/// or when restore would fail outright (no parentless task at all).
+fn restored_root_task<'a>(tasks: &[&'a api::Task]) -> Option<&'a api::Task> {
+    let parentless: Vec<&'a api::Task> = parentless_tasks(tasks).collect();
+
+    let mut with_messages = parentless
+        .iter()
+        .copied()
+        .filter(|task| !task.messages.is_empty());
+
+    match (with_messages.next(), with_messages.next()) {
+        (Some(root), None) => Some(root),
+        (Some(_), Some(_)) => None,
+        // No candidate carries messages, so whichever stub restore picks
+        // contributes no exchanges and any of them answers identically.
+        (None, _) => parentless.first().copied(),
+    }
+}
+
+/// Mirrors `AIConversation::is_entirely_passive()` over a persisted task
+/// snapshot: `true` when the root task has at least one passive request and no
+/// message that restores into a user query.
+///
+/// Returns `None` when the snapshot can't answer the question; see
+/// [`AgentConversationSummary::is_entirely_passive`].
+fn derive_is_entirely_passive(tasks: &[&api::Task]) -> Option<bool> {
+    // Restore synthesizes a fresh, exchange-less root task for a task-less
+    // row, so there is no passive exchange for the predicate to find.
+    if tasks.is_empty() {
+        return Some(false);
+    }
+
+    let root_task = restored_root_task(tasks)?;
+
+    let mut has_passive_request = false;
+    let mut has_unclassifiable_message = false;
+    for message in &root_task.messages {
+        match restored_message_kind(message) {
+            // A single user query anywhere in the root task settles it.
+            RestoredMessageKind::UserQuery => return Some(false),
+            RestoredMessageKind::PassiveRequest => has_passive_request = true,
+            RestoredMessageKind::Neither => {}
+            RestoredMessageKind::Unknown => has_unclassifiable_message = true,
+        }
+    }
+
+    // An unclassifiable message resolves to either a user query or nothing,
+    // never to a passive request, so it can only change the answer once a
+    // passive request has been found. Bailing out unconditionally would send
+    // every conversation started from a slash command down the full-load path
+    // on every startup.
+    if has_passive_request && has_unclassifiable_message {
+        return None;
+    }
+    Some(has_passive_request)
 }
 
 impl AgentConversationSummary {
+    /// True when this summary carries every derived field the current client
+    /// expects. Stale summaries must be re-derived from tasks before use.
+    pub fn is_current_version(&self) -> bool {
+        self.version >= AGENT_CONVERSATION_SUMMARY_VERSION
+    }
+
     /// Derives the summary from a conversation's full task snapshot.
     pub fn from_tasks<'a>(tasks: impl IntoIterator<Item = &'a api::Task>) -> Self {
         let tasks: Vec<&api::Task> = tasks.into_iter().collect();
@@ -1096,7 +1336,10 @@ impl AgentConversationSummary {
             }
         }
 
-        let root_task = tasks.iter().find(|task| task.dependencies.is_none());
+        // Incidental to the pane-restore fix: this finder predates it and only
+        // feeds `initial_query`/`title`, but it is aligned with
+        // `parentless_tasks` so the file has one definition of "parentless".
+        let root_task = parentless_tasks(&tasks).next();
 
         // The first user query in the root task (or, for a passive code
         // diff, the summary of the diff).
@@ -1134,11 +1377,13 @@ impl AgentConversationSummary {
             .find_map(|task| api_task_initial_working_directory(task));
 
         Self {
+            version: AGENT_CONVERSATION_SUMMARY_VERSION,
             initial_query,
             title,
             initial_working_directory,
             is_restorable: tasks_are_restorable(tasks.iter().copied()),
             is_unlisted_auto_code_diff: has_auto_code_diff && !has_user_query,
+            is_entirely_passive: derive_is_entirely_passive(&tasks),
         }
     }
 }
