@@ -2712,7 +2712,7 @@ impl AIBlock {
                         },
                     ..
                 } => {
-                    if self.model.is_restored() && FeatureFlag::PRCommentsV2.is_enabled() {
+                    if self.model.is_restored() {
                         self.handle_insert_code_review_comments(
                             id.clone(),
                             repo_path,
@@ -4891,16 +4891,14 @@ impl AIBlock {
                     comments,
                     base_branch,
                 } => {
-                    if FeatureFlag::PRCommentsV2.is_enabled() {
-                        me.handle_insert_code_review_comments(
-                            action_id.clone(),
-                            repo_path,
-                            comments,
-                            base_branch.as_deref(),
-                            ctx,
-                        );
-                        ctx.notify();
-                    }
+                    me.handle_insert_code_review_comments(
+                        action_id.clone(),
+                        repo_path,
+                        comments,
+                        base_branch.as_deref(),
+                        ctx,
+                    );
+                    ctx.notify();
                 }
 
                 BlocklistAIActionEvent::InitProject(_)
