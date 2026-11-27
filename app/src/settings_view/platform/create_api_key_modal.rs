@@ -76,7 +76,6 @@ pub struct CreateApiKeyModal {
     has_team: bool,
     has_named_agents: bool,
     agents: Vec<AgentIdentity>,
-    selected_agent_uid: Option<String>,
     is_loading_agents: bool,
 }
 
@@ -174,6 +173,7 @@ impl CreateApiKeyModal {
             ctx.add_typed_action_view(FilterableDropdown::<CreateApiKeyModalAction>::new);
         agent_dropdown.update(ctx, |dropdown, ctx| {
             dropdown.set_top_bar_max_width(INPUT_WIDTH);
+            dropdown.set_placeholder("Select an agent", ctx);
             // Match the open menu width to the rendered top-bar (input) width so
             // the dropdown doesn't overhang the search field.
             dropdown.set_match_menu_width_to_top_bar(true, ctx);
@@ -274,7 +274,6 @@ impl CreateApiKeyModal {
             has_team,
             has_named_agents,
             agents: Vec::new(),
-            selected_agent_uid: None,
             is_loading_agents: false,
         }
     }
@@ -310,13 +309,19 @@ impl CreateApiKeyModal {
     }
 
     fn populate_agent_dropdown(&mut self, ctx: &mut ViewContext<Self>) {
-        if self.selected_agent_uid.is_none() {
-            self.selected_agent_uid = self
-                .agents
-                .iter()
-                .find(|agent| agent.available)
-                .map(|agent| agent.uid.clone());
-        }
+        let selected_agent_uid = self
+            .selected_agent_uid(ctx)
+            .filter(|uid| {
+                self.agents
+                    .iter()
+                    .any(|agent| agent.available && agent.uid.as_str() == uid)
+            })
+            .or_else(|| {
+                self.agents
+                    .iter()
+                    .find(|agent| agent.available)
+                    .map(|agent| agent.uid.clone())
+            });
         let items: Vec<DropdownItem<CreateApiKeyModalAction>> = self
             .agents
             .iter()
@@ -330,13 +335,28 @@ impl CreateApiKeyModal {
             .collect();
         self.agent_dropdown.update(ctx, |dropdown, ctx| {
             dropdown.set_items(items, ctx);
-            if let Some(selected_agent_uid) = &self.selected_agent_uid {
+            if let Some(selected_agent_uid) = selected_agent_uid {
                 dropdown.set_selected_by_action(
-                    CreateApiKeyModalAction::SelectAgent(selected_agent_uid.clone()),
+                    CreateApiKeyModalAction::SelectAgent(selected_agent_uid),
                     ctx,
                 );
+            } else {
+                dropdown.reset_selection(ctx);
             }
         });
+    }
+    fn selected_agent_uid(&self, ctx: &AppContext) -> Option<String> {
+        match self.agent_dropdown.as_ref(ctx).selected_action() {
+            Some(CreateApiKeyModalAction::SelectAgent(uid)) => Some(uid),
+            Some(
+                CreateApiKeyModalAction::Cancel
+                | CreateApiKeyModalAction::Create
+                | CreateApiKeyModalAction::CopyRawKey
+                | CreateApiKeyModalAction::SetExpiration(_)
+                | CreateApiKeyModalAction::CreateNewAgent,
+            )
+            | None => None,
+        }
     }
 
     #[cfg(test)]
@@ -375,8 +395,8 @@ impl CreateApiKeyModal {
         let selected_type = self.api_key_type_control.as_ref(ctx).selected_option();
 
         let agent_uid = if selected_type == ApiKeyType::Agent {
-            match &self.selected_agent_uid {
-                Some(uid) => Some(cynic::Id::new(uid.clone())),
+            match self.selected_agent_uid(ctx) {
+                Some(uid) => Some(cynic::Id::new(uid)),
                 None => {
                     self.request_state = RequestState::Idle;
                     ctx.emit(CreateApiKeyModalEvent::Error {
@@ -445,9 +465,9 @@ impl CreateApiKeyModal {
         self.request_state = RequestState::Idle;
         self.raw_key_copied = false;
         self.raw_key = None;
-        self.selected_agent_uid = None;
         self.agent_dropdown.update(ctx, |dropdown, ctx| {
             dropdown.clear_filter(ctx);
+            dropdown.reset_selection(ctx);
         });
         self.name_editor.update(ctx, |editor, ctx| {
             editor.clear_buffer_and_reset_undo_stack(ctx);
@@ -498,10 +518,10 @@ impl CreateApiKeyModal {
         }
     }
 
-    fn is_create_disabled(&self, selected_key_type: ApiKeyType) -> bool {
+    fn is_create_disabled(&self, selected_key_type: ApiKeyType, ctx: &AppContext) -> bool {
         self.request_state == RequestState::Pending
             || (selected_key_type == ApiKeyType::Agent
-                && (self.selected_agent_uid.is_none() || self.is_loading_agents))
+                && (self.selected_agent_uid(ctx).is_none() || self.is_loading_agents))
     }
     fn render_success_content(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
@@ -674,7 +694,7 @@ impl View for CreateApiKeyModal {
                     .finish();
 
                 let is_pending = self.request_state == RequestState::Pending;
-                let is_create_disabled = self.is_create_disabled(selected_key_type);
+                let is_create_disabled = self.is_create_disabled(selected_key_type, app);
 
                 let mut cancel_button_hover = appearance
                     .ui_builder()
@@ -911,8 +931,7 @@ impl TypedActionView for CreateApiKeyModal {
                 self.expiration = *exp;
                 ctx.notify();
             }
-            CreateApiKeyModalAction::SelectAgent(uid) => {
-                self.selected_agent_uid = Some(uid.clone());
+            CreateApiKeyModalAction::SelectAgent(_) => {
                 ctx.notify();
             }
             CreateApiKeyModalAction::CreateNewAgent => {
