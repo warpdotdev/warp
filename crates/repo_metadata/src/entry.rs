@@ -272,9 +272,12 @@ impl Entry {
         // ignored/symlinked), a classification failure at the root propagates to
         // the caller, preserving existing error behavior.
         if let Some(state) = standing_queries.as_deref_mut() {
-            state
-                .results
-                .record_path(&root_path, root_path.is_dir(), state.definitions);
+            state.results.record_path(
+                &root_path,
+                root_path.is_dir(),
+                ancestor_is_ignored,
+                state.definitions,
+            );
         }
         match evaluate_entry(
             &root_path,
@@ -378,6 +381,7 @@ impl Entry {
                             state.results.record_path(
                                 &child_path,
                                 child_path.is_dir(),
+                                job.ignored,
                                 state.definitions,
                             );
                         }
@@ -1006,6 +1010,9 @@ fn descend_allowlist_matches(suffix: &[Component<'_>]) -> bool {
 /// pruned to avoid following trees outside the repository, and any other
 /// gitignored directory is pruned so we don't register watches on
 /// `node_modules`, build output, vendored deps, etc.
+///
+/// `gitignores` is the repository's root + global set; `.gitignore` files in
+/// directories between `repo_root` and `path` are consulted as well.
 pub fn should_watch_repo_directory(
     path: &Path,
     repo_root: &Path,
@@ -1032,9 +1039,36 @@ pub fn should_watch_repo_directory(
     !matches_gitignores(
         path,
         path.is_dir(),
-        gitignores,
+        &gitignores_for_path_in_repo(repo_root, path, gitignores),
         /* check_ancestors */ true,
     )
+}
+
+/// Extends `base` (the repository's root + global gitignores) with every `.gitignore` found in
+/// the directories strictly between `repo_root` and `path`, ordered root-first, so that `path`
+/// is matched the way git matches it. `.gitignore` files inside `path` itself are not included
+/// because they cannot ignore `path`; tree traversal picks those up when it descends.
+pub fn gitignores_for_path_in_repo(
+    repo_root: &Path,
+    path: &Path,
+    base: &[Arc<Gitignore>],
+) -> Vec<Arc<Gitignore>> {
+    let mut gitignores = base.to_vec();
+    let Ok(relative) = path.strip_prefix(repo_root) else {
+        return gitignores;
+    };
+    let Some(relative_parent) = relative.parent() else {
+        return gitignores;
+    };
+    let mut directory = repo_root.to_path_buf();
+    for component in relative_parent.components() {
+        directory.push(component);
+        let gitignore_path = directory.join(".gitignore");
+        if gitignore_path.is_file() {
+            gitignores.push(gitignore_cache::get_or_parse(&gitignore_path));
+        }
+    }
+    gitignores
 }
 
 /// Returns whether `path` is a symlink or is below one.
@@ -1071,11 +1105,8 @@ fn is_within_symlink(path: &Path, repo_root: &Path) -> bool {
 /// gitignored subtrees.
 ///
 /// `gitignores` should be the repo's root + global gitignores (as produced by
-/// [`gitignores_for_directory`]), matching `Repository::check_gitignore_status`
-/// so descend decisions and the downstream `is_ignored` tagging stay
-/// consistent. Nested per-directory `.gitignore` files are not consulted here
-/// (same limitation as the existing tagging), which can only cause us to
-/// over-watch, never to miss events.
+/// [`gitignores_for_directory`]); nested per-directory `.gitignore` files are
+/// resolved per path by [`should_watch_repo_directory`].
 #[cfg(feature = "local_fs")]
 pub fn repo_watch_filter(
     repo_root: PathBuf,

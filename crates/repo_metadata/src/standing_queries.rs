@@ -111,6 +111,7 @@ impl StandingQueryResults {
         &mut self,
         path: &Path,
         is_directory: bool,
+        ancestor_is_ignored: bool,
         definitions: &StandingQueryDefinitions,
     ) {
         let standardized = StandardizedPath::from_local_absolute_unchecked(path);
@@ -122,7 +123,10 @@ impl StandingQueryResults {
             self.project_skills
                 .insert(StandingQueryContent::file(standardized.clone()));
         }
-        if !is_directory && definitions.is_project_rule_file(path) {
+        // Rules under gitignored directories (e.g. `node_modules`) aren't project guidance, but a
+        // directly-ignored rule file in a tracked directory may be a personal rule, so keep it.
+        // Skills are exempt: provider directories like `.agents/skills` are gitignored by design.
+        if !is_directory && !ancestor_is_ignored && definitions.is_project_rule_file(path) {
             self.project_rules
                 .insert(StandingQueryContent::file(standardized));
         }
@@ -156,7 +160,7 @@ impl StandingQueryResults {
 
         let skill_file = path.join("SKILL.md");
         if skill_file.is_file() {
-            self.record_path(&skill_file, false, definitions);
+            self.record_path(&skill_file, false, false, definitions);
         }
     }
     pub fn insert_project_skill(&mut self, content: StandingQueryContent) {
