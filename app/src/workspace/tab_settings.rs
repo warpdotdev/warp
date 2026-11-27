@@ -21,8 +21,8 @@ use warp_core::ui::theme::AnsiColorIdentifier;
     rename_all = "snake_case"
 )]
 pub enum NewTabPlacement {
-    #[default]
     AfterCurrentTab,
+    #[default]
     AfterAllTabs,
 }
 
