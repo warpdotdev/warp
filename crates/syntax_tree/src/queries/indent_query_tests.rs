@@ -738,3 +738,50 @@ fn test_indent_query_on_typescript() {
         2
     );
 }
+
+#[test]
+fn test_indent_query_on_solidity() {
+    let language = language_by_filename(&test_path("Token.sol"))
+        .expect("Should contain language rule for solidity");
+    let (buffer, tree) = mock_buffer_and_tree(
+        r#"contract Token {
+    function mint(uint256 amount) external {
+        totalSupply += amount;
+    }
+}"#,
+        language.clone(),
+    );
+    let query = &language.as_ref().indents_query.as_ref().unwrap();
+
+    // Top-level contract line should not be indented.
+    assert_eq!(
+        indentation_delta(&buffer, &tree, Point { row: 0, column: 0 }, query)
+            .unwrap()
+            .delta,
+        0
+    );
+
+    // Inside the contract body should be 1.
+    assert_eq!(
+        indentation_delta(&buffer, &tree, Point { row: 1, column: 0 }, query)
+            .unwrap()
+            .delta,
+        1
+    );
+
+    // Inside the function body nested in the contract should be 2.
+    assert_eq!(
+        indentation_delta(&buffer, &tree, Point { row: 2, column: 0 }, query)
+            .unwrap()
+            .delta,
+        2
+    );
+
+    // Closing brace of the contract should be back at 0.
+    assert_eq!(
+        indentation_delta(&buffer, &tree, Point { row: 4, column: 0 }, query)
+            .unwrap()
+            .delta,
+        0
+    );
+}
