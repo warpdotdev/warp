@@ -154,3 +154,69 @@ fn test_jwt() {
     assert_regex_match_not_found(regexes::JWT, missing_periods);
     assert_regex_match_not_found(regexes::JWT, not_a_jwt);
 }
+
+#[test]
+fn reports_multibyte_ranges_and_level_from_matching_pattern() {
+    let patterns = ["enterprise-secret", "秘密"];
+    let secrets_regex = SecretsRegex {
+        regex: regex_automata::meta::Regex::new_many(&patterns)
+            .expect("should construct test regex"),
+        dfas: RegexDFAs::new_many(&patterns, false, true).expect("should construct test DFAs"),
+        level_metadata: RegexLevelMetadata {
+            enterprise_count: 1,
+            user_count: 1,
+        },
+    };
+
+    assert_eq!(
+        find_secrets_in_text_with_levels_using_regex("x秘密", &secrets_regex),
+        vec![(
+            StringRange {
+                char_range: 1..3,
+                byte_range: 1..7,
+            },
+            SecretLevel::User,
+        )]
+    );
+}
+
+#[test]
+fn advances_zero_length_matches_across_multibyte_text() {
+    let patterns = [""];
+    let secrets_regex = SecretsRegex {
+        regex: regex_automata::meta::Regex::new_many(&patterns)
+            .expect("should construct test regex"),
+        dfas: RegexDFAs::new_many(&patterns, false, true).expect("should construct test DFAs"),
+        level_metadata: RegexLevelMetadata {
+            enterprise_count: 1,
+            user_count: 0,
+        },
+    };
+
+    assert_eq!(
+        find_secrets_in_text_with_levels_using_regex("éa", &secrets_regex),
+        vec![
+            (
+                StringRange {
+                    char_range: 0..0,
+                    byte_range: 0..0,
+                },
+                SecretLevel::Enterprise,
+            ),
+            (
+                StringRange {
+                    char_range: 1..1,
+                    byte_range: 2..2,
+                },
+                SecretLevel::Enterprise,
+            ),
+            (
+                StringRange {
+                    char_range: 2..2,
+                    byte_range: 3..3,
+                },
+                SecretLevel::Enterprise,
+            ),
+        ]
+    );
+}
