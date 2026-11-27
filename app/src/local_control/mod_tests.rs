@@ -26,6 +26,8 @@ use super::{
     validate_action_params, validate_loopback_headers, validate_request_authority,
     validate_tab_create_target,
 };
+#[cfg(windows)]
+use super::{ensure_peer_user, read_credential_request};
 use crate::settings::{LocalControlMode, LocalControlModeSetting, LocalControlSettings};
 
 fn settings_with_mode(mode: LocalControlMode) -> LocalControlSettings {
@@ -54,6 +56,102 @@ async fn credential_broker_accepts_peer_from_same_user() {
     let actual_uid = stream.peer_cred().expect("peer credentials").uid();
 
     ensure_peer_uid(&stream, actual_uid).expect("same user is accepted");
+}
+
+/// Returns a connected server/client pair on a fresh, test-only named pipe.
+#[cfg(windows)]
+async fn connected_pipe_pair() -> (
+    tokio::net::windows::named_pipe::NamedPipeServer,
+    tokio::net::windows::named_pipe::NamedPipeClient,
+) {
+    let path = format!(
+        r"\\.\pipe\warp-local-control-app-test-{}",
+        uuid::Uuid::new_v4().simple()
+    );
+    let server = tokio::net::windows::named_pipe::ServerOptions::new()
+        .first_pipe_instance(true)
+        .create(&path)
+        .expect("pipe is created");
+    let client = tokio::net::windows::named_pipe::ClientOptions::new()
+        .open(&path)
+        .expect("client connects");
+    server.connect().await.expect("server accepts");
+    (server, client)
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn credential_broker_rejects_pipe_peer_from_different_user() {
+    let (server, _client) = connected_pipe_pair().await;
+
+    // `S-1-5-18` is `SYSTEM`, which never runs the test process.
+    let err = ensure_peer_user(&server, "S-1-5-18").expect_err("different user is rejected");
+    assert_eq!(err.code, ErrorCode::UnauthorizedLocalClient);
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn credential_broker_accepts_pipe_peer_from_same_user() {
+    let (server, _client) = connected_pipe_pair().await;
+    let current_user = ::local_control::windows_security::current_user_sid().expect("current user");
+
+    ensure_peer_user(&server, &current_user).expect("same user is accepted");
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn credential_request_reader_stops_at_delimiter() {
+    use tokio::io::AsyncWriteExt as _;
+
+    let (mut server, mut client) = connected_pipe_pair().await;
+    client
+        .write_all(b"{\"action\":\"app.ping\"}\ntrailing")
+        .await
+        .expect("client writes request");
+
+    let request = read_credential_request(&mut server)
+        .await
+        .expect("request is read");
+    assert_eq!(request, b"{\"action\":\"app.ping\"}");
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn credential_request_reader_rejects_truncated_request() {
+    use tokio::io::AsyncWriteExt as _;
+
+    let (mut server, mut client) = connected_pipe_pair().await;
+    client
+        .write_all(b"{\"action\":")
+        .await
+        .expect("client writes partial request");
+    drop(client);
+
+    let err = read_credential_request(&mut server)
+        .await
+        .expect_err("truncated request is rejected");
+    assert_eq!(err.code, ErrorCode::InvalidRequest);
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn credential_request_reader_rejects_oversized_request() {
+    use tokio::io::AsyncWriteExt as _;
+
+    let (mut server, mut client) = connected_pipe_pair().await;
+    let writer = tokio::spawn(async move {
+        let oversized = vec![b'x'; ::local_control::client::MAX_CREDENTIAL_REQUEST_BYTES + 1];
+        // The broker stops reading once the limit is exceeded, so this write
+        // may fail when the server end goes away.
+        let _ = client.write_all(&oversized).await;
+    });
+
+    let err = read_credential_request(&mut server)
+        .await
+        .expect_err("oversized request is rejected");
+    assert_eq!(err.code, ErrorCode::InvalidRequest);
+    drop(server);
+    writer.await.expect("writer completes");
 }
 
 #[test]
