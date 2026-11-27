@@ -1,14 +1,16 @@
 use futures::FutureExt;
+use notify_rust::{Hint, Notification};
 use winit::event_loop::EventLoopProxy;
 
 use crate::WindowId;
-use crate::notification::NotificationSendError;
+use crate::notification::{NotificationSendError, UserNotification};
 use crate::windowing::winit::app::CustomEvent;
 use crate::windowing::winit::notifications::NotificationInfo;
 
 pub(super) async fn send_notification(
     notification_info: NotificationInfo,
     _window_id: WindowId,
+    desktop_entry: Option<String>,
     proxy: EventLoopProxy<CustomEvent>,
 ) {
     let NotificationInfo {
@@ -16,12 +18,7 @@ pub(super) async fn send_notification(
         on_error,
     } = notification_info;
 
-    let mut notification = notify_rust::Notification::new();
-    notification
-        .summary(notification_content.title())
-        .body(notification_content.body());
-
-    notification
+    build_notification(&notification_content, desktop_entry.as_deref())
         .show_async()
         .then(|handle| async move {
             match handle {
@@ -52,3 +49,29 @@ pub(super) async fn send_notification(
         })
         .await
 }
+
+/// Name of the freedesktop sound theme sound requested when a notification should play a sound.
+const NOTIFICATION_SOUND_NAME: &str = "message-new-instant";
+
+/// Builds the D-Bus notification for `content`, attributing it to `desktop_entry` (the app's
+/// desktop file ID without the `.desktop` suffix) when one is known.
+fn build_notification(content: &UserNotification, desktop_entry: Option<&str>) -> Notification {
+    let mut notification = Notification::new();
+    notification.summary(content.title()).body(content.body());
+
+    if let Some(desktop_entry) = desktop_entry {
+        notification.hint(Hint::DesktopEntry(desktop_entry.to_owned()));
+    }
+
+    if content.play_sound() {
+        notification.sound_name(NOTIFICATION_SOUND_NAME);
+    } else {
+        notification.hint(Hint::SuppressSound(true));
+    }
+
+    notification
+}
+
+#[cfg(test)]
+#[path = "linux_tests.rs"]
+mod tests;

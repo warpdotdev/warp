@@ -9,6 +9,7 @@ use crate::windowing::winit::notifications::NotificationInfo;
 pub(super) async fn send_notification(
     notification_info: NotificationInfo,
     window_id: WindowId,
+    _desktop_entry: Option<String>,
     proxy: EventLoopProxy<CustomEvent>,
 ) {
     let NotificationInfo {
