@@ -120,6 +120,37 @@ pub async fn dump_jemalloc_heap_profile(memory_breakdown: serde_json::Value) {
                             sentry::protocol::Context::Other(context_map),
                         );
                     }
+
+                    // On macOS the heap profile arrives unsymbolicated: the
+                    // shipped release binary is stripped and the in-process
+                    // jemalloc profiler cannot populate Mach-O mappings (there
+                    // is no `/proc/self/maps`), so the pprof contains only raw
+                    // instruction addresses.  Record the main image's
+                    // debug-id, runtime load address, and `__TEXT` vmaddr as
+                    // context so the profile can be symbolicated offline
+                    // against the debug-info file uploaded to Sentry (matched
+                    // by `debug_id`).  See APP-4796.
+                    #[cfg(target_os = "macos")]
+                    if let Some(image) = macos_main_image_symbolication_info() {
+                        let mut image_map: std::collections::BTreeMap<
+                            String,
+                            sentry::protocol::Value,
+                        > = std::collections::BTreeMap::new();
+                        image_map.insert("code_file".to_string(), image.code_file.into());
+                        image_map.insert("debug_id".to_string(), image.debug_id.into());
+                        image_map.insert(
+                            "image_base".to_string(),
+                            format!("0x{:x}", image.image_base).into(),
+                        );
+                        image_map.insert(
+                            "text_vmaddr".to_string(),
+                            format!("0x{:x}", image.text_vmaddr).into(),
+                        );
+                        scope.set_context(
+                            "heap_profile_image",
+                            sentry::protocol::Context::Other(image_map),
+                        );
+                    }
                 },
                 || {
                     sentry::capture_message(
@@ -134,6 +165,146 @@ pub async fn dump_jemalloc_heap_profile(memory_breakdown: serde_json::Value) {
             log::warn!("Failed to dump heap profile: {err:#}");
         }
     }
+}
+
+/// Symbolication metadata for the running main executable, used to make an
+/// otherwise-unsymbolicated macOS heap profile symbolicatable offline.
+#[cfg(all(target_os = "macos", feature = "heap_usage_tracking"))]
+struct MachoImageInfo {
+    /// On-disk path of the main executable.
+    code_file: String,
+    /// Mach-O `LC_UUID` formatted as a Sentry debug-id (e.g.
+    /// `11e1342b-e904-3852-a433-14274590ecac`).
+    debug_id: String,
+    /// Runtime load address of the `__TEXT` segment (`vmaddr` + ASLR slide).
+    image_base: u64,
+    /// `__TEXT` segment `vmaddr` as recorded in the Mach-O/dSYM (no slide).
+    text_vmaddr: u64,
+}
+
+/// Collects [`MachoImageInfo`] for the running main executable so that an
+/// unsymbolicated macOS heap profile can be symbolicated offline against the
+/// debug-info file uploaded to Sentry (matched by `debug_id`).
+///
+/// macOS release binaries are stripped and the in-process jemalloc profiler
+/// cannot populate Mach-O mappings (there is no `/proc/self/maps`), so the
+/// uploaded pprof contains only raw instruction addresses.  Recording the main
+/// image's `debug_id`, runtime load address (`image_base`) and `__TEXT`
+/// `vmaddr` lets offline tooling translate those addresses to symbols.
+#[cfg(all(target_os = "macos", feature = "heap_usage_tracking"))]
+fn macos_main_image_symbolication_info() -> Option<MachoImageInfo> {
+    // SAFETY: Image index 0 is always the main executable.  Its Mach-O header
+    // and load commands are mapped and readable for the lifetime of the
+    // process, and `sizeofcmds` bounds the readable load-command region.
+    unsafe {
+        let header = libc::_dyld_get_image_header(0);
+        if header.is_null() {
+            return None;
+        }
+        let header_ptr = header as *const u8;
+
+        // Read `sizeofcmds` (offset 20 in `mach_header_64`) to bound the slice
+        // covering the header and its load commands.
+        let header_only = std::slice::from_raw_parts(header_ptr, 32);
+        let sizeofcmds = u32::from_le_bytes(header_only.get(20..24)?.try_into().ok()?) as usize;
+        let total = 32usize.checked_add(sizeofcmds)?;
+        let buf = std::slice::from_raw_parts(header_ptr, total);
+
+        let (debug_id, text_vmaddr) = parse_macho_image_uuid_and_text_vmaddr(buf)?;
+
+        let slide = libc::_dyld_get_image_vmaddr_slide(0);
+        let image_base = text_vmaddr.wrapping_add(slide as u64);
+
+        let name_ptr = libc::_dyld_get_image_name(0);
+        let code_file = if name_ptr.is_null() {
+            String::new()
+        } else {
+            std::ffi::CStr::from_ptr(name_ptr)
+                .to_string_lossy()
+                .into_owned()
+        };
+
+        Some(MachoImageInfo {
+            code_file,
+            debug_id,
+            image_base,
+            text_vmaddr,
+        })
+    }
+}
+
+/// Parses a 64-bit little-endian Mach-O header (including its load commands)
+/// and returns the image's `LC_UUID` (formatted as a Sentry debug-id, e.g.
+/// `11e1342b-e904-3852-a433-14274590ecac`) together with the `__TEXT`
+/// segment's `vmaddr`.
+///
+/// `buf` must cover the Mach-O header and all of its load commands.  Returns
+/// `None` if the buffer is not a recognized 64-bit little-endian Mach-O image,
+/// is truncated, or is missing an `LC_UUID`/`__TEXT` segment.
+#[cfg(any(all(target_os = "macos", feature = "heap_usage_tracking"), test))]
+fn parse_macho_image_uuid_and_text_vmaddr(buf: &[u8]) -> Option<(String, u64)> {
+    // MH_MAGIC_64 stored natively in a little-endian image.
+    const MH_MAGIC_64_LE: [u8; 4] = [0xcf, 0xfa, 0xed, 0xfe];
+    const LC_SEGMENT_64: u32 = 0x19;
+    const LC_UUID: u32 = 0x1b;
+    const HEADER_LEN: usize = 32;
+
+    if buf.len() < HEADER_LEN || buf[0..4] != MH_MAGIC_64_LE {
+        return None;
+    }
+
+    let read_u32 = |off: usize| -> Option<u32> {
+        buf.get(off..off + 4)
+            .map(|b| u32::from_le_bytes(b.try_into().unwrap()))
+    };
+    let read_u64 = |off: usize| -> Option<u64> {
+        buf.get(off..off + 8)
+            .map(|b| u64::from_le_bytes(b.try_into().unwrap()))
+    };
+
+    let ncmds = read_u32(16)? as usize;
+
+    let mut uuid: Option<[u8; 16]> = None;
+    let mut text_vmaddr: Option<u64> = None;
+
+    let mut offset = HEADER_LEN;
+    for _ in 0..ncmds {
+        let cmd = read_u32(offset)?;
+        let cmdsize = read_u32(offset + 4)? as usize;
+        // A load command must contain at least its `cmd`/`cmdsize` words and
+        // must not run past the end of the buffer.
+        if cmdsize < 8 || offset.checked_add(cmdsize)? > buf.len() {
+            return None;
+        }
+
+        match cmd {
+            LC_UUID => {
+                uuid = Some(buf.get(offset + 8..offset + 24)?.try_into().unwrap());
+            }
+            LC_SEGMENT_64 => {
+                let segname = buf.get(offset + 8..offset + 24)?;
+                let name_len = segname
+                    .iter()
+                    .position(|&c| c == 0)
+                    .unwrap_or(segname.len());
+                if &segname[..name_len] == b"__TEXT" {
+                    // `vmaddr` follows the 16-byte segment name.
+                    text_vmaddr = read_u64(offset + 24);
+                }
+            }
+            _ => {}
+        }
+
+        offset += cmdsize;
+    }
+
+    let uuid = uuid?;
+    let debug_id = format!(
+        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        uuid[0], uuid[1], uuid[2], uuid[3], uuid[4], uuid[5], uuid[6], uuid[7], uuid[8], uuid[9],
+        uuid[10], uuid[11], uuid[12], uuid[13], uuid[14], uuid[15],
+    );
+    Some((debug_id, text_vmaddr?))
 }
 
 #[cfg(feature = "heap_usage_tracking")]
@@ -309,3 +480,7 @@ pub async fn handle_get_heap()
     })?;
     Ok(pprof)
 }
+
+#[cfg(test)]
+#[path = "profiling_tests.rs"]
+mod tests;
