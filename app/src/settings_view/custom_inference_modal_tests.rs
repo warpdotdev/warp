@@ -6,6 +6,7 @@ use warpui::units::Pixels;
 use warpui::{App, EntityIdSet, Presenter, WindowInvalidation};
 
 use super::*;
+use crate::ai::discover_models::DiscoveredModel;
 use crate::test_util::terminal::initialize_app_for_terminal_view;
 
 fn endpoint_with_models(model_count: usize) -> CustomEndpoint {
@@ -138,6 +139,142 @@ fn model_row_inputs_align_and_controls_fit_gutter() {
         REMOVE_MODEL_BUTTON_SPACING + REMOVE_MODEL_BUTTON_COL_WIDTH + SCROLL_CONTENT_RIGHT_MARGIN,
         56.
     );
+}
+
+#[test]
+fn fetch_models_is_disabled_until_url_and_key_are_valid() {
+    App::test((), |mut app| async move {
+        init_modal_test_models(&mut app);
+        let (window_id, modal) = app.add_window(WindowStyle::NotStealFocus, move |ctx| {
+            CustomEndpointModal::new(None, None, ctx)
+        });
+        app.update(|ctx| {
+            ctx.presenter(window_id)
+                .expect("presenter should exist")
+                .borrow_mut()
+                .build_scene(vec2f(560., 600.), 1., None, ctx);
+            assert!(!modal.as_ref(ctx).can_fetch_models(ctx));
+            modal.update(ctx, |modal, ctx| {
+                modal.endpoint_url_editor.update(ctx, |editor, ctx| {
+                    editor.set_buffer_text("https://openrouter.ai/api/v1", ctx);
+                });
+                modal.api_key_editor.update(ctx, |editor, ctx| {
+                    editor.set_buffer_text("sk-test", ctx);
+                });
+            });
+            assert!(modal.as_ref(ctx).can_fetch_models(ctx));
+            modal.update(ctx, |modal, ctx| {
+                modal.endpoint_url_editor.update(ctx, |editor, ctx| {
+                    editor.set_buffer_text("http://127.0.0.1:8317/v1", ctx);
+                });
+            });
+            assert!(!modal.as_ref(ctx).can_fetch_models(ctx));
+        });
+    })
+}
+
+#[test]
+fn applying_discovered_ids_replaces_blank_row_and_skips_existing_names() {
+    App::test((), |mut app| async move {
+        init_modal_test_models(&mut app);
+        let endpoint = endpoint_with_models(1);
+        let (window_id, modal) = app.add_window(WindowStyle::NotStealFocus, move |ctx| {
+            CustomEndpointModal::new(Some(&endpoint), Some(0), ctx)
+        });
+        app.update(|ctx| {
+            ctx.presenter(window_id)
+                .expect("presenter should exist")
+                .borrow_mut()
+                .build_scene(vec2f(560., 600.), 1., None, ctx);
+            modal.update(ctx, |modal, ctx| {
+                modal.apply_discovered_models(
+                    vec![
+                        DiscoveredModel {
+                            id: "model-0".to_string(),
+                            alias: None,
+                        },
+                        DiscoveredModel {
+                            id: "openai/gpt-5".to_string(),
+                            alias: Some("GPT-5".to_string()),
+                        },
+                        DiscoveredModel {
+                            id: "anthropic/claude".to_string(),
+                            alias: Some("Claude".to_string()),
+                        },
+                    ],
+                    ctx,
+                );
+            });
+            let names: Vec<String> = modal
+                .as_ref(ctx)
+                .model_rows
+                .iter()
+                .map(|row| row.name_editor.as_ref(ctx).buffer_text(ctx))
+                .collect();
+            let aliases: Vec<String> = modal
+                .as_ref(ctx)
+                .model_rows
+                .iter()
+                .map(|row| row.alias_editor.as_ref(ctx).buffer_text(ctx))
+                .collect();
+            assert_eq!(
+                names,
+                vec![
+                    "model-0".to_string(),
+                    "openai/gpt-5".to_string(),
+                    "anthropic/claude".to_string()
+                ]
+            );
+            assert_eq!(
+                aliases,
+                vec!["".to_string(), "GPT-5".to_string(), "Claude".to_string()]
+            );
+            assert_eq!(
+                modal.as_ref(ctx).fetch_status,
+                FetchStatus::Success { added: 2 }
+            );
+        });
+    })
+}
+
+#[test]
+fn applying_discovered_ids_removes_the_default_blank_row() {
+    App::test((), |mut app| async move {
+        init_modal_test_models(&mut app);
+        let (window_id, modal) = app.add_window(WindowStyle::NotStealFocus, move |ctx| {
+            CustomEndpointModal::new(None, None, ctx)
+        });
+        app.update(|ctx| {
+            ctx.presenter(window_id)
+                .expect("presenter should exist")
+                .borrow_mut()
+                .build_scene(vec2f(560., 600.), 1., None, ctx);
+            assert_eq!(modal.as_ref(ctx).model_rows.len(), 1);
+            modal.update(ctx, |modal, ctx| {
+                modal.apply_discovered_models(
+                    vec![DiscoveredModel {
+                        id: "openai/gpt-5".to_string(),
+                        alias: Some("GPT-5".to_string()),
+                    }],
+                    ctx,
+                );
+            });
+            let names: Vec<String> = modal
+                .as_ref(ctx)
+                .model_rows
+                .iter()
+                .map(|row| row.name_editor.as_ref(ctx).buffer_text(ctx))
+                .collect();
+            assert_eq!(names, vec!["openai/gpt-5".to_string()]);
+            assert_eq!(
+                modal.as_ref(ctx).model_rows[0]
+                    .alias_editor
+                    .as_ref(ctx)
+                    .buffer_text(ctx),
+                "GPT-5"
+            );
+        });
+    })
 }
 
 #[test]
