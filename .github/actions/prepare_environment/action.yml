@@ -178,7 +178,7 @@ runs:
     - name: Install protoc for generating rust bindings of protobuf APIs
       id: install_protoc
       # Install protoc for generating rust bindings of protobuf APIs.
-      uses: ConorMacBride/install-package@3e7ad059e07782ee54fa35f827df52aae0626f30 # v1
+      uses: ConorMacBride/install-package@3e7ad059e07782ee54fa35f827df52aae0626f30 # v1.1.0
       # Don't fail the job here so the Windows (winget) and macOS (brew) fallbacks
       # below have a chance to run.
       continue-on-error: true
