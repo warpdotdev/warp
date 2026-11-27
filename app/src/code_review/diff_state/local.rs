@@ -9,7 +9,7 @@ use std::io::{BufRead, BufReader, Read, Seek};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use instant::Instant;
 #[cfg(feature = "local_fs")]
 use warp_util::standardized_path::StandardizedPath;
@@ -1033,8 +1033,10 @@ impl LocalDiffStateModel {
         update: RepositoryUpdate,
         ctx: &mut ModelContext<Self>,
     ) -> bool {
-        // Refresh if there are file changes or if commit state has been updated
-        if update.is_empty() {
+        // Refresh if there are file changes or if commit state has been updated.
+        // A pull request layer diffs an immutable remote commit range, so local
+        // working-tree/commit changes never invalidate it.
+        if update.is_empty() || self.mode.is_read_only() {
             return false;
         }
 
@@ -1190,7 +1192,7 @@ impl LocalDiffStateModel {
     #[cfg(feature = "local_fs")]
     fn recompute_merge_base_and_flush(&mut self, ctx: &mut ModelContext<Self>) {
         let diff_mode = self.mode.clone();
-        if !matches!(diff_mode, DiffMode::Head) {
+        if !matches!(diff_mode, DiffMode::Head) && !diff_mode.is_read_only() {
             let Some(repo_path) = self.active_repository_path(ctx) else {
                 self.flush_pending_invalidations(ctx);
                 return;
@@ -1498,6 +1500,11 @@ impl LocalDiffStateModel {
             DiffMode::Head => {
                 anyhow::bail!("merge base is not applicable for Head mode")
             }
+            DiffMode::PullRequestLayer { .. } => {
+                anyhow::bail!(
+                    "merge base against the working tree is not applicable for PullRequestLayer mode"
+                )
+            }
         };
         Self::get_merge_base(repo_path, &branch).await
     }
@@ -1618,6 +1625,13 @@ impl LocalDiffStateModel {
             DiffMode::OtherBranch(branch) => {
                 Self::diff_state_against_specific_branch(&repo_path, branch, should_fetch_base)
                     .await
+            }
+            DiffMode::PullRequestLayer {
+                pr_number,
+                base_oid,
+                head_oid,
+            } => {
+                Self::diff_state_against_pr_layer(&repo_path, pr_number, &base_oid, &head_oid).await
             }
         };
 
@@ -1816,6 +1830,7 @@ impl LocalDiffStateModel {
             files.push(FileDiffAndContent {
                 file_diff,
                 content_at_head,
+                content_at_new_commit: None,
             });
         }
 
@@ -2012,6 +2027,7 @@ impl LocalDiffStateModel {
         Ok(Some(FileDiffAndContent {
             file_diff,
             content_at_head,
+            content_at_new_commit: None,
         }))
     }
 
@@ -2124,6 +2140,384 @@ impl LocalDiffStateModel {
             total_additions,
             total_deletions,
         })
+    }
+
+    /// Full 40-character hexadecimal Git object IDs only. Pull request layer
+    /// object IDs come from GitHub's API and must be validated before ever
+    /// being interpolated into a Git command.
+    fn is_full_git_object_id(oid: &str) -> bool {
+        oid.len() == 40 && oid.bytes().all(|b| b.is_ascii_hexdigit())
+    }
+
+    /// Whether `oid` resolves to a commit already present in the local object
+    /// store.
+    async fn commit_exists_locally(repo_path: &Path, oid: &str) -> bool {
+        run_git_command(repo_path, &["cat-file", "-e", &format!("{oid}^{{commit}}")])
+            .await
+            .is_ok()
+    }
+
+    /// Ensures `oid` is available locally, fetching `remote_ref` from `origin`
+    /// into the Warp-owned `local_ref` when it is missing. Only ever writes to
+    /// `refs/warp/code-review/...` and Git's object store — never `HEAD`, the
+    /// index, the working tree, or a user-owned branch/remote-tracking ref.
+    async fn ensure_pr_commit_available(
+        repo_path: &Path,
+        oid: &str,
+        remote_ref: &str,
+        local_ref: &str,
+    ) -> Result<()> {
+        if Self::commit_exists_locally(repo_path, oid).await {
+            return Ok(());
+        }
+        log::debug!(
+            "[GIT OPERATION] local.rs ensure_pr_commit_available git fetch origin {remote_ref}:{local_ref}"
+        );
+        run_git_command(
+            repo_path,
+            &["fetch", "origin", &format!("{remote_ref}:{local_ref}")],
+        )
+        .await
+        .with_context(|| format!("failed to fetch {remote_ref} from origin"))?;
+        Ok(())
+    }
+
+    /// Loads the read-only diff for a single pull request layer: the exact
+    /// `base_oid...head_oid` range GitHub reports for that pull request,
+    /// independent of the working tree or `HEAD`. Never mutates `HEAD`, the
+    /// index, the working tree, local branches, or normal remote-tracking
+    /// refs — only `refs/warp/code-review/pr/{pr_number}/...` and read-only
+    /// `git diff`/`git show`/`git cat-file` calls are used.
+    async fn diff_state_against_pr_layer(
+        repo_path: &Path,
+        pr_number: u64,
+        base_oid: &str,
+        head_oid: &str,
+    ) -> Result<GitDiffWithBaseContent> {
+        if !Self::is_full_git_object_id(base_oid) || !Self::is_full_git_object_id(head_oid) {
+            anyhow::bail!("pull request #{pr_number} layer has an invalid base/head object id");
+        }
+
+        Self::ensure_pr_commit_available(
+            repo_path,
+            head_oid,
+            &format!("refs/pull/{pr_number}/head"),
+            &format!("refs/warp/code-review/pr/{pr_number}/head"),
+        )
+        .await?;
+
+        // Fetching the head ref normally brings its ancestors, including the
+        // base commit. Only fall back to fetching the base object directly by
+        // OID when that didn't happen — e.g. the base was retargeted by a
+        // partial stack merge and isn't reachable from head.
+        if !Self::commit_exists_locally(repo_path, base_oid).await {
+            Self::ensure_pr_commit_available(
+                repo_path,
+                base_oid,
+                base_oid,
+                &format!("refs/warp/code-review/pr/{pr_number}/base"),
+            )
+            .await?;
+        }
+
+        if !Self::commit_exists_locally(repo_path, head_oid).await {
+            anyhow::bail!(
+                "head commit {head_oid} for pull request #{pr_number} is unavailable after fetch"
+            );
+        }
+        if !Self::commit_exists_locally(repo_path, base_oid).await {
+            anyhow::bail!(
+                "base commit {base_oid} for pull request #{pr_number} is unavailable after fetch"
+            );
+        }
+
+        // GitHub computes a pull request's diff from the merge base of its
+        // base and head commits (a three-dot `base...head` range). Resolving
+        // it explicitly keeps the diff and its base content in agreement even
+        // when `base_oid` isn't a strict ancestor of `head_oid`.
+        log::debug!(
+            "[GIT OPERATION] local.rs diff_state_against_pr_layer git merge-base {base_oid} {head_oid}"
+        );
+        let merge_base = run_git_command(repo_path, &["merge-base", base_oid, head_oid])
+            .await
+            .map(|output| output.trim().to_string())
+            .unwrap_or_else(|_| base_oid.to_string());
+
+        let changed_files =
+            Self::file_statuses_between_commits(repo_path, &merge_base, head_oid).await?;
+        if changed_files.is_empty() {
+            return Ok(GitDiffWithBaseContent {
+                files_changed: 0,
+                files: Vec::new(),
+                total_additions: 0,
+                total_deletions: 0,
+            });
+        }
+
+        let binary_files =
+            Self::get_binary_files_between_commits(repo_path, &merge_base, head_oid).await?;
+
+        let mut files = Vec::new();
+        let mut total_additions = 0;
+        let mut total_deletions = 0;
+        for (file_path, status) in changed_files {
+            let is_binary = binary_files.contains(&file_path);
+            let file_diff = Self::file_diff_for_path_between_commits(
+                is_binary,
+                repo_path,
+                &file_path,
+                &status,
+                &merge_base,
+                head_oid,
+            )
+            .await?;
+
+            if let Some(file_diff) = file_diff {
+                total_additions += file_diff.file_diff.additions();
+                total_deletions += file_diff.file_diff.deletions();
+                files.push(file_diff);
+            }
+        }
+
+        Ok(GitDiffWithBaseContent {
+            files_changed: files.len(),
+            files,
+            total_additions,
+            total_deletions,
+        })
+    }
+
+    /// Like [`Self::file_statuses_against_base`], but between two explicit
+    /// commits rather than a commit and the working tree. There is no
+    /// "untracked file" concept when diffing two commits.
+    async fn file_statuses_between_commits(
+        repo_path: &Path,
+        old_commit: &str,
+        new_commit: &str,
+    ) -> Result<Vec<(String, GitFileStatus)>> {
+        log::debug!(
+            "[GIT OPERATION] local.rs file_statuses_between_commits git diff --name-status -z {old_commit} {new_commit}"
+        );
+        let diff_output = run_git_command(
+            repo_path,
+            &["diff", "--name-status", "-z", old_commit, new_commit],
+        )
+        .await?;
+
+        if diff_output.trim().is_empty() {
+            return Ok(Vec::new());
+        }
+        Self::parse_git_diff_name_status(&diff_output)
+    }
+
+    /// Like [`Self::get_binary_files_vs_commit`], but between two explicit
+    /// commits rather than a commit and the working tree.
+    async fn get_binary_files_between_commits(
+        repo_path: &Path,
+        old_commit: &str,
+        new_commit: &str,
+    ) -> Result<std::collections::HashSet<String>> {
+        log::debug!(
+            "[GIT OPERATION] local.rs get_binary_files_between_commits git diff --numstat {old_commit} {new_commit}"
+        );
+        let numstat_output = match run_git_command(
+            repo_path,
+            &["diff", "--numstat", old_commit, new_commit],
+        )
+        .await
+        {
+            Ok(output) => output,
+            Err(_) => return Ok(std::collections::HashSet::new()),
+        };
+
+        Ok(numstat_output
+            .lines()
+            .filter_map(|line| {
+                let parts: Vec<&str> = line.split('\t').collect();
+                (parts.len() >= 3 && parts[0] == "-" && parts[1] == "-")
+                    .then(|| parts[2].to_string())
+            })
+            .collect())
+    }
+
+    /// Like [`Self::get_file_diff`], but between two explicit commits rather
+    /// than a commit and the working tree. Used for pull request layer
+    /// review, which diffs two immutable commits.
+    async fn get_file_diff_between_commits(
+        repo_path: &Path,
+        file_path: &str,
+        status: &GitFileStatus,
+        is_binary: bool,
+        old_commit: &str,
+        new_commit: &str,
+    ) -> Result<FileDiff> {
+        if is_binary {
+            return Ok(FileDiff {
+                file_path: file_path.to_owned(),
+                status: status.clone(),
+                hunks: Arc::new(Vec::new()),
+                is_binary: true,
+                is_autogenerated: false,
+                max_line_number: 0,
+                has_hidden_bidi_chars: false,
+                size: DiffSize::Normal,
+            });
+        }
+
+        let diff_args: Vec<&str> = match status {
+            GitFileStatus::Renamed { old_path } => vec![
+                "diff",
+                "--no-ext-diff",
+                "--patch-with-raw",
+                "-z",
+                "--no-color",
+                old_commit,
+                new_commit,
+                "--",
+                old_path,
+                file_path,
+            ],
+            _ => vec![
+                "diff",
+                "--no-ext-diff",
+                "--patch-with-raw",
+                "-z",
+                "--no-color",
+                old_commit,
+                new_commit,
+                "--",
+                file_path,
+            ],
+        };
+
+        log::debug!(
+            "[GIT OPERATION] local.rs get_file_diff_between_commits git {}",
+            diff_args.join(" ")
+        );
+        let diff_output = match run_git_command(repo_path, &diff_args).await {
+            Ok(output) => output,
+            Err(error) => {
+                log::info!(
+                    "Failed to get file diff for {file_path} ({old_commit}..{new_commit}): {error}"
+                );
+                return Ok(FileDiff {
+                    file_path: file_path.to_owned(),
+                    status: status.clone(),
+                    hunks: Arc::new(Vec::new()),
+                    is_binary: true,
+                    is_autogenerated: false,
+                    max_line_number: 0,
+                    has_hidden_bidi_chars: false,
+                    size: DiffSize::Normal,
+                });
+            }
+        };
+
+        if diff_output
+            .lines()
+            .any(|line| line.starts_with("Binary files ") && line.contains(" differ"))
+        {
+            return Ok(FileDiff {
+                file_path: file_path.to_owned(),
+                status: status.clone(),
+                hunks: Arc::new(Vec::new()),
+                is_binary: true,
+                is_autogenerated: false,
+                max_line_number: 0,
+                has_hidden_bidi_chars: false,
+                size: DiffSize::Normal,
+            });
+        }
+
+        let hunks = Self::parse_diff_hunks(&diff_output)?;
+        let mut max_line_number = 0;
+        for hunk in &hunks {
+            for line in &hunk.lines {
+                if let Some(line_num) = line.old_line_number {
+                    max_line_number = max_line_number.max(line_num);
+                }
+                if let Some(line_num) = line.new_line_number {
+                    max_line_number = max_line_number.max(line_num);
+                }
+            }
+        }
+
+        let has_hidden_bidi_chars = Self::check_for_hidden_bidi_chars(&diff_output);
+        let size = compute_diff_size(&hunks, diff_output.len());
+
+        Ok(FileDiff {
+            file_path: file_path.to_owned(),
+            status: status.clone(),
+            hunks: Arc::new(hunks),
+            is_binary,
+            is_autogenerated: false,
+            max_line_number,
+            has_hidden_bidi_chars,
+            size,
+        })
+    }
+
+    /// Like [`Self::file_diff_for_path`], but between two explicit commits
+    /// rather than a commit and the working tree.
+    async fn file_diff_for_path_between_commits(
+        is_binary: bool,
+        repo_path: &Path,
+        file_path: &str,
+        status: &GitFileStatus,
+        old_commit: &str,
+        new_commit: &str,
+    ) -> Result<Option<FileDiffAndContent>> {
+        let mut file_diff = Self::get_file_diff_between_commits(
+            repo_path, file_path, status, is_binary, old_commit, new_commit,
+        )
+        .await?;
+
+        if !is_binary
+            && (file_diff.hunks.is_empty() || file_diff.is_empty())
+            && !status.is_renamed()
+            && !status.is_new_file()
+        {
+            return Ok(None);
+        }
+
+        // Never read or ship base content for binary files: it can't be
+        // inline-rendered and, after lossy UTF-8 decoding, can balloon ~3x.
+        let content_at_head = if is_binary {
+            None
+        } else {
+            match status {
+                // A file that doesn't exist at the merge base has no baseline;
+                // the diff hunks show all content as additions.
+                GitFileStatus::New | GitFileStatus::Untracked => Some(String::new()),
+                GitFileStatus::Renamed { old_path } => {
+                    Self::get_file_content_at_commit(repo_path, old_path, old_commit).await
+                }
+                _ => Self::get_file_content_at_commit(repo_path, file_path, old_commit).await,
+            }
+        };
+
+        // Unlike every other diff mode, a pull request layer has no
+        // working-tree editor to load the "current" side from disk — both
+        // endpoints are immutable commits. Read the head-side content
+        // directly from the git object store so the read-only editor
+        // (`CodeReviewView::create_code_review_model`) can seed its buffer
+        // without ever touching disk.
+        let content_at_new_commit = if is_binary {
+            None
+        } else {
+            match status {
+                GitFileStatus::Deleted => None,
+                _ => Self::get_file_content_at_commit(repo_path, file_path, new_commit).await,
+            }
+        };
+
+        file_diff.is_autogenerated = is_file_autogenerated(file_path, content_at_head.as_deref());
+
+        Ok(Some(FileDiffAndContent {
+            file_diff,
+            content_at_head,
+            content_at_new_commit,
+        }))
     }
 
     /// Diff against a specific branch (similar to main branch but with custom branch name)

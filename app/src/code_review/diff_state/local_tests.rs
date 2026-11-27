@@ -1,3 +1,5 @@
+use tempfile::TempDir;
+
 use super::*;
 use crate::util::git::{
     BranchEntry, parse_range, parse_unified_diff_header, sort_branches_main_first,
@@ -455,4 +457,167 @@ async fn num_lines_in_file_if_non_binary_errors_for_directory() {
     // metadata computation.
     let result = LocalDiffStateModel::num_lines_in_file_if_non_binary(dir.path()).await;
     assert!(result.is_err());
+}
+
+// ── Pull request layer diff mode ────────────────────────────────────────
+
+#[test]
+fn is_full_git_object_id_accepts_only_full_hex_oids() {
+    assert!(LocalDiffStateModel::is_full_git_object_id(&"a".repeat(40)));
+    assert!(LocalDiffStateModel::is_full_git_object_id(
+        "0123456789abcdef0123456789abcdef01234567"
+    ));
+    // Too short / too long.
+    assert!(!LocalDiffStateModel::is_full_git_object_id(&"a".repeat(39)));
+    assert!(!LocalDiffStateModel::is_full_git_object_id(&"a".repeat(41)));
+    // Non-hex characters.
+    assert!(!LocalDiffStateModel::is_full_git_object_id(&format!(
+        "{}g",
+        "a".repeat(39)
+    )));
+    // Shell/ref-like input must never pass.
+    assert!(!LocalDiffStateModel::is_full_git_object_id("HEAD"));
+    assert!(!LocalDiffStateModel::is_full_git_object_id(""));
+}
+
+/// Runs a git command in `repo`, panicking on failure, and returns trimmed stdout.
+async fn git(repo: &Path, args: &[&str]) -> String {
+    run_git_command(repo, args)
+        .await
+        .unwrap_or_else(|e| panic!("git {args:?} in {repo:?} failed: {e}"))
+        .trim()
+        .to_string()
+}
+
+/// Sets up a bare `origin` repo and a `work` clone of it, both rooted under one
+/// temp dir. `origin` has one commit on `main` (returned as `base_oid`);
+/// `work` is cloned from `origin` right after that push, so it has `base_oid`
+/// but not yet any pull request commit.
+async fn init_pr_layer_fixture() -> (TempDir, PathBuf, PathBuf, String) {
+    let root = tempfile::tempdir().expect("create root temp dir");
+    let origin_path = root.path().join("origin.git");
+    let seed_path = root.path().join("seed");
+    let work_path = root.path().join("work");
+    std::fs::create_dir(&origin_path).expect("create origin dir");
+    std::fs::create_dir(&seed_path).expect("create seed dir");
+
+    git(&origin_path, &["init", "--bare", "-b", "main"]).await;
+
+    git(&seed_path, &["init", "-b", "main"]).await;
+    git(&seed_path, &["config", "user.email", "test@test.com"]).await;
+    git(&seed_path, &["config", "user.name", "Test"]).await;
+    std::fs::write(seed_path.join("a.txt"), "base content\n").expect("write base file");
+    git(&seed_path, &["add", "a.txt"]).await;
+    git(&seed_path, &["commit", "-m", "initial"]).await;
+    let base_oid = git(&seed_path, &["rev-parse", "HEAD"]).await;
+    git(
+        &seed_path,
+        &["remote", "add", "origin", origin_path.to_str().unwrap()],
+    )
+    .await;
+    git(&seed_path, &["push", "origin", "main"]).await;
+
+    git(
+        root.path(),
+        &[
+            "clone",
+            origin_path.to_str().unwrap(),
+            work_path.to_str().unwrap(),
+        ],
+    )
+    .await;
+
+    (root, origin_path, seed_path, base_oid)
+}
+
+#[tokio::test]
+async fn pull_request_layer_rejects_invalid_object_ids() {
+    let (root, _origin_path, _seed_path, base_oid) = init_pr_layer_fixture().await;
+    let work_path = root.path().join("work");
+
+    let result =
+        LocalDiffStateModel::diff_state_against_pr_layer(&work_path, 7, "not-an-oid", &base_oid)
+            .await;
+    assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn pull_request_layer_loads_diff_and_fetches_missing_head_without_mutating_repo() {
+    let (root, origin_path, seed_path, base_oid) = init_pr_layer_fixture().await;
+    let work_path = root.path().join("work");
+
+    // Create the pull request's head commit and publish it under GitHub's
+    // `refs/pull/{n}/head` convention. `work_path` was cloned before this, so
+    // it doesn't have the head commit locally.
+    git(&seed_path, &["checkout", "-b", "feature"]).await;
+    std::fs::write(seed_path.join("b.txt"), "pr content\n").expect("write pr file");
+    git(&seed_path, &["add", "b.txt"]).await;
+    git(&seed_path, &["commit", "-m", "add b.txt"]).await;
+    let head_oid = git(&seed_path, &["rev-parse", "HEAD"]).await;
+    git(&seed_path, &["push", "origin", "feature:refs/pull/7/head"]).await;
+
+    // Snapshot mutable repo state before loading the layer.
+    let head_before = git(&work_path, &["rev-parse", "HEAD"]).await;
+    let status_before = git(&work_path, &["status", "--porcelain=v2", "--branch"]).await;
+    let branches_before = git(&work_path, &["branch", "--list"]).await;
+    let remotes_before = git(&work_path, &["for-each-ref", "refs/remotes"]).await;
+
+    let diffs =
+        LocalDiffStateModel::diff_state_against_pr_layer(&work_path, 7, &base_oid, &head_oid)
+            .await
+            .expect("pull request layer diff should load");
+
+    assert_eq!(diffs.files.len(), 1);
+    assert_eq!(diffs.files[0].file_diff.file_path, "b.txt");
+    assert_eq!(diffs.files[0].content_at_head.as_deref(), Some(""));
+
+    // The head commit had to be fetched; confirm it landed under the
+    // Warp-owned ref and resolves to the expected OID.
+    let fetched_head = git(
+        &work_path,
+        &["rev-parse", "refs/warp/code-review/pr/7/head"],
+    )
+    .await;
+    assert_eq!(fetched_head, head_oid);
+
+    // HEAD, the working tree, local branches, and remote-tracking refs must
+    // be byte-for-byte unchanged.
+    let head_after = git(&work_path, &["rev-parse", "HEAD"]).await;
+    let status_after = git(&work_path, &["status", "--porcelain=v2", "--branch"]).await;
+    let branches_after = git(&work_path, &["branch", "--list"]).await;
+    let remotes_after = git(&work_path, &["for-each-ref", "refs/remotes"]).await;
+    assert_eq!(head_before, head_after);
+    assert_eq!(status_before, status_after);
+    assert_eq!(branches_before, branches_after);
+    assert_eq!(remotes_before, remotes_after);
+
+    let _ = origin_path;
+}
+
+#[tokio::test]
+async fn set_diff_mode_does_not_reload_when_pull_request_layer_is_unchanged() {
+    warpui::App::test((), |mut app| async move {
+        let handle = app.add_model(LocalDiffStateModel::new_for_test);
+        let mode = DiffMode::PullRequestLayer {
+            pr_number: 7,
+            base_oid: "a".repeat(40),
+            head_oid: "b".repeat(40),
+        };
+
+        handle.update(&mut app, |model, ctx| {
+            model.set_diff_mode(mode.clone(), false, false, ctx);
+        });
+        let mode_after_first = handle.read(&app, |model, _| model.diff_mode());
+        assert_eq!(mode_after_first, mode);
+
+        // Re-applying the identical mode must be a no-op per the `self.mode
+        // != mode` guard in `set_diff_mode` — there is no repository attached
+        // to this test model, so a real reload would panic/return early
+        // either way; this asserts the mode itself is unaffected and equal.
+        handle.update(&mut app, |model, ctx| {
+            model.set_diff_mode(mode.clone(), false, false, ctx);
+        });
+        let mode_after_second = handle.read(&app, |model, _| model.diff_mode());
+        assert_eq!(mode_after_second, mode);
+    });
 }

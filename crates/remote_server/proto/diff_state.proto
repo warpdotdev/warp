@@ -17,12 +17,22 @@ message DiffMode {
     DiffModeHead head = 1;
     DiffModeMainBranch main_branch = 2;
     DiffModeOtherBranch other_branch = 3;
+    DiffModePullRequestLayer pull_request_layer = 4;
   }
 }
 message DiffModeHead {}
 message DiffModeMainBranch {}
 message DiffModeOtherBranch {
   string branch_name = 1;
+}
+// Read-only diff for a single pull request layer in a GitHub-native stack.
+// V1 never sends this variant over the wire (stack review is local-only),
+// but the protocol representation is total so DiffMode conversions stay
+// exhaustive-safe.
+message DiffModePullRequestLayer {
+  uint64 pr_number = 1;
+  string base_oid = 2;
+  string head_oid = 3;
 }
 
 // Mirrors DiffState in Rust. After the wrapper split (§1), Loaded is a
