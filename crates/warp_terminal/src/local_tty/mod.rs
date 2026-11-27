@@ -79,6 +79,29 @@ pub trait EventedPty: EventedReadWrite {
 
     /// Terminate the PTY process
     fn kill(self) -> Result<()>;
+
+    fn take_replay(&mut self) -> Option<Vec<u8>> {
+        None
+    }
+
+    /// Reads the output still in flight after the child exited, for PTYs whose
+    /// bytes are relayed and can trail the exit notification.
+    fn drain_after_exit(&mut self) -> Option<Vec<u8>> {
+        None
+    }
+}
+
+/// The result of trying to reattach a restored pane to the shell it had in a
+/// previous run of the app.
+pub enum PersistentReattach {
+    /// The persistent session daemon handed the shell over.
+    #[cfg(unix)]
+    Attached(ReattachedSession),
+    /// There is no shell to reattach to, so a new one can take the pane's id.
+    NotFound,
+    /// The shell may still exist but could not be reattached; it is left
+    /// running.
+    Failed,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -105,4 +128,20 @@ pub struct PtyOptions {
     /// (gated via the `WARP_PROMPT_NODE_VERSION_ENABLED` env var).
     pub node_version_chip_enabled: bool,
     pub close_fds: bool,
+    /// When set, the shell starts from exactly this environment instead of
+    /// inheriting the spawner's; Warp's own variables and `env_vars` are
+    /// applied on top. Entries that cannot be set are skipped.
+    #[serde(default)]
+    pub base_env: Option<Vec<(OsString, OsString)>>,
+    /// Soft resource limits the child sets for itself before exec, for
+    /// spawners whose own limits differ from the ones the shell should get.
+    #[serde(default)]
+    pub child_rlimits: Option<ChildResourceLimits>,
+}
+
+/// Soft resource limits restored in a spawned child, best effort.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChildResourceLimits {
+    pub nofile_soft: u64,
+    pub core_soft: u64,
 }

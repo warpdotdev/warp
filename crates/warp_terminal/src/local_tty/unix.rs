@@ -9,10 +9,12 @@ use std::mem::MaybeUninit;
 use std::os::unix::fs::DirBuilderExt;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 use std::{io, ptr};
 
 use anyhow::{Context as _, Error, Result};
 use command::blocking::Command;
+use instant::Instant;
 use itertools::Itertools;
 use libc::{self, TIOCSCTTY, c_int, winsize};
 use mio::Interest;
@@ -27,12 +29,20 @@ use warp_core::cli_agent_protocol::{
 };
 use warp_core::features::FeatureFlag;
 use warp_core::safe_error;
-use warp_errors::report_if_error;
+use warp_errors::{report_error, report_if_error};
 use warpui_core::{AppContext, SingletonEntity};
 
 use super::event_loop::{PTY_TOKEN, SIGNALS_TOKEN};
-use super::spawner::{PtyHandle, PtySpawnHooks, PtySpawnInfo, PtySpawner};
-use super::{ChildEvent, EventedPty, EventedReadWrite, PtyOptions, SizeInfo};
+use super::server::{
+    AttachInfo, AttachedSession, PersistentSessionId, RING_CAPACITY, SessionMetadata,
+};
+use super::spawner::{
+    PersistentSessionsHandle, PtyHandle, PtySpawnHooks, PtySpawnInfo, PtySpawner, ReattachOutcome,
+};
+use super::{
+    ChildEvent, ChildResourceLimits, EventedPty, EventedReadWrite, PersistentReattach, PtyOptions,
+    SizeInfo,
+};
 use crate::ASSETS;
 use crate::bootstrap::raw_init_shell_script_for_shell;
 use crate::local_tty::docker_sandbox::{DOCKER_SANDBOX_HOME_DIR, DockerSandboxShellStarter};
@@ -207,10 +217,35 @@ fn parse_passwd_line(line: &str, uid: u32) -> Option<CurrentUser> {
 pub struct Pty {
     pty_handle: Box<dyn PtyHandle>,
     fd: File,
+    /// The PTY leader of a daemon-owned session, used only for ioctls. `fd` is
+    /// then a socket that carries the session bytes.
+    leader: Option<File>,
+    persistent: Option<PersistentPtyState>,
     token: mio::Token,
     signals: Signals,
     signals_token: mio::Token,
 }
+
+/// A daemon session handed over to this app, ready to become a [`Pty`].
+pub struct ReattachedSession {
+    session: AttachedSession,
+    signals: Signals,
+}
+
+impl ReattachedSession {
+    pub fn info(&self) -> &AttachInfo {
+        &self.session.info
+    }
+}
+
+struct PersistentPtyState {
+    info: AttachInfo,
+    pending_replay: Option<u64>,
+}
+
+const REPLAY_READ_TIMEOUT: Duration = Duration::from_secs(5);
+const EXIT_DRAIN_TIMEOUT: Duration = Duration::from_secs(1);
+const EXIT_DRAIN_LIMIT: u64 = RING_CAPACITY as u64;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PtySpawnResult {
@@ -241,6 +276,8 @@ pub(super) fn spawn(options: PtyOptions) -> Result<PtySpawnInfo> {
         honor_ps1,
         node_version_chip_enabled,
         close_fds,
+        base_env,
+        child_rlimits,
     } = options;
     let shell_starter = match shell_starter {
         ShellStarter::Direct(shell_starter) => shell_starter,
@@ -261,9 +298,10 @@ pub(super) fn spawn(options: PtyOptions) -> Result<PtySpawnInfo> {
         shell_debug_mode,
         honor_ps1,
         node_version_chip_enabled,
+        base_env,
     );
 
-    spawn_command_in_pty(command, &size, close_fds)
+    spawn_command_in_pty(command, &size, close_fds, child_rlimits)
 }
 
 /// Builds the `Command` for a host-shell PTY session: executable, args,
@@ -282,6 +320,7 @@ fn build_host_shell_command(
     shell_debug_mode: bool,
     honor_ps1: bool,
     node_version_chip_enabled: bool,
+    base_env: Option<Vec<(OsString, OsString)>>,
 ) -> Command {
     let pw = resolve_current_user();
 
@@ -294,12 +333,14 @@ fn build_host_shell_command(
     for arg in shell_starter.args() {
         builder.arg(arg);
     }
+    let base_env = BaseEnv::new(base_env);
+    base_env.apply(&mut builder);
 
     // Support an overridden home directory for integration tests, which
     // should execute in a more hermetic environment than one where the home
     // directory contains whatever happens to already exist there.
-    let home_dir = std::env::var("HOME")
-        .ok()
+    let home_dir = base_env
+        .var("HOME")
         .or_else(|| pw.as_ref().map(|pw| pw.dir.to_owned()))
         .unwrap_or_else(|| "/".to_owned());
 
@@ -314,8 +355,8 @@ fn build_host_shell_command(
     if let Some(user_name) = pw
         .as_ref()
         .map(|pw| pw.name.to_owned())
-        .or_else(|| std::env::var("USER").ok())
-        .or_else(|| std::env::var("LOGNAME").ok())
+        .or_else(|| base_env.var("USER"))
+        .or_else(|| base_env.var("LOGNAME"))
     {
         builder.env("LOGNAME", &user_name);
         builder.env("USER", &user_name);
@@ -464,6 +505,7 @@ fn spawn_command_in_pty(
     mut command: Command,
     size: &SizeInfo,
     close_fds: bool,
+    child_rlimits: Option<ChildResourceLimits>,
 ) -> Result<PtySpawnInfo> {
     let (leader, follower) = make_pty(size.to_winsize())?;
 
@@ -483,7 +525,7 @@ fn spawn_command_in_pty(
     let is_isolated = warp_isolation_platform::detect().is_some();
 
     unsafe {
-        let fdlimit = libc::sysconf(libc::_SC_OPEN_MAX) as i32;
+        let fdlimit = close_fds_upper_bound();
 
         command.pre_exec(move || {
             // IMPORTANT: THIS FUNCTION IS RUN AFTER FORK.
@@ -544,6 +586,13 @@ fn spawn_command_in_pty(
                 for fd in 3..fdlimit {
                     libc::close(fd);
                 }
+            }
+
+            // Restore the soft limits the spawner asked for. Best effort:
+            // a limit that cannot be set is left as inherited.
+            if let Some(limits) = child_rlimits {
+                set_soft_rlimit_in_child(libc::RLIMIT_NOFILE as c_int, limits.nofile_soft);
+                set_soft_rlimit_in_child(libc::RLIMIT_CORE as c_int, limits.core_soft);
             }
 
             #[cfg(any(target_os = "linux", target_os = "freebsd"))]
@@ -623,6 +672,8 @@ impl Pty {
         let mut pty = Pty {
             pty_handle,
             fd,
+            leader: None,
+            persistent: None,
             token: PTY_TOKEN,
             signals,
             signals_token: SIGNALS_TOKEN,
@@ -631,12 +682,266 @@ impl Pty {
         Ok(pty)
     }
 
+    /// Spawns a shell owned by the persistent session daemon.
+    pub fn spawn_persistent(
+        session_id: PersistentSessionId,
+        metadata: SessionMetadata,
+        options: PtyOptions,
+        hooks: &dyn PtySpawnHooks,
+        ctx: &mut AppContext,
+    ) -> Result<Self> {
+        let size = options.size;
+        // Prepare signal handling first: the daemon client raises SIGCHLD as
+        // soon as it learns the session exited.
+        let signals = Signals::new([signal_hook::consts::SIGCHLD])
+            .context("error preparing signal handling")?;
+        let session = PtySpawner::handle(ctx).update(ctx, |pty_spawner, _| {
+            pty_spawner.spawn_persistent_session(session_id, metadata, options, hooks)
+        })?;
+        Ok(Self::from_attached_with_signals(session, &size, signals))
+    }
+
+    /// Reattaches to a session that kept running in the daemon.
+    ///
+    /// Blocks on daemon IPC, so call it off the main thread, then finish with
+    /// [`Pty::from_reattached`].
+    pub fn reattach_persistent(
+        sessions: &PersistentSessionsHandle,
+        session_id: PersistentSessionId,
+    ) -> PersistentReattach {
+        // Prepare signal handling first: attaching to an exited session raises
+        // SIGCHLD right away.
+        let signals = match Signals::new([signal_hook::consts::SIGCHLD]) {
+            Ok(signals) => signals,
+            Err(err) => {
+                report_error!(
+                    anyhow::Error::from(err)
+                        .context("Failed to prepare signal handling for persistent session")
+                );
+                return PersistentReattach::Failed;
+            }
+        };
+        match sessions.reattach(session_id) {
+            ReattachOutcome::Attached(session) => {
+                PersistentReattach::Attached(ReattachedSession { session, signals })
+            }
+            ReattachOutcome::NotFound => PersistentReattach::NotFound,
+            ReattachOutcome::Failed => PersistentReattach::Failed,
+        }
+    }
+
+    /// Wraps a session returned by [`Pty::reattach_persistent`].
+    pub fn from_reattached(reattached: ReattachedSession, size: &SizeInfo) -> Self {
+        let ReattachedSession { session, signals } = reattached;
+        Self::from_attached_with_signals(session, size, signals)
+    }
+
+    /// Wraps a session handed over by the daemon.
+    pub fn from_attached(session: AttachedSession, size: &SizeInfo) -> Result<Self> {
+        let signals = Signals::new([signal_hook::consts::SIGCHLD])
+            .context("error preparing signal handling")?;
+        Ok(Self::from_attached_with_signals(session, size, signals))
+    }
+
+    fn from_attached_with_signals(
+        session: AttachedSession,
+        size: &SizeInfo,
+        signals: Signals,
+    ) -> Self {
+        let AttachedSession {
+            info,
+            data,
+            leader,
+            handle,
+        } = session;
+        let fd = File::from(data);
+        unsafe { set_nonblocking(fd.as_raw_fd()) };
+        let pending_replay = (info.replay_len > 0).then_some(info.replay_len);
+        let mut pty = Pty {
+            pty_handle: handle,
+            fd,
+            leader: leader.map(File::from),
+            persistent: Some(PersistentPtyState {
+                info,
+                pending_replay,
+            }),
+            token: PTY_TOKEN,
+            signals,
+            signals_token: SIGNALS_TOKEN,
+        };
+        if pending_replay.is_some() && size.columns > 1 {
+            let mut narrower = *size;
+            narrower.columns -= 1;
+            pty.on_resize(&narrower);
+        }
+        pty.on_resize(size);
+        pty
+    }
+
     pub fn get_pid(&self) -> u32 {
         self.pty_handle.pid()
     }
 
+    /// Returns the fd to use for terminal ioctls (`TIOCSWINSZ`, `tcgetattr`,
+    /// `tcgetpgrp`).
     pub fn get_fd(&self) -> RawFd {
-        self.fd.as_raw_fd()
+        self.leader.as_ref().unwrap_or(&self.fd).as_raw_fd()
+    }
+
+    /// Returns the daemon's description of the session, if this PTY is owned by
+    /// the persistent session daemon.
+    pub fn attach_info(&self) -> Option<&AttachInfo> {
+        self.persistent.as_ref().map(|state| &state.info)
+    }
+
+    fn read_replay(&mut self, len: u64) -> Vec<u8> {
+        let (replay, _) = read_session_bytes(&mut self.fd, len, REPLAY_READ_TIMEOUT);
+        if (replay.len() as u64) < len {
+            log::warn!(
+                "Read {} of {len} replay bytes for reattached session",
+                replay.len()
+            );
+        }
+        replay
+    }
+}
+
+/// The environment a shell starts from: the spawner's own, or an explicit
+/// base that replaces it.
+struct BaseEnv(Option<Vec<(OsString, OsString)>>);
+
+impl BaseEnv {
+    fn new(vars: Option<Vec<(OsString, OsString)>>) -> Self {
+        Self(vars.map(|vars| {
+            vars.into_iter()
+                .filter(|(key, value)| is_settable_env_var(key, value))
+                .collect()
+        }))
+    }
+
+    /// Clears the inherited environment and applies the base, if any.
+    fn apply(&self, command: &mut Command) {
+        if let Some(vars) = &self.0 {
+            command.env_clear();
+            command.envs(vars.iter().map(|(key, value)| (key, value)));
+        }
+    }
+
+    /// Looks `key` up in the environment the shell starts from.
+    fn var(&self, key: &str) -> Option<String> {
+        match &self.0 {
+            Some(vars) => vars
+                .iter()
+                .rev()
+                .find(|(name, _)| name == key)
+                .and_then(|(_, value)| value.to_str())
+                .map(str::to_owned),
+            None => std::env::var(key).ok(),
+        }
+    }
+}
+
+/// Whether `Command` can set this variable without failing the spawn.
+fn is_settable_env_var(key: &std::ffi::OsStr, value: &std::ffi::OsStr) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+    let key = key.as_bytes();
+    !key.is_empty() && !key.contains(&b'=') && !key.contains(&0) && !value.as_bytes().contains(&0)
+}
+
+/// Sets the soft limit of `resource`, clamped to the hard limit. Only makes
+/// async-signal-safe calls, so it can run between fork and exec.
+fn set_soft_rlimit_in_child(resource: c_int, soft: u64) {
+    let mut limit = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    // SAFETY: `limit` is valid for writes.
+    if unsafe { libc::getrlimit(resource as _, &mut limit) } != 0 {
+        return;
+    }
+    let soft = soft as libc::rlim_t;
+    limit.rlim_cur = if limit.rlim_max == libc::RLIM_INFINITY {
+        soft
+    } else {
+        soft.min(limit.rlim_max)
+    };
+    // SAFETY: `limit` is a valid rlimit.
+    unsafe { libc::setrlimit(resource as _, &limit) };
+}
+
+const CLOSE_FDS_FALLBACK_LIMIT: c_int = 1024;
+const CLOSE_FDS_MAX_LIMIT: c_int = 65536;
+
+/// Returns the exclusive upper bound of the fds a spawned shell closes when
+/// `close_fds` is set.
+///
+/// Prefers the soft `RLIMIT_NOFILE` and falls back to `sysconf`, since either
+/// can be unlimited or fail; the result is capped so the post-fork loop stays
+/// short.
+pub(super) fn close_fds_upper_bound() -> c_int {
+    let mut limit = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    let from_rlimit = (unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) } == 0
+        && limit.rlim_cur != libc::RLIM_INFINITY)
+        .then_some(limit.rlim_cur);
+    let from_sysconf = || {
+        let value = unsafe { libc::sysconf(libc::_SC_OPEN_MAX) };
+        (value > 0).then_some(value as u64)
+    };
+    close_fds_limit(from_rlimit.or_else(from_sysconf))
+}
+
+fn close_fds_limit(limit: Option<u64>) -> c_int {
+    limit.map_or(CLOSE_FDS_FALLBACK_LIMIT, |limit| {
+        limit.clamp(3, CLOSE_FDS_MAX_LIMIT as u64) as c_int
+    })
+}
+
+/// Reads up to `limit` bytes from a non-blocking session socket, waiting for
+/// more until `timeout` elapses. Returns the bytes and whether the peer closed
+/// the socket.
+fn read_session_bytes(fd: &mut File, limit: u64, timeout: Duration) -> (Vec<u8>, bool) {
+    let mut bytes = Vec::with_capacity(limit.min(RING_CAPACITY as u64 * 2) as usize);
+    let deadline = Instant::now() + timeout;
+    let mut buf = [0u8; 0x1_0000];
+    while (bytes.len() as u64) < limit {
+        let remaining = (limit - bytes.len() as u64).min(buf.len() as u64) as usize;
+        match io::Read::read(fd, &mut buf[..remaining]) {
+            Ok(0) => return (bytes, true),
+            Ok(n) => bytes.extend_from_slice(&buf[..n]),
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
+            Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
+                let now = Instant::now();
+                if now >= deadline || !wait_readable(fd.as_raw_fd(), deadline - now) {
+                    break;
+                }
+            }
+            Err(err) => {
+                log::warn!("Failed to read from persistent session: {err}");
+                break;
+            }
+        }
+    }
+    (bytes, false)
+}
+
+fn wait_readable(fd: RawFd, timeout: Duration) -> bool {
+    let mut pollfd = libc::pollfd {
+        fd,
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    let timeout_ms = timeout.as_millis().clamp(1, c_int::MAX as u128) as c_int;
+    loop {
+        let res = unsafe { libc::poll(&mut pollfd, 1, timeout_ms) };
+        if res >= 0 {
+            return res > 0;
+        }
+        if io::Error::last_os_error().kind() != io::ErrorKind::Interrupted {
+            return false;
+        }
     }
 }
 
@@ -717,7 +1022,24 @@ impl EventedPty for Pty {
     fn on_resize(&mut self, size: &SizeInfo) {
         let win = size.to_winsize();
 
-        let res = unsafe { libc::ioctl(self.fd.as_raw_fd(), libc::TIOCSWINSZ, &win as *const _) };
+        if self.persistent.is_some() {
+            // A daemon-owned session may have exited, in which case there is no
+            // leader (or it no longer accepts ioctls).
+            let Some(leader) = &self.leader else {
+                return;
+            };
+            let res =
+                unsafe { libc::ioctl(leader.as_raw_fd(), libc::TIOCSWINSZ, &win as *const _) };
+            if res < 0 {
+                log::warn!(
+                    "ioctl TIOCSWINSZ failed for persistent session: {}",
+                    io::Error::last_os_error()
+                );
+            }
+            return;
+        }
+
+        let res = unsafe { libc::ioctl(self.get_fd(), libc::TIOCSWINSZ, &win as *const _) };
 
         if res < 0 {
             panic!("ioctl TIOCSWINSZ failed: {}", io::Error::last_os_error());
@@ -730,9 +1052,25 @@ impl EventedPty for Pty {
         // hang. Closing the pty explicitly fixes it, though the reason is unclear;
         // it appears to be a kernel bug.
         std::mem::drop(self.fd);
+        std::mem::drop(self.leader);
         let result = self.pty_handle.kill();
         report_if_error!(result);
         result
+    }
+
+    fn take_replay(&mut self) -> Option<Vec<u8>> {
+        let len = self.persistent.as_mut()?.pending_replay.take()?;
+        Some(self.read_replay(len))
+    }
+
+    fn drain_after_exit(&mut self) -> Option<Vec<u8>> {
+        self.persistent.as_ref()?;
+        let (output, closed) =
+            read_session_bytes(&mut self.fd, EXIT_DRAIN_LIMIT, EXIT_DRAIN_TIMEOUT);
+        if !closed {
+            log::warn!("Persistent session did not close its output after exiting");
+        }
+        Some(output)
     }
 }
 
@@ -793,6 +1131,8 @@ fn spawn_docker_sandbox(
         honor_ps1,
         node_version_chip_enabled,
         close_fds,
+        base_env,
+        child_rlimits,
     } = options;
 
     let command = build_docker_sandbox_command(
@@ -804,9 +1144,10 @@ fn spawn_docker_sandbox(
         shell_debug_mode,
         honor_ps1,
         node_version_chip_enabled,
+        base_env,
     );
 
-    spawn_command_in_pty(command, &size, close_fds)
+    spawn_command_in_pty(command, &size, close_fds, child_rlimits)
 }
 
 /// Builds the `Command` for a Docker-sandbox PTY session: `sbx run`
@@ -825,6 +1166,7 @@ fn build_docker_sandbox_command(
     shell_debug_mode: bool,
     honor_ps1: bool,
     node_version_chip_enabled: bool,
+    base_env: Option<Vec<(OsString, OsString)>>,
 ) -> Command {
     let pw = resolve_current_user();
 
@@ -837,9 +1179,11 @@ fn build_docker_sandbox_command(
     for arg in docker_sandbox_run_args(docker_starter) {
         builder.arg(arg);
     }
+    let base_env = BaseEnv::new(base_env);
+    base_env.apply(&mut builder);
 
-    let home_dir = std::env::var("HOME")
-        .ok()
+    let home_dir = base_env
+        .var("HOME")
         .or_else(|| pw.as_ref().map(|pw| pw.dir.to_owned()))
         .unwrap_or_else(|| "/".to_owned());
 
@@ -858,8 +1202,8 @@ fn build_docker_sandbox_command(
     if let Some(user_name) = pw
         .as_ref()
         .map(|pw| pw.name.to_owned())
-        .or_else(|| std::env::var("USER").ok())
-        .or_else(|| std::env::var("LOGNAME").ok())
+        .or_else(|| base_env.var("USER"))
+        .or_else(|| base_env.var("LOGNAME"))
     {
         builder.env("LOGNAME", &user_name);
         builder.env("USER", &user_name);

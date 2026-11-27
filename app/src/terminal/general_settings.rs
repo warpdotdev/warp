@@ -4,6 +4,7 @@ use warp_core::settings::macros::define_settings_group;
 use warp_core::settings::{RespectUserSyncSetting, SupportedPlatforms, SyncToCloud};
 
 use crate::banner::BannerState;
+use crate::channel::{Channel, ChannelState};
 use crate::resource_center::Tip;
 
 define_settings_group!(GeneralSettings, settings: [
@@ -36,6 +37,19 @@ define_settings_group!(GeneralSettings, settings: [
         private: false,
         toml_path: "general.restore_session",
         description: "Whether to restore the previous session when Warp starts up.",
+    },
+    persistent_sessions: PersistentSessions {
+        type: bool,
+        default: true,
+        supported_platforms: SupportedPlatforms::OR(
+            Box::new(SupportedPlatforms::MAC),
+            Box::new(SupportedPlatforms::LINUX),
+        ),
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
+        private: false,
+        toml_path: "general.persistent_sessions",
+        description: "Whether shells keep running in the background after quitting Warp and reattach on relaunch.",
     },
     add_app_as_login_item: LoginItem {
         type: bool,
@@ -178,3 +192,47 @@ define_settings_group!(GeneralSettings, settings: [
         private: true,
     },
 ]);
+
+impl GeneralSettings {
+    /// Whether new local shells should be owned by the persistent session
+    /// daemon, so they keep running after Warp quits.
+    pub fn should_persist_sessions(&self) -> bool {
+        persistent_sessions_enabled(
+            *self.persistent_sessions,
+            *self.restore_session,
+            std::env::var_os("APPIMAGE").is_some(),
+        ) && persistent_sessions_allowed_for_channel(
+            ChannelState::channel(),
+            std::env::var(INTEGRATION_PERSISTENT_SESSIONS_ENV)
+                .ok()
+                .as_deref(),
+        )
+    }
+}
+
+/// Set to `1` to opt integration tests into persistent sessions, which they
+/// otherwise do not use so that they never spawn or reuse a daemon that
+/// outlives the test.
+pub const INTEGRATION_PERSISTENT_SESSIONS_ENV: &str = "WARP_INTEGRATION_PERSISTENT_SESSIONS";
+
+/// Integration tests only persist sessions when the opt-in variable is `1`.
+pub fn persistent_sessions_allowed_for_channel(
+    channel: Channel,
+    integration_opt_in: Option<&str>,
+) -> bool {
+    channel != Channel::Integration || integration_opt_in == Some("1")
+}
+
+/// Persistence requires session restoration, and is disabled for AppImages
+/// because unmounting the image can crash a daemon started from it.
+pub fn persistent_sessions_enabled(
+    persistent_sessions: bool,
+    restore_session: bool,
+    is_appimage: bool,
+) -> bool {
+    cfg!(unix) && persistent_sessions && restore_session && !is_appimage
+}
+
+#[cfg(test)]
+#[path = "general_settings_tests.rs"]
+mod tests;

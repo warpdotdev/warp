@@ -734,6 +734,9 @@ impl Command {
 pub struct TerminalServerArgs {
     #[clap(flatten)]
     pub parent: ParentOpts,
+
+    #[clap(long)]
+    pub daemon: bool,
 }
 
 #[derive(Debug, Copy, Clone, clap::ValueEnum)]

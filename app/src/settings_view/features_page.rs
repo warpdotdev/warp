@@ -83,8 +83,8 @@ use crate::terminal::alt_screen_reporting::{
     AltScreenReporting, FocusReportingEnabled, MouseReportingEnabled, ScrollReportingEnabled,
 };
 use crate::terminal::general_settings::{
-    GeneralSettings, LinkTooltip, LoginItem, QuitOnLastWindowClosed, RestoreSession,
-    ShowWarningBeforeQuitting,
+    GeneralSettings, LinkTooltip, LoginItem, PersistentSessions, QuitOnLastWindowClosed,
+    RestoreSession, ShowWarningBeforeQuitting,
 };
 use crate::terminal::input::OPEN_COMPLETIONS_KEYBINDING_NAME;
 use crate::terminal::keys_settings::{
@@ -750,6 +750,7 @@ pub enum FeaturesPageAction {
     ToggleAsyncFind,
     ToggleNotifications,
     ToggleRestoreSession,
+    TogglePersistentSessions,
     ToggleAutocompleteSymbols,
     ToggleLinuxClipboardSelection,
     ToggleOpenLinksInDesktopApp,
@@ -940,6 +941,10 @@ impl FeaturesPageAction {
             Self::ToggleRestoreSession => {
                 TelemetryEvent::ToggleRestoreSession(*GeneralSettings::as_ref(ctx).restore_session)
             }
+            Self::TogglePersistentSessions => TelemetryEvent::FeaturesPageAction {
+                action: "TogglePersistentSessions".to_string(),
+                value: to_string(*GeneralSettings::as_ref(ctx).persistent_sessions),
+            },
             Self::ToggleAutocompleteSymbols => TelemetryEvent::FeaturesPageAction {
                 action: "ToggleAutocompleteSymbols".to_string(),
                 value: to_string(*AppEditorSettings::as_ref(ctx).autocomplete_symbols),
@@ -1554,6 +1559,15 @@ impl TypedActionView for FeaturesPageView {
             ToggleRestoreSession => {
                 GeneralSettings::handle(ctx).update(ctx, |general_settings, ctx| {
                     report_if_error!(general_settings.restore_session.toggle_and_save_value(ctx))
+                })
+            }
+            TogglePersistentSessions => {
+                GeneralSettings::handle(ctx).update(ctx, |general_settings, ctx| {
+                    report_if_error!(
+                        general_settings
+                            .persistent_sessions
+                            .toggle_and_save_value(ctx)
+                    )
                 })
             }
             ToggleAutocompleteSymbols => {
@@ -2791,6 +2805,12 @@ impl FeaturesPageView {
             .is_supported_on_current_platform()
         {
             general_widgets.push(Box::new(SessionRestorationWidget::default()))
+        }
+        if general_settings
+            .persistent_sessions
+            .is_supported_on_current_platform()
+        {
+            general_widgets.push(Box::new(PersistentSessionsWidget::default()))
         }
 
         general_widgets.push(Box::new(SnackbarHeaderWidget::default()));
@@ -4629,6 +4649,68 @@ impl SettingsWidget for NativeRedirectWidget {
                 })
                 .finish(),
             None,
+        )
+    }
+}
+
+#[derive(Default)]
+struct PersistentSessionsWidget {
+    switch_state: SwitchStateHandle,
+}
+
+impl SettingsWidget for PersistentSessionsWidget {
+    type View = FeaturesPageView;
+
+    fn search_terms(&self) -> &str {
+        "persistent sessions keep running background quit reattach shell"
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let general_settings = GeneralSettings::as_ref(app);
+        let is_enabled = *general_settings.restore_session;
+        let switch = appearance
+            .ui_builder()
+            .switch(self.switch_state.clone())
+            .check(*general_settings.persistent_sessions)
+            .with_disabled(!is_enabled)
+            .build()
+            .on_click(move |ctx, _, _| {
+                if is_enabled {
+                    ctx.dispatch_typed_action(FeaturesPageAction::TogglePersistentSessions);
+                }
+            })
+            .finish();
+
+        render_body_item::<FeaturesPageAction>(
+            "Keep sessions running after quitting Warp".into(),
+            None,
+            LocalOnlyIconState::for_setting(
+                PersistentSessions::storage_key(),
+                PersistentSessions::sync_to_cloud(),
+                &mut view
+                    .button_mouse_states
+                    .local_only_icon_tooltip_states
+                    .borrow_mut(),
+                app,
+            ),
+            if is_enabled {
+                ToggleState::Enabled
+            } else {
+                ToggleState::Disabled
+            },
+            appearance,
+            switch,
+            Some(
+                "Shells keep running in the background when you quit Warp and reattach when \
+                 you reopen it. Closing a tab or pane still ends its process. Requires \
+                 restoring windows, tabs, and panes on startup."
+                    .to_owned(),
+            ),
         )
     }
 }

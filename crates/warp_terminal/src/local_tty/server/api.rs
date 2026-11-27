@@ -1,3 +1,5 @@
+use std::ffi::OsString;
+
 use serde::{Deserialize, Serialize};
 
 use crate::event::ObservedExitStatus;
@@ -60,3 +62,137 @@ pub(super) enum Message {
         children: Vec<(u32, ObservedExitStatus)>,
     },
 }
+
+pub const DAEMON_PROTOCOL_VERSION: u32 = 2;
+pub const RING_CAPACITY: usize = 10 * 1024 * 1024;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct PersistentSessionId(pub [u8; 16]);
+
+impl From<uuid::Uuid> for PersistentSessionId {
+    fn from(value: uuid::Uuid) -> Self {
+        Self(value.into_bytes())
+    }
+}
+
+impl From<PersistentSessionId> for uuid::Uuid {
+    fn from(value: PersistentSessionId) -> Self {
+        uuid::Uuid::from_bytes(value.0)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionMetadata {
+    pub hook_session_id: u64,
+    pub shell_type: String,
+}
+
+/// The environment of the client at spawn time. The daemon passes these
+/// variables as the shell's base environment (`PtyOptions::base_env`), so the
+/// shell starts as if the client had spawned it instead of inheriting the
+/// environment the daemon started with.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SpawnEnvironment {
+    pub vars: Vec<(OsString, OsString)>,
+}
+
+impl SpawnEnvironment {
+    /// Captures the current process environment.
+    pub fn capture() -> Self {
+        Self {
+            vars: std::env::vars_os().collect(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ClientMessage {
+    Hello {
+        protocol_version: u32,
+        client_pid: u32,
+        app_version: Option<String>,
+    },
+    Request {
+        request_id: u64,
+        request: DaemonRequest,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum DaemonRequest {
+    List,
+    Spawn {
+        session_id: PersistentSessionId,
+        metadata: SessionMetadata,
+        options: Box<PtyOptions>,
+        /// `None` keeps the daemon's own environment.
+        environment: Option<SpawnEnvironment>,
+    },
+    Attach {
+        session_id: PersistentSessionId,
+    },
+    Kill {
+        session_id: PersistentSessionId,
+    },
+    Prune {
+        keep: Vec<PersistentSessionId>,
+    },
+    DetachAll,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum DaemonMessage {
+    HelloAck {
+        protocol_version: u32,
+        daemon_pid: u32,
+    },
+    HelloReject {
+        protocol_version: u32,
+        reason: String,
+    },
+    Response {
+        request_id: u64,
+        response: DaemonResponse,
+    },
+    Event(DaemonEvent),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum DaemonResponse {
+    Sessions(Vec<SessionSummary>),
+    Attached(AttachInfo),
+    Done,
+    Error(String),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionSummary {
+    pub session_id: PersistentSessionId,
+    pub pid: u32,
+    pub metadata: SessionMetadata,
+    pub exit_status: Option<ObservedExitStatus>,
+    pub attached: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AttachInfo {
+    pub session_id: PersistentSessionId,
+    pub pid: u32,
+    pub metadata: SessionMetadata,
+    pub replay_len: u64,
+    pub has_bootstrap_preamble: bool,
+    pub exit_status: Option<ObservedExitStatus>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum DaemonEvent {
+    SessionExited {
+        session_id: PersistentSessionId,
+        pid: u32,
+        status: ObservedExitStatus,
+    },
+}
+
+#[cfg(test)]
+#[path = "api_tests.rs"]
+mod tests;
