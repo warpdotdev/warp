@@ -1155,3 +1155,98 @@ fn test_active_comments_not_marked_outdated() {
         });
     });
 }
+
+#[test]
+fn test_reuse_file_state_preserves_editor_on_identical_diff() {
+    App::test((), |mut app| async move {
+        let ctx = TestContext::new(&mut app, "test.txt", "line 1\nline 2\nline 3");
+
+        ctx.code_review_view.update(&mut app, |view, view_ctx| {
+            let state = ctx.state.file_states.into_values().next().unwrap();
+            let file = FileDiffAndContent {
+                file_diff: state.file_diff.clone(),
+                content_at_head: Some("line 1\nline 2\nline 3".to_string()),
+            };
+
+            let reused = view
+                .reuse_file_state_if_compatible(state, &file, view_ctx)
+                .expect("identical diff should reuse the file state");
+            assert!(
+                reused
+                    .editor_state
+                    .as_ref()
+                    .is_some_and(|editor_state| editor_state.is_loaded()),
+                "Reused editor should keep its loaded state"
+            );
+        });
+    });
+}
+
+#[test]
+fn test_reuse_file_state_rebuilds_on_incompatible_diff() {
+    App::test((), |mut app| async move {
+        let ctx = TestContext::new(&mut app, "test.txt", "line 1\nline 2\nline 3");
+
+        let file_diff = ctx
+            .state
+            .file_states
+            .values()
+            .next()
+            .unwrap()
+            .file_diff
+            .clone();
+
+        // Each case gets a fresh file state so a consumed one can't be reused.
+        let cases: Vec<(FileState, FileDiffAndContent)> = [
+            // File became binary: no editor to reuse.
+            (
+                FileDiff {
+                    is_binary: true,
+                    ..file_diff.clone()
+                },
+                Some("content".to_string()),
+            ),
+            // Deleted-state toggled: rebuild required.
+            (
+                FileDiff {
+                    status: GitFileStatus::Deleted,
+                    ..file_diff.clone()
+                },
+                Some("content".to_string()),
+            ),
+            // No head content: no editor to reuse.
+            (file_diff.clone(), None),
+        ]
+        .into_iter()
+        .map(|(diff, content_at_head)| {
+            let editor = create_editor_with_content(&mut app, "content");
+            let state = create_loaded_state_with_editors(
+                &mut app,
+                ctx.window_id,
+                vec![("test.txt".to_string(), editor)],
+            )
+            .file_states
+            .into_values()
+            .next()
+            .unwrap();
+            (
+                state,
+                FileDiffAndContent {
+                    file_diff: diff,
+                    content_at_head,
+                },
+            )
+        })
+        .collect();
+
+        ctx.code_review_view.update(&mut app, |view, view_ctx| {
+            for (state, file) in cases {
+                assert!(
+                    view.reuse_file_state_if_compatible(state, &file, view_ctx)
+                        .is_none(),
+                    "incompatible diff should not reuse the file state"
+                );
+            }
+        });
+    });
+}
