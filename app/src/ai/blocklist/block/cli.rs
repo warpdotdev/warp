@@ -1,4 +1,3 @@
-use std::cmp::Ordering;
 use std::path::Path;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -45,7 +44,9 @@ use super::view_impl::common::{
     render_failed_output, render_informational_footer, render_text_sections,
 };
 use super::view_impl::output::are_all_text_sections_empty;
-use super::{EmbeddedCodeEditorView, SecretRedactionState, TableSectionHandles};
+use super::{
+    EmbeddedCodeEditorView, SecretRedactionState, TableSectionHandles, apply_streamed_code_update,
+};
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::icons::yellow_stop_icon;
 use crate::ai::agent::task::TaskId;
@@ -760,18 +761,11 @@ impl CLISubagentView {
                     // received the ``` end marker.
                     // Ex: Iteration 57: "a += 12\n``"
                     // Ex: Iteration 58: "a += 12"
-                    match code.len().cmp(&embedded_view.length) {
-                        Ordering::Greater => {
-                            view.append_at_end(&code[embedded_view.length..], ctx);
-                            ctx.notify();
-                        }
-                        Ordering::Less => {
-                            view.truncate(code.len(), ctx);
-                            ctx.notify();
-                        }
-                        Ordering::Equal => {}
-                    }
-                    embedded_view.length = code.len();
+                    //
+                    // See `apply_streamed_code_update`/`streamed_code_update`: a non-prefix
+                    // rewrite resets the buffer instead of corrupting it.
+                    apply_streamed_code_update(view, code, &embedded_view.rendered_code, ctx);
+                    embedded_view.rendered_code = code.to_string();
                 });
             }
             None => {
@@ -818,7 +812,7 @@ impl CLISubagentView {
                 self.code_editor_views.push(EmbeddedCodeEditorView {
                     view,
                     language: Default::default(),
-                    length: code.len(),
+                    rendered_code: code.to_string(),
                 });
                 self.code_editor_buttons.push(Default::default());
             }
