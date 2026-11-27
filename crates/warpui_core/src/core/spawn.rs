@@ -1,8 +1,9 @@
 //! Type-erased plumbing behind `ModelContext::spawn` and `ViewContext::spawn`.
 //!
 //! The typed entry points erase the entity type, the future's output type, and the callbacks
-//! before they call [`AppContext::spawn_abortable_erased`]. The channel, the background task, and
-//! the main-thread relay are therefore compiled once, instead of once per entity and output type.
+//! before they call [`AppContext::spawn_for_model`] or [`AppContext::spawn_for_view`]. The
+//! channel, the background task, and the main-thread relay are therefore compiled once, instead of
+//! once per entity and output type.
 
 use std::any::Any;
 
@@ -22,24 +23,25 @@ pub(super) type ErasedOutput = Box<dyn Any + Send>;
 #[cfg(target_family = "wasm")]
 pub(super) type ErasedOutput = Box<dyn Any>;
 
-type ModelResolveCallback = dyn FnOnce(&mut dyn Any, ErasedOutput, &mut AppContext, EntityId);
-type ModelAbortCallback = dyn FnOnce(&mut dyn Any, &mut AppContext, EntityId);
-type ViewResolveCallback =
+pub(super) type ModelResolveCallback =
+    dyn FnOnce(&mut dyn Any, ErasedOutput, &mut AppContext, EntityId);
+pub(super) type ModelAbortCallback = dyn FnOnce(&mut dyn Any, &mut AppContext, EntityId);
+pub(super) type ViewResolveCallback =
     dyn FnOnce(&mut dyn Any, ErasedOutput, &mut AppContext, WindowId, EntityId);
-type ViewAbortCallback = dyn FnOnce(&mut dyn Any, &mut AppContext, WindowId, EntityId);
+pub(super) type ViewAbortCallback = dyn FnOnce(&mut dyn Any, &mut AppContext, WindowId, EntityId);
 
 /// The main-thread callbacks for a spawned future, and the entity they run against.
-pub(super) enum SpawnCallbacks {
+enum SpawnCallbacks {
     Model {
         model_id: EntityId,
         on_resolve: Box<ModelResolveCallback>,
-        on_abort: Box<ModelAbortCallback>,
+        on_abort: Option<Box<ModelAbortCallback>>,
     },
     View {
         window_id: WindowId,
         view_id: EntityId,
         on_resolve: Box<ViewResolveCallback>,
-        on_abort: Box<ViewAbortCallback>,
+        on_abort: Option<Box<ViewAbortCallback>>,
     },
 }
 
@@ -58,11 +60,11 @@ pub(super) fn downcast_output<O: 'static>(output: ErasedOutput) -> O {
         .expect("the spawn entry point fixes the output type")
 }
 
-/// Recovers the typed entity inside a spawned future's callback.
+/// Recovers the typed entity inside a type-erased callback.
 pub(super) fn downcast_entity<T: 'static>(entity: &mut dyn Any) -> &mut T {
     entity
         .downcast_mut()
-        .expect("the spawn entry point fixes the entity type")
+        .expect("the typed entry point fixes the entity type")
 }
 
 /// Unpacks what the main thread received for a spawned future. Returns the output if the future
@@ -82,9 +84,49 @@ fn resolved_output(received: Box<dyn Any>) -> Option<ErasedOutput> {
 }
 
 impl AppContext {
-    /// Runs a future on the background executor, then runs one callback on the main thread:
-    /// `on_resolve` with the future's output, or `on_abort` if the future was aborted.
-    pub(super) fn spawn_abortable_erased(
+    /// Runs a future on the background executor, then runs one callback against the model on the
+    /// main thread: `on_resolve` with the future's output, or `on_abort` if the future was
+    /// aborted.
+    pub(super) fn spawn_for_model(
+        &mut self,
+        future: BoxFuture<'static, ErasedOutput>,
+        model_id: EntityId,
+        on_resolve: Box<ModelResolveCallback>,
+        on_abort: Option<Box<ModelAbortCallback>>,
+    ) -> SpawnedFutureHandle {
+        self.spawn_abortable_erased(
+            future,
+            SpawnCallbacks::Model {
+                model_id,
+                on_resolve,
+                on_abort,
+            },
+        )
+    }
+
+    /// Runs a future on the background executor, then runs one callback against the view on the
+    /// main thread: `on_resolve` with the future's output, or `on_abort` if the future was
+    /// aborted.
+    pub(super) fn spawn_for_view(
+        &mut self,
+        future: BoxFuture<'static, ErasedOutput>,
+        window_id: WindowId,
+        view_id: EntityId,
+        on_resolve: Box<ViewResolveCallback>,
+        on_abort: Option<Box<ViewAbortCallback>>,
+    ) -> SpawnedFutureHandle {
+        self.spawn_abortable_erased(
+            future,
+            SpawnCallbacks::View {
+                window_id,
+                view_id,
+                on_resolve,
+                on_abort,
+            },
+        )
+    }
+
+    fn spawn_abortable_erased(
         &mut self,
         future: BoxFuture<'static, ErasedOutput>,
         callbacks: SpawnCallbacks,
@@ -113,7 +155,11 @@ impl AppContext {
                 callback: Box::new(move |model, received, app, model_id| {
                     match resolved_output(received) {
                         Some(output) => on_resolve(model, output, app, model_id),
-                        None => on_abort(model, app, model_id),
+                        None => {
+                            if let Some(on_abort) = on_abort {
+                                on_abort(model, app, model_id);
+                            }
+                        }
                     }
                     let _ = done_tx.send(());
                 }),
@@ -129,7 +175,11 @@ impl AppContext {
                 callback: Box::new(move |view, received, app, window_id, view_id| {
                     match resolved_output(received) {
                         Some(output) => on_resolve(view, output, app, window_id, view_id),
-                        None => on_abort(view, app, window_id, view_id),
+                        None => {
+                            if let Some(on_abort) = on_abort {
+                                on_abort(view, app, window_id, view_id);
+                            }
+                        }
                     }
                     let _ = done_tx.send(());
                 }),

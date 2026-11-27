@@ -210,7 +210,7 @@ pub struct WeakModelHandle<T> {
 }
 
 impl<T: Entity> WeakModelHandle<T> {
-    pub(super) fn new(model_id: EntityId) -> Self {
+    pub(in crate::core) fn new(model_id: EntityId) -> Self {
         Self {
             model_id,
             model_type: PhantomData,
