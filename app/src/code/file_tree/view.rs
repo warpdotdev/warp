@@ -1426,6 +1426,24 @@ impl FileTreeView {
         }
 
         let dir_path = target_item.path().clone();
+
+        // Release this view's clone of the shared file-tree store before asking
+        // the model to load the directory. `FileTreeEntry` holds the whole-repo
+        // store as an `Arc<FileTreeMapStore>`, so `RepoMetadataModel::load_directory`
+        // mutates it through `Arc::make_mut`. While this view still holds a clone
+        // of that `Arc` (`root_dir.entry`), `make_mut` sees the store as shared
+        // and deep-clones the entire tree (both the `state_map` and
+        // `parent_to_child_map` hashmaps). For large repos that copy-on-write
+        // clone is multiple GB and is the dominant source of the "Excessive
+        // memory usage" spikes (Sentry 7259255054 / APP-4656). Swapping in a
+        // cheap empty entry drops our reference so the model can mutate the store
+        // in place; we immediately re-sync from the model below. This is all
+        // synchronous (no `ctx.notify()` in between), so the tree never visibly
+        // flashes empty.
+        if let Some(root_dir) = self.root_directories.get_mut(root_path) {
+            root_dir.entry = Self::create_empty_entry(root_path);
+        }
+
         let load_result =
             self.repository_metadata_model
                 .update(ctx, |model: &mut RepoMetadataModel, ctx| {
