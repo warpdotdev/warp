@@ -3064,6 +3064,12 @@ impl BlockList {
         if self.active_block().finished() || self.active_block().state() == BlockState::Executing {
             return;
         }
+        // rc-file and SSH login banner output lands in a ScriptExecution block's command grid, and
+        // no command ever runs there. Marking it executed would persist that output as a command,
+        // which session restoration then adds to up-arrow history.
+        if self.active_block().bootstrap_stage() == BootstrapStage::ScriptExecution {
+            return;
+        }
         if self.is_bootstrapping_precmd_done() {
             EarlyOutput::preexec(self);
         }
