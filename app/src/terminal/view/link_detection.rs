@@ -381,6 +381,14 @@ impl super::TerminalView {
             return;
         };
 
+        // Whether file paths are linkified can change while hovering the same fragment (e.g. by
+        // holding the link modifier in vim), so start the hover over.
+        if from_editor != self.last_hover_from_editor {
+            self.last_hover_from_editor = from_editor;
+            self.last_hover_fragment_boundary = None;
+            self.highlighted_link.invalidate();
+        }
+
         // If the mouse is still on top of the previous highlighted link and that link is
         // still valid, we can keep highlighting it.
         if let Some(link) = self.highlighted_link.as_ref()
