@@ -729,7 +729,7 @@ fn conversation_total_text_shows_em_dash_without_usage_data() {
 }
 
 /// A restored conversation with only the server's billed snapshot (no per-request charges)
-/// still shows that snapshot as its dollar total; the provider cost is never shown.
+/// still shows that snapshot as its dollar total.
 #[test]
 fn conversation_total_text_falls_back_to_the_billed_snapshot() {
     let mut conversation = AIConversation::new(false, false);
