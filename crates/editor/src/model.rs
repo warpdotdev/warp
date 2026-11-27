@@ -958,9 +958,26 @@ pub trait RichTextEditorModel: CoreEditorModel {
     }
 
     fn update_to_new_markdown(&mut self, markdown: &str, ctx: &mut ModelContext<Self::T>) {
-        use markdown_parser::{compute_formatted_text_delta, parse_markdown};
+        use markdown_parser::{
+            compute_formatted_text_delta, parse_markdown, parse_markdown_with_gfm_tables,
+        };
 
         use crate::content::buffer::StyledBlockBoundaryBehavior;
+
+        // Honor the same `MarkdownTables` gate as `Buffer::from_markdown`
+        // (crates/editor/src/content/buffer.rs): enabled builds lower GFM
+        // tables into `Table` blocks, while disabled builds fall back to the
+        // ordinary Markdown parser's non-table rendering. This keeps the
+        // incremental streaming path (e.g. `AIDocumentModel::apply_streamed_agent_update`)
+        // consistent with the full-reset path (`reset_with_markdown`), so a
+        // GFM table streamed into a plan/notebook document renders live as a
+        // table instead of literal `|` text (APP-4917). The flag ships on by
+        // default via the `markdown_tables` Cargo feature in `app/Cargo.toml`.
+        let parse_fn = if warp_core::features::FeatureFlag::MarkdownTables.is_enabled() {
+            parse_markdown_with_gfm_tables
+        } else {
+            parse_markdown
+        };
 
         // Try to obtain the current formatted-text view from the buffer and
         // compute both the `FormattedText` delta and the common prefix length in
@@ -972,7 +989,7 @@ pub trait RichTextEditorModel: CoreEditorModel {
             let old_formatted =
                 buffer.range_to_formatted_text(full_range, StyledBlockBoundaryBehavior::Inclusive);
 
-            let new_formatted = match parse_markdown(markdown) {
+            let new_formatted = match parse_fn(markdown) {
                 Ok(parsed) => parsed,
                 Err(_) => return None,
             };
