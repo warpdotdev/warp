@@ -287,7 +287,7 @@ fn remote_fragment_metadata(
     Ok((
         content_hash,
         AiFragmentMetadata {
-            absolute_path: PathBuf::from(fragment.path),
+            absolute_path: Arc::from(PathBuf::from(fragment.path)),
             location: FragmentMetadataLocation {
                 start_line: fragment.start_line as usize,
                 end_line: fragment.end_line as usize,
