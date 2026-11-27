@@ -398,6 +398,7 @@ fn layout_line_with_offset(
             char_offset,
             Some(clip_config),
             &utf16_offset_to_char_idx,
+            text,
         )
     }
 }
@@ -762,6 +763,7 @@ pub fn layout_text(
                             // Only apply clipping to the last line in the frame.
                             is_last_line.then_some(ClipConfig::default()),
                             &utf16_offset_to_char_idx,
+                            text,
                         )
                     };
 
@@ -785,12 +787,14 @@ fn line_from_ct_line(
     char_offset: usize,
     clip_config: Option<ClipConfig>,
     utf16_offset_to_char_idx: &[usize],
+    text: &str,
 ) -> Line {
     let mut runs = Vec::with_capacity(line.glyph_runs().len() as usize);
     let typographic_bounds = line.get_typographic_bounds();
     let width = typographic_bounds.width as f32;
 
     let mut previous_run_font_and_attribute = None;
+    let mut chars_with_missing_glyphs = Vec::new();
 
     for run in line.glyph_runs().into_iter() {
         let attributes = run.attributes().expect("attributes should exist");
@@ -810,9 +814,20 @@ fn line_from_ct_line(
         ))
         .map(|(glyph_id, position, utf16_offset, advance)| {
             let utf16_offset = usize::try_from(*utf16_offset).expect("Negative character offset");
-            let char_index = utf16_offset_to_char_idx
+            let char_index = *utf16_offset_to_char_idx
                 .get(utf16_offset)
                 .expect("mapping covers whole string");
+
+            // Glyph ID 0 is the ".notdef" glyph: Core Text's own font cascade (which already
+            // tries every installed system font) still found nothing for this character. Only
+            // characters that reach this point are candidates for the app's own external
+            // fallback fonts (e.g. Noto Sans Arabic), so this is the Mac equivalent of the
+            // cosmic-text backend's `glyph.glyph_id == 0` check.
+            if *glyph_id == 0
+                && let Some(ch) = text.chars().nth(char_index)
+            {
+                chars_with_missing_glyphs.push(ch);
+            }
 
             Glyph {
                 id: *glyph_id as GlyphId,
@@ -863,9 +878,7 @@ fn line_from_ct_line(
         ascent: typographic_bounds.ascent as f32,
         descent: typographic_bounds.descent as f32,
         caret_positions,
-        // TODO(CORE-2004): If we want to support external font fallback on
-        // Mac, we need to populate this with the missing chars.
-        chars_with_missing_glyphs: vec![],
+        chars_with_missing_glyphs,
     }
 }
 
