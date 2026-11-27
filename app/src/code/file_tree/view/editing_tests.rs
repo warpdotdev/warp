@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::sync::Arc;
 
 use repo_metadata::file_tree_store::{FileTreeDirectoryEntryState, FileTreeEntryState};
@@ -103,4 +104,30 @@ fn sort_entries_for_file_tree_uses_natural_order_for_numbered_files() {
             "/repo/L12.tsx",
         ]
     );
+}
+
+#[test]
+fn sort_entries_for_file_tree_is_a_total_order_for_digits_mixed_with_non_ascii() {
+    let root = std_path("/repo");
+    let mut entry = FileTreeEntry::new_for_directory(Arc::new(root.clone()));
+    let paths = [
+        "0a", "00a", "0я", "0яé", "00я", "0中.", "1", "01", "10", "2", "a1", "a01", "a10", "a2",
+        "я1", "я10", "я2",
+    ]
+    .map(|name| std_path(&format!("/repo/{name}")));
+    for path in &paths {
+        entry.insert_child_state(&root, file_state(path.as_str()));
+    }
+
+    let cmp = |a, b| sort_entries_for_file_tree(a, b, &entry);
+    for a in &paths {
+        for b in &paths {
+            assert_eq!(cmp(a, b), cmp(b, a).reverse(), "{a:?} vs {b:?}");
+            for c in &paths {
+                if cmp(a, b).is_le() && cmp(b, c).is_le() {
+                    assert_ne!(cmp(a, c), Ordering::Greater, "{a:?} <= {b:?} <= {c:?}");
+                }
+            }
+        }
+    }
 }
