@@ -535,11 +535,12 @@ impl ResponseStream {
             RecoveryAction::Fail(reason) => {
                 log::warn!(
                     "MultiAgent request failed; not recovering: recovery={} reason={} \
-                     attempt={}/{MAX_RECOVERY_ATTEMPTS} failed_request={} - Error: {error:?}",
+                     attempt={}/{MAX_RECOVERY_ATTEMPTS} failed_request={} {} - Error: {error:?}",
                     action.log_label(),
                     reason.log_label(),
                     self.recovery.attempts_used(),
                     self.failed_request_label(),
+                    self.request_context_label(),
                 );
                 self.error_event_emitted = true;
                 self.report_request_failure(error, is_online, self.recovery.attempts_used());
@@ -556,11 +557,24 @@ impl ResponseStream {
     fn log_recovery(&self, action: RecoveryAction, wait: &str, error: &Arc<AIApiError>) {
         log::warn!(
             "MultiAgent request failed; recovering: recovery={} \
-             attempt={}/{MAX_RECOVERY_ATTEMPTS} wait={wait} failed_request={} - Error: {error:?}",
+             attempt={}/{MAX_RECOVERY_ATTEMPTS} wait={wait} failed_request={} {} - Error: {error:?}",
             action.log_label(),
             self.recovery.attempts_used() + 1,
             self.failed_request_label(),
+            self.request_context_label(),
         );
+    }
+
+    /// The model the failed request targeted and whether it carried user-provided credentials,
+    /// so a transport failure can be attributed to hosted or bring-your-own-key routing.
+    /// Reports presence only, never credential values.
+    fn request_context_label(&self) -> String {
+        format!(
+            "model={} user_api_keys={} custom_model_providers={}",
+            self.params.model,
+            self.params.api_keys.is_some(),
+            self.params.custom_model_providers.is_some(),
+        )
     }
 
     /// Sends the request for `request_id`. When the request's model is served by
