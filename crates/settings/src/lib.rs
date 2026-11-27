@@ -1,6 +1,7 @@
 #[macro_use]
 pub mod macros;
 pub mod manager;
+mod persistence;
 pub mod registration;
 pub mod schema;
 
@@ -14,6 +15,7 @@ use std::sync::OnceLock;
 pub use inventory as _inventory;
 pub use macros::SettingSection;
 pub use manager::SettingsManager;
+use persistence::StorageLocation;
 #[doc(hidden)]
 pub use schemars as _schemars;
 #[doc(hidden)]
@@ -64,7 +66,6 @@ use anyhow::{Context, Result};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use warp_errors::report_error;
-use warp_features::FeatureFlag;
 use warpui_core::{AppContext, Entity, ModelContext};
 use warpui_extras::secure_storage::{self, AppContextExt as _};
 use warpui_extras::user_preferences::UserPreferences;
@@ -468,17 +469,7 @@ pub trait Setting {
     /// Private settings use the platform-native store; public settings use
     /// the main preferences backend (which may be the TOML settings file).
     fn preferences_for_setting(ctx: &AppContext) -> &dyn UserPreferences {
-        use warpui_core::SingletonEntity;
-
-        if Self::is_private() {
-            <PrivatePreferences as SingletonEntity>::as_ref(ctx).deref()
-        } else if FeatureFlag::SettingsFile.is_enabled() {
-            <PublicPreferences as SingletonEntity>::as_ref(ctx).as_preferences()
-        } else {
-            // When the settings file is disabled, fall back to the private
-            // backend so both paths share a single instance.
-            <PrivatePreferences as SingletonEntity>::as_ref(ctx).deref()
-        }
+        persistence::preferences_for(Self::is_private(), ctx)
     }
 
     /// Constructs a new instance of the setting, populating its initial value
@@ -497,61 +488,7 @@ pub trait Setting {
     /// Reads the setting's value from the provided preferences, returning None
     /// if the value is not set or could not be parsed successfully.
     fn read_from_preferences(preferences: &dyn UserPreferences) -> Option<Self::Value> {
-        let key = if preferences.is_settings_file() {
-            Self::toml_key()
-        } else {
-            Self::storage_key()
-        };
-        let value = preferences
-            .read_value_with_hierarchy(key, Self::hierarchy())
-            .unwrap_or_default()?;
-
-        // For the settings file, use the SettingsValue trait.
-        if preferences.is_settings_file() {
-            let json_value = match serde_json::from_str::<serde_json::Value>(&value)
-                .context("Failed to parse JSON for setting")
-            {
-                Ok(v) => v,
-                Err(err) => {
-                    report_error!(err, extra: { "setting" => Self::storage_key() });
-                    preferences.inhibit_writes_for_key(Self::toml_key(), Self::hierarchy());
-                    return None;
-                }
-            };
-            match <Self::Value as SettingsValue>::from_file_value(&json_value) {
-                Some(val) => {
-                    log::debug!(
-                        "Loaded {} from settings file; value: {:?}",
-                        Self::setting_name(),
-                        val
-                    );
-                    return Some(val);
-                }
-                None => {
-                    report_error!(
-                        "Failed to parse file value for setting",
-                        extra: { "setting" => Self::storage_key() }
-                    );
-                    preferences.inhibit_writes_for_key(Self::toml_key(), Self::hierarchy());
-                    return None;
-                }
-            }
-        }
-
-        match serde_json::from_str(&value).context("Failed to parse stored value for setting") {
-            Ok(val) => {
-                log::debug!(
-                    "Loaded {} from user defaults; value: {:?}",
-                    Self::setting_name(),
-                    val
-                );
-                Some(val)
-            }
-            Err(err) => {
-                report_error!(err, extra: { "setting" => Self::storage_key() });
-                None
-            }
-        }
+        persistence::read_stored_value(preferences, &StorageLocation::of::<Self>())
     }
 
     /// Persists the current value of the setting in some form of durable
@@ -561,76 +498,12 @@ pub trait Setting {
         new_value: &Self::Value,
         preferences: &dyn UserPreferences,
     ) -> Result<bool> {
-        let key = if preferences.is_settings_file() {
-            Self::toml_key()
-        } else {
-            Self::storage_key()
-        };
-
-        // For the settings file, use the SettingsValue trait.
-        let value = if preferences.is_settings_file() {
-            let file_value = <Self::Value as SettingsValue>::to_file_value(new_value);
-            serde_json::to_string(&file_value).context(format!(
-                "Failed to write {} to storage",
-                Self::storage_key()
-            ))?
-        } else {
-            serde_json::to_string(new_value).context(format!(
-                "Failed to write {} to storage",
-                Self::storage_key()
-            ))?
-        };
-
-        // Compare semantically by deserializing the stored value back into
-        // the typed value rather than comparing JSON strings. This avoids
-        // spurious writes caused by serialization differences (key ordering,
-        // null-vs-missing fields, formatting) that don't represent actual
-        // value changes.
-        let stored_value_matches = preferences
-            .read_value_with_hierarchy(key, Self::hierarchy())?
-            .as_deref()
-            .and_then(|stored| {
-                if preferences.is_settings_file() {
-                    let json_value = serde_json::from_str::<serde_json::Value>(stored).ok()?;
-                    return <Self::Value as SettingsValue>::from_file_value(&json_value);
-                }
-                serde_json::from_str::<Self::Value>(stored).ok()
-            })
-            .is_some_and(|stored_val| &stored_val == new_value);
-
-        if !stored_value_matches {
-            log::debug!(
-                "Writing new value of {} to storage; key: {}; value: {:?}",
-                Self::setting_name(),
-                key,
-                value
-            );
-            let _ = preferences.write_value_with_hierarchy(
-                key,
-                value,
-                Self::hierarchy(),
-                Self::max_table_depth(),
-            );
-            Ok(true)
-        } else {
-            Ok(false)
-        }
+        persistence::write_stored_value(new_value, preferences, &StorageLocation::of::<Self>())
     }
 
     /// Clears the setting from the given durable storage and returns whether the setting was cleared.
     fn clear_from_preferences(preferences: &dyn UserPreferences) -> Result<()> {
-        let key = if preferences.is_settings_file() {
-            Self::toml_key()
-        } else {
-            Self::storage_key()
-        };
-        log::debug!(
-            "Clearing setting {} with key {} from preferences",
-            Self::setting_name(),
-            key,
-        );
-        preferences.remove_value_with_hierarchy(key, Self::hierarchy())?;
-        Ok(())
+        persistence::clear_stored_value(preferences, &StorageLocation::of::<Self>())
     }
 
     /// Returns true if this setting is supported on the current platform (e.g., Web, Linux, Mac). For example,
