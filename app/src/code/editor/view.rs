@@ -2417,6 +2417,9 @@ impl View for CodeEditorView {
     }
 
     fn active_cursor_position(&self, ctx: &ViewContext<Self>) -> Option<CursorInfo> {
+        if self.interaction_state(ctx) != InteractionState::Editable {
+            return None;
+        }
         let render_state = self.model.as_ref(ctx).render_state().as_ref(ctx);
         let cursor_id = render_state.saved_positions().cursor_id();
         let font_size = render_state.styles().base_text.font_size;
@@ -2425,6 +2428,7 @@ impl View for CodeEditorView {
             .map(|position| CursorInfo {
                 position,
                 font_size,
+                view_id: ctx.view_id(),
             })
     }
 
