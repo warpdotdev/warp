@@ -585,8 +585,49 @@ fn third_party_conversation_with_edit_access_shows_continue_in_cloud_tombstone()
     });
 }
 
+// REMOTE-2314: environment setup failure without a prior conversation (setup command failed
+// before the agent started) — task owner should now get a follow-up input (Oz harness) or
+// a "Continue" CTA (third-party harness) so they can retry after fixing their setup commands.
+
 #[test]
-fn environment_setup_failure_without_conversation_shows_tombstone_without_cta() {
+fn environment_setup_failure_without_conversation_oz_harness_shows_followup_input_for_owner() {
+    App::test((), |mut app| async move {
+        let TestHandles {
+            terminal_view_id,
+            task_id,
+        } = setup_app(
+            &mut app,
+            AuthFixture::LoggedIn,
+            AIAgentHarness::Oz,
+            ConversationPermissionFixture::CurrentUserOwner,
+        );
+        AgentConversationsModel::handle(&app).update(&mut app, |model, _| {
+            let mut task =
+                ambient_agent_task(task_id, CONVERSATION_TOKEN, AmbientAgentTaskState::Failed);
+            task.conversation_id = None;
+            task.status_message = Some(TaskStatusMessage {
+                message: "Environment setup failed: Failed to run setup command: uv".to_string(),
+                error_code: Some(TaskStatusErrorCode::EnvironmentSetupFailed),
+            });
+            // No agent_config_snapshot → task_harness() returns Oz
+            model.insert_task_for_test(task);
+        });
+
+        app.update(|ctx| {
+            let state =
+                resolve_cloud_conversation_continuation_ui_state(terminal_view_id, task_id, ctx);
+
+            assert_eq!(
+                state,
+                Ok(CloudConversationContinuationUiState::FollowupInput)
+            );
+        });
+    });
+}
+
+#[test]
+fn environment_setup_failure_without_conversation_third_party_harness_shows_continue_cta_for_owner(
+) {
     App::test((), |mut app| async move {
         let TestHandles {
             terminal_view_id,
@@ -599,10 +640,11 @@ fn environment_setup_failure_without_conversation_shows_tombstone_without_cta() 
         );
         AgentConversationsModel::handle(&app).update(&mut app, |model, _| {
             let mut task =
-                ambient_agent_task(task_id, CONVERSATION_TOKEN, AmbientAgentTaskState::Failed);
+                ambient_agent_task(task_id, CONVERSATION_TOKEN, AmbientAgentTaskState::Failed)
+                    .with_harness(Harness::Claude);
             task.conversation_id = None;
             task.status_message = Some(TaskStatusMessage {
-                message: "Environment setup failed: Failed to run setup command: hi".to_string(),
+                message: "Environment setup failed: Failed to run setup command: uv".to_string(),
                 error_code: Some(TaskStatusErrorCode::EnvironmentSetupFailed),
                 session_debug_until: None,
                 debug_agent_active: false,
@@ -616,7 +658,45 @@ fn environment_setup_failure_without_conversation_shows_tombstone_without_cta() 
 
             assert_eq!(
                 state,
-                Ok(CloudConversationContinuationUiState::Tombstone { cta: None })
+                Ok(CloudConversationContinuationUiState::Tombstone {
+                    cta: Some(TombstoneCta::ContinueInCloud { task_id }),
+                })
+            );
+        });
+    });
+}
+
+#[test]
+fn environment_setup_failure_without_conversation_shows_tombstone_without_cta_for_non_owner() {
+    App::test((), |mut app| async move {
+        let TestHandles {
+            terminal_view_id,
+            task_id,
+        } = setup_app(
+            &mut app,
+            AuthFixture::LoggedIn,
+            AIAgentHarness::ClaudeCode,
+            ConversationPermissionFixture::OtherUserOwner,
+        );
+        AgentConversationsModel::handle(&app).update(&mut app, |model, _| {
+            let mut task =
+                ambient_agent_task(task_id, CONVERSATION_TOKEN, AmbientAgentTaskState::Failed)
+                    .with_creator("other-user");
+            task.conversation_id = None;
+            task.status_message = Some(TaskStatusMessage {
+                message: "Environment setup failed: Failed to run setup command: uv".to_string(),
+                error_code: Some(TaskStatusErrorCode::EnvironmentSetupFailed),
+            });
+            model.insert_task_for_test(task);
+        });
+
+        app.update(|ctx| {
+            let state =
+                resolve_cloud_conversation_continuation_ui_state(terminal_view_id, task_id, ctx);
+
+            assert_eq!(
+                state,
+                Err(CloudConversationContinuationError::MissingConversationToken)
             );
         });
     });
