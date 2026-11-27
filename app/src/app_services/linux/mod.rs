@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::ffi::OsString;
 
 use futures_util::FutureExt as _;
 use itertools::Itertools as _;
@@ -7,7 +8,11 @@ use warpui::r#async::executor::BackgroundTask;
 use warpui::{AppContext, SingletonEntity};
 use zbus::{interface, proxy, zvariant};
 
+use super::should_run_single_instance_server;
 use crate::channel::ChannelState;
+use crate::external_session::ExternalSessionLaunchRequest;
+
+const OPEN_EXTERNAL_SESSION_ACTION: &str = "open_external_session";
 
 /// Initializes application services.
 pub fn init(ctx: &mut AppContext) {
@@ -25,10 +30,14 @@ pub fn teardown(ctx: &mut AppContext) {
 /// application.
 ///
 /// Returns Ok if an existing instance exists and was reachable.
-#[cfg(feature = "release_bundle")]
 pub fn pass_startup_args_to_existing_instance(
     args: &warp_cli::AppArgs,
+    initial_env: &[(OsString, OsString)],
 ) -> Result<(), StartupArgsForwardingError> {
+    let has_external_session = args.external_session.has_session_options();
+    if !cfg!(feature = "release_bundle") && !has_external_session {
+        return Err(StartupArgsForwardingError::NoExistingInstance);
+    }
     if args.finish_update {
         return Err(StartupArgsForwardingError::IgnoredAfterAutoUpdate);
     }
@@ -46,18 +55,29 @@ pub fn pass_startup_args_to_existing_instance(
             .path(DBusServiceHost::application_service_path())?
             .build()
             .await?;
-        let mut open_new_url;
-        let mut url_refs = args.urls.iter().map(AsRef::as_ref).collect_vec();
-        // If there are no URLs on the command line, send one to open a new
-        // window using the same current working directory as this process.
-        if url_refs.is_empty() {
-            open_new_url = format!("{}://action/new_window", ChannelState::url_scheme());
-            if let Ok(current_dir) = std::env::current_dir() {
-                open_new_url.push_str(&format!("?path={}", current_dir.display()));
+
+        if has_external_session {
+            let request =
+                ExternalSessionLaunchRequest::from_cli_args(&args.external_session, initial_env);
+            let payload = serde_json::to_string(&request)?;
+            let params = [zvariant::Value::from(payload.as_str())];
+            proxy
+                .activate_action(OPEN_EXTERNAL_SESSION_ACTION, &params, HashMap::new())
+                .await?;
+        } else {
+            let mut open_new_url;
+            let mut url_refs = args.urls.iter().map(AsRef::as_ref).collect_vec();
+            // If there are no URLs on the command line, send one to open a new
+            // window using the same current working directory as this process.
+            if url_refs.is_empty() {
+                open_new_url = format!("{}://action/new_window", ChannelState::url_scheme());
+                if let Ok(current_dir) = std::env::current_dir() {
+                    open_new_url.push_str(&format!("?path={}", current_dir.display()));
+                }
+                url_refs.push(&open_new_url);
             }
-            url_refs.push(&open_new_url);
+            proxy.open(&url_refs, HashMap::new()).await?;
         }
-        proxy.open(&url_refs, HashMap::new()).await?;
 
         // Make sure we close the connection and clean up resources, to avoid
         // leaving behind file descriptors that will interfere with the terminal
@@ -69,7 +89,6 @@ pub fn pass_startup_args_to_existing_instance(
 }
 
 #[derive(Debug, thiserror::Error)]
-#[cfg(feature = "release_bundle")]
 pub enum StartupArgsForwardingError {
     /// There's no instance of Warp already running.
     #[error("no existing instance found to forward args to")]
@@ -80,12 +99,13 @@ pub enum StartupArgsForwardingError {
     IgnoredAfterAutoUpdate,
     #[error("should not forward args from the crash recovery process")]
     IgnoredForCrashRecoveryProcess,
+    #[error("failed to serialize startup request")]
+    Serialization(#[from] serde_json::Error),
     /// An unknown D-Bus error occurred.
     #[error("unknown dbus error")]
     Unknown(zbus::Error),
 }
 
-#[cfg(feature = "release_bundle")]
 impl From<zbus::fdo::Error> for StartupArgsForwardingError {
     fn from(value: zbus::fdo::Error) -> Self {
         // While ServiceUnknown usually means that D-Bus doesn't know how to
@@ -100,7 +120,6 @@ impl From<zbus::fdo::Error> for StartupArgsForwardingError {
     }
 }
 
-#[cfg(feature = "release_bundle")]
 impl From<zbus::Error> for StartupArgsForwardingError {
     fn from(value: zbus::Error) -> Self {
         match value {
@@ -111,7 +130,12 @@ impl From<zbus::Error> for StartupArgsForwardingError {
 }
 
 enum ApplicationServiceEvent {
-    Open { uris: Vec<String> },
+    Open {
+        uris: Vec<String>,
+    },
+    ExternalSession {
+        request: ExternalSessionLaunchRequest,
+    },
 }
 
 /// A structure providing an implementation of the org.freedesktop.Application
@@ -139,11 +163,31 @@ impl ApplicationService {
     /// See: https://specifications.freedesktop.org/desktop-entry-spec/1.5/ar01s11.html
     async fn activate_action(
         &self,
-        _action_name: String,
-        _parameter: Vec<zvariant::Value<'_>>,
+        action_name: String,
+        parameter: Vec<zvariant::Value<'_>>,
         _platform_data: HashMap<String, zvariant::Value<'_>>,
     ) -> zbus::fdo::Result<()> {
-        // not yet implemented
+        if action_name == OPEN_EXTERNAL_SESSION_ACTION {
+            let Some(raw) = parameter
+                .into_iter()
+                .next()
+                .and_then(|value| String::try_from(value).ok())
+            else {
+                return Err(zbus::fdo::Error::InvalidArgs(
+                    "missing external session payload".to_owned(),
+                ));
+            };
+            let request: ExternalSessionLaunchRequest =
+                serde_json::from_str(&raw).map_err(|err| {
+                    zbus::fdo::Error::InvalidArgs(format!(
+                        "invalid external session payload: {err}"
+                    ))
+                })?;
+            let _ = self
+                .tx
+                .send(ApplicationServiceEvent::ExternalSession { request })
+                .await;
+        }
         Ok(())
     }
 
@@ -191,6 +235,10 @@ struct DBusServiceHost {
 
 impl DBusServiceHost {
     fn new(ctx: &mut warpui::ModelContext<Self>) -> Self {
+        if !should_run_single_instance_server(ctx) {
+            return Self { server_task: None };
+        }
+
         let (tx, rx) = async_channel::unbounded();
 
         // Spawn a background task for the D-Bus server.
@@ -211,9 +259,15 @@ impl DBusServiceHost {
             }
             .map(|result: anyhow::Result<()>| {
                 if let Err(err) = result {
-                    log::error!(
-                        "Failed to initialize org.freedesktop.Application D-Bus service: {err:#}"
-                    );
+                    if !cfg!(feature = "release_bundle")
+                        && matches!(err.downcast_ref::<zbus::Error>(), Some(zbus::Error::NameTaken))
+                    {
+                        log::info!("Another local Warp instance already owns the D-Bus service name");
+                    } else {
+                        log::error!(
+                            "Failed to initialize org.freedesktop.Application D-Bus service: {err:#}"
+                        );
+                    }
                 }
             }),
         );
@@ -229,6 +283,9 @@ impl DBusServiceHost {
                         }
                     }
                 },
+                ApplicationServiceEvent::ExternalSession { request } => {
+                    crate::external_session::open_external_session(request, ctx);
+                }
             }
         }, |_, _| {});
 

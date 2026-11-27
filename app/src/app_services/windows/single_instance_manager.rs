@@ -96,6 +96,9 @@ impl SingleInstanceManager {
     /// holds the named mutex). This function enforces that a URI server is created iff the mutex
     /// is held.
     pub(super) fn new(ctx: &mut ModelContext<Self>) -> Self {
+        if !crate::app_services::should_run_single_instance_server(ctx) {
+            return Self { _server: None };
+        }
         if let Ok(None) | Err(_) = &*SOLE_INSTANCE_MUTEX.lock() {
             return Self { _server: None };
         }
@@ -110,9 +113,7 @@ impl SingleInstanceManager {
                 ctx.spawn_stream_local(
                     rx,
                     |_single_instance_manager, event, ctx| {
-                        for uri in event {
-                            crate::uri::handle_incoming_uri(&uri, ctx);
-                        }
+                        crate::app_services::dispatch_forwarded_request(event, ctx);
                     },
                     |_, _| {},
                 );

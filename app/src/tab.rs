@@ -370,6 +370,8 @@ pub struct TabData {
     pub in_multi_selection: bool,
     /// True when this tab is pinned to the front of the tab list.
     pub pinned: bool,
+    /// True when this tab was opened for an external terminal launch.
+    pub(crate) opened_for_external_session: bool,
 }
 
 const TAB_COLOR_ICON_PATH: &str = "bundled/svg/ellipse.svg";
@@ -390,6 +392,7 @@ impl TabData {
             group_id: None,
             in_multi_selection: false,
             pinned: false,
+            opened_for_external_session: false,
         }
     }
 

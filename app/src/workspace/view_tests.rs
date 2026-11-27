@@ -5824,3 +5824,216 @@ fn test_tab_group_rename_blur_does_not_commit_unfinished_name() {
         });
     });
 }
+
+#[cfg(feature = "local_tty")]
+fn set_external_session_tab_state(
+    workspace: &mut Workspace,
+    tab_index: usize,
+    running_command: bool,
+    ctx: &mut ViewContext<Workspace>,
+) {
+    let pane_group = workspace
+        .get_pane_group_view(tab_index)
+        .expect("tab should exist")
+        .clone();
+    pane_group.update(ctx, |pg, ctx| {
+        pg.for_all_terminal_panes(
+            |tv, _ctx| {
+                tv.set_login_shell_bootstrapped_for_test(true);
+                let mut model = crate::terminal::model::TerminalModel::mock(None, None);
+                if running_command {
+                    model.simulate_long_running_block("sleep 30", "");
+                } else {
+                    model.simulate_block("echo prev", "prev");
+                }
+                *tv.model.lock() = model;
+            },
+            ctx,
+        );
+    });
+}
+
+#[cfg(feature = "local_tty")]
+#[test]
+fn reuses_idle_external_session_tab_in_place() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+
+        let first_pane_group_id = workspace.update(&mut app, |workspace, ctx| {
+            workspace.open_or_reuse_external_session_tab(
+                NewTerminalOptions::default(),
+                Some("Debug One".to_owned()),
+                ctx,
+            );
+            assert_eq!(workspace.tab_count(), 2);
+            set_external_session_tab_state(workspace, 1, false, ctx);
+            workspace.get_pane_group_view(1).unwrap().id()
+        });
+
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.open_or_reuse_external_session_tab(
+                NewTerminalOptions::default(),
+                Some("Debug Two".to_owned()),
+                ctx,
+            );
+
+            assert_eq!(workspace.tab_count(), 2);
+            assert_eq!(workspace.active_tab_index(), 1);
+            let reused_pane_group = workspace.get_pane_group_view(1).unwrap();
+            assert_ne!(reused_pane_group.id(), first_pane_group_id);
+            assert_eq!(
+                reused_pane_group.as_ref(ctx).display_title(ctx),
+                "Debug Two"
+            );
+            assert!(
+                !UndoCloseStack::as_ref(ctx).is_pane_group_tab_in_stack(first_pane_group_id),
+                "reused external session tabs must not be pushed to UndoCloseStack"
+            );
+        });
+    });
+}
+
+#[cfg(feature = "local_tty")]
+#[test]
+fn opens_new_tab_when_external_session_tab_is_executing_command() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+
+        let busy_pane_group_id = workspace.update(&mut app, |workspace, ctx| {
+            workspace.open_or_reuse_external_session_tab(
+                NewTerminalOptions::default(),
+                Some("Debug Busy".to_owned()),
+                ctx,
+            );
+            set_external_session_tab_state(workspace, 1, true, ctx);
+            workspace.get_pane_group_view(1).unwrap().id()
+        });
+
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.open_or_reuse_external_session_tab(
+                NewTerminalOptions::default(),
+                Some("Debug Two".to_owned()),
+                ctx,
+            );
+
+            assert_eq!(workspace.tab_count(), 3);
+            assert_eq!(workspace.active_tab_index(), 2);
+            assert_eq!(
+                workspace.get_pane_group_view(1).unwrap().id(),
+                busy_pane_group_id
+            );
+            assert_eq!(
+                workspace
+                    .get_pane_group_view(2)
+                    .unwrap()
+                    .as_ref(ctx)
+                    .display_title(ctx),
+                "Debug Two"
+            );
+        });
+    });
+}
+
+#[cfg(feature = "local_tty")]
+#[test]
+fn opens_new_tab_when_external_session_tab_has_unsent_user_input() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+
+        let edited_pane_group_id = workspace.update(&mut app, |workspace, ctx| {
+            workspace.open_or_reuse_external_session_tab(
+                NewTerminalOptions::default(),
+                Some("Debug Draft".to_owned()),
+                ctx,
+            );
+            set_external_session_tab_state(workspace, 1, false, ctx);
+            let pane_group = workspace.get_pane_group_view(1).unwrap().clone();
+            pane_group.update(ctx, |pg, ctx| {
+                pg.for_all_terminal_panes(
+                    |tv, ctx| {
+                        let input = tv.input().clone();
+                        input.update(ctx, |input, ctx| {
+                            input.user_replace_editor_text("draft", ctx);
+                        });
+                    },
+                    ctx,
+                );
+            });
+            pane_group.id()
+        });
+
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.open_or_reuse_external_session_tab(
+                NewTerminalOptions::default(),
+                Some("Debug Two".to_owned()),
+                ctx,
+            );
+
+            assert_eq!(workspace.tab_count(), 3);
+            assert_eq!(workspace.active_tab_index(), 2);
+            assert_eq!(
+                workspace.get_pane_group_view(1).unwrap().id(),
+                edited_pane_group_id
+            );
+        });
+    });
+}
+
+#[cfg(feature = "local_tty")]
+#[test]
+fn does_not_reuse_ordinary_user_terminal_tabs() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+
+        let user_tab_id = workspace.update(&mut app, |workspace, ctx| {
+            set_external_session_tab_state(workspace, 0, false, ctx);
+            workspace.get_pane_group_view(0).unwrap().id()
+        });
+
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.open_or_reuse_external_session_tab(
+                NewTerminalOptions::default(),
+                Some("Debug Fresh".to_owned()),
+                ctx,
+            );
+
+            assert_eq!(workspace.tab_count(), 2);
+            assert_eq!(workspace.active_tab_index(), 1);
+            assert_eq!(workspace.get_pane_group_view(0).unwrap().id(), user_tab_id);
+        });
+    });
+}
+
+#[cfg(feature = "local_tty")]
+#[test]
+fn reuses_sole_idle_external_session_tab_without_closing_window() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+
+        let initial_pane_group_id = workspace.update(&mut app, |workspace, ctx| {
+            assert_eq!(workspace.tab_count(), 1);
+            workspace.mark_active_tab_as_external_session();
+            set_external_session_tab_state(workspace, 0, false, ctx);
+            workspace.get_pane_group_view(0).unwrap().id()
+        });
+
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.open_or_reuse_external_session_tab(
+                NewTerminalOptions::default(),
+                Some("Debug Reused".to_owned()),
+                ctx,
+            );
+
+            assert_eq!(workspace.tab_count(), 1);
+            assert_eq!(workspace.active_tab_index(), 0);
+            let reused = workspace.get_pane_group_view(0).unwrap();
+            assert_ne!(reused.id(), initial_pane_group_id);
+            assert_eq!(reused.as_ref(ctx).display_title(ctx), "Debug Reused");
+        });
+    });
+}

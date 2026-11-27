@@ -1,22 +1,24 @@
-use registry::register_uri_handler;
+use std::ffi::OsString;
+
 #[cfg(feature = "release_bundle")]
+use registry::register_uri_handler;
+use service_impl::forward_request_to_sole_running_instance;
+use single_instance_manager::SingleInstanceManager;
+use thiserror::Error;
+use url::Url;
+use warp_core::channel::ChannelState;
 use warp_errors::report_error;
 use warpui::AppContext;
-#[cfg(feature = "release_bundle")]
-use {
-    service_impl::forward_uri_to_sole_running_instance,
-    single_instance_manager::SingleInstanceManager, thiserror::Error, url::Url,
-    warp_core::channel::ChannelState,
-};
 
+use super::StartupForwardRequest;
+use crate::external_session::ExternalSessionLaunchRequest;
+
+#[cfg(feature = "release_bundle")]
 mod registry;
-#[cfg(feature = "release_bundle")]
 mod service_impl;
-#[cfg(feature = "release_bundle")]
 mod single_instance_manager;
 
 #[derive(Error, Debug)]
-#[cfg(feature = "release_bundle")]
 pub enum StartupArgsForwardingError {
     #[error("should not forward arguments after an auto-update")]
     IgnoredAfterAutoUpdate,
@@ -35,10 +37,14 @@ pub enum StartupArgsForwardingError {
     WindowsError(#[from] windows::core::Error),
 }
 
-#[cfg(feature = "release_bundle")]
 pub fn pass_startup_args_to_existing_instance(
     args: &warp_cli::AppArgs,
+    initial_env: &[(OsString, OsString)],
 ) -> Result<(), StartupArgsForwardingError> {
+    let has_external_session = args.external_session.has_session_options();
+    if !cfg!(feature = "release_bundle") && !has_external_session {
+        return Err(StartupArgsForwardingError::NoExistingInstance);
+    }
     if args.finish_update {
         return Err(StartupArgsForwardingError::IgnoredAfterAutoUpdate);
     }
@@ -50,13 +56,18 @@ pub fn pass_startup_args_to_existing_instance(
     }
 
     warpui::r#async::block_on(async {
-        if args.urls.is_empty() {
+        let request = if has_external_session {
+            StartupForwardRequest::ExternalSession(ExternalSessionLaunchRequest::from_cli_args(
+                &args.external_session,
+                initial_env,
+            ))
+        } else if args.urls.is_empty() {
             // If there are no URLs on the command line, send one to open a new
             // window using the same current working directory as this process.
             let mut open_new_url = format!("{}://action/new_window", ChannelState::url_scheme());
             if let Ok(current_dir) = std::env::current_dir() {
                 match current_dir.into_os_string().into_string() {
-                    Ok(current_dir) => open_new_url.push_str(&format!("?path={}", current_dir)),
+                    Ok(current_dir) => open_new_url.push_str(&format!("?path={current_dir}")),
                     Err(os_string) => {
                         report_error!(
                             "Failed to convert OsString to String",
@@ -67,17 +78,18 @@ pub fn pass_startup_args_to_existing_instance(
             }
 
             let url = Url::parse(&open_new_url)?;
-            forward_uri_to_sole_running_instance(vec![url]).await?
+            StartupForwardRequest::Urls(vec![url])
         } else {
-            forward_uri_to_sole_running_instance(args.urls.clone()).await?
-        }
+            StartupForwardRequest::Urls(args.urls.clone())
+        };
 
+        forward_request_to_sole_running_instance(request).await?;
         Ok(())
     })
 }
 
-pub(super) fn init(_ctx: &mut AppContext) {
+pub(super) fn init(ctx: &mut AppContext) {
+    ctx.add_singleton_model(SingleInstanceManager::new);
     #[cfg(feature = "release_bundle")]
-    _ctx.add_singleton_model(SingleInstanceManager::new);
     register_uri_handler();
 }

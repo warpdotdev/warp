@@ -25,7 +25,8 @@ local_control.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows = { workspace = true, features = [
-    "Win32_Foundation"
+    "Win32_Foundation",
+    "Win32_System_Environment",
 ] }
 
 [build-dependencies]

@@ -389,4 +389,10 @@ integration_tests! {
     test_rich_input_toggle_on_enter_inserts_newline_and_ctrl_enter_submits,
     // Regression: Enter must accept inline menus (not insert newline) when toggle=true
     test_rich_input_enter_accepts_menu_item_when_toggle_is_true,
+
+    // External terminal session CLI & single-instance forwarding (issue #10165)
+    test_external_session_opens_tab_and_runs_command_with_env,
+    test_external_session_new_window_runs_command,
+    test_external_session_reuses_idle_debug_tab,
+    test_external_session_opens_new_tab_when_debug_tab_is_busy,
 }

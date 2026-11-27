@@ -1,9 +1,11 @@
 #![cfg_attr(target_family = "wasm", allow(dead_code))]
 
-use std::path::Path;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 use std::{env, fmt};
 
-use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
+use clap::{CommandFactory, FromArgMatches as _, Parser, Subcommand, ValueEnum};
+use serde::{Deserialize, Serialize};
 use url::Url;
 use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
@@ -182,6 +184,78 @@ pub struct Args {
     args: AppArgs,
 }
 
+/// Command and arguments to execute in an externally launched terminal session.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ExternalCommandSpec {
+    /// Program and arguments passed after `-e` or `--command`.
+    Argv(Vec<String>),
+    /// Raw `cmd.exe` command string passed after `/c` on Windows.
+    WindowsCmdLine(String),
+}
+
+/// Options for opening a local terminal session and optionally executing an initial command.
+#[derive(Debug, Default, clap::Args, Clone, PartialEq, Eq)]
+pub struct ExternalSessionArgs {
+    /// Initial working directory for the terminal session.
+    #[arg(long = "working-directory", visible_alias = "cwd", value_name = "DIR")]
+    pub working_directory: Option<PathBuf>,
+
+    /// Open the session in a new window instead of a new tab in an existing window.
+    #[arg(long = "new-window")]
+    pub new_window: bool,
+
+    /// Custom title for the opened tab.
+    #[arg(
+        short = 'T',
+        long = "title",
+        allow_hyphen_values = true,
+        value_name = "TITLE"
+    )]
+    pub title: Option<String>,
+
+    /// Keep the terminal session open after the command finishes.
+    #[arg(
+        long = "wait-after-command",
+        num_args = 0..=1,
+        default_missing_value = "true",
+        value_name = "BOOL"
+    )]
+    pub wait_after_command: Option<bool>,
+
+    /// Execute a command with arguments in the opened terminal session.
+    #[arg(
+        short = 'e',
+        long = "command",
+        num_args = 1..,
+        allow_hyphen_values = true,
+        value_name = "COMMAND"
+    )]
+    pub command: Vec<String>,
+
+    /// Parsed command specification populated from `-e` / `--command` or Windows `/c`.
+    #[clap(skip)]
+    pub command_spec: Option<ExternalCommandSpec>,
+}
+
+impl ExternalSessionArgs {
+    /// Returns `true` if any external session launch option or command was specified.
+    pub fn has_session_options(&self) -> bool {
+        self.command_spec.is_some()
+            || !self.command.is_empty()
+            || self.working_directory.is_some()
+            || self.new_window
+            || self.title.is_some()
+            || self.wait_after_command.is_some()
+    }
+
+    /// Returns the resolved command specification, if a command was requested.
+    pub fn resolved_command_spec(&self) -> Option<ExternalCommandSpec> {
+        self.command_spec.clone().or_else(|| {
+            (!self.command.is_empty()).then(|| ExternalCommandSpec::Argv(self.command.clone()))
+        })
+    }
+}
+
 /// Flags for the Warp application. Additional binaries, like test runners, may use this type
 /// along with their own flags, or convert their flags into an `AppArgs` value.
 #[derive(Debug, Default, clap::Args, Clone)]
@@ -199,6 +273,10 @@ pub struct AppArgs {
     #[clap(flatten)]
     pub parent: ParentOpts,
 
+    /// Options for launching an external terminal session/command.
+    #[clap(flatten)]
+    pub external_session: ExternalSessionArgs,
+
     /// URLs to open in Warp.
     #[arg(hide = true)]
     pub urls: Vec<Url>,
@@ -213,8 +291,6 @@ impl Args {
             if #[cfg(target_family = "wasm")] {
                 Args::default()
             } else {
-                use clap::FromArgMatches as _;
-
                 // Check for disabled commands before parsing to prevent help from showing (e.g.
                 // `warp environment` should not return help text)
                 if !FeatureFlag::CloudEnvironments.is_enabled() {
@@ -298,19 +374,113 @@ impl Args {
                     }
                 }
 
-                let command = Self::clap_command();
+                #[cfg(windows)]
+                let raw_windows_cmdline = current_win32_command_line();
+                #[cfg(not(windows))]
+                let raw_windows_cmdline: Option<String> = None;
 
-                command.try_get_matches()
-                    .and_then(|matches| Self::from_arg_matches(&matches))
-                    .unwrap_or_else(|err| {
-                        // We attach a console to ensure help and error messages are printed
-                        // when using the CLI.
-                        #[cfg(windows)]
-                        warp_util::windows::attach_to_parent_console();
-                        err.exit()
-                    })
+                Self::try_parse_from_iter_with_raw_cmdline(
+                    env::args_os(),
+                    cfg!(windows),
+                    raw_windows_cmdline.as_deref(),
+                )
+                .unwrap_or_else(|err| {
+                    // We attach a console to ensure help and error messages are printed
+                    // when using the CLI.
+                    #[cfg(windows)]
+                    warp_util::windows::attach_to_parent_console();
+                    err.exit()
+                })
             }
         }
+    }
+
+    /// Parses command-line arguments from an iterator while preserving child command arguments
+    /// passed after `-e` / `--command` (and `/c` on Windows) verbatim.
+    pub fn try_parse_app_from<I, T>(iter: I) -> Result<Self, clap::Error>
+    where
+        I: IntoIterator<Item = T>,
+        T: Into<OsString> + Clone,
+    {
+        Self::try_parse_from_iter_with_options(iter, cfg!(windows))
+    }
+
+    fn try_parse_from_iter_with_options<I, T>(
+        iter: I,
+        allow_windows_slash_c: bool,
+    ) -> Result<Self, clap::Error>
+    where
+        I: IntoIterator<Item = T>,
+        T: Into<OsString> + Clone,
+    {
+        Self::try_parse_from_iter_with_raw_cmdline(iter, allow_windows_slash_c, None)
+    }
+
+    fn try_parse_from_iter_with_raw_cmdline<I, T>(
+        iter: I,
+        allow_windows_slash_c: bool,
+        raw_windows_cmdline: Option<&str>,
+    ) -> Result<Self, clap::Error>
+    where
+        I: IntoIterator<Item = T>,
+        T: Into<OsString> + Clone,
+    {
+        let raw_args: Vec<OsString> = iter.into_iter().map(Into::into).collect();
+        let mut command = Self::clap_command();
+
+        if let Some((prefix_end, split_kind, inline_first_arg)) =
+            find_external_command_split(&raw_args, &command, allow_windows_slash_c)
+        {
+            let mut trailing_args = Vec::new();
+            if let Some(first_arg) = inline_first_arg {
+                trailing_args.push(first_arg);
+            }
+            for arg in &raw_args[prefix_end + 1..] {
+                trailing_args.push(arg.to_string_lossy().into_owned());
+            }
+
+            if trailing_args.is_empty() {
+                let flag = match split_kind {
+                    ExternalCommandSplitKind::Argv => "`-e` / `--command`",
+                    ExternalCommandSplitKind::WindowsCmdLine => "`/c`",
+                };
+                return Err(command.error(
+                    clap::error::ErrorKind::MissingRequiredArgument,
+                    format!("expected a command after {flag}"),
+                ));
+            }
+
+            let matches = command.try_get_matches_from(&raw_args[..prefix_end])?;
+            let mut parsed = Self::from_arg_matches(&matches)?;
+            match split_kind {
+                ExternalCommandSplitKind::Argv => {
+                    parsed.args.external_session.command = trailing_args.clone();
+                    parsed.args.external_session.command_spec =
+                        Some(ExternalCommandSpec::Argv(trailing_args));
+                }
+                ExternalCommandSplitKind::WindowsCmdLine => {
+                    let cmdline = resolve_windows_cmdline_after_slash_c(
+                        prefix_end,
+                        &trailing_args,
+                        raw_windows_cmdline,
+                    );
+                    parsed.args.external_session.command_spec =
+                        Some(ExternalCommandSpec::WindowsCmdLine(cmdline));
+                }
+            }
+            return Ok(parsed);
+        }
+
+        let matches = command.try_get_matches_from(raw_args)?;
+        let mut parsed = Self::from_arg_matches(&matches)?;
+        if parsed.args.external_session.command_spec.is_none()
+            && !parsed.args.external_session.command.is_empty()
+        {
+            parsed.args.external_session.command_spec = Some(ExternalCommandSpec::Argv(
+                parsed.args.external_session.command.clone(),
+            ));
+        }
+        Ok(parsed)
     }
 
     /// Construct the [`clap::Command`] that backs `Args`.
@@ -422,6 +592,22 @@ impl Args {
             command = command.mut_subcommand("runner", |c| c.hide(true));
         }
 
+        #[allow(unexpected_cfgs)]
+        let is_oz_cli = cfg!(feature = "standalone")
+            || binary_name().is_some_and(|name| name.starts_with("oz"))
+            || env::var_os("WARP_CLI_MODE").is_some();
+        if is_oz_cli {
+            for arg_id in [
+                "working_directory",
+                "new_window",
+                "title",
+                "wait_after_command",
+                "command",
+            ] {
+                command = command.mut_arg(arg_id, |arg| arg.hide(true));
+            }
+        }
+
         // Wire up `--version` / `-V` using the same version metadata used elsewhere in the
         // app, so the CLI reports the build's release tag.
         command = command.version(version_string());
@@ -507,7 +693,7 @@ pub enum WorkerCommand {
     #[clap(hide = true)]
     MinidumpServer {
         /// Socket name for the minidump server.
-        socket_name: std::path::PathBuf,
+        socket_name: PathBuf,
     },
 
     /// Run the remote development server proxy over SSH stdio.
@@ -533,7 +719,7 @@ pub enum WorkerCommand {
         /// File the driver wrote with the address to connect to, the token to present, and the
         /// agent command line.
         #[clap(long = "launch-file")]
-        launch_file: std::path::PathBuf,
+        launch_file: PathBuf,
     },
 
     /// Serve computer-use tools to an external agent harness over MCP on stdin/stdout.
@@ -554,7 +740,7 @@ pub enum WorkerCommand {
         /// Search pattern.
         pattern: String,
         /// Paths to search.
-        paths: Vec<std::path::PathBuf>,
+        paths: Vec<PathBuf>,
     },
 }
 
@@ -704,7 +890,7 @@ pub enum Command {
     #[cfg(not(target_family = "wasm"))]
     DumpSettingsSchema {
         /// Write the schema to this path instead of standard output.
-        output_path: Option<std::path::PathBuf>,
+        output_path: Option<PathBuf>,
     },
 
     /// Print telemetry events in production and exit.
@@ -834,6 +1020,248 @@ pub fn binary_name() -> Option<String> {
 /// untagged builds (e.g. local `cargo run`).
 pub fn version_string() -> &'static str {
     ChannelState::app_version().unwrap_or("<unknown>")
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExternalCommandSplitKind {
+    Argv,
+    WindowsCmdLine,
+}
+
+fn flag_takes_separate_value(command: &clap::Command, token: &str) -> bool {
+    let long = token
+        .strip_prefix("--")
+        .filter(|s| !s.is_empty() && !s.contains('='));
+    let short = if long.is_none() {
+        token
+            .strip_prefix('-')
+            .filter(|s| s.chars().count() == 1)
+            .and_then(|s| s.chars().next())
+            .filter(|&ch| ch != '-')
+    } else {
+        None
+    };
+
+    if long.is_none() && short.is_none() {
+        return false;
+    }
+
+    command.get_arguments().any(|arg| {
+        if matches!(arg.get_id().as_str(), "wait_after_command" | "command") {
+            return false;
+        }
+        let matches_flag = long.is_some_and(|long| {
+            arg.get_long() == Some(long)
+                || arg
+                    .get_all_aliases()
+                    .into_iter()
+                    .flatten()
+                    .any(|a| a == long)
+        }) || short.is_some_and(|ch| {
+            arg.get_short() == Some(ch)
+                || arg
+                    .get_all_short_aliases()
+                    .into_iter()
+                    .flatten()
+                    .any(|a| a == ch)
+        });
+        matches_flag
+            && arg.get_action().takes_values()
+            && arg
+                .get_num_args()
+                .map(|r| r.min_values() >= 1)
+                .unwrap_or(true)
+    })
+}
+
+fn find_external_command_split(
+    raw_args: &[OsString],
+    command: &clap::Command,
+    allow_windows_slash_c: bool,
+) -> Option<(usize, ExternalCommandSplitKind, Option<String>)> {
+    let mut idx = 1;
+    while idx < raw_args.len() {
+        let token = raw_args[idx].to_string_lossy();
+
+        if token == "--" {
+            return None;
+        }
+        if token == "-e" || token == "--command" {
+            return Some((idx, ExternalCommandSplitKind::Argv, None));
+        }
+        if let Some(first_arg) = token.strip_prefix("--command=") {
+            let inline_first_arg = (!first_arg.is_empty()).then(|| first_arg.to_owned());
+            return Some((idx, ExternalCommandSplitKind::Argv, inline_first_arg));
+        }
+        if !token.starts_with("--")
+            && let Some(first_arg) = token.strip_prefix("-e")
+            && !first_arg.is_empty()
+        {
+            return Some((
+                idx,
+                ExternalCommandSplitKind::Argv,
+                Some(first_arg.to_owned()),
+            ));
+        }
+        if allow_windows_slash_c && (token == "/c" || token == "/C") {
+            return Some((idx, ExternalCommandSplitKind::WindowsCmdLine, None));
+        }
+        if token == "--wait-after-command" {
+            if raw_args
+                .get(idx + 1)
+                .is_some_and(|next| matches!(next.to_string_lossy().as_ref(), "true" | "false"))
+            {
+                idx += 2;
+            } else {
+                idx += 1;
+            }
+            continue;
+        }
+        if flag_takes_separate_value(command, &token) {
+            idx += 2;
+            continue;
+        }
+        let is_long_flag_subcommand = token.strip_prefix("--").is_some_and(|long_flag| {
+            command
+                .get_subcommands()
+                .any(|sub| sub.get_long_flag() == Some(long_flag))
+        });
+        if command.find_subcommand(&*token).is_some()
+            || is_long_flag_subcommand
+            || is_worker_invocation(&token)
+        {
+            return None;
+        }
+        if token.starts_with('-') {
+            idx += 1;
+            continue;
+        }
+        idx += 1;
+    }
+
+    None
+}
+
+#[cfg(windows)]
+fn current_win32_command_line() -> Option<String> {
+    unsafe {
+        let ptr = windows::Win32::System::Environment::GetCommandLineW();
+        ptr.to_string().ok()
+    }
+}
+
+fn resolve_windows_cmdline_after_slash_c(
+    prefix_end: usize,
+    trailing_args: &[String],
+    raw_windows_cmdline: Option<&str>,
+) -> String {
+    if let Some(cmdline) = raw_windows_cmdline
+        && let Some(raw_tail) = extract_raw_windows_cmdline_after_token(cmdline, prefix_end)
+    {
+        return raw_tail;
+    }
+
+    join_windows_cmdline_args(trailing_args)
+}
+
+fn join_windows_cmdline_args(trailing_args: &[String]) -> String {
+    if trailing_args.len() == 1 {
+        return trailing_args[0].clone();
+    }
+
+    let mut result = String::new();
+    for (idx, arg) in trailing_args.iter().enumerate() {
+        if idx > 0 {
+            result.push(' ');
+        }
+        let already_quoted = arg.len() >= 2 && arg.starts_with('"') && arg.ends_with('"');
+        if !already_quoted && (arg.is_empty() || arg.chars().any(char::is_whitespace)) {
+            result.push('"');
+            result.push_str(&arg.replace('"', "\\\""));
+            result.push('"');
+        } else {
+            result.push_str(arg);
+        }
+    }
+    result
+}
+
+fn extract_raw_windows_cmdline_after_token(cmdline: &str, token_index: usize) -> Option<String> {
+    let bytes = cmdline.as_bytes();
+    let mut i = 0;
+
+    // `argv[0]` follows CommandLineToArgvW rules without backslash quote escaping.
+    let mut in_quotes = false;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'"' => {
+                in_quotes = !in_quotes;
+                i += 1;
+            }
+            b' ' | b'\t' if !in_quotes => break,
+            _ => i += 1,
+        }
+    }
+
+    for _ in 1..=token_index {
+        while i < bytes.len() && matches!(bytes[i], b' ' | b'\t') {
+            i += 1;
+        }
+        if i >= bytes.len() {
+            return None;
+        }
+
+        let mut in_quotes = false;
+        while i < bytes.len() {
+            if bytes[i] == b'\\' {
+                let mut backslashes = 0;
+                while i < bytes.len() && bytes[i] == b'\\' {
+                    backslashes += 1;
+                    i += 1;
+                }
+                if i < bytes.len() && bytes[i] == b'"' {
+                    if backslashes % 2 == 0 {
+                        if in_quotes && i + 1 < bytes.len() && bytes[i + 1] == b'"' {
+                            i += 2;
+                        } else {
+                            in_quotes = !in_quotes;
+                            i += 1;
+                        }
+                    } else {
+                        i += 1;
+                    }
+                }
+            } else if bytes[i] == b'"' {
+                if in_quotes && i + 1 < bytes.len() && bytes[i + 1] == b'"' {
+                    i += 2;
+                } else {
+                    in_quotes = !in_quotes;
+                    i += 1;
+                }
+            } else if !in_quotes && matches!(bytes[i], b' ' | b'\t') {
+                break;
+            } else {
+                i += 1;
+            }
+        }
+    }
+
+    let rest = cmdline[i..].trim_matches(|ch| matches!(ch, ' ' | '\t' | '\r' | '\n'));
+    if rest.is_empty() {
+        return None;
+    }
+
+    Some(unwrap_redundant_windows_cmdline_quotes(rest).to_owned())
+}
+
+fn unwrap_redundant_windows_cmdline_quotes(cmdline: &str) -> &str {
+    // VS Code's non-wt fallback wraps the entire quoted command string in outer quotes
+    // (`exec /c "\"prog\" \"arg\" & pause"`), producing a leading `""` and trailing `"`.
+    if cmdline.len() >= 3 && cmdline.starts_with("\"\"") && cmdline.ends_with('"') {
+        &cmdline[1..cmdline.len() - 1]
+    } else {
+        cmdline
+    }
 }
 
 #[cfg(test)]

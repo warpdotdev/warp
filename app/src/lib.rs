@@ -35,6 +35,7 @@ mod dynamic_libraries;
 mod env_vars;
 mod experiments;
 mod external_secrets;
+mod external_session;
 #[cfg(target_family = "wasm")]
 mod font_fallback;
 mod global_resource_handles;
@@ -290,6 +291,8 @@ use crate::notification::NotificationContext;
 use crate::palette::PaletteMode;
 use crate::persistence::PersistenceWriter;
 use crate::persistence::model::AgentConversationData;
+#[cfg(feature = "local_tty")]
+use crate::process_environment::InitialProcessEnvironment;
 use crate::projects::ProjectManagementModel;
 use crate::root_view::{
     OpenFromRestoredArg, OpenPath, quake_mode_window_id, quake_mode_window_is_open,
@@ -871,6 +874,11 @@ pub fn run() -> Result<()> {
         || warp_cli::binary_name().is_some_and(|name| name.starts_with("oz"))
         || std::env::var_os("WARP_CLI_MODE").is_some();
     if is_cli_binary {
+        if args.app_args().external_session.has_session_options() {
+            return Err(anyhow!(
+                "External terminal session flags are only supported by the Warp desktop app"
+            ));
+        }
         warp_cli::Args::clap_command().print_help()?;
         return Ok(());
     }
@@ -1169,21 +1177,38 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
     // Collect errors that occur in run_internal() before the Sentry client is initialized,
     // so they can be replayed to Sentry once it's ready.
     #[cfg_attr(
-        not(all(
-            feature = "release_bundle",
-            any(windows, any(target_os = "linux", target_os = "freebsd"))
+        not(any(
+            windows,
+            target_os = "macos",
+            target_os = "linux",
+            target_os = "freebsd"
         )),
         expect(unused_mut)
     )]
     let mut pre_sentry_errors: Vec<anyhow::Error> = Vec::new();
 
-    #[cfg(all(
-        feature = "release_bundle",
-        any(target_os = "linux", target_os = "freebsd")
+    #[cfg(any(
+        windows,
+        target_os = "macos",
+        target_os = "linux",
+        target_os = "freebsd"
     ))]
+    let initial_env_vars = {
+        #[cfg(feature = "local_tty")]
+        {
+            initial_process_environment.variables().to_vec()
+        }
+        #[cfg(not(feature = "local_tty"))]
+        {
+            Vec::new()
+        }
+    };
+
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     if let LaunchMode::App { .. } = launch_mode {
         match app_services::linux::pass_startup_args_to_existing_instance(
             launch_mode.args().as_ref(),
+            &initial_env_vars,
         ) {
             // If we were able to contact an existing application instance, quit -
             // we only want to run a single instance of Warp at a time.
@@ -1199,17 +1224,18 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
             // it's better to run a second instance than potentially end up in a
             // state where Warp refuses to run even a first instance.
             Err(err) => {
-                let err = anyhow::Error::from(err).context("Failed to forward startup args");
+                let err = anyhow::Error::new(err).context("Failed to forward startup args");
                 report_error!(&err);
                 pre_sentry_errors.push(err);
             }
         }
     }
 
-    #[cfg(all(feature = "release_bundle", windows))]
+    #[cfg(windows)]
     if let LaunchMode::App { .. } = launch_mode {
         match app_services::windows::pass_startup_args_to_existing_instance(
             launch_mode.args().as_ref(),
+            &initial_env_vars,
         ) {
             // If we were able to contact an existing application instance, quit -
             // we only want to run a single instance of Warp at a time.
@@ -1225,7 +1251,27 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
             // it's better to run a second instance than potentially end up in a
             // state where Warp refuses to run even a first instance.
             Err(err) => {
-                let err = anyhow::Error::from(err).context("Failed to forward startup args");
+                let err = anyhow::Error::new(err).context("Failed to forward startup args");
+                report_error!(&err);
+                pre_sentry_errors.push(err);
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    if let LaunchMode::App { .. } = launch_mode {
+        match app_services::mac::pass_startup_args_to_existing_instance(
+            launch_mode.args().as_ref(),
+            &initial_env_vars,
+        ) {
+            Ok(_) => std::process::exit(0),
+            Err(
+                app_services::mac::StartupArgsForwardingError::NoExistingInstance
+                | app_services::mac::StartupArgsForwardingError::NothingToForward
+                | app_services::mac::StartupArgsForwardingError::IgnoredAfterAutoUpdate,
+            ) => {}
+            Err(err) => {
+                let err = anyhow::Error::new(err).context("Failed to forward startup args");
                 report_error!(&err);
                 pre_sentry_errors.push(err);
             }
@@ -3262,6 +3308,16 @@ fn launch(ctx: &mut warpui::AppContext, app_state: Option<AppState>, launch_mode
             // file:// URLs or ones using our custom URL scheme).
             for url in launch_mode.args().urls.iter() {
                 uri::handle_incoming_uri(url, ctx);
+            }
+
+            #[cfg(feature = "local_tty")]
+            if launch_mode.args().external_session.has_session_options() {
+                let caller_env = InitialProcessEnvironment::as_ref(ctx).variables();
+                let request = external_session::ExternalSessionLaunchRequest::from_cli_args(
+                    &launch_mode.args().external_session,
+                    caller_env,
+                );
+                external_session::open_external_session(request, ctx);
             }
 
             // If, after session restoration and command-line argument handling, we

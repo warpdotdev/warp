@@ -5712,7 +5712,7 @@ impl Workspace {
         );
     }
 
-    fn set_active_tab_name(&mut self, title: &str, ctx: &mut ViewContext<Self>) {
+    pub(crate) fn set_active_tab_name(&mut self, title: &str, ctx: &mut ViewContext<Self>) {
         let Some(pane_group) = self
             .tabs
             .get(self.active_tab_index)
@@ -13100,6 +13100,37 @@ impl Workspace {
         }
     }
 
+    fn build_subscribed_pane_group(
+        &self,
+        panes_layout: PanesLayout,
+        block_lists: Arc<HashMap<PaneUuid, Vec<SerializedBlockListItem>>>,
+        custom_tab_title: Option<String>,
+        ctx: &mut ViewContext<Self>,
+    ) -> ViewHandle<PaneGroup> {
+        let new_pane_group = ctx.add_typed_action_view(|ctx| {
+            let mut pane_group = PaneGroup::new_with_panes_layout(
+                self.tips_completed.clone(),
+                self.user_default_shell_unsupported_banner_model_handle
+                    .clone(),
+                self.server_api.clone(),
+                panes_layout,
+                block_lists,
+                self.model_event_sender.clone(),
+                ctx,
+            );
+            if let Some(title) = custom_tab_title {
+                pane_group.set_title(&title, ctx);
+            }
+            pane_group
+        });
+
+        ctx.subscribe_to_view(&new_pane_group, move |me, pane_group, event, ctx| {
+            me.handle_file_tree_event(pane_group, event, ctx)
+        });
+
+        new_pane_group
+    }
+
     pub fn add_tab_with_pane_layout(
         &mut self,
         panes_layout: PanesLayout,
@@ -13122,26 +13153,8 @@ impl Workspace {
 
         let is_new_terminal = matches!(panes_layout, PanesLayout::SingleTerminal(_));
         let is_restoration = matches!(panes_layout, PanesLayout::Snapshot(_));
-        let new_pane_group = ctx.add_typed_action_view(|ctx| {
-            let mut pane_group = PaneGroup::new_with_panes_layout(
-                self.tips_completed.clone(),
-                self.user_default_shell_unsupported_banner_model_handle
-                    .clone(),
-                self.server_api.clone(),
-                panes_layout,
-                block_lists,
-                self.model_event_sender.clone(),
-                ctx,
-            );
-            if let Some(title) = custom_tab_title {
-                pane_group.set_title(&title, ctx);
-            }
-            pane_group
-        });
-
-        ctx.subscribe_to_view(&new_pane_group, move |me, pane_group, event, ctx| {
-            me.handle_file_tree_event(pane_group, event, ctx)
-        });
+        let new_pane_group =
+            self.build_subscribed_pane_group(panes_layout, block_lists, custom_tab_title, ctx);
 
         // Compute where the new tab goes and whether it inherits a group, then
         // insert it. An empty workspace has no active tab to key off of, so it
@@ -13197,6 +13210,92 @@ impl Workspace {
                 pg.set_left_panel_open(true, ctx);
             });
         }
+    }
+
+    pub(crate) fn mark_active_tab_as_external_session(&mut self) {
+        if let Some(tab) = self.tabs.get_mut(self.active_tab_index) {
+            tab.opened_for_external_session = true;
+        }
+    }
+
+    fn find_reusable_external_session_tab_index(&self, ctx: &AppContext) -> Option<usize> {
+        let is_reusable = |tab: &TabData| {
+            tab.opened_for_external_session
+                && tab
+                    .pane_group
+                    .as_ref(ctx)
+                    .is_idle_single_terminal_for_external_session_reuse(ctx)
+        };
+
+        self.tab_mru_order
+            .iter()
+            .find_map(|pane_group_id| {
+                self.tabs
+                    .iter()
+                    .position(|tab| tab.pane_group.id() == *pane_group_id && is_reusable(tab))
+            })
+            .or_else(|| self.tabs.iter().position(is_reusable))
+    }
+
+    #[cfg(feature = "local_tty")]
+    pub(crate) fn open_or_reuse_external_session_tab(
+        &mut self,
+        options: NewTerminalOptions,
+        custom_tab_title: Option<String>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some(reuse_idx) = self.find_reusable_external_session_tab_index(ctx) else {
+            self.add_tab_with_pane_layout(
+                PanesLayout::SingleTerminal(Box::new(options)),
+                Arc::new(HashMap::new()),
+                custom_tab_title,
+                ctx,
+            );
+            self.mark_active_tab_as_external_session();
+            return;
+        };
+
+        let left_panel_was_open = self.tabs[reuse_idx].pane_group.as_ref(ctx).left_panel_open;
+        let new_pane_group = self.build_subscribed_pane_group(
+            PanesLayout::SingleTerminal(Box::new(options)),
+            Arc::new(HashMap::new()),
+            custom_tab_title,
+            ctx,
+        );
+
+        // Swap the fresh PaneGroup into the tab before shutting down the old one so its
+        // `Event::Exited` cannot match this tab and close it (or close a single-tab window).
+        let old_pane_group =
+            std::mem::replace(&mut self.tabs[reuse_idx].pane_group, new_pane_group);
+        self.tabs[reuse_idx].default_directory_color = None;
+        self.tabs[reuse_idx].opened_for_external_session = true;
+
+        let old_pane_group_id = old_pane_group.id();
+        self.vertical_tabs_panel
+            .clear_detail_sidecar_if_for_pane_group(old_pane_group_id);
+        self.tab_mru_order.retain(|id| *id != old_pane_group_id);
+        self.tab_mru_order
+            .push(self.tabs[reuse_idx].pane_group.id());
+
+        let working_directories_model = self.working_directories_model.clone();
+        old_pane_group.update(ctx, |pane_group, ctx| {
+            pane_group.for_all_terminal_panes(
+                |terminal_view, ctx| {
+                    terminal_view.shutdown_pty(ctx);
+                },
+                ctx,
+            );
+            pane_group.detach_panes_for_close(&working_directories_model, ctx);
+        });
+
+        self.activate_tab_internal(reuse_idx, ctx);
+        if FeatureFlag::AgentViewConversationListView.is_enabled() && left_panel_was_open {
+            self.active_tab_pane_group().update(ctx, |pg, ctx| {
+                pg.set_left_panel_open(true, ctx);
+            });
+        }
+        ctx.dispatch_global_action("workspace:save_app", ());
+        ctx.notify();
     }
 
     pub fn add_tab_from_existing_pane(

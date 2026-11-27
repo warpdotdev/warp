@@ -1189,6 +1189,30 @@ impl PaneGroup {
         self.number_of_shared_sessions(ctx) > 0
     }
 
+    /// Returns true when this pane group consists of a single unshared terminal pane without
+    /// child agent panes and its terminal is idle at the prompt.
+    pub(crate) fn is_idle_single_terminal_for_external_session_reuse(
+        &self,
+        ctx: &AppContext,
+    ) -> bool {
+        if self.pane_count() != 1
+            || !self.child_agent_panes.is_empty()
+            || self.child_agent_origin.is_some()
+            || self.is_terminal_pane_being_shared(ctx)
+        {
+            return false;
+        }
+        let mut terminal_ids = self.terminal_pane_ids();
+        let Some(pane_id) = terminal_ids.next() else {
+            return false;
+        };
+        if terminal_ids.next().is_some() {
+            return false;
+        }
+        self.terminal_view_from_pane_id(pane_id, ctx)
+            .is_some_and(|view| view.as_ref(ctx).is_idle_for_external_session_reuse(ctx))
+    }
+
     pub fn smart_split_direction(
         &self,
         ctx: &mut ViewContext<Self>,

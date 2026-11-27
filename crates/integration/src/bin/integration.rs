@@ -527,5 +527,11 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     // Regression: Enter must accept inline menus (not insert newline) when toggle=true (PR #11723)
     register_test!(test_rich_input_enter_accepts_menu_item_when_toggle_is_true);
 
+    // External session / IDE debug launch tests
+    register_test!(test_external_session_opens_tab_and_runs_command_with_env);
+    register_test!(test_external_session_new_window_runs_command);
+    register_test!(test_external_session_reuses_idle_debug_tab);
+    register_test!(test_external_session_opens_new_tab_when_debug_tab_is_busy);
+
     tests
 }

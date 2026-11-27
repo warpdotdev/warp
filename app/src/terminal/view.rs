@@ -11996,6 +11996,27 @@ impl TerminalView {
         }
     }
 
+    /// Returns true when this terminal has finished bootstrapping, has no pending or running
+    /// command, has no active AI conversation or unsent user input, and is sitting at an idle
+    /// shell prompt.
+    pub(crate) fn is_idle_for_external_session_reuse(&self, ctx: &AppContext) -> bool {
+        if self.shell_replacement_refusal().is_some()
+            || self.has_pending_command_or_awaiting_completion(ctx)
+            || self.active_conversation_id(ctx).is_some()
+            || !self.input.as_ref(ctx).buffer_text(ctx).is_empty()
+        {
+            return false;
+        }
+        let model = self.model.lock();
+        let active_block = model.block_list().active_block();
+        active_block.has_received_precmd() && active_block.is_command_grid_active()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_login_shell_bootstrapped_for_test(&mut self, bootstrapped: bool) {
+        self.is_login_shell_bootstrapped = bootstrapped;
+    }
+
     /// Resolves the pending shell replacement with `request_id`, ignoring stale completions.
     pub(crate) fn complete_shell_replacement(
         &mut self,
