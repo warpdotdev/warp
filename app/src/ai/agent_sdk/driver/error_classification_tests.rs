@@ -447,7 +447,10 @@ fn share_session_timeout_gets_internal_error() {
     });
     assert_eq!(state, AgentTaskState::Error);
     assert_eq!(update.error_code, Some(PlatformErrorCode::InternalError));
-    assert!(update.message.contains("timed out"));
+    assert_eq!(
+        update.message,
+        "Timed out starting session sharing. Please retry the run."
+    );
 }
 
 #[test]

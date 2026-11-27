@@ -1020,6 +1020,8 @@ fn test_oversized_initialize_fails_startup_without_retry() {
                 startup_retry: StartupRetryState {
                     current_attempt: 1,
                     max_attempts: AMBIENT_CREATE_SESSION_MAX_ATTEMPTS,
+                    started_at: Instant::now(),
+                    initialization_sent: false,
                     timeout_abort_handle: None,
                     transport_abort_handle: None,
                 },
@@ -1112,6 +1114,8 @@ fn test_should_retry_startup_failure_respects_attempt_budget() {
                 startup_retry: StartupRetryState {
                     current_attempt: 1,
                     max_attempts: AMBIENT_CREATE_SESSION_MAX_ATTEMPTS,
+                    started_at: Instant::now(),
+                    initialization_sent: false,
                     timeout_abort_handle: None,
                     transport_abort_handle: None,
                 },
@@ -1122,6 +1126,8 @@ fn test_should_retry_startup_failure_respects_attempt_budget() {
                 startup_retry: StartupRetryState {
                     current_attempt: AMBIENT_CREATE_SESSION_MAX_ATTEMPTS,
                     max_attempts: AMBIENT_CREATE_SESSION_MAX_ATTEMPTS,
+                    started_at: Instant::now(),
+                    initialization_sent: false,
                     timeout_abort_handle: None,
                     transport_abort_handle: None,
                 },
@@ -1143,6 +1149,106 @@ fn test_should_retry_startup_failure_respects_attempt_budget() {
 }
 
 #[test]
+fn test_exhausted_startup_timeout_emits_failure() {
+    App::test((), |mut app| async move {
+        let network = create_network(&mut app, false).0;
+        let (failure_tx, failure_rx) = async_channel::bounded(1);
+        app.update(|ctx| {
+            ctx.subscribe_to_model(&network, move |_, event, _| {
+                if let NetworkEvent::FailedToCreateSharedSession { reason, cause } = event {
+                    assert!(
+                        cause
+                            .as_ref()
+                            .unwrap()
+                            .is::<super::SessionSharingStartupTimeout>()
+                    );
+                    failure_tx.try_send(reason.clone()).unwrap();
+                }
+            });
+        });
+        network.update(&mut app, |network, ctx| {
+            network.stage = Stage::BeforeStarted {
+                startup_retry: StartupRetryState {
+                    current_attempt: AMBIENT_CREATE_SESSION_MAX_ATTEMPTS,
+                    max_attempts: AMBIENT_CREATE_SESSION_MAX_ATTEMPTS,
+                    started_at: Instant::now(),
+                    initialization_sent: false,
+                    timeout_abort_handle: None,
+                    transport_abort_handle: None,
+                },
+            };
+
+            network.handle_startup_failure(StartupFailure::Timeout, ctx);
+        });
+
+        let reason = failure_rx
+            .recv()
+            .with_timeout(Duration::from_secs(2))
+            .await
+            .expect("Final startup timeout should notify the session-sharing caller")
+            .unwrap();
+        assert!(matches!(
+            &reason,
+            FailedToInitializeSessionReason::InternalServerError { details }
+                if details == "Timed out creating shared session"
+        ));
+        assert_eq!(
+            super::failed_to_initialize_session_user_error(&reason),
+            "An internal error occurred. Please try sharing again."
+        );
+        network.read(&app, |network, _| {
+            assert!(matches!(network.stage, Stage::Finished));
+            assert!(network.ws_proxy_tx.is_closed());
+            assert!(!network.is_connected());
+        });
+    });
+}
+
+#[test]
+fn test_startup_does_not_retry_after_overall_deadline() {
+    App::test((), |mut app| async move {
+        let network = create_network(&mut app, false).0;
+        network.update(&mut app, |network, _| {
+            let mut startup_retry = StartupRetryState::new(AMBIENT_CREATE_SESSION_MAX_ATTEMPTS);
+            startup_retry.current_attempt = 1;
+            startup_retry.started_at = Instant::now() - super::AMBIENT_SESSION_STARTUP_TIMEOUT;
+            network.stage = Stage::BeforeStarted { startup_retry };
+
+            assert!(!network.should_retry_startup_failure(&StartupFailure::Timeout));
+            assert!(!network.should_retry_startup_failure(&StartupFailure::Transport));
+        });
+    });
+}
+
+#[test]
+fn test_startup_does_not_retry_ambiguous_initialized_session() {
+    App::test((), |mut app| async move {
+        let network = create_network(&mut app, false).0;
+        network.update(&mut app, |network, _| {
+            let mut startup_retry = StartupRetryState::new(AMBIENT_CREATE_SESSION_MAX_ATTEMPTS);
+            startup_retry.current_attempt = 1;
+            startup_retry.initialization_sent = true;
+            network.stage = Stage::BeforeStarted { startup_retry };
+
+            assert!(!network.should_retry_startup_failure(&StartupFailure::Timeout));
+            assert!(!network.should_retry_startup_failure(&StartupFailure::InitializeSend));
+            assert!(!network.should_retry_startup_failure(&StartupFailure::WebsocketError));
+            assert!(
+                !network
+                    .should_retry_startup_failure(&StartupFailure::WebsocketClosedBeforeStarted)
+            );
+            assert!(
+                network.should_retry_startup_failure(&StartupFailure::ServerRejected(
+                    FailedToInitializeSessionReason::InternalServerError {
+                        details: "explicit rejection".to_string(),
+                    }
+                ))
+            );
+        });
+    });
+}
+
+#[test]
 fn test_startup_attempt_stale_filtering() {
     App::test((), |mut app| async move {
         let network = create_network(&mut app, false).0;
@@ -1152,6 +1258,8 @@ fn test_startup_attempt_stale_filtering() {
                 startup_retry: StartupRetryState {
                     current_attempt: 1,
                     max_attempts: AMBIENT_CREATE_SESSION_MAX_ATTEMPTS,
+                    started_at: Instant::now(),
+                    initialization_sent: false,
                     timeout_abort_handle: None,
                     transport_abort_handle: None,
                 },
@@ -1196,7 +1304,7 @@ fn is_upstream_message_selection_update(
     )
 }
 
-fn create_network(
+pub(super) fn create_network(
     app: &mut App,
     session_initialized: bool,
 ) -> (ModelHandle<Network>, Sender<OrderedTerminalEventType>) {
