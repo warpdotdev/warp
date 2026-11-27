@@ -557,9 +557,6 @@ pub enum FeatureFlag {
     /// Enables the inline history menu for quickly accessing previous commands and conversations.
     InlineHistoryMenu,
 
-    /// Enables the inline repo switcher menu for switching between indexed repos.
-    InlineRepoMenu,
-
     /// Enables cloud mode functionality for ambient agents.
     CloudMode,
 
