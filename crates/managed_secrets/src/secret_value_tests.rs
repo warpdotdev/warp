@@ -423,6 +423,22 @@ fn test_debug_representation_no_secrets_aws_ecr_credential() {
     );
 }
 
+#[test]
+fn test_serialize_http_bearer_and_redact_debug() {
+    let secret = ManagedSecretValue::http_bearer(
+        "api.github.com",
+        vec!["GET".to_owned()],
+        vec!["/user".to_owned()],
+        "bearer-secret",
+    );
+    assert_eq!(
+        serde_json::to_string(&secret).expect("failed to serialize"),
+        r#"{"host":"api.github.com","allowed_methods":["GET"],"path_prefixes":["/user"],"bearer_token":"bearer-secret"}"#
+    );
+    assert_eq!(format!("{secret:?}"), "ManagedSecret::HttpBearer { .. }");
+    assert!(secret.validate_field_sizes("GITHUB").is_ok());
+}
+
 /// An AWS ECR credential is never injected as an environment variable, so it has no
 /// field-size limit to enforce - same reasoning as `docker_registry`.
 #[test]
