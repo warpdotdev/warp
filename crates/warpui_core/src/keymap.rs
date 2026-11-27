@@ -439,9 +439,23 @@ impl Keymap {
     /// Items will be returned in the reverse order they were registered, the most recently
     /// registered editable binding will have the highest precedence
     fn editable_bindings(&self) -> impl Iterator<Item = EditableBindingLens<'_>> {
-        self.editable_bindings
+        // Iterate user-customized bindings before defaults, so an explicit user
+        // override always wins precedence over a default binding that happens to
+        // use the same keystroke. Within each partition, retain reverse-registration
+        // order (most recently registered first), matching the prior behavior.
+        // See https://github.com/warpdotdev/warp/issues/9128.
+        let user_overridden = self
+            .editable_bindings
             .iter()
             .rev()
+            .filter(|binding| binding.custom_trigger.is_some());
+        let defaults = self
+            .editable_bindings
+            .iter()
+            .rev()
+            .filter(|binding| binding.custom_trigger.is_none());
+        user_overridden
+            .chain(defaults)
             .map(|binding| binding.as_lens())
             .filter(|binding| binding.is_enabled())
     }
@@ -450,7 +464,9 @@ impl Keymap {
     /// modified by the custom bindings, where appropriate.
     ///
     /// Editable bindings will be returned first, followed by any fixed bindings in the reverse
-    /// order they were added.
+    /// order they were added. Among editable bindings, user-customized ones take precedence
+    /// over defaults so an explicit user override is not shadowed by a default binding that
+    /// shares the same keystroke (#9128).
     fn bindings(&self) -> impl Iterator<Item = BindingLens<'_>> {
         self.editable_bindings()
             .map(|lens| lens.as_binding())
@@ -464,9 +480,19 @@ impl Keymap {
     }
 
     fn editable_custom_action_bindings(&self) -> impl Iterator<Item = EditableBindingLens<'_>> {
-        self.editable_custom_action_bindings
+        // Mirror the precedence rule used by `editable_bindings` (#9128).
+        let user_overridden = self
+            .editable_custom_action_bindings
             .iter()
             .rev()
+            .filter(|binding| binding.custom_trigger.is_some());
+        let defaults = self
+            .editable_custom_action_bindings
+            .iter()
+            .rev()
+            .filter(|binding| binding.custom_trigger.is_none());
+        user_overridden
+            .chain(defaults)
             .map(|binding| binding.as_lens())
             .filter(|binding| binding.is_enabled())
     }
