@@ -167,9 +167,17 @@ impl RepoPicker {
             })
             .collect();
 
+        // With nothing explicitly selected, the dropdown auto-highlights its first item and shows
+        // it in the top bar, so treat that item as the selection to keep the displayed value and
+        // `selected_value()` in sync.
+        let first_path = PersistedWorkspace::as_ref(ctx)
+            .workspaces()
+            .find(|ws| ws.path.exists())
+            .map(|ws| ws.path.to_string_lossy().into_owned());
         let raw_to_select = select_path
             .or(self.selected.as_deref())
-            .map(|s| s.to_owned());
+            .map(|s| s.to_owned())
+            .or(first_path);
 
         // Mirror the raw path into `self.selected` so `selected_value()`
         // returns a real filesystem path even before the user explicitly
@@ -245,3 +253,7 @@ impl TypedActionView for RepoPicker {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "repo_picker_tests.rs"]
+mod tests;
