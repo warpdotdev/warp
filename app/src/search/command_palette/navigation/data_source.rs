@@ -1,9 +1,10 @@
-use warpui::{AppContext, Entity, ModelHandle};
+use warp_core::execution_mode::AppExecutionMode;
+use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 
 use crate::search::SyncDataSource;
 use crate::search::command_palette::mixer::CommandPaletteItemAction;
 use crate::search::command_palette::navigation::search::{
-    FuzzySessionSearcher, MatchedSession, SessionMatchResult, SessionSearcher,
+    FuzzySessionSearcher, MatchedSession, NoOpSessionSearcher, SessionMatchResult, SessionSearcher,
 };
 use crate::search::command_palette::navigation::search_item::SearchItem;
 use crate::search::data_source::{DataSourceSearchError, Query, QueryResult};
@@ -18,8 +19,16 @@ pub struct DataSource {
 
 impl DataSource {
     #[cfg(not(target_family = "wasm"))]
-    pub fn new(active_session_handle: ModelHandle<SessionSource>) -> Self {
-        if warp_core::features::FeatureFlag::UseTantivySearch.is_enabled() {
+    pub fn new(
+        active_session_handle: ModelHandle<SessionSource>,
+        ctx: &mut ModelContext<Self>,
+    ) -> Self {
+        if AppExecutionMode::as_ref(ctx).is_autonomous() {
+            // Autonomous execution modes (e.g. the SDK/agent driver, or the remote server
+            // daemon) have no user to present the command palette to, so there's no reason
+            // to build a full-text search index of sessions.
+            Self::new_no_op(active_session_handle)
+        } else if warp_core::features::FeatureFlag::UseTantivySearch.is_enabled() {
             Self::new_full_text(active_session_handle)
         } else {
             Self::new_fuzzy(active_session_handle)
@@ -27,7 +36,10 @@ impl DataSource {
     }
 
     #[cfg(target_family = "wasm")]
-    pub fn new(active_session_handle: ModelHandle<SessionSource>) -> Self {
+    pub fn new(
+        active_session_handle: ModelHandle<SessionSource>,
+        _ctx: &mut ModelContext<Self>,
+    ) -> Self {
         Self::new_fuzzy(active_session_handle)
     }
 
@@ -40,6 +52,14 @@ impl DataSource {
 
     fn new_fuzzy(active_session_handle: ModelHandle<SessionSource>) -> Self {
         let searcher = Box::new(FuzzySessionSearcher {
+            session_source_handle: active_session_handle,
+        });
+        Self { searcher }
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn new_no_op(active_session_handle: ModelHandle<SessionSource>) -> Self {
+        let searcher = Box::new(NoOpSessionSearcher {
             session_source_handle: active_session_handle,
         });
         Self { searcher }
