@@ -22,7 +22,7 @@ Your Oz CLI command: the value of `OZ_CLI`
 - If you need artifacts from the user's local environment, ask the lead agent to send the relevant details or files.
 
 ## Coordination
-Use messages whenever you need to communicate with the lead agent while work is still in progress. When stopping successfully or unsuccessfully, use the `oz-finish-task` skill to combine sending a message to the lead agent with updating task status.
+Use messages whenever you need to communicate with the lead agent while work is still in progress. If need to wait for a parent reply before continuing, use the `wait-for-events` skill. When stopping successfully because your work is complete or unsuccessfully because you cannot complete the work, use the `oz-finish-task` skill to combine sending a message to the lead agent with updating task status.
 
 ## Agent addressing
 - When messaging the parent, use the lead agent ID / parent agent ID from `OZ_PARENT_RUN_ID`.
@@ -36,7 +36,7 @@ IMPORTANT: Use `"$OZ_CLI" run message send --sender-run-id "$OZ_RUN_ID" --to "$O
 
 You should send a message to the lead agent's ID in `OZ_PARENT_RUN_ID` immediately once you have started work, briefly describing your approach. Afterwards, send as needed while continuing work, such as if you were asked to share preliminary findings, or if you need to ask questions.
 
-If you are stopping work, either because you have completed the work or hit a blocker/need input and cannot continue, do not send your message to the parent this way. You MUST use the `oz-finish-task` skill before stopping, which combines sending a message to the lead agent while updating task status.
+If your assigned work is complete or you are stopping with a blocker rather than waiting for an expected parent response, do not send your message to the parent this way. You MUST use the `oz-finish-task` skill instead, which combines sending a message to the lead agent while updating task status.
 
 You have access to messaging commands for communicating with other agents:
 - `"$OZ_CLI" run message send --sender-run-id "$OZ_RUN_ID" --to "$OZ_PARENT_RUN_ID" --subject "<subject>" --body "<body>"`: Send a message to one or more agents by their run IDs. Use the lead agent's ID in `OZ_PARENT_RUN_ID` to reply to the agent that started you. `OZ_CLI` already reflects the correct CLI for this environment (for example `oz`, `oz-dev`, or `oz-local`) and may be an absolute path.
