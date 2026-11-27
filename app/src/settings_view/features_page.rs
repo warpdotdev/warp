@@ -45,8 +45,8 @@ use super::settings_page::{
     render_dropdown_item_label, render_local_only_icon,
 };
 use super::{
-    DisplayCount, SettingsAction, SettingsSection, ToggleSettingActionPair, features, flags,
-    render_beta_chip,
+    DisplayCount, SettingActionPairContexts, SettingActionPairDescriptions, SettingsAction,
+    SettingsSection, ToggleSettingActionPair, features, flags, render_beta_chip,
 };
 use crate::appearance::Appearance;
 use crate::default_terminal::DefaultTerminal;
@@ -99,8 +99,10 @@ use crate::terminal::session_settings::{
     SessionSettingsChangedEvent, ShouldConfirmCloseSession,
 };
 use crate::terminal::settings::{
-    AsyncFindEnabled, MaximumGridSize, Osc52ClipboardAccess, Osc52ClipboardAccessSetting,
-    ShowTerminalZeroStateBlock, TerminalSettings, TerminalSettingsChangedEvent, UseAudibleBell,
+    AsyncFindEnabled, GitBranchNamePrefixChars, GitBranchNameTruncation,
+    GitBranchNameTruncationSetting, MaximumGridSize, Osc52ClipboardAccess,
+    Osc52ClipboardAccessSetting, ShowTerminalZeroStateBlock, TerminalSettings,
+    TerminalSettingsChangedEvent, UseAudibleBell,
 };
 use crate::terminal::{BlockListSettings, PreserveInputFocusOnBlockSelection, SnackbarEnabled};
 use crate::undo_close::UndoCloseSettings;
@@ -108,6 +110,7 @@ use crate::user_config::{WarpConfig, WarpConfigUpdateEvent};
 use crate::util::bindings::{
     keybinding_name_to_display_string, reset_keybinding_to_default, set_custom_keybinding,
 };
+use crate::util::git_branch_display::GIT_BRANCH_NAME_EDGE_CHARS_LIMIT;
 use crate::view_components::{Dropdown, DropdownItem, FilterableDropdown};
 use crate::workspace::WorkspaceAction;
 use crate::workspace::tab_settings::{NewTabPlacement, TabSettings, TabSettingsChangedEvent};
@@ -295,6 +298,20 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
             TerminalSettings::as_ref(app)
                 .use_audible_bell
                 .is_supported_on_current_platform(),
+        ),
+        ToggleSettingActionPair::custom(
+            SettingActionPairDescriptions::new(
+                "Show the start of long git branch names",
+                "Show the end of long git branch names",
+            ),
+            builder(SettingsAction::FeaturesPageToggle(
+                FeaturesPageAction::ToggleGitBranchNameTruncation,
+            )),
+            SettingActionPairContexts::new(
+                context.clone() & !id!(flags::GIT_BRANCH_NAME_SHOW_START),
+                context.clone() & id!(flags::GIT_BRANCH_NAME_SHOW_START),
+            ),
+            None,
         ),
         ToggleSettingActionPair::new(
             "autosuggestions",
@@ -815,6 +832,8 @@ pub enum FeaturesPageAction {
     SetPreferredGraphicsBackend(Option<GraphicsBackend>),
     SetNewTabPlacement(NewTabPlacement),
     SetOsc52ClipboardAccess(Osc52ClipboardAccess),
+    SetGitBranchNameTruncation(GitBranchNameTruncation),
+    ToggleGitBranchNameTruncation,
     SetDefaultSessionMode(DefaultSessionMode),
     SetDefaultTabConfig(String),
     SearchForKeybinding(String),
@@ -859,6 +878,7 @@ const NOTIFICATIONS_DOCS_URL: &str = "https://docs.warp.dev/terminal/more-featur
 const QUAKE_DROPDOWN_WIDTH: f32 = 130.;
 
 const MAX_BLOCK_SIZE_INPUT_BOX_WIDTH: f32 = 80.;
+const GIT_BRANCH_EDGE_CHARS_INPUT_WIDTH: f32 = 48.;
 
 const MIN_MAX_GRID_SIZE: usize = 100;
 
@@ -1242,6 +1262,17 @@ impl FeaturesPageAction {
                 action: "SetOsc52ClipboardAccess".to_string(),
                 value: format!("{access:?}"),
             },
+            Self::SetGitBranchNameTruncation(truncation) => TelemetryEvent::FeaturesPageAction {
+                action: "SetGitBranchNameTruncation".to_string(),
+                value: format!("{truncation:?}"),
+            },
+            Self::ToggleGitBranchNameTruncation => TelemetryEvent::FeaturesPageAction {
+                action: "ToggleGitBranchNameTruncation".to_string(),
+                value: format!(
+                    "{:?}",
+                    *TerminalSettings::as_ref(ctx).git_branch_name_truncation
+                ),
+            },
             Self::SetDefaultSessionMode(mode) => TelemetryEvent::FeaturesPageAction {
                 action: "SetDefaultSessionMode".to_string(),
                 value: format!("{mode:?}"),
@@ -1448,6 +1479,11 @@ pub struct FeaturesPageView {
     graphics_backend_dropdown: ViewHandle<Dropdown<FeaturesPageAction>>,
     new_tab_placement_dropdown: ViewHandle<Dropdown<FeaturesPageAction>>,
     osc52_clipboard_access_dropdown: ViewHandle<Dropdown<FeaturesPageAction>>,
+    git_branch_name_truncation_dropdown: ViewHandle<Dropdown<FeaturesPageAction>>,
+    git_branch_name_prefix_chars_editor: ViewHandle<EditorView>,
+    git_branch_name_suffix_chars_editor: ViewHandle<EditorView>,
+    git_branch_prefix_chars_valid: bool,
+    git_branch_suffix_chars_valid: bool,
     default_session_mode_dropdown: ViewHandle<FilterableDropdown<FeaturesPageAction>>,
     tab_behavior: Tracked<TabBehavior>,
     completions_keystroke: Tracked<String>,
@@ -2025,6 +2061,25 @@ impl TypedActionView for FeaturesPageView {
                     );
                 });
             }
+            SetGitBranchNameTruncation(truncation) => {
+                TerminalSettings::handle(ctx).update(ctx, |terminal_settings, ctx| {
+                    report_if_error!(
+                        terminal_settings
+                            .git_branch_name_truncation
+                            .set_value(*truncation, ctx)
+                    );
+                });
+            }
+            ToggleGitBranchNameTruncation => {
+                TerminalSettings::handle(ctx).update(ctx, |terminal_settings, ctx| {
+                    let next = terminal_settings.git_branch_name_truncation.toggled();
+                    report_if_error!(
+                        terminal_settings
+                            .git_branch_name_truncation
+                            .set_value(next, ctx)
+                    );
+                });
+            }
             SetDefaultSessionMode(mode) => self.set_default_session_mode(mode, ctx),
             SetDefaultTabConfig(path) => {
                 AISettings::handle(ctx).update(ctx, |ai_settings, ctx| {
@@ -2386,6 +2441,39 @@ impl FeaturesPageView {
                         ctx,
                     );
                 }
+                if matches!(
+                    event,
+                    TerminalSettingsChangedEvent::GitBranchNameTruncationSetting { .. }
+                ) {
+                    Self::update_git_branch_name_truncation_dropdown(
+                        me.git_branch_name_truncation_dropdown.clone(),
+                        ctx,
+                    );
+                }
+                if matches!(
+                    event,
+                    TerminalSettingsChangedEvent::GitBranchNamePrefixChars { .. }
+                ) {
+                    let saved = *terminal_settings.as_ref(ctx).git_branch_name_prefix_chars;
+                    me.git_branch_prefix_chars_valid = true;
+                    me.sync_git_branch_edge_chars_editor(
+                        me.git_branch_name_prefix_chars_editor.clone(),
+                        saved,
+                        ctx,
+                    );
+                }
+                if matches!(
+                    event,
+                    TerminalSettingsChangedEvent::GitBranchNameSuffixChars { .. }
+                ) {
+                    let saved = *terminal_settings.as_ref(ctx).git_branch_name_suffix_chars;
+                    me.git_branch_suffix_chars_valid = true;
+                    me.sync_git_branch_edge_chars_editor(
+                        me.git_branch_name_suffix_chars_editor.clone(),
+                        saved,
+                        ctx,
+                    );
+                }
                 ctx.notify()
             },
         );
@@ -2468,6 +2556,12 @@ impl FeaturesPageView {
 
         let osc52_clipboard_access_dropdown = ctx.add_typed_action_view(Dropdown::new);
         Self::update_osc52_clipboard_access_dropdown(osc52_clipboard_access_dropdown.clone(), ctx);
+
+        let git_branch_name_truncation_dropdown = ctx.add_typed_action_view(Dropdown::new);
+        Self::update_git_branch_name_truncation_dropdown(
+            git_branch_name_truncation_dropdown.clone(),
+            ctx,
+        );
 
         ctx.subscribe_to_model(&TabSettings::handle(ctx), |me, _, event, ctx| {
             if matches!(event, TabSettingsChangedEvent::NewTabPlacement { .. }) {
@@ -2632,6 +2726,38 @@ impl FeaturesPageView {
             me.handle_block_size_editor_event(event, ctx);
         });
 
+        let git_branch_name_prefix_chars_editor = ctx.add_typed_action_view(|ctx| {
+            EditorView::single_line(width_and_height_editor_options.clone(), ctx)
+        });
+        git_branch_name_prefix_chars_editor.update(ctx, |editor, ctx| {
+            editor.set_buffer_text(
+                &format!(
+                    "{}",
+                    *TerminalSettings::as_ref(ctx).git_branch_name_prefix_chars
+                ),
+                ctx,
+            );
+        });
+        ctx.subscribe_to_view(&git_branch_name_prefix_chars_editor, |me, _, event, ctx| {
+            me.handle_git_branch_edge_chars_editor_event(event, true, ctx);
+        });
+
+        let git_branch_name_suffix_chars_editor = ctx.add_typed_action_view(|ctx| {
+            EditorView::single_line(width_and_height_editor_options.clone(), ctx)
+        });
+        git_branch_name_suffix_chars_editor.update(ctx, |editor, ctx| {
+            editor.set_buffer_text(
+                &format!(
+                    "{}",
+                    *TerminalSettings::as_ref(ctx).git_branch_name_suffix_chars
+                ),
+                ctx,
+            );
+        });
+        ctx.subscribe_to_view(&git_branch_name_suffix_chars_editor, |me, _, event, ctx| {
+            me.handle_git_branch_edge_chars_editor_event(event, false, ctx);
+        });
+
         let mouse_scroll_input_editor = ctx.add_typed_action_view(|ctx| {
             EditorView::single_line(width_and_height_editor_options.clone(), ctx)
         });
@@ -2753,6 +2879,11 @@ impl FeaturesPageView {
             graphics_backend_dropdown,
             new_tab_placement_dropdown,
             osc52_clipboard_access_dropdown,
+            git_branch_name_truncation_dropdown,
+            git_branch_name_prefix_chars_editor,
+            git_branch_name_suffix_chars_editor,
+            git_branch_prefix_chars_valid: true,
+            git_branch_suffix_chars_valid: true,
             default_session_mode_dropdown,
             tab_behavior: Default::default(),
 
@@ -3054,6 +3185,8 @@ impl FeaturesPageView {
         terminal_widgets.push(Box::new(SmartSelectWidget::default()));
         terminal_widgets.push(Box::new(CopyOnSelectWidget::default()));
         terminal_widgets.push(Box::new(Osc52ClipboardAccessWidget::default()));
+        terminal_widgets.push(Box::new(GitBranchNameTruncationWidget::default()));
+        terminal_widgets.push(Box::new(GitBranchNameMiddleCharsWidget::default()));
         terminal_widgets.push(Box::new(NewTabPlacementWidget::default()));
 
         let mut system_widgets: Vec<Box<dyn SettingsWidget<View = Self>>> = vec![];
@@ -3711,6 +3844,146 @@ impl FeaturesPageView {
             );
             dropdown.set_selected_by_index(selected_index, ctx);
         });
+    }
+
+    fn update_git_branch_name_truncation_dropdown(
+        dropdown: ViewHandle<Dropdown<FeaturesPageAction>>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        dropdown.update(ctx, |dropdown, ctx| {
+            let values = vec![
+                GitBranchNameTruncation::OmitStart,
+                GitBranchNameTruncation::OmitEnd,
+                GitBranchNameTruncation::OmitMiddle,
+            ];
+            let current_value = *TerminalSettings::as_ref(ctx).git_branch_name_truncation;
+            let selected_index = values
+                .iter()
+                .position(|val| *val == current_value)
+                .unwrap_or(0);
+
+            dropdown.set_items(
+                values
+                    .into_iter()
+                    .map(|val| {
+                        DropdownItem::new(
+                            val.as_dropdown_label(),
+                            FeaturesPageAction::SetGitBranchNameTruncation(val),
+                        )
+                    })
+                    .collect(),
+                ctx,
+            );
+            dropdown.set_selected_by_index(selected_index, ctx);
+        });
+    }
+
+    fn sync_git_branch_edge_chars_editor(
+        &self,
+        editor: ViewHandle<EditorView>,
+        saved: usize,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let saved = saved.to_string();
+        editor.update(ctx, |editor, ctx| {
+            if editor.buffer_text(ctx) != saved {
+                editor.set_buffer_text(&saved, ctx);
+            }
+        });
+    }
+
+    fn handle_git_branch_edge_chars_editor_event(
+        &mut self,
+        event: &EditorEvent,
+        prefix: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        match event {
+            EditorEvent::Edited(_) => {
+                let editor = if prefix {
+                    self.git_branch_name_prefix_chars_editor.clone()
+                } else {
+                    self.git_branch_name_suffix_chars_editor.clone()
+                };
+                let valid = editor
+                    .as_ref(ctx)
+                    .buffer_text(ctx)
+                    .parse::<usize>()
+                    .is_ok_and(|input| input <= GIT_BRANCH_NAME_EDGE_CHARS_LIMIT);
+                if prefix {
+                    self.git_branch_prefix_chars_valid = valid;
+                } else {
+                    self.git_branch_suffix_chars_valid = valid;
+                }
+                ctx.notify();
+            }
+            EditorEvent::Enter | EditorEvent::Blurred => {
+                self.save_git_branch_edge_chars(prefix, ctx);
+            }
+            EditorEvent::Escape => ctx.emit(FeaturesSettingsPageEvent::FocusModal),
+            _ => {}
+        }
+    }
+
+    fn save_git_branch_edge_chars(&mut self, prefix: bool, ctx: &mut ViewContext<Self>) {
+        let editor = if prefix {
+            self.git_branch_name_prefix_chars_editor.clone()
+        } else {
+            self.git_branch_name_suffix_chars_editor.clone()
+        };
+        let buffer_text = editor.as_ref(ctx).buffer_text(ctx);
+        if let Ok(input) = buffer_text.parse::<usize>() {
+            let clamped = input.min(GIT_BRANCH_NAME_EDGE_CHARS_LIMIT);
+            if clamped != input {
+                editor.update(ctx, |editor, ctx| {
+                    editor.set_buffer_text(&format!("{clamped}"), ctx);
+                });
+            }
+            if prefix {
+                self.git_branch_prefix_chars_valid = true;
+            } else {
+                self.git_branch_suffix_chars_valid = true;
+            }
+            let current = if prefix {
+                *TerminalSettings::as_ref(ctx).git_branch_name_prefix_chars
+            } else {
+                *TerminalSettings::as_ref(ctx).git_branch_name_suffix_chars
+            };
+            if current == clamped {
+                ctx.notify();
+                return;
+            }
+            TerminalSettings::handle(ctx).update(ctx, |settings, ctx| {
+                if prefix {
+                    report_if_error!(
+                        settings
+                            .git_branch_name_prefix_chars
+                            .set_value(clamped, ctx)
+                    );
+                } else {
+                    report_if_error!(
+                        settings
+                            .git_branch_name_suffix_chars
+                            .set_value(clamped, ctx)
+                    );
+                }
+            });
+        } else {
+            let saved = if prefix {
+                *TerminalSettings::as_ref(ctx).git_branch_name_prefix_chars
+            } else {
+                *TerminalSettings::as_ref(ctx).git_branch_name_suffix_chars
+            };
+            editor.update(ctx, |editor, ctx| {
+                editor.set_buffer_text(&format!("{saved}"), ctx);
+            });
+            if prefix {
+                self.git_branch_prefix_chars_valid = true;
+            } else {
+                self.git_branch_suffix_chars_valid = true;
+            }
+            ctx.notify();
+        }
     }
 
     fn update_default_session_mode_dropdown(
@@ -7403,6 +7676,151 @@ impl SettingsWidget for Osc52ClipboardAccessWidget {
             ),
             None,
             &view.osc52_clipboard_access_dropdown,
+        )
+    }
+}
+
+#[derive(Default)]
+struct GitBranchNameTruncationWidget {}
+
+impl SettingsWidget for GitBranchNameTruncationWidget {
+    type View = FeaturesPageView;
+
+    fn search_terms(&self) -> &str {
+        "git branch name truncation prompt chip ticket prefix omit start end middle ellipsis"
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        render_dropdown_item(
+            appearance,
+            "Long git branch names",
+            Some(
+                "Choose which part of a long git branch name the prompt replaces with an ellipsis.",
+            ),
+            None,
+            LocalOnlyIconState::for_setting(
+                GitBranchNameTruncationSetting::storage_key(),
+                GitBranchNameTruncationSetting::sync_to_cloud(),
+                &mut view
+                    .button_mouse_states
+                    .local_only_icon_tooltip_states
+                    .borrow_mut(),
+                app,
+            ),
+            None,
+            &view.git_branch_name_truncation_dropdown,
+        )
+    }
+}
+
+#[derive(Default)]
+struct GitBranchNameMiddleCharsWidget {}
+
+impl GitBranchNameMiddleCharsWidget {
+    fn edge_input(
+        label: &'static str,
+        editor: ViewHandle<EditorView>,
+        valid: bool,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let border_color: Option<Fill> = if valid {
+            None
+        } else {
+            Some(themes::theme::Fill::error().into())
+        };
+        Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_child(
+                Text::new_inline(
+                    label,
+                    appearance.ui_font_family(),
+                    appearance.ui_font_size() - 2.,
+                )
+                .with_color(theme.active_ui_text_color().into())
+                .finish(),
+            )
+            .with_child(
+                Container::new(
+                    appearance
+                        .ui_builder()
+                        .text_input(editor)
+                        .with_style(UiComponentStyles {
+                            width: Some(GIT_BRANCH_EDGE_CHARS_INPUT_WIDTH),
+                            padding: Some(Coords {
+                                top: 4.,
+                                bottom: 4.,
+                                left: 6.,
+                                right: 6.,
+                            }),
+                            background: Some(theme.surface_2().into()),
+                            border_color,
+                            ..Default::default()
+                        })
+                        .build()
+                        .finish(),
+                )
+                .with_margin_left(6.)
+                .with_margin_right(12.)
+                .finish(),
+            )
+            .finish()
+    }
+}
+
+impl SettingsWidget for GitBranchNameMiddleCharsWidget {
+    type View = FeaturesPageView;
+
+    fn search_terms(&self) -> &str {
+        "git branch name middle ellipsis characters prefix suffix start end prompt chip"
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let inputs = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_child(Self::edge_input(
+                "Start",
+                view.git_branch_name_prefix_chars_editor.clone(),
+                view.git_branch_prefix_chars_valid,
+                appearance,
+            ))
+            .with_child(Self::edge_input(
+                "End",
+                view.git_branch_name_suffix_chars_editor.clone(),
+                view.git_branch_suffix_chars_valid,
+                appearance,
+            ))
+            .finish();
+
+        render_body_item::<FeaturesPageAction>(
+            "Characters kept at each end".into(),
+            None,
+            LocalOnlyIconState::for_setting(
+                GitBranchNamePrefixChars::storage_key(),
+                GitBranchNamePrefixChars::sync_to_cloud(),
+                &mut view
+                    .button_mouse_states
+                    .local_only_icon_tooltip_states
+                    .borrow_mut(),
+                app,
+            ),
+            ToggleState::Enabled,
+            appearance,
+            inputs,
+            Some(
+                "Used only when Long git branch names is set to Omit the middle. The prompt keeps this many characters from the start and from the end, with an ellipsis between them."
+                    .to_string(),
+            ),
         )
     }
 }

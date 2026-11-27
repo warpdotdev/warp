@@ -5,6 +5,7 @@ pub mod extensions;
 #[cfg(feature = "local_fs")]
 pub mod file;
 pub mod git;
+pub(crate) mod git_branch_display;
 pub mod image;
 pub(crate) mod link_detection;
 pub mod links;
