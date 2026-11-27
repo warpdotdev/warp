@@ -92,6 +92,139 @@ fn response(id: &str, usage: Value, content: Value) -> Value {
 }
 
 #[test]
+fn nullable_cache_fields_preserve_known_usage_attribution_and_tools() {
+    for (field, expected) in [
+        (
+            "cache_creation",
+            json!({"input_tokens":100,"output_tokens":0,"cache_read_input_tokens":4096,"cache_creation_input_tokens":0}),
+        ),
+        (
+            "cache_read_input_tokens",
+            json!({"input_tokens":100,"output_tokens":0,"cache_creation_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0}}),
+        ),
+        (
+            "cache_creation_input_tokens",
+            json!({"input_tokens":100,"output_tokens":0,"cache_read_input_tokens":4096,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0}}),
+        ),
+    ] {
+        let mut usage = json!({
+            "input_tokens":100,"output_tokens":0,"cache_read_input_tokens":4096,
+            "cache_creation_input_tokens":0,
+            "cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0},
+            "service_tier":"standard"
+        });
+        usage[field] = Value::Null;
+        let snapshot = capture(&[response(
+            "a",
+            usage,
+            json!([{"type":"tool_use","id":"t","name":"Read"}]),
+        )]);
+        assert_eq!(
+            serde_json::to_value(&snapshot.payload).unwrap(),
+            json!({
+                "usage":expected,
+                "attribution":[{"model":"claude-a","service_tier":"standard","usage":expected}],
+                "toolCalls":{"total":1,"byName":{"Read":1}}
+            }),
+            "{field}"
+        );
+        assert_eq!(snapshot.coverage.token_status, CoverageStatus::Known);
+        assert_eq!(snapshot.coverage.tool_status, CoverageStatus::Known);
+        assert!(snapshot.diagnostics.reasons.is_empty(), "{field}");
+    }
+}
+
+#[test]
+fn null_cache_counter_in_one_response_makes_its_observed_total_partial() {
+    let snapshot = capture(&[
+        response(
+            "a",
+            json!({"input_tokens":10,"output_tokens":1,"cache_read_input_tokens":100}),
+            json!([]),
+        ),
+        response(
+            "b",
+            json!({"input_tokens":20,"output_tokens":2,"cache_read_input_tokens":null}),
+            json!([]),
+        ),
+    ]);
+    assert_eq!(
+        serde_json::to_value(&snapshot.payload).unwrap()["usage"],
+        json!({"input_tokens":30,"output_tokens":3,"cache_read_input_tokens":100})
+    );
+    assert_eq!(snapshot.coverage.token_status, CoverageStatus::Partial);
+    assert_eq!(snapshot.coverage.tool_status, CoverageStatus::Known);
+    assert_eq!(
+        snapshot.diagnostics.reasons,
+        [(ReasonCode::IncompleteInput, 1)].into()
+    );
+}
+
+#[test]
+fn later_null_cache_fields_do_not_replace_a_complete_response() {
+    let known = json!({
+        "input_tokens":100,"output_tokens":2,"cache_read_input_tokens":4096,
+        "cache_creation_input_tokens":15,
+        "cache_creation":{"ephemeral_5m_input_tokens":10,"ephemeral_1h_input_tokens":5}
+    });
+    for field in [
+        "cache_creation",
+        "cache_read_input_tokens",
+        "cache_creation_input_tokens",
+    ] {
+        let mut later = known.clone();
+        later[field] = Value::Null;
+        let snapshot = capture(&[
+            response("a", known.clone(), json!([])),
+            response("a", later, json!([])),
+        ]);
+        assert_eq!(
+            serde_json::to_value(&snapshot.payload).unwrap()["usage"],
+            json!({
+                "input_tokens":100,"output_tokens":2,"cache_read_input_tokens":4096,
+                "cache_creation_input_tokens":15,
+                "cache_creation":{"ephemeral_5m_input_tokens":10,"ephemeral_1h_input_tokens":5}
+            }),
+            "{field}"
+        );
+        assert_eq!(snapshot.coverage.token_status, CoverageStatus::Known);
+        assert!(snapshot.diagnostics.reasons.is_empty(), "{field}");
+    }
+}
+
+#[test]
+fn nullable_cache_fields_do_not_relax_other_counter_validation() {
+    for (path, value) in [
+        ("/cache_read_input_tokens", json!("0")),
+        ("/cache_read_input_tokens", json!(-1)),
+        ("/cache_creation_input_tokens", json!("0")),
+        ("/cache_creation_input_tokens", json!(-1)),
+        ("/cache_creation", json!("0")),
+        ("/cache_creation", json!(-1)),
+        ("/input_tokens", Value::Null),
+        ("/output_tokens", Value::Null),
+        ("/cache_creation/ephemeral_5m_input_tokens", Value::Null),
+        ("/cache_creation/ephemeral_1h_input_tokens", Value::Null),
+    ] {
+        let mut usage = json!({
+            "input_tokens":100,"output_tokens":0,"cache_read_input_tokens":4096,
+            "cache_creation_input_tokens":0,
+            "cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0}
+        });
+        *usage.pointer_mut(path).unwrap() = value;
+        let snapshot = capture(&[response("a", usage, json!([]))]);
+        assert_eq!(
+            serde_json::to_value(&snapshot.payload).unwrap(),
+            json!({"toolCalls":{"total":0,"byName":{}}}),
+            "{path}"
+        );
+        assert_eq!(snapshot.coverage.token_status, CoverageStatus::Unavailable);
+        assert_eq!(snapshot.coverage.tool_status, CoverageStatus::Known);
+        assert_eq!(snapshot.diagnostics.reasons[&ReasonCode::InvalidData], 1);
+    }
+}
+
+#[test]
 fn evolving_responses_do_not_deduplicate_distinct_tool_blocks() {
     let entries = parse_jsonl(
         include_bytes!("fixtures/claude.jsonl").as_slice(),

@@ -272,12 +272,17 @@ pub fn extract_claude<'a>(
 fn parse_usage(value: &Value, findings: &mut Findings) -> Option<Counters<6>> {
     if value
         .get("cache_creation")
-        .is_some_and(|partitions| !partitions.is_object())
+        .is_some_and(|partitions| !partitions.is_null() && !partitions.is_object())
     {
         findings.token(ReasonCode::InvalidData);
         return None;
     }
-    let usage = Counters::parse(value, PATHS, findings)?;
+    let usage = Counters::parse(
+        value,
+        PATHS,
+        &["/cache_read_input_tokens", "/cache_creation_input_tokens"],
+        findings,
+    )?;
     let [_, _, _, aggregate, short, long] = usage.values;
     if let (Some(aggregate), Some(short), Some(long)) = (aggregate, short, long)
         && short.checked_add(long) != Some(aggregate)

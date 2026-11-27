@@ -21,8 +21,13 @@ impl<const N: usize> Default for Counters<N> {
 }
 
 impl<const N: usize> Counters<N> {
-    /// Parse known nonnegative counters while preserving absent fields as unknown.
-    pub(crate) fn parse(value: &Value, paths: [&str; N], findings: &mut Findings) -> Option<Self> {
+    /// Parse nonnegative counters, preserving absent and explicitly nullable fields as unknown.
+    pub(crate) fn parse(
+        value: &Value,
+        paths: [&str; N],
+        nullable_paths: &[&str],
+        findings: &mut Findings,
+    ) -> Option<Self> {
         if !value.is_object() {
             findings.token(ReasonCode::InvalidData);
             return None;
@@ -30,6 +35,9 @@ impl<const N: usize> Counters<N> {
         let mut result = Self::default();
         for (index, path) in paths.into_iter().enumerate() {
             if let Some(value) = value.pointer(path) {
+                if value.is_null() && nullable_paths.contains(&path) {
+                    continue;
+                }
                 match value.as_i64().filter(|count| *count >= 0) {
                     Some(count) => result.values[index] = Some(count),
                     None => {
