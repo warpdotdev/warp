@@ -1,6 +1,6 @@
 use clap::Parser;
 
-use super::{CreateProvider, CreateSecretArgs, ListSecretsArgs, SecretCommand};
+use super::{CreateProvider, CreateSecretArgs, ListSecretsArgs, SecretCommand, SecretType};
 
 #[derive(Debug, Parser)]
 struct TestSecret {
@@ -18,6 +18,37 @@ fn parse_list(argv: &[&str]) -> ListSecretsArgs {
         panic!("expected list command");
     };
     args
+}
+
+#[test]
+fn create_accepts_secret_key_and_legacy_raw_value() {
+    assert!(matches!(
+        parse_create(&["create", "TOKEN"]).secret_type,
+        SecretType::RawValue
+    ));
+    assert!(matches!(
+        parse_create(&["create", "TOKEN", "--type", "secret-key"]).secret_type,
+        SecretType::RawValue
+    ));
+    assert!(matches!(
+        parse_create(&["create", "TOKEN", "--type", "raw-value"]).secret_type,
+        SecretType::RawValue
+    ));
+}
+
+#[test]
+fn create_help_advertises_secret_key() {
+    let help = TestSecret::try_parse_from(["test", "create", "--help"])
+        .expect_err("help is displayed")
+        .to_string();
+
+    assert!(help.contains("[default: secret-key]"), "{help}");
+    assert!(
+        help.contains("[possible values: secret-key, anthropic-api-key]"),
+        "{help}"
+    );
+    assert!(help.contains("environment variables"), "{help}");
+    assert!(!help.contains("raw-value"), "{help}");
 }
 
 fn parse_create(argv: &[&str]) -> CreateSecretArgs {
