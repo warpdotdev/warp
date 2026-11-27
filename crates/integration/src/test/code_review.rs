@@ -136,7 +136,6 @@ fn code_review_scroll_anchor_builder(
     insertion_prefix: &'static str,
 ) -> Builder {
     FeatureFlag::CodeReviewScrollPreservation.set_enabled(true);
-    FeatureFlag::IncrementalAutoReload.set_enabled(true);
     let inserted_line_text = inserted_lines(insertion_prefix)
         .into_iter()
         .next()
@@ -292,7 +291,6 @@ fn deleted_range_diff_contents() -> String {
 
 pub fn test_code_review_scroll_preserved_deleted_range() -> Builder {
     FeatureFlag::CodeReviewScrollPreservation.set_enabled(true);
-    FeatureFlag::IncrementalAutoReload.set_enabled(true);
 
     let inserted_line_text = inserted_lines("above")
         .into_iter()
@@ -372,7 +370,6 @@ pub fn test_code_review_scroll_preserved_deleted_range() -> Builder {
 
 pub fn test_code_review_scroll_preserved_header_range() -> Builder {
     FeatureFlag::CodeReviewScrollPreservation.set_enabled(true);
-    FeatureFlag::IncrementalAutoReload.set_enabled(true);
 
     let inserted_line_text = inserted_lines("above")
         .into_iter()
@@ -453,7 +450,6 @@ pub fn test_code_review_scroll_preserved_header_range() -> Builder {
 
 pub fn test_code_review_scroll_preserved_footer_range() -> Builder {
     FeatureFlag::CodeReviewScrollPreservation.set_enabled(true);
-    FeatureFlag::IncrementalAutoReload.set_enabled(true);
 
     let inserted_line_text = inserted_lines("first")
         .into_iter()
@@ -548,7 +544,6 @@ pub fn test_code_review_scroll_preserved_footer_range() -> Builder {
 
 pub fn test_code_review_scroll_preserved_second_file() -> Builder {
     FeatureFlag::CodeReviewScrollPreservation.set_enabled(true);
-    FeatureFlag::IncrementalAutoReload.set_enabled(true);
 
     let inserted_line_text = inserted_lines("second")
         .into_iter()
