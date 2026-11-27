@@ -587,3 +587,24 @@ fn charged_usage_totals_saturates_wide_wire_counts_and_cumulative_totals() {
     assert_eq!(totals.input_cache_write_tokens, 2);
     assert_eq!(totals.total_tokens(), u32::MAX);
 }
+
+#[allow(deprecated)]
+#[test]
+fn custom_endpoint_identity_survives_persistence_and_replay() {
+    let usage = ModelTokenUsage {
+        model_id: "Friendly alias".into(),
+        custom_endpoint_config_key: Some("endpoint-key".into()),
+        custom_endpoint_tokens: 6,
+        ..Default::default()
+    };
+    let restored: ModelTokenUsage =
+        serde_json::from_str(&serde_json::to_string(&usage).unwrap()).unwrap();
+    let (key, proto) = restored.to_proto_custom_endpoint_usage().unwrap();
+    assert_eq!(restored.model_id, "Friendly alias");
+    assert_eq!(key, "endpoint-key");
+    assert_eq!(proto.model_id, "endpoint-key");
+    assert_eq!(proto.total_tokens, 6);
+    let legacy: ModelTokenUsage =
+        serde_json::from_str(r#"{"model_id":"old alias","custom_endpoint_tokens":6}"#).unwrap();
+    assert_eq!(legacy.custom_endpoint_config_key, None);
+}

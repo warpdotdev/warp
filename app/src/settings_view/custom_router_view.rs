@@ -9,13 +9,14 @@ use warpui::fonts::{Properties, Weight};
 use warpui::{AppContext, Element, Entity, SingletonEntity, View, ViewContext, ViewHandle};
 
 use crate::ai::custom_model_routers::{CustomModelRouter, CustomModelRouting};
-use crate::ai::llms::{LLMId, LLMPreferences};
+use crate::ai::llms::LLMPreferences;
 use crate::appearance::Appearance;
 use crate::settings::AISettings;
 use crate::ui_components::icons::Icon;
 use crate::view_components::action_button::ActionButton;
 #[cfg(feature = "local_fs")]
 use crate::view_components::action_button::{ButtonSize, DangerSecondaryTheme, SecondaryTheme};
+use crate::workspaces::user_workspaces::{TeamContextResolver, TeamScope, UserWorkspaces};
 #[cfg(feature = "local_fs")]
 const HEADER_BUTTON_HEIGHT: f32 = 28.;
 
@@ -38,6 +39,7 @@ pub enum CustomRouterViewEvent {
 
 pub struct CustomRouterView {
     router: CustomModelRouter,
+    team_context: TeamContextResolver,
     open_file_button: ViewHandle<ActionButton>,
     edit_button: ViewHandle<ActionButton>,
     delete_button: ViewHandle<ActionButton>,
@@ -97,8 +99,10 @@ impl CustomRouterView {
             ctx.notify();
         });
 
+        ctx.subscribe_to_model(&LLMPreferences::handle(ctx), |_, _, _, ctx| ctx.notify());
         Self {
             router,
+            team_context: UserWorkspaces::team_context_resolver(ctx.handle()),
             open_file_button,
             edit_button,
             delete_button,
@@ -205,7 +209,7 @@ impl View for CustomRouterView {
             &self.router.routing,
             appearance,
             sub_color,
-            is_any_ai_enabled,
+            &(self.team_context)(app),
             app,
         );
 
@@ -250,7 +254,7 @@ fn render_targets_row(
     routing: &CustomModelRouting,
     appearance: &Appearance,
     sub_color: warp_core::ui::theme::Fill,
-    _is_ai_enabled: bool,
+    scope: &(impl TeamScope + ?Sized),
     app: &AppContext,
 ) -> Box<dyn Element> {
     let mut flex = Flex::column();
@@ -258,7 +262,7 @@ fn render_targets_row(
         CustomModelRouting::Complexity(c) => {
             flex.add_child(render_model_line(
                 "Default:",
-                model_display_name(&c.default, app),
+                model_display_name(&c.default, scope, app),
                 appearance,
                 sub_color,
             ));
@@ -266,7 +270,7 @@ fn render_targets_row(
                 flex.add_child(
                     Container::new(render_model_line(
                         "Easy:",
-                        model_display_name(easy, app),
+                        model_display_name(easy, scope, app),
                         appearance,
                         sub_color,
                     ))
@@ -278,7 +282,7 @@ fn render_targets_row(
                 flex.add_child(
                     Container::new(render_model_line(
                         "Medium:",
-                        model_display_name(medium, app),
+                        model_display_name(medium, scope, app),
                         appearance,
                         sub_color,
                     ))
@@ -290,7 +294,7 @@ fn render_targets_row(
                 flex.add_child(
                     Container::new(render_model_line(
                         "Hard:",
-                        model_display_name(hard, app),
+                        model_display_name(hard, scope, app),
                         appearance,
                         sub_color,
                     ))
@@ -302,7 +306,7 @@ fn render_targets_row(
         CustomModelRouting::Prompt(p) => {
             flex.add_child(render_model_line(
                 "Default:",
-                model_display_name(&p.default_model, app),
+                model_display_name(&p.default_model, scope, app),
                 appearance,
                 sub_color,
             ));
@@ -328,14 +332,12 @@ fn render_targets_row(
     flex.finish()
 }
 
-/// Resolves a concrete model id (e.g. `claude-4-5-haiku`) to its display
-/// name/alias (e.g. `claude 4.5 haiku`), falling back to the raw id when the
-/// model isn't known to the client.
-fn model_display_name(model_id: &str, app: &AppContext) -> String {
-    LLMPreferences::as_ref(app)
-        .get_llm_info(&LLMId::from(model_id), app)
-        .map(|info| info.display_name.clone())
-        .unwrap_or_else(|| model_id.to_string())
+fn model_display_name(
+    model_id: &str,
+    scope: &(impl TeamScope + ?Sized),
+    ctx: &AppContext,
+) -> String {
+    LLMPreferences::as_ref(ctx).model_display_name(model_id, scope, false, ctx)
 }
 
 fn render_model_line(

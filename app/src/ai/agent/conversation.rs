@@ -141,12 +141,6 @@ fn footer_model_token_usage(
     usage_metadata: &stream_finished::ConversationUsageMetadata,
     llm_preferences: &LLMPreferences,
 ) -> Vec<ModelTokenUsage> {
-    // warp + byok rows merge on their server-known model id. Custom endpoint
-    // rows live in a separate bucket keyed by their upstream `config_key` so
-    // they never collide with a warp/byok row that happens to share the same
-    // resolved alias. The `config_key` itself is not retained on
-    // `ModelTokenUsage`; it is translated to an alias up front and only the
-    // alias flows downstream (display + shared-session replay).
     let mut standard_usage: HashMap<String, ModelTokenUsage> = HashMap::new();
     for (model_id, usage) in &usage_metadata.warp_token_usage {
         let entry = standard_usage
@@ -192,6 +186,7 @@ fn footer_model_token_usage(
             .entry(config_key.clone())
             .or_insert_with(|| ModelTokenUsage {
                 model_id: label,
+                custom_endpoint_config_key: Some(config_key.clone()),
                 ..Default::default()
             });
         entry.custom_endpoint_tokens = entry

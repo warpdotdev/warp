@@ -279,7 +279,7 @@ pub fn model_leading_icon(llm: &LLMInfo, flags: ModelIconFlags) -> Icon {
 /// Note: this key used to store a single [`AvailableLLMs`]
 /// but was migrated to store a full [`ModelsByFeature`].
 pub const MODELS_BY_FEATURE_CACHE_KEY: &str = "AvailableLLMs";
-const CUSTOM_ENDPOINT_USAGE_FALLBACK_LABEL: &str = "Custom endpoint";
+const CUSTOM_ENDPOINT_USAGE_FALLBACK_LABEL: &str = "Unavailable custom model";
 const CLOUD_FALLBACK_OZ_MODEL_ID: &str = "auto";
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1387,6 +1387,48 @@ impl LLMPreferences {
             .map(|info| info.display_name.as_str())
             .map(str::to_string)
             .unwrap_or_else(|| CUSTOM_ENDPOINT_USAGE_FALLBACK_LABEL.to_string())
+    }
+
+    pub(crate) fn model_display_name(
+        &self,
+        model_id: &str,
+        scope: &(impl TeamScope + ?Sized),
+        is_custom_endpoint: bool,
+        ctx: &AppContext,
+    ) -> String {
+        let id = LLMId::from(model_id);
+        let catalog = UserWorkspaces::as_ref(ctx).feature_model_choice_for_scope(scope);
+        let info = catalog
+            .info_for_id(&id)
+            .or_else(|| self.custom_llm_info_for_id(&id))
+            .or_else(|| self.custom_router_llm_info_for_id(&id));
+        if let Some(info) = info.filter(|info| !info.display_name.trim().is_empty()) {
+            let duplicate_name = catalog
+                .agent_mode
+                .choices
+                .iter()
+                .chain(self.custom_llms.iter())
+                .any(|other| other.id != id && other.display_name == info.display_name);
+            if (is_custom_endpoint || uuid::Uuid::parse_str(model_id).is_ok())
+                && duplicate_name
+                && let Some(description) = info
+                    .description
+                    .as_ref()
+                    .filter(|value| !value.trim().is_empty())
+            {
+                return format!("{} · {description}", info.display_name);
+            }
+            return info.display_name.clone();
+        }
+        if is_custom_endpoint || uuid::Uuid::parse_str(model_id).is_ok() {
+            "Unavailable custom model".to_string()
+        } else if model_id.starts_with("custom-router:") || model_id.starts_with("custom-auto:") {
+            "Unavailable router".to_string()
+        } else if model_id.is_empty() {
+            "Unavailable model".to_string()
+        } else {
+            model_id.to_string()
+        }
     }
 
     fn custom_llm_info_for_id_if_enabled(&self, id: &LLMId, app: &AppContext) -> Option<&LLMInfo> {

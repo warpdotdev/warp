@@ -39,6 +39,7 @@ use crate::settings::ai::{AISettings, AISettingsChangedEvent};
 use crate::settings_view::SettingsSection;
 use crate::ui_components::blended_colors;
 use crate::workspace::WorkspaceAction;
+use crate::workspaces::user_workspaces::{TeamContextResolver, UserWorkspaces};
 
 /// Fixed popover width: the Figma reference (`336px`) widened by 15% so long
 /// model names and their values fit on one row.
@@ -131,6 +132,7 @@ pub struct UsagePopoverView {
     /// Namespaces this popover's `SavePosition` ids in the window-wide
     /// position cache.
     view_id: EntityId,
+    team_context: TeamContextResolver,
     model_usage_toggle_mouse_state: MouseStateHandle,
     tool_call_summary_toggle_mouse_state: MouseStateHandle,
     view_account_usage_mouse_state: MouseStateHandle,
@@ -174,8 +176,10 @@ impl UsagePopoverView {
                 }
             },
         );
+        ctx.subscribe_to_model(&LLMPreferences::handle(ctx), |_, _, _, ctx| ctx.notify());
         Self {
             conversation_id,
+            team_context: UserWorkspaces::team_context_resolver(ctx.handle()),
             model_usage_section_expanded: true,
             tool_call_summary_section_expanded: true,
             expanded_model_ids: HashSet::new(),
@@ -937,8 +941,9 @@ impl View for UsagePopoverView {
         };
         let usage_display_unit = conversation_usage_display_unit(conversation, app);
         let llm_preferences = LLMPreferences::as_ref(app);
-        let custom_endpoint_label =
-            |config_key: &str| llm_preferences.custom_endpoint_usage_display_label(config_key);
+        let custom_endpoint_label = |config_key: &str| {
+            llm_preferences.model_display_name(config_key, &(self.team_context)(app), true, app)
+        };
         let charged_usage_by_key =
             sum_charged_usage_by_key(conversation.all_tasks().flat_map(|task| task.messages()));
         let charged_totals = conversation_charged_totals(conversation);
@@ -1051,11 +1056,11 @@ impl ModelRole {
 /// a standard model and a custom endpoint (or two custom endpoints sharing an
 /// alias) can display the same label but must not share expansion state or
 /// tooltip hover state.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) enum ModelRowKey {
     Standard(String),
-    /// Keyed by the display label of the merged custom-endpoint row.
     CustomEndpoint(String),
+    LegacyCustomEndpoint,
 }
 
 impl ModelRowKey {
@@ -1063,7 +1068,8 @@ impl ModelRowKey {
     fn hover_key(&self) -> String {
         match self {
             Self::Standard(model_id) => format!("standard:{model_id}"),
-            Self::CustomEndpoint(label) => format!("custom:{label}"),
+            Self::CustomEndpoint(config_key) => format!("custom:{config_key}"),
+            Self::LegacyCustomEndpoint => "legacy-custom".to_string(),
         }
     }
 }
@@ -1176,28 +1182,6 @@ impl ModelChargedUsage {
     /// zero-cost row.
     fn has_activity(&self) -> bool {
         self.tokens() > 0 || self.web_search_count > 0 || self.cost() != CostValue::new(0., 0.)
-    }
-
-    fn merge_from(&mut self, other: &Self) {
-        self.input_tokens = self.input_tokens.saturating_add(other.input_tokens);
-        self.output_tokens = self.output_tokens.saturating_add(other.output_tokens);
-        self.input_cache_read_tokens = self
-            .input_cache_read_tokens
-            .saturating_add(other.input_cache_read_tokens);
-        self.input_cache_write_tokens = self
-            .input_cache_write_tokens
-            .saturating_add(other.input_cache_write_tokens);
-        self.input_cost_in_cents += other.input_cost_in_cents;
-        self.output_cost_in_cents += other.output_cost_in_cents;
-        self.input_cache_read_cost_in_cents += other.input_cache_read_cost_in_cents;
-        self.input_cache_write_cost_in_cents += other.input_cache_write_cost_in_cents;
-        self.input_cost_in_credits += other.input_cost_in_credits;
-        self.output_cost_in_credits += other.output_cost_in_credits;
-        self.input_cache_read_cost_in_credits += other.input_cache_read_cost_in_credits;
-        self.input_cache_write_cost_in_credits += other.input_cache_write_cost_in_credits;
-        self.web_search_count = self.web_search_count.saturating_add(other.web_search_count);
-        self.web_search_cost_in_cents += other.web_search_cost_in_cents;
-        self.web_search_cost_in_credits += other.web_search_cost_in_credits;
     }
 
     fn add(&mut self, usage: &api::InferenceUsage) {
@@ -1338,30 +1322,6 @@ fn charged_usage_for_standard_row(
     })
 }
 
-/// Sums every custom-endpoint charge whose display label matches the given
-/// (merged) custom row's label. Row order therefore cannot change attribution:
-/// same-label rows were already merged, and same-label charges all sum onto
-/// that one row.
-fn charged_usage_for_custom_label(
-    label: &str,
-    charged_usage_by_key: &HashMap<ModelChargeKey, ModelChargedUsage>,
-    custom_endpoint_label: impl Fn(&str) -> String,
-    consumed_keys: &mut HashSet<ModelChargeKey>,
-) -> Option<ModelChargedUsage> {
-    let mut joined: Option<ModelChargedUsage> = None;
-    for (key, charged_usage) in charged_usage_by_key {
-        if let ModelChargeKey::CustomEndpoint(config_key) = key
-            && custom_endpoint_label(config_key) == label
-        {
-            consumed_keys.insert(key.clone());
-            joined
-                .get_or_insert_with(Default::default)
-                .merge_from(charged_usage);
-        }
-    }
-    joined
-}
-
 /// Merges the three token buckets and their per-category breakdowns.
 fn merge_model_token_usage(target: &mut ModelTokenUsage, source: &ModelTokenUsage) {
     target.warp_tokens = target.warp_tokens.saturating_add(source.warp_tokens);
@@ -1391,34 +1351,26 @@ fn merge_model_token_usage(target: &mut ModelTokenUsage, source: &ModelTokenUsag
     }
 }
 
-/// Builds the sorted per-model row list. Rows are ordered primary-agent-first,
-/// then alphabetically by model id.
-///
-/// Custom-endpoint token rows are indistinguishable in the UI beyond their
-/// display label, so rows sharing a label merge into one row (summed
-/// buckets), and all same-label custom charges sum onto that merged row. The
-/// result is independent of the token rows' order.
+/// Builds per-model rows without using readable labels as identities.
 fn model_usage_rows(
     models: &[ModelTokenUsage],
     charged_usage_by_key: &HashMap<ModelChargeKey, ModelChargedUsage>,
     custom_endpoint_label: impl Fn(&str) -> String,
 ) -> Vec<ModelUsageRow> {
-    let mut consumed_keys: HashSet<ModelChargeKey> = HashSet::new();
-    let mut rows: Vec<ModelUsageRow> = Vec::new();
-    let mut custom_rows_by_label: HashMap<String, ModelTokenUsage> = HashMap::new();
+    let mut consumed_keys = HashSet::new();
+    let mut rows = Vec::new();
+    let mut custom_rows: HashMap<String, ModelTokenUsage> = HashMap::new();
+    let mut legacy = ModelTokenUsage::default();
     for model in models {
         if model.custom_endpoint_tokens > 0 {
-            let merged = custom_rows_by_label
-                .entry(model.model_id.clone())
-                .or_insert_with(|| ModelTokenUsage {
-                    model_id: model.model_id.clone(),
-                    ..Default::default()
-                });
-            merge_model_token_usage(merged, model);
+            if let Some(config_key) = &model.custom_endpoint_config_key {
+                merge_model_token_usage(custom_rows.entry(config_key.clone()).or_default(), model);
+            } else {
+                merge_model_token_usage(&mut legacy, model);
+            }
             continue;
         }
-
-        let reported_tokens = model.warp_tokens as u64 + model.byok_tokens as u64;
+        let reported_tokens = u64::from(model.warp_tokens) + u64::from(model.byok_tokens);
         let charged_usage = charged_usage_for_standard_row(
             &model.model_id,
             charged_usage_by_key,
@@ -1439,55 +1391,36 @@ fn model_usage_rows(
             charged_usage,
         });
     }
-    // Charged-only custom sources join the same grouping: every label gets
-    // one row, whether its tokens came from token rows or only from charges.
-    for key in charged_usage_by_key.keys() {
-        if let ModelChargeKey::CustomEndpoint(config_key) = key {
-            let label = custom_endpoint_label(config_key);
-            custom_rows_by_label
-                .entry(label.clone())
-                .or_insert_with(|| ModelTokenUsage {
-                    model_id: label,
-                    ..Default::default()
-                });
-        }
-    }
-    for (label, merged) in custom_rows_by_label {
-        let reported_tokens = u64::from(merged.custom_endpoint_tokens);
-        let charged_usage = charged_usage_for_custom_label(
-            &label,
-            charged_usage_by_key,
-            &custom_endpoint_label,
-            &mut consumed_keys,
-        );
-        if reported_tokens == 0 && charged_usage.is_none() {
-            continue;
-        }
+    for (config_key, model) in custom_rows {
+        let key = ModelChargeKey::CustomEndpoint(config_key.clone());
+        let charged_usage = charged_usage_by_key.get(&key).copied();
+        consumed_keys.insert(key);
         rows.push(ModelUsageRow {
-            key: ModelRowKey::CustomEndpoint(label.clone()),
-            label,
-            role: role_for_model(&merged),
+            key: ModelRowKey::CustomEndpoint(config_key.clone()),
+            label: custom_endpoint_label(&config_key),
+            role: role_for_model(&model),
             tokens: charged_usage
                 .as_ref()
                 .map(ModelChargedUsage::tokens)
-                .unwrap_or(reported_tokens),
+                .unwrap_or(u64::from(model.custom_endpoint_tokens)),
             cost: charged_usage.as_ref().map(ModelChargedUsage::cost),
             charged_usage,
         });
     }
-    // Charges without a token row to join (e.g. a restore that dropped token
-    // metadata) still rendered, as long as they would not be invisible zeros.
+    let mut unassigned_custom_tokens = 0;
     for (key, charged_usage) in charged_usage_by_key {
         if consumed_keys.contains(key) || !charged_usage.has_activity() {
             continue;
         }
+        let row_key = match key {
+            ModelChargeKey::Standard(model_id) => ModelRowKey::Standard(model_id.clone()),
+            ModelChargeKey::CustomEndpoint(config_key) => {
+                unassigned_custom_tokens += charged_usage.tokens();
+                ModelRowKey::CustomEndpoint(config_key.clone())
+            }
+        };
         rows.push(ModelUsageRow {
-            key: match key {
-                ModelChargeKey::Standard(model_id) => ModelRowKey::Standard(model_id.clone()),
-                ModelChargeKey::CustomEndpoint(config_key) => {
-                    ModelRowKey::CustomEndpoint(custom_endpoint_label(config_key))
-                }
-            },
+            key: row_key,
             label: key.display_label(&custom_endpoint_label),
             role: None,
             tokens: charged_usage.tokens(),
@@ -1495,12 +1428,26 @@ fn model_usage_rows(
             charged_usage: Some(*charged_usage),
         });
     }
+    // Legacy aliases cannot identify endpoints. Charges account for their own tokens;
+    // only the unassigned remainder belongs in an identity-free row.
+    let legacy_tokens =
+        u64::from(legacy.custom_endpoint_tokens).saturating_sub(unassigned_custom_tokens);
+    if legacy_tokens > 0 {
+        rows.push(ModelUsageRow {
+            key: ModelRowKey::LegacyCustomEndpoint,
+            label: "Unavailable custom model".to_string(),
+            role: role_for_model(&legacy),
+            tokens: legacy_tokens,
+            cost: None,
+            charged_usage: None,
+        });
+    }
     rows.sort_by(|a, b| {
         let primary = |role| role == Some(ModelRole::PrimaryAgent);
         match (primary(a.role), primary(b.role)) {
             (true, false) => Ordering::Less,
             (false, true) => Ordering::Greater,
-            _ => a.label.cmp(&b.label),
+            _ => a.label.cmp(&b.label).then_with(|| a.key.cmp(&b.key)),
         }
     });
     rows
