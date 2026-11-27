@@ -316,9 +316,6 @@ pub enum FeatureFlag {
     /// Enables inline review comments on specific lines of code.
     ContextLineReviewComments,
 
-    /// Enables the fast-forward autoexecute button
-    FastForwardAutoexecuteButton,
-
     /// Remembers the per-conversation fast-forward state across local session restoration.
     RememberFastForwardState,
 
