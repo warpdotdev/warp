@@ -68,8 +68,18 @@ fn build_line_result(
     let lines_added = usize::from(matches!(line_type, DiffLineType::Add));
     let lines_removed = usize::from(matches!(line_type, DiffLineType::Delete));
 
+    let content = match line_type {
+        DiffLineType::Context => line.strip_prefix(' ').unwrap_or(line).to_string(),
+        DiffLineType::Add | DiffLineType::Delete => line.to_string(),
+        DiffLineType::HunkHeader => {
+            return Err(DiffHunkParseError::UnexpectedHunkHeader {
+                line_index: line_index_in_hunk,
+            });
+        }
+    };
+
     let line_diff_content = LineDiffContent {
-        content: line.to_string(),
+        content,
         lines_added: LineCount::from(lines_added),
         lines_removed: LineCount::from(lines_removed),
     };
