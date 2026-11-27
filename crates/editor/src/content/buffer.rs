@@ -3654,6 +3654,9 @@ impl Buffer {
         text_style: TextStyles,
     ) -> Vec<CoreEditorAction> {
         let mut editor_action_set = Vec::new();
+        // `TextStyles::all()` can store only one `CustomWeight` (Bold). Strip-all still
+        // has to clear every `Weight(_)` variant, not just that hardcoded Bold.
+        let strip_all = text_style == TextStyles::all();
 
         let mut handled_weight = false;
         for style in all::<BufferTextStyle>() {
@@ -3661,8 +3664,17 @@ impl Buffer {
             if is_weight && handled_weight {
                 continue;
             }
-            if text_style.exact_match_style(&style) {
-                handled_weight |= is_weight;
+            let wants_style = if strip_all && is_weight {
+                true
+            } else {
+                text_style.exact_match_style(&style)
+            };
+            if wants_style {
+                // A specific weight mask still collapses to one variant. Strip-all must
+                // visit each variant so Black/Light/etc. are removed, not only Bold.
+                if !strip_all {
+                    handled_weight |= is_weight;
+                }
                 // We only want to unstyle the sub-ranges that has been styled with the target text style.
                 let cursor = self.content.cursor::<CharOffset, BufferSummary>();
                 let mut buffer_cursor = BufferCursor::new(cursor);
