@@ -36,7 +36,17 @@ where
     I: IntoIterator<Item = T>,
     T: TableFormat + Serialize,
 {
-    if let Err(err) = write_list(items, output_format, &mut std::io::stdout()) {
+    // Write through a blocking guard so a large table is not truncated
+    // mid-write when stdout is a non-blocking PTY. Without this, a fast/large
+    // write can fail with `EAGAIN` (`WouldBlock`) after a partial write, cutting
+    // the table off part-way through — intermittently, and most visibly on
+    // macOS. This mirrors the protection `print_raw_json` already applies to the
+    // JSON path; the table paths previously wrote straight to `std::io::stdout()`
+    // and were left unprotected.
+    let mut out = StdoutBlockingGuard::new();
+    let result = write_list(items, output_format, &mut out)
+        .and_then(|()| out.flush().context("unable to flush stdout"));
+    if let Err(err) = result {
         // If we can't write to stdout, try reporting to the log file.
         log::warn!("Unable to write to stdout: {err}");
     }
@@ -63,6 +73,47 @@ where
     writeln!(&mut output)?;
     Ok(())
 }
+/// Clear `O_NONBLOCK` on `fd`, returning the original file status flags when
+/// they were changed (so the caller can restore them), or `None` if the fd was
+/// already blocking or the flags could not be read/modified.
+#[cfg(unix)]
+fn clear_nonblocking(fd: libc::c_int) -> Option<libc::c_int> {
+    use libc::{F_GETFL, F_SETFL, O_NONBLOCK, fcntl};
+    // SAFETY: `fcntl` with `F_GETFL` / `F_SETFL` only reads and writes the file
+    // status flags on `fd`; it does not mutate Rust memory.
+    unsafe {
+        let flags = fcntl(fd, F_GETFL, 0);
+        if flags < 0 {
+            let err = std::io::Error::last_os_error();
+            log::warn!("Unable to read stdout flags: {err}");
+            None
+        } else if flags & O_NONBLOCK == 0 {
+            // Already blocking; nothing to change and nothing to restore.
+            None
+        } else if fcntl(fd, F_SETFL, flags & !O_NONBLOCK) < 0 {
+            let err = std::io::Error::last_os_error();
+            log::warn!("Unable to clear O_NONBLOCK on stdout: {err}");
+            None
+        } else {
+            Some(flags)
+        }
+    }
+}
+
+/// Restore the file status `flags` on `fd`, paired with [`clear_nonblocking`].
+#[cfg(unix)]
+fn restore_flags(fd: libc::c_int, flags: libc::c_int) {
+    use libc::{F_SETFL, fcntl};
+    // SAFETY: `fcntl` with `F_SETFL` only updates the file status flags on `fd`;
+    // it does not mutate Rust memory.
+    unsafe {
+        if fcntl(fd, F_SETFL, flags) < 0 {
+            let err = std::io::Error::last_os_error();
+            log::warn!("Unable to restore stdout flags: {err}");
+        }
+    }
+}
+
 /// RAII guard that locks stdout and, on Unix, temporarily clears `O_NONBLOCK`
 /// so writes block instead of returning `EAGAIN`. Restores the original flags
 /// and releases the stdout lock on drop.
@@ -91,26 +142,7 @@ impl StdoutBlockingGuard {
 
         #[cfg(unix)]
         {
-            use libc::{F_GETFL, F_SETFL, O_NONBLOCK, STDOUT_FILENO, fcntl};
-            // SAFETY: `fcntl` with `F_GETFL` / `F_SETFL` only reads and writes
-            // the file status flags on stdout; it does not mutate Rust memory.
-            let original_flags = unsafe {
-                let flags = fcntl(STDOUT_FILENO, F_GETFL, 0);
-                if flags < 0 {
-                    let err = std::io::Error::last_os_error();
-                    log::warn!("Unable to read stdout flags: {err}");
-                    None
-                } else if flags & O_NONBLOCK == 0 {
-                    // Already blocking; nothing to change and nothing to restore.
-                    None
-                } else if fcntl(STDOUT_FILENO, F_SETFL, flags & !O_NONBLOCK) < 0 {
-                    let err = std::io::Error::last_os_error();
-                    log::warn!("Unable to clear O_NONBLOCK on stdout: {err}");
-                    None
-                } else {
-                    Some(flags)
-                }
-            };
+            let original_flags = clear_nonblocking(libc::STDOUT_FILENO);
             Self {
                 lock,
                 original_flags,
@@ -141,15 +173,7 @@ impl Drop for StdoutBlockingGuard {
     fn drop(&mut self) {
         #[cfg(unix)]
         if let Some(flags) = self.original_flags {
-            use libc::{F_SETFL, STDOUT_FILENO, fcntl};
-            // SAFETY: `fcntl` with `F_SETFL` only updates the file status
-            // flags on stdout; it does not mutate Rust memory.
-            unsafe {
-                if fcntl(STDOUT_FILENO, F_SETFL, flags) < 0 {
-                    let err = std::io::Error::last_os_error();
-                    log::warn!("Unable to restore stdout flags: {err}");
-                }
-            }
+            restore_flags(libc::STDOUT_FILENO, flags);
         }
     }
 }
