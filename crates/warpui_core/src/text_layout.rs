@@ -715,6 +715,39 @@ impl TextFrame {
         }
     }
 
+    /// Keeps line geometry and boundary carets while dropping render-only glyph and caret payloads.
+    pub fn compact_for_deferred_layout(&self) -> Self {
+        let lines = self.lines.mapped_ref(|line| {
+            let mut boundary_carets = Vec::with_capacity(2);
+            if let Some(first) = line.caret_positions.first() {
+                boundary_carets.push(first.clone());
+            }
+            if line.caret_positions.len() > 1
+                && let Some(last) = line.caret_positions.last()
+            {
+                boundary_carets.push(last.clone());
+            }
+            Line {
+                width: line.width,
+                trailing_whitespace_width: line.trailing_whitespace_width,
+                runs: Vec::new(),
+                font_size: line.font_size,
+                line_height_ratio: line.line_height_ratio,
+                baseline_ratio: line.baseline_ratio,
+                clip_config: line.clip_config,
+                ascent: line.ascent,
+                descent: line.descent,
+                caret_positions: boundary_carets,
+                chars_with_missing_glyphs: Vec::new(),
+            }
+        });
+        Self {
+            lines,
+            max_width: self.max_width,
+            alignment: self.alignment,
+        }
+    }
+
     // Returns the absolute bounds of all hyperlinks in the frame. The position of each link is offset by the provided `origin.`
     pub fn hyperlink_bounds(&self, origin: Vector2F) -> Vec<Vec<RectF>> {
         let mut positions: Vec<Vec<RectF>> = Vec::new();
