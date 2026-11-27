@@ -97,7 +97,7 @@ pub(super) fn upsert_agent_conversation<'a>(
 
             if let Err(e) = diesel::insert_into(agent_tasks::table)
                 .values(&new_task)
-                .on_conflict(tasks_dsl::task_id)
+                .on_conflict((tasks_dsl::conversation_id, tasks_dsl::task_id))
                 .do_update()
                 .set(&new_task)
                 .execute(conn)
