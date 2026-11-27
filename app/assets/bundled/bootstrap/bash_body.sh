@@ -1420,6 +1420,22 @@ esac
             source "$HOME/.profile"
         fi
 
+        # Warp starts bash as an interactive shell, so also mirror the
+        # interactive (non-login) startup sequence, which reads ~/.bashrc.
+        # Without this, aliases and functions defined only in ~/.bashrc never
+        # exist inside Warp even though they work in other terminals. Notably,
+        # a user alias like `alias ssh="trzsz -d ssh"` would be silently
+        # dropped, and the `ssh` function installed by this bootstrap script
+        # above would take over interactive `ssh` invocations, bypassing the
+        # wrapper (see issue #16631). Guard against double-sourcing for users
+        # whose login rcfile already re-sources ~/.bashrc (the documented
+        # pattern for login/interactive unification), which is harmless but
+        # wasteful.
+        if [[ $- == *i* && -f "$HOME/.bashrc" && -z ${WARP_SOURCED_BASHRC:-} ]]; then
+            export WARP_SOURCED_BASHRC=1
+            source "$HOME/.bashrc"
+        fi
+
         rcfiles_end_time="$(LC_ALL="C"; echo $EPOCHREALTIME)"
     fi
 

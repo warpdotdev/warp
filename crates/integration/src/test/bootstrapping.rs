@@ -567,3 +567,56 @@ PROMPT_COMMAND=('printf "\033]0;SHAKA WHEN THE WALLS FELL\a"' 'custom_prompt')
             ),
         )
 }
+
+/// Regression test for https://github.com/warpdotdev/warp/issues/16631.
+///
+/// Warp starts bash with a custom rcfile and then sources user rcfiles in
+/// login order (`/etc/profile` -> `~/.bash_profile` | `~/.bash_login` |
+/// `~/.profile`). Previously, `~/.bashrc` was never sourced, so aliases and
+/// functions defined only there never existed inside Warp even though they
+/// work in other terminals. In particular, an `alias ssh="trzsz -d ssh"`
+/// (or any other ssh wrapper) would be silently dropped and the bootstrap
+/// script's own `ssh` function would take over interactive `ssh`
+/// invocations, bypassing the wrapper.
+///
+/// This test writes an alias solely into `~/.bashrc` (with a `.bash_profile`
+/// present that does *not* re-source `.bashrc`, matching the reporter's
+/// setup), then verifies after bootstrap that the alias is active and wins
+/// over any same-named shell function.
+pub fn test_bash_bootstraps_sources_bashrc_aliases() -> Builder {
+    new_builder()
+        .set_should_run_test(|| {
+            // Only run this one on bash
+            let (starter, _version) = current_shell_starter_and_version();
+            matches!(starter.shell_type(), shell::ShellType::Bash)
+        })
+        .with_setup(|utils| {
+            let dir = utils.test_dir();
+            // .bash_profile exists (so login-order sourcing stops there) but does
+            // NOT re-source .bashrc — the exact layout from the issue report.
+            write_rc_files_for_test(&dir, "export WARP_TEST_LOGIN_RCFILE=1", [ShellRcType::Bash]);
+            // The wrapper alias under test lives only in ~/.bashrc. It shadows
+            // the bootstrap script's own `ssh` function: bash resolves aliases
+            // before functions, so if this alias is active, `ssh` cannot reach
+            // the function.
+            write_rc_files_for_test(dir, "alias ssh='echo ssh-alias-won'", [ShellRcType::BashRc]);
+        })
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
+        // The login rcfile must have been sourced (sanity check of the setup).
+        .with_step(execute_command_for_single_terminal_in_tab(
+            0,
+            "test \"$WARP_TEST_LOGIN_RCFILE\" = 1 && echo login-rcfile-sourced".to_string(),
+            ExpectedExitStatus::Success,
+            "login-rcfile-sourced",
+        ))
+        // If ~/.bashrc was sourced, the alias wins over the bootstrap's ssh
+        // function and `ssh` just echoes. Before the fix the alias never
+        // existed and `ssh` fell through to the bootstrap's ssh function
+        // (which would try to open a connection instead of printing this).
+        .with_step(execute_command_for_single_terminal_in_tab(
+            0,
+            "ssh".to_string(),
+            ExpectedExitStatus::Success,
+            "ssh-alias-won",
+        ))
+}

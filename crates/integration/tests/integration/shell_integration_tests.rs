@@ -42,6 +42,8 @@ integration_tests! {
     test_ps1_value_not_null_or_exit,
     // Tests bash-specific behavior.
     test_custom_ps1_expansion_bash,
+    // Tests bash-specific behavior: ~/.bashrc aliases survive bootstrap (#16631).
+    test_bash_bootstraps_sources_bashrc_aliases,
     test_bash_honor_ps1_expands_dynamic_prompt_once,
     // Tests zsh-specific behavior.
     test_auto_title,
