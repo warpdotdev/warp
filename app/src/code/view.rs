@@ -84,6 +84,10 @@ type SaveCallback =
 
 const CLOSE_BUTTON_WIDTH: f32 = 24.;
 const LANGUAGE_ICON_WIDTH: f32 = 16.;
+/// Below this rendered width a tab no longer has room for a persistent
+/// close button; like Chrome, the close affordance then replaces the file
+/// icon while the tab is hovered.
+const NARROW_TAB_WIDTH: f32 = 80.;
 const TAB_INTERNAL_MARGIN: f32 = 4.;
 const TAB_HORIZONTAL_MARGIN: f32 = 8.;
 const TAB_PADDING: f32 = 2.;
@@ -143,6 +147,13 @@ pub use crate::util::openable_file_type::is_binary_file;
 /// Determines the `SavePosition` ID for a draggable tab based on its index.
 pub fn tab_position_id(index: usize) -> String {
     format!("file_tab_position_{index}")
+}
+
+struct TabRenderState {
+    is_active: bool,
+    is_hovered: bool,
+    has_unsaved_changes: bool,
+    is_narrow: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -1605,12 +1616,16 @@ impl CodeView {
     fn render_tab_internal(
         tab_data: &TabData,
         index: usize,
-        is_active: bool,
-        is_hovered: bool,
-        has_unsaved_changes: bool,
+        state: TabRenderState,
         appearance: &Appearance,
         app: &AppContext,
     ) -> Box<dyn Element> {
+        let TabRenderState {
+            is_active,
+            is_hovered,
+            has_unsaved_changes,
+            is_narrow,
+        } = state;
         let theme = appearance.theme();
         let text_color = if is_active {
             blended_colors::text_main(theme, theme.surface_1())
@@ -1630,11 +1645,37 @@ impl CodeView {
             .unwrap_or_else(|| "Untitled".to_string());
         let language_icon =
             icon_from_file_path(&file_name, appearance, ItemHighlightState::Default);
+        let icon_slot = if is_narrow && is_hovered {
+            // Narrow tabs have no room for a persistent close button, so
+            // hovering swaps the file icon for one (Chrome-style).
+            Self::render_close_button(
+                appearance,
+                tab_data.mouse_state_handles.close_handle.clone(),
+                index,
+            )
+        } else {
+            Align::new(
+                Container::new(
+                    ConstrainedBox::new(language_icon)
+                        .with_width(LANGUAGE_ICON_WIDTH)
+                        .with_height(LANGUAGE_ICON_WIDTH)
+                        .finish(),
+                )
+                .finish(),
+            )
+            .finish()
+        };
+        // A fixed slot width keeps the swap from shifting the file name.
+        let icon_slot_width = if is_narrow {
+            CLOSE_BUTTON_WIDTH
+        } else {
+            LANGUAGE_ICON_WIDTH
+        };
         row.add_child(
             Container::new(
-                ConstrainedBox::new(language_icon)
-                    .with_width(LANGUAGE_ICON_WIDTH)
-                    .with_height(LANGUAGE_ICON_WIDTH)
+                ConstrainedBox::new(icon_slot)
+                    .with_width(icon_slot_width)
+                    .with_height(CLOSE_BUTTON_WIDTH)
                     .finish(),
             )
             .with_margin_right(TAB_INTERNAL_MARGIN)
@@ -1673,7 +1714,7 @@ impl CodeView {
             .finish(),
         );
 
-        let show_close = is_active || is_hovered;
+        let show_close = !is_narrow && (is_active || is_hovered);
         row.add_child(
             Shrinkable::new(
                 1.,
@@ -1838,9 +1879,17 @@ impl CodeView {
                         Container::new(Self::render_tab_internal(
                             tab_data,
                             index,
-                            is_active,
-                            tab_handle.is_hovered(),
-                            Self::show_unsaved_indicator(tab_data, app),
+                            TabRenderState {
+                                is_active,
+                                is_hovered: tab_handle.is_hovered(),
+                                has_unsaved_changes: Self::show_unsaved_indicator(tab_data, app),
+                                is_narrow: app
+                                    .element_position_by_id_at_last_frame(
+                                        self.window_id,
+                                        tab_position_id(index),
+                                    )
+                                    .is_some_and(|rect| rect.width() < NARROW_TAB_WIDTH),
+                            },
                             appearance,
                             app,
                         ))

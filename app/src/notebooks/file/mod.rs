@@ -265,6 +265,8 @@ impl FileNotebookView {
             let styles = rich_text_styles(Appearance::as_ref(ctx), FontSettings::as_ref(ctx));
             let mut model = NotebooksEditorModel::new(styles, window_id, ctx);
             model.set_default_mermaid_display_mode(MarkdownDisplayMode::Rendered, ctx);
+            // The file viewer scrolls content horizontally, so lay out at intrinsic width.
+            model.set_container_scrolls_horizontally(ctx);
             model
         });
         let editor = ctx.add_typed_action_view(|ctx| {
@@ -272,7 +274,12 @@ impl FileNotebookView {
                 view_position_id.clone(),
                 editor_model,
                 links.clone(),
-                RichTextEditorConfig::default(),
+                RichTextEditorConfig {
+                    // Rendered Markdown content (e.g. wide tables) can exceed the pane
+                    // width; scroll it horizontally instead of clipping.
+                    horizontal_scrolling: true,
+                    ..RichTextEditorConfig::default()
+                },
                 ctx,
             );
             view.set_interaction_state(InteractionState::Selectable, ctx);

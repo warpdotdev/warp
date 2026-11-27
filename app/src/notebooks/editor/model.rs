@@ -30,6 +30,7 @@ use warp_editor::content::text::{
 use warp_editor::model::{BufferUpdateWrapper, CoreEditorModel, RichTextEditorModel};
 use warp_editor::render::model::{
     AutoScrollMode, BlockItem, RenderEvent, RenderState, RichTextStyles, StyleUpdateAction,
+    WidthSetting,
 };
 use warp_editor::search::Searcher;
 use warp_editor::selection::{SelectionMode, SelectionModel, TextDirection, TextUnit};
@@ -248,6 +249,15 @@ impl NotebooksEditorModel {
 
     pub fn render_state(&self) -> &ModelHandle<RenderState> {
         &self.render_state
+    }
+
+    /// Configures the render state for a surrounding container that provides horizontal
+    /// scrolling: content lays out at its intrinsic width (for example, wide Markdown
+    /// tables render full-width) and the container scrolls over it.
+    pub fn set_container_scrolls_horizontally(&mut self, ctx: &mut ModelContext<Self>) {
+        self.render_state.update(ctx, |render_state, ctx| {
+            render_state.set_width_setting(WidthSetting::InfiniteWidth, ctx);
+        });
     }
 
     pub fn markdown_table_count(&self, ctx: &impl ModelAsRef) -> usize {

@@ -2686,6 +2686,12 @@ impl RenderState {
         self
     }
 
+    /// Updates the [`WidthSetting`] after construction. See [`Self::with_width_setting`].
+    pub fn set_width_setting(&mut self, setting: WidthSetting, ctx: &mut ModelContext<Self>) {
+        self.width_setting = setting;
+        ctx.notify();
+    }
+
     /// Whether the surrounding container for this render state already provides horizontal
     /// scrolling over its full content area. Blocks that would otherwise introduce a nested
     /// horizontal scroll (for example, wide Markdown tables) should render at full intrinsic

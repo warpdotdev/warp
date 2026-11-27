@@ -23,11 +23,12 @@ use warpui::actions::StandardAction;
 use warpui::assets::asset_cache::{AssetCache, AssetHandle, AssetState};
 use warpui::r#async::SpawnedFutureHandle;
 use warpui::clipboard::ClipboardContent;
+use warpui::elements::new_scrollable::{AxisConfiguration, DualAxisConfig, NewScrollableElement};
 use warpui::elements::{
     AnchorPair, Axis, Border, ChildAnchor, Clipped, ConstrainedBox, Container, CornerRadius,
-    Dismiss, Fill, Flex, Hoverable, Icon, MouseStateHandle, OffsetPositioning, OffsetType,
-    ParentAnchor, ParentElement, PositionedElementOffsetBounds, PositioningAxis, Radius,
-    ScrollStateHandle, Scrollable, ScrollableElement, ScrollbarWidth, Stack, XAxisAnchor,
+    Dismiss, Fill, Flex, Hoverable, Icon, MouseStateHandle, NewScrollable, OffsetPositioning,
+    OffsetType, ParentAnchor, ParentElement, PositionedElementOffsetBounds, PositioningAxis,
+    Radius, ScrollStateHandle, Scrollable, ScrollableElement, ScrollbarWidth, Stack, XAxisAnchor,
     YAxisAnchor,
 };
 use warpui::event::ModifiersState;
@@ -739,6 +740,7 @@ pub enum EditorViewAction {
     Delete,
     Backspace,
     Scroll(Pixels),
+    ScrollHorizontal(Pixels),
     MaybeOpenFileOrUrl {
         offset: CharOffset,
         link_in_text: Option<UserInput<String>>,
@@ -1069,6 +1071,10 @@ pub struct RichTextEditorView {
 
     /// When true, the block insertion menu (slash menu) is disabled.
     disable_block_insertion_menu: bool,
+
+    /// When true, the editor scrolls horizontally as well as vertically.
+    horizontal_scrolling: bool,
+    horizontal_scroll_state: ScrollStateHandle,
 }
 
 #[derive(Default)]
@@ -1092,6 +1098,12 @@ pub struct RichTextEditorConfig {
     /// Enable or disable the block insertion menu (slash menu).
     /// When disabled, typing "/" will not open the menu.
     pub disable_block_insertion_menu: bool,
+
+    /// When true, the editor is wrapped in a dual-axis scrollable so content wider than the
+    /// viewport (for example, wide Markdown tables) can be scrolled horizontally. The render
+    /// model must also be configured to lay out at intrinsic width; see
+    /// `NotebooksEditorModel::set_container_scrolls_horizontally`.
+    pub horizontal_scrolling: bool,
 }
 
 impl RichTextEditorView {
@@ -1153,6 +1165,8 @@ impl RichTextEditorView {
             model,
             display_state: Default::default(),
             scroll_state: Default::default(),
+            horizontal_scroll_state: Default::default(),
+            horizontal_scrolling: config.horizontal_scrolling,
             self_handle: ctx.handle(),
             ongoing_mouse_state: OngoingMouseEvent::None,
             debug_mode: false,
@@ -1700,6 +1714,15 @@ impl RichTextEditorView {
         self.model.update(ctx, |model, ctx| {
             model.render_state().update(ctx, |render_state, ctx| {
                 render_state.scroll(delta, ctx);
+            })
+        })
+    }
+
+    /// Scroll horizontally by `delta` pixels.
+    fn scroll_horizontal(&mut self, delta: Pixels, ctx: &mut ViewContext<Self>) {
+        self.model.update(ctx, |model, ctx| {
+            model.render_state().update(ctx, |render_state, ctx| {
+                render_state.scroll_horizontal(delta, ctx);
             })
         })
     }
@@ -2678,7 +2701,7 @@ impl View for RichTextEditorView {
             ..Default::default()
         };
 
-        let rich_text = RichTextElement::<Self>::new(
+        let rich_text_element = RichTextElement::<Self>::new(
             render_state.clone(),
             self.self_handle.clone(),
             display_options,
@@ -2686,17 +2709,33 @@ impl View for RichTextEditorView {
             None,       // Not currently supporting vim in notebooks
             Vec::new(), // Not currently supporting vim in notebooks
         )
-        .with_max_width(self.max_width)
-        .finish_scrollable();
+        .with_max_width(if self.horizontal_scrolling {
+            // Laying out at intrinsic width lets the container scroll horizontally.
+            None
+        } else {
+            self.max_width
+        });
 
         // When disable_scrolling is true, don't wrap in Scrollable to allow scroll events
         // to propagate to the parent (used for embedded editors like comment chips).
         let main_content: Box<dyn Element> = if self.disable_scrolling {
-            rich_text
+            ScrollableElement::finish_scrollable(rich_text_element)
+        } else if self.horizontal_scrolling {
+            NewScrollable::horizontal_and_vertical(
+                DualAxisConfig::Manual {
+                    horizontal: AxisConfiguration::Manual(self.horizontal_scroll_state.clone()),
+                    vertical: AxisConfiguration::Manual(self.scroll_state.clone()),
+                    child: NewScrollableElement::finish_scrollable(rich_text_element),
+                },
+                theme.disabled_text_color(theme.background()).into(),
+                theme.main_text_color(theme.background()).into(),
+                Fill::None,
+            )
+            .finish()
         } else {
             Scrollable::vertical(
                 self.scroll_state.clone(),
-                rich_text,
+                ScrollableElement::finish_scrollable(rich_text_element),
                 SCROLLBAR_WIDTH,
                 theme.disabled_text_color(theme.background()).into(),
                 theme.main_text_color(theme.background()).into(),
@@ -2865,6 +2904,7 @@ impl TypedActionView for RichTextEditorView {
                 .update(ctx, |links, ctx| links.secondary_action(target, ctx)),
             CreateOrEditLink => self.edit_link(false, ctx),
             Scroll(delta) => self.scroll(*delta, ctx),
+            ScrollHorizontal(delta) => self.scroll_horizontal(*delta, ctx),
             SelectUp => self.select_up(ctx),
             SelectDown => self.select_down(ctx),
             SelectLeft => self.select_left(ctx),
@@ -3294,6 +3334,7 @@ impl TypedActionView for RichTextEditorView {
             EditorViewAction::Delete
             | EditorViewAction::Backspace
             | EditorViewAction::Scroll(_)
+            | EditorViewAction::ScrollHorizontal(_)
             | EditorViewAction::SelectUp
             | EditorViewAction::SelectDown
             | EditorViewAction::SelectLeft
@@ -3410,7 +3451,7 @@ impl RichTextAction<RichTextEditorView> for EditorViewAction {
     fn scroll(delta: Pixels, axis: Axis) -> Option<Self> {
         match axis {
             Axis::Vertical => Some(EditorViewAction::Scroll(delta)),
-            Axis::Horizontal => None,
+            Axis::Horizontal => Some(EditorViewAction::ScrollHorizontal(delta)),
         }
     }
 
