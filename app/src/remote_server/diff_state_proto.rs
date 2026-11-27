@@ -605,10 +605,9 @@ impl From<&DiffState> for proto::DiffState {
 /// Converts a `FileDiff` to proto with an optional `content_at_base`.
 /// Cannot be a `From` impl because of the extra parameter.
 pub fn file_diff_to_proto(f: &FileDiff, content_at_base: Option<&str>) -> proto::FileDiff {
-    // Decide what base content (if any) to send over the wire, adjusting the
-    // rendered size accordingly. This gating is remote-only: it runs when the
-    // daemon serializes a diff for a subscriber, never on the local in-memory
-    // path, so local rendering keeps full content regardless of size.
+    // Decide what base content (if any) to send over the wire, adjusting the rendered size
+    // accordingly. Local Code Review applies its separate editor admission budget while loading
+    // Git content.
     let (size, content_at_base) = if f.is_binary {
         // Binary base content is never rendered by the client; never ship it.
         (f.size, None)

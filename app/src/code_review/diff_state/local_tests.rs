@@ -1,4 +1,5 @@
 use super::*;
+use crate::code::global_buffer_model::MAX_EDITOR_BUFFER_NEWLINE_COUNT;
 use crate::util::git::{
     BranchEntry, parse_range, parse_unified_diff_header, sort_branches_main_first,
 };
@@ -317,7 +318,7 @@ async fn untracked_directory_has_no_baseline_content() {
         &GitFileStatus::Untracked,
     )
     .await;
-    assert_eq!(dir_content, None);
+    assert_eq!(dir_content, BaseContent::Unavailable);
 
     // Regular untracked files keep their empty baseline.
     let file_content = LocalDiffStateModel::get_file_content_at_head(
@@ -326,7 +327,7 @@ async fn untracked_directory_has_no_baseline_content() {
         &GitFileStatus::Untracked,
     )
     .await;
-    assert_eq!(file_content, Some(String::new()));
+    assert_eq!(file_content, BaseContent::Loaded(String::new()));
 }
 
 #[tokio::test]
@@ -369,7 +370,89 @@ async fn renamed_file_content_at_head_reads_old_path() {
 
     // The baseline content at HEAD must come from the old path, not the new one, so the code
     // review pane can render a diff instead of "Unable to load file content".
-    assert_eq!(content, Some("hello world\n".to_string()));
+    assert_eq!(content, BaseContent::Loaded("hello world\n".to_string()));
+}
+
+#[tokio::test]
+async fn deleted_file_content_over_newline_limit_is_withheld() {
+    let repo_dir = tempfile::tempdir().expect("create temp repo dir");
+    let repo_path = repo_dir.path();
+    let content = "\n".repeat(MAX_EDITOR_BUFFER_NEWLINE_COUNT + 1);
+
+    run_git_command(repo_path, &["init", "-b", "main"])
+        .await
+        .expect("git init");
+    run_git_command(repo_path, &["config", "user.email", "test@test.com"])
+        .await
+        .expect("git config email");
+    run_git_command(repo_path, &["config", "user.name", "Test"])
+        .await
+        .expect("git config name");
+    std::fs::write(repo_path.join("deleted.txt"), content).expect("write deleted file");
+    run_git_command(repo_path, &["add", "deleted.txt"])
+        .await
+        .expect("git add");
+    run_git_command(repo_path, &["commit", "-m", "initial"])
+        .await
+        .expect("git commit");
+    std::fs::remove_file(repo_path.join("deleted.txt")).expect("delete tracked file");
+
+    let content = LocalDiffStateModel::get_file_content_at_head(
+        repo_path,
+        "deleted.txt",
+        &GitFileStatus::Deleted,
+    )
+    .await;
+
+    assert_eq!(content, BaseContent::ExceedsEditorLimit);
+}
+
+#[tokio::test]
+async fn base_content_read_uses_blob_resolved_before_head_changes() {
+    let repo_dir = tempfile::tempdir().expect("create temp repo dir");
+    let repo_path = repo_dir.path();
+
+    run_git_command(repo_path, &["init", "-b", "main"])
+        .await
+        .expect("git init");
+    run_git_command(repo_path, &["config", "user.email", "test@test.com"])
+        .await
+        .expect("git config email");
+    run_git_command(repo_path, &["config", "user.name", "Test"])
+        .await
+        .expect("git config name");
+    std::fs::write(repo_path.join("file.txt"), "preflighted\n").expect("write initial file");
+    run_git_command(repo_path, &["add", "file.txt"])
+        .await
+        .expect("git add");
+    run_git_command(repo_path, &["commit", "-m", "initial"])
+        .await
+        .expect("git commit");
+
+    let blob_oid = run_git_command(repo_path, &["rev-parse", "--verify", "HEAD:file.txt"])
+        .await
+        .expect("resolve initial blob");
+    let blob_oid = blob_oid.trim();
+
+    std::fs::write(
+        repo_path.join("file.txt"),
+        "\n".repeat(MAX_EDITOR_BUFFER_NEWLINE_COUNT + 1),
+    )
+    .expect("replace file");
+    run_git_command(repo_path, &["add", "file.txt"])
+        .await
+        .expect("git add replacement");
+    run_git_command(repo_path, &["commit", "-m", "replace"])
+        .await
+        .expect("git commit replacement");
+
+    let content = LocalDiffStateModel::get_file_content_at_blob(repo_path, blob_oid).await;
+
+    assert_eq!(content, BaseContent::Loaded("preflighted\n".to_string()));
+    assert_eq!(
+        LocalDiffStateModel::get_file_content_at_commit(repo_path, "file.txt", "HEAD").await,
+        BaseContent::ExceedsEditorLimit
+    );
 }
 
 #[tokio::test]
