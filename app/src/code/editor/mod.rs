@@ -3,6 +3,7 @@
 pub(crate) mod comment_editor;
 mod comments;
 pub(super) mod diff;
+pub mod diff_alignment;
 mod element;
 pub mod embedded_comment;
 pub mod find;

@@ -21,6 +21,7 @@ use warpui::{Entity, ModelContext};
 
 use super::super::DiffResult;
 use crate::appearance::Appearance;
+use crate::code::editor::diff_alignment::ChangeSpan;
 use crate::code::editor::line::EditorLineLocation;
 use crate::code::editor::line_iterator::LineIterator;
 
@@ -81,6 +82,17 @@ pub(crate) fn remove_inline_overlay_color(appearance: &Appearance) -> ColorU {
         AnsiColorIdentifier::Red.to_ansi_color(&appearance.theme().terminal_colors().normal);
     let mut color: ColorU = ansi_color.into();
     color.a = INLINE_OVERLAY_ALPHA;
+    color
+}
+
+/// Alpha of the foreground blended over the editor background for blank gap rows in the split
+/// diff layout.
+const GAP_FILL_ALPHA: u8 = 20;
+
+/// Get the theme-appropriate fill for the blank gap rows of a split diff.
+pub(crate) fn gap_fill_color(appearance: &Appearance) -> ColorU {
+    let mut color = appearance.theme().foreground().into_solid();
+    color.a = GAP_FILL_ALPHA;
     color
 }
 
@@ -152,9 +164,25 @@ pub struct DiffStatus {
     change_mapping: RangeMap<usize, ChangeType>,
     /// A deletion that maps a line index in current content to an old range in base.
     deletion_mapping: HashMap<usize, Range<usize>>,
+    /// Whether the changed lines are lines removed from the base, as shown in the base pane of a
+    /// split diff, rather than lines added to it.
+    marks_removed_lines: bool,
 }
 
 impl DiffStatus {
+    /// A status for the base pane of a split diff, which shows the base text itself: each range of
+    /// removed base lines is a hunk the gutter can act on, drawn in the removal color.
+    pub fn for_split_baseline(removed_lines: &[Range<usize>]) -> Self {
+        Self {
+            change_mapping: removed_lines
+                .iter()
+                .map(|range| (range.clone(), ChangeType::Addition))
+                .collect(),
+            deletion_mapping: HashMap::new(),
+            marks_removed_lines: true,
+        }
+    }
+
     /// Returns the number of lines added and removed in the current diff.
     pub fn get_diff_lines(&self) -> (usize, usize) {
         let mut lines_added = 0;
@@ -201,9 +229,47 @@ impl DiffStatus {
                 add_color: add_color(appearance),
                 remove_color: remove_color(appearance),
             }),
+            Some(ChangeType::Addition) if self.marks_removed_lines => {
+                Some(DiffHunkDisplay::Add(remove_color(appearance)))
+            }
             Some(ChangeType::Addition) => Some(DiffHunkDisplay::Add(add_color(appearance))),
             None => None,
         }
+    }
+
+    /// Every change in the diff as a base range and a modified range, ordered by position.
+    pub fn change_spans(&self) -> Vec<ChangeSpan> {
+        let mut changes = self
+            .change_mapping
+            .iter()
+            .map(|(modified, change)| match change {
+                ChangeType::Addition => (modified.clone(), None),
+                ChangeType::Replacement { replaced_range, .. } => {
+                    (modified.clone(), Some(replaced_range.clone()))
+                }
+            })
+            .chain(
+                self.deletion_mapping
+                    .iter()
+                    .map(|(index, base)| (*index..*index, Some(base.clone()))),
+            )
+            .collect_vec();
+        changes.sort_by_key(|(modified, _)| (modified.start, modified.end));
+
+        // Additions carry no base position, so derive it from how far the base has drifted from
+        // the modified text at that point.
+        let mut base_minus_modified: isize = 0;
+        changes
+            .into_iter()
+            .map(|(modified, base)| {
+                let base = base.unwrap_or_else(|| {
+                    let start = (modified.start as isize + base_minus_modified).max(0) as usize;
+                    start..start
+                });
+                base_minus_modified += base.len() as isize - modified.len() as isize;
+                ChangeSpan { base, modified }
+            })
+            .collect()
     }
 
     /// Return the range of diff hunk lines (if any) containing the given line.

@@ -5,10 +5,12 @@ use std::time::Duration;
 use command::blocking::Command;
 use warp::features::FeatureFlag;
 use warp::integration_testing::code_review::{
-    ScrollRegion, assert_code_review_anchor, assert_code_review_line_text,
-    assert_code_review_loaded, assert_code_review_scroll_region, assert_min_hidden_sections,
+    DiffLayout, ScrollRegion, assert_code_review_anchor, assert_code_review_line_text,
+    assert_code_review_loaded, assert_code_review_scroll_region, assert_code_review_split_aligned,
+    assert_code_review_unified, assert_min_hidden_sections,
     expand_first_hidden_section_and_assert_full_reveal, scroll_code_review_to_deleted_range,
     scroll_code_review_to_footer, scroll_code_review_to_header, scroll_code_review_to_line,
+    switch_code_review_diff_layout,
 };
 use warp::integration_testing::terminal::wait_until_bootstrapped_single_pane_for_tab;
 use warp::integration_testing::view_getters::{single_terminal_view_for_tab, workspace_view};
@@ -707,4 +709,81 @@ pub fn test_code_review_double_click_fully_expands_hidden_section() -> Builder {
         .with_step(expand_first_hidden_section_and_assert_full_reveal(
             TEST_FILE_NAME,
         ))
+}
+
+/// Switches a modified file to the split layout, checks that paired rows line up, edits the file
+/// so the right pane gains lines (and the left pane gap rows), checks alignment again, and
+/// switches back to unified.
+pub fn test_code_review_split_diff_aligns_and_realigns_after_edit() -> Builder {
+    FeatureFlag::SideBySideDiffLayout.set_enabled(true);
+    FeatureFlag::IncrementalAutoReload.set_enabled(true);
+    let inserted_line_text = inserted_lines("split")
+        .into_iter()
+        .next()
+        .expect("inserted lines should not be empty");
+    new_builder()
+        .use_tmp_filesystem_for_test_root_directory()
+        .with_setup(|utils| {
+            let test_dir = utils.test_dir();
+            let repo_dir = test_dir.join("repo");
+            fs::create_dir_all(&repo_dir).expect("should create repo subdirectory");
+            let repo_dir_string = repo_dir
+                .to_str()
+                .expect("repo directory should be valid utf-8");
+
+            write_all_rc_files_for_test(&test_dir, format!("cd {repo_dir_string}"));
+
+            fs::write(repo_dir.join(TEST_FILE_NAME), initial_committed_contents())
+                .expect("should write initial committed contents");
+            run_git(&repo_dir, &["init", "-b", "main"]);
+            run_git(&repo_dir, &["config", "user.email", "test@example.com"]);
+            run_git(&repo_dir, &["config", "user.name", "Warp Integration Test"]);
+            run_git(&repo_dir, &["add", TEST_FILE_NAME]);
+            run_git(&repo_dir, &["commit", "-m", "Initial commit"]);
+
+            fs::write(repo_dir.join(TEST_FILE_NAME), initial_diff_contents())
+                .expect("should write initial diff contents");
+        })
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
+        .with_step(
+            TestStep::new("Wait for the terminal to detect the git repository")
+                .set_timeout(Duration::from_secs(20))
+                .add_assertion(assert_repo_detected()),
+        )
+        .with_step(
+            TestStep::new("Open the code review panel")
+                .with_action(|app, window_id, _| open_code_review_panel(app, window_id)),
+        )
+        .with_step(
+            TestStep::new("Wait for the code review panel to load file diffs")
+                .set_timeout(Duration::from_secs(20))
+                .add_assertion(assert_code_review_loaded()),
+        )
+        .with_step(switch_code_review_diff_layout(DiffLayout::SideBySide))
+        .with_step(
+            TestStep::new("Wait for the split panes to line up")
+                .set_timeout(Duration::from_secs(20))
+                .add_assertion(assert_code_review_split_aligned(TEST_FILE_NAME)),
+        )
+        .with_step(mutate_test_file(INSERT_ABOVE_LINE_NUMBER, "split"))
+        .with_step(
+            TestStep::new("Wait for code review to reflect the inserted lines")
+                .set_timeout(Duration::from_secs(20))
+                .add_assertion(assert_code_review_line_text(
+                    TEST_FILE_NAME,
+                    INSERT_ABOVE_LINE_NUMBER,
+                    inserted_line_text,
+                )),
+        )
+        .with_step(
+            TestStep::new("Wait for the split panes to line up after the edit")
+                .set_timeout(Duration::from_secs(20))
+                .add_assertion(assert_code_review_split_aligned(TEST_FILE_NAME)),
+        )
+        .with_step(switch_code_review_diff_layout(DiffLayout::Inline))
+        .with_step(
+            TestStep::new("Wait for the unified layout to return")
+                .set_timeout(Duration::from_secs(20))
+                .add_assertion(assert_code_review_unified(TEST_FILE_NAME)),
+        )
 }
