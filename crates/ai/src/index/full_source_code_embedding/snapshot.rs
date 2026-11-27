@@ -78,13 +78,19 @@ pub(super) fn split_snapshot_metadata_by_validity(
     persisted_codebase_indices
         .into_iter()
         .partition(|index_metadata| {
-            log::info!(
-                "Discarding expired codebase index snapshot for {:?}",
-                index_metadata.path
-            );
-            index_metadata.is_expired(now, REPO_SNAPSHOT_SHELF_LIFE_DAYS)
+            let is_expired = index_metadata.is_expired(now, REPO_SNAPSHOT_SHELF_LIFE_DAYS)
                 || !snapshot_storage
-                    .is_some_and(|storage| storage.has_snapshot(&index_metadata.path))
+                    .is_some_and(|storage| storage.has_snapshot(&index_metadata.path));
+            // Only log when the snapshot is actually being discarded. Previously this fired
+            // unconditionally for every persisted index (including ones being kept), which
+            // produced misleading "mass discard" log/breadcrumb trails on startup.
+            if is_expired {
+                log::info!(
+                    "Discarding expired codebase index snapshot for {:?}",
+                    index_metadata.path
+                );
+            }
+            is_expired
         })
 }
 
