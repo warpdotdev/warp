@@ -175,6 +175,32 @@ fn natural_language_detection_command_is_supported_in_tui() {
     assert!(!slash_command_is_submitted_as_prompt(command));
 }
 
+#[test]
+fn rename_conversation_prefill_populates_title_and_selects_only_the_title_range() {
+    use super::rename_conversation_prefill;
+
+    // Selecting `/rename-conversation` with no argument pre-fills the current conversation
+    // title and selects exactly the title (not the command prefix), so typing replaces the
+    // whole title while granular edits remain possible and Enter still routes through the
+    // existing rename validation/API flow.
+    let (buffer, title_range) =
+        rename_conversation_prefill("/rename-conversation", Some("acme plan"))
+            .expect("a non-empty title should produce a prefill");
+    assert_eq!(buffer, "/rename-conversation acme plan");
+    let prefix_len = "/rename-conversation ".len();
+    assert_eq!(title_range, prefix_len..prefix_len + "acme plan".len());
+    assert_eq!(&buffer[title_range.start..title_range.end], "acme plan");
+    // The `/rename-conversation ` prefix stays outside the selection.
+    assert!(!title_range.contains(&(prefix_len - 1)));
+
+    // No active conversation title -> no prefill (caller falls back to the default
+    // `/<command> ` insertion so the existing empty-argument path is preserved).
+    assert!(rename_conversation_prefill("/rename-conversation", None).is_none());
+
+    // Empty/whitespace-only title -> no prefill.
+    assert!(rename_conversation_prefill("/rename-conversation", Some("   ")).is_none());
+}
+
 #[cfg(all(feature = "local_fs", windows))]
 mod windows {
     use std::sync::Arc;
