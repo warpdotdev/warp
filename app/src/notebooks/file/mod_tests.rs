@@ -323,7 +323,6 @@ fn test_load_static() {
 fn test_file_notebook_mermaid_blocks_default_to_rendered() {
     App::test((), |mut app| async move {
         init_app(&mut app);
-        let _flag = FeatureFlag::MarkdownMermaid.override_enabled(true);
         let _editable_flag = FeatureFlag::EditableMarkdownMermaid.override_enabled(true);
         let (_, handle) = app.add_window(WindowStyle::NotStealFocus, FileNotebookView::new);
 

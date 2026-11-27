@@ -173,7 +173,6 @@ pub fn test_open_in_warp_banner() -> Builder {
 }
 
 pub fn test_backspace_inside_raw_mermaid_block_edits_text_without_removing_block() -> Builder {
-    FeatureFlag::MarkdownMermaid.set_enabled(true);
     FeatureFlag::EditableMarkdownMermaid.set_enabled(true);
 
     let markdown = "Before\n```mermaid\ngraph TD\nA --> B\n```\nAfter";
