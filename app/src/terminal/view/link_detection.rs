@@ -6,7 +6,7 @@ use warpui::platform::Cursor;
 
 use crate::terminal::TerminalModel;
 use crate::terminal::model::RespectObfuscatedSecrets;
-use crate::terminal::model::grid::grid_handler::Link;
+use crate::terminal::model::grid::grid_handler::{Link, TermMode};
 use crate::terminal::model::index::Point;
 use crate::terminal::model::terminal_model::{WithinBlock, WithinModel};
 
@@ -30,6 +30,30 @@ cfg_if::cfg_if! {
 use warp_errors::report_error;
 
 use super::{FindLinkArg, TerminalEditor};
+
+/// Mouse-reporting apps such as vim with `mouse=a` handle clicks themselves, so file paths are
+/// only detected there while the link-open modifier is held (as in iTerm2 and Ghostty).
+fn file_scan_editor_mode(
+    from_editor: TerminalEditor,
+    position: &WithinModel<Point>,
+    link_modifier_held: bool,
+) -> TerminalEditor {
+    match position {
+        WithinModel::AltScreen(_) if link_modifier_held => TerminalEditor::No,
+        _ => from_editor,
+    }
+}
+
+/// Whether `link` only exists because the link-open modifier is held, so it must be cleared
+/// once the modifier is released or the app scrolls its content under it.
+#[cfg(feature = "local_fs")]
+fn is_modifier_gated_file_link(link: Option<&GridHighlightedLink>, mouse_reporting: bool) -> bool {
+    mouse_reporting
+        && matches!(
+            link,
+            Some(GridHighlightedLink::File(WithinModel::AltScreen(_)))
+        )
+}
 
 // "a/" and "b/" are prefixes specific to Git Diff
 #[cfg(feature = "local_fs")]
@@ -363,6 +387,8 @@ impl super::TerminalView {
         if self.terminal_is_selecting(&self.model.lock(), ctx)
             || self.is_navigated_away_from_window(ctx)
         {
+            // The modifier may be released while the window is inactive, e.g. after Cmd+Tab.
+            self.link_modifier_held = false;
             if self.highlighted_link.take(&mut self.model.lock()).is_some() {
                 ctx.reset_cursor();
                 ctx.notify();
@@ -380,6 +406,7 @@ impl super::TerminalView {
             }
             return;
         };
+        let from_editor = file_scan_editor_mode(from_editor, position, self.link_modifier_held);
 
         // If the mouse is still on top of the previous highlighted link and that link is
         // still valid, we can keep highlighting it.
@@ -466,6 +493,42 @@ impl super::TerminalView {
         }
 
         self.last_hover_fragment_boundary = Some(new_fragment_boundary);
+    }
+
+    pub(super) fn link_modifier_changed(
+        &mut self,
+        held: bool,
+        position: &Option<WithinModel<Point>>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if self.link_modifier_held == held {
+            return;
+        }
+        self.link_modifier_held = held;
+        if !held {
+            self.clear_modifier_gated_file_link(ctx);
+        } else if position.is_some() && self.model.lock().is_term_mode_set(TermMode::SGR_MOUSE) {
+            // The word under the pointer was already scanned without the modifier, so force a
+            // rescan instead of waiting for the mouse to move to a new word.
+            self.last_hover_fragment_boundary = None;
+            self.maybe_link_hover(position, TerminalEditor::Yes, ctx);
+        }
+    }
+
+    #[cfg_attr(not(feature = "local_fs"), allow(unused_variables))]
+    pub(super) fn clear_modifier_gated_file_link(&mut self, ctx: &mut ViewContext<Self>) {
+        #[cfg(feature = "local_fs")]
+        {
+            let mut model = self.model.lock();
+            if is_modifier_gated_file_link(
+                self.highlighted_link.as_ref(),
+                model.is_term_mode_set(TermMode::SGR_MOUSE),
+            ) && self.highlighted_link.take(&mut model).is_some()
+            {
+                ctx.reset_cursor();
+                ctx.notify();
+            }
+        }
     }
 
     #[cfg_attr(not(feature = "local_fs"), allow(unused_variables))]
@@ -788,6 +851,14 @@ impl super::TerminalView {
             ctx.notify();
         }
 
+        // The scan runs off the main thread, so the modifier may have been released meanwhile.
+        let link_result = link_result.filter(|link| {
+            self.link_modifier_held
+                || !is_modifier_gated_file_link(
+                    Some(link),
+                    model.is_term_mode_set(TermMode::SGR_MOUSE),
+                )
+        });
         if let Some(new_link) = link_result {
             self.highlighted_link.set(new_link, &mut model);
             ctx.set_cursor_shape(Cursor::PointingHand);

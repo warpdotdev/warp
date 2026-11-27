@@ -67,6 +67,80 @@ fn strips_trailing_fullwidth_sentence_punctuation() {
     assert_eq!(trimmed.removed_width, 6);
 }
 
+// File paths in mouse-reporting full-screen apps such as Claude Code and Codex
+// (https://github.com/warpdotdev/warp/issues/16174, #11157).
+mod mouse_reporting_alt_screen {
+    use std::path::PathBuf;
+
+    use super::super::{GridHighlightedLink, file_scan_editor_mode, is_modifier_gated_file_link};
+    use crate::terminal::GridType;
+    use crate::terminal::model::grid::grid_handler::Link;
+    use crate::terminal::model::index::Point;
+    use crate::terminal::model::terminal_model::{BlockIndex, WithinBlock, WithinModel};
+    use crate::terminal::view::TerminalEditor;
+    use crate::util::file::FileLink;
+
+    fn alt_screen_point() -> WithinModel<Point> {
+        WithinModel::AltScreen(Point::new(0, 0))
+    }
+
+    fn link() -> Link {
+        Link {
+            range: Point::new(0, 0)..=Point::new(0, 4),
+            is_empty: false,
+        }
+    }
+
+    fn file_link() -> FileLink {
+        FileLink {
+            link: link(),
+            absolute_path: PathBuf::from("/tmp/file.rs"),
+            line_and_column_num: None,
+        }
+    }
+
+    #[test]
+    fn scans_alt_screen_editor_only_while_modifier_held() {
+        assert!(matches!(
+            file_scan_editor_mode(TerminalEditor::Yes, &alt_screen_point(), false),
+            TerminalEditor::Yes
+        ));
+        assert!(matches!(
+            file_scan_editor_mode(TerminalEditor::Yes, &alt_screen_point(), true),
+            TerminalEditor::No
+        ));
+        assert!(matches!(
+            file_scan_editor_mode(TerminalEditor::No, &alt_screen_point(), false),
+            TerminalEditor::No
+        ));
+    }
+
+    #[test]
+    fn modifier_does_not_change_block_list_scanning() {
+        let position = WithinModel::BlockList(WithinBlock::new(
+            Point::new(0, 0),
+            BlockIndex::zero(),
+            GridType::Output,
+        ));
+        assert!(matches!(
+            file_scan_editor_mode(TerminalEditor::Yes, &position, true),
+            TerminalEditor::Yes
+        ));
+    }
+
+    #[test]
+    fn only_alt_screen_file_links_under_mouse_reporting_are_modifier_gated() {
+        let alt_file = GridHighlightedLink::File(WithinModel::AltScreen(file_link()));
+        let alt_url = GridHighlightedLink::Url(WithinModel::AltScreen(link()));
+
+        assert!(is_modifier_gated_file_link(Some(&alt_file), true));
+        // Without mouse reporting (e.g. `less`), paths are detected without the modifier.
+        assert!(!is_modifier_gated_file_link(Some(&alt_file), false));
+        assert!(!is_modifier_gated_file_link(Some(&alt_url), true));
+        assert!(!is_modifier_gated_file_link(None, true));
+    }
+}
+
 // Regression test for https://github.com/warpdotdev/warp/issues/11477:
 // a `.md` path at the end of a sentence captured the trailing period, so the
 // resolved file and the highlight range ended in `.md.` and the file failed
