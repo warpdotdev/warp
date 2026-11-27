@@ -3703,7 +3703,7 @@ pub(crate) fn render_debug_footer<V: View>(
 
     if let Some(submit_button) = stacked_submit_button {
         let mut column = Flex::column();
-        column.add_child(Expanded::new(1.0, debug_row.finish()).finish());
+        column.add_child(debug_row.finish());
         column.add_child(Container::new(submit_button).with_margin_top(8.).finish());
         column.finish()
     } else {
