@@ -1,6 +1,6 @@
 use std::iter;
 
-use warp_util::path::CleanPathResult;
+use warp_util::path::{CleanPathResult, LineAndColumnArg};
 
 use super::super::TerminalView;
 use super::{GridHighlightedLink, path_without_trailing_sentence_punctuation};
@@ -208,4 +208,69 @@ fn compute_valid_paths_keeps_trailing_fullwidth_punctuation_when_it_is_the_filen
             col: end_col,
         }
     );
+}
+
+#[test]
+fn resolve_hyperlink_uri_resolves_local_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let docs = dir.path().join("docs");
+    std::fs::create_dir(&docs).unwrap();
+    let file = docs.join("notes.md");
+    std::fs::write(&file, "# Notes\n").unwrap();
+    let working_directory = dir.path().to_string_lossy().into_owned();
+    let resolve =
+        |uri: &str| TerminalView::resolve_hyperlink_uri(uri, working_directory.clone(), None);
+
+    // Relative URIs resolve against the working directory.
+    assert_eq!(resolve("docs/notes.md"), Some((file.clone(), None)));
+    // Absolute paths and `file://` URIs resolve as-is.
+    assert_eq!(resolve(&file.to_string_lossy()), Some((file.clone(), None)));
+    let file_uri = url::Url::from_file_path(&file).unwrap().to_string();
+    assert_eq!(resolve(&file_uri), Some((file.clone(), None)));
+    // A `:line:col` suffix is split off rather than treated as part of the file name.
+    assert_eq!(
+        resolve("docs/notes.md:3:7"),
+        Some((
+            file.clone(),
+            Some(LineAndColumnArg {
+                line_num: 3,
+                column_num: Some(7),
+            })
+        ))
+    );
+    // A top-level file with a `:line` suffix also parses as a URL whose scheme is the file name.
+    let top_level_file = dir.path().join("package.json");
+    std::fs::write(&top_level_file, "{}\n").unwrap();
+    assert_eq!(
+        resolve("package.json:3"),
+        Some((
+            top_level_file,
+            Some(LineAndColumnArg {
+                line_num: 3,
+                column_num: None,
+            })
+        ))
+    );
+    assert_eq!(
+        resolve(&format!("{file_uri}:3")),
+        Some((
+            file,
+            Some(LineAndColumnArg {
+                line_num: 3,
+                column_num: None,
+            })
+        ))
+    );
+}
+
+#[test]
+fn resolve_hyperlink_uri_rejects_missing_files_and_non_file_urls() {
+    let dir = tempfile::tempdir().unwrap();
+    let working_directory = dir.path().to_string_lossy().into_owned();
+    let resolve =
+        |uri: &str| TerminalView::resolve_hyperlink_uri(uri, working_directory.clone(), None);
+
+    assert_eq!(resolve("docs/missing.md"), None);
+    assert_eq!(resolve("https://www.warp.dev"), None);
+    assert_eq!(resolve("mailto:hello@warp.dev"), None);
 }

@@ -450,7 +450,7 @@ use crate::terminal::model::blocks::{
 use crate::terminal::model::escape_sequences::{
     self, C1, EscCodes, ToEscapeSequence, alt_screen_scroll_to_pty_bytes,
 };
-use crate::terminal::model::grid::grid_handler::{FragmentBoundary, TermMode};
+use crate::terminal::model::grid::grid_handler::{FragmentBoundary, Link, TermMode};
 use crate::terminal::model::index::{Point, Side};
 use crate::terminal::model::mouse::MouseState;
 use crate::terminal::model::selection::{SelectAction, SelectionDirection};
@@ -19475,7 +19475,8 @@ impl TerminalView {
                 ctx.open_url(&uri);
             }
             GridHighlightedLink::Hyperlink { link, uri } if link.contains(position) => {
-                self.open_hyperlink_uri(uri, ctx);
+                let (link, uri) = (link.clone(), uri.clone());
+                self.open_grid_hyperlink(&link, &uri, ctx);
             }
             _ => (),
         }
@@ -19484,6 +19485,24 @@ impl TerminalView {
             ctx.reset_cursor();
             ctx.notify();
         }
+    }
+
+    /// Open an OSC 8 hyperlink from the grid. A URI that resolves to an existing local file is
+    /// opened like other file links, honoring the editor settings.
+    #[cfg_attr(not(feature = "local_fs"), allow(unused_variables))]
+    fn open_grid_hyperlink(
+        &mut self,
+        link: &WithinModel<Link>,
+        uri: &str,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        #[cfg(feature = "local_fs")]
+        if let Some((path, line_and_column_num)) = self.local_file_for_hyperlink_uri(link, uri, ctx)
+        {
+            self.open_file_path(path, line_and_column_num, ctx);
+            return;
+        }
+        self.open_hyperlink_uri(uri, ctx);
     }
 
     /// Open an OSC 8 hyperlink URI. The URI comes from untrusted terminal
