@@ -491,6 +491,10 @@ pub enum ModelEvent {
         lsp_type: LSPServerType,
         enabled: EnablementState,
     },
+    /// Delete all language-server registrations for a workspace.
+    DeleteWorkspaceLanguageServers {
+        workspace_path: PathBuf,
+    },
     UpdateBlockAgentViewVisibility {
         block_id: String,
         agent_view_visibility: SerializedAgentViewVisibility,

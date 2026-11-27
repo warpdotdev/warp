@@ -400,6 +400,19 @@ impl PersistedWorkspace {
         }
     }
 
+    /// Remove every language-server registration for a workspace, both
+    /// in-memory and persisted, so the folder no longer counts as
+    /// LSP-initialized in settings.
+    pub fn remove_lsp_workspace(&mut self, path: &Path) {
+        let Some(workspace) = self.workspaces.get_mut(path) else {
+            return;
+        };
+        workspace.language_servers.clear();
+        self.save_to_db(vec![ModelEvent::DeleteWorkspaceLanguageServers {
+            workspace_path: path.to_path_buf(),
+        }]);
+    }
+
     /// Internal method to set LSP server state for a path.
     fn set_lsp_server_for_path(
         &mut self,
