@@ -87,7 +87,8 @@ impl Client {
         connection_address: ConnectionAddress,
         background_executor: Arc<Background>,
     ) -> Result<Self> {
-        let (reader, writer) = connect_client(connection_address).await?;
+        let (reader, writer) =
+            connect_client(connection_address, background_executor.clone()).await?;
         let (disconnect_tx, disconnect_rx) = async_channel::bounded(1);
         let (pending_request_info_tx, pending_request_info_rx) = async_channel::unbounded();
         let disconnect_tx_clone = disconnect_tx.clone();
