@@ -10,6 +10,14 @@ fn args(command: &Command) -> Vec<&OsStr> {
     command.get_args().collect()
 }
 
+// Command's Debug output includes environment overrides only on Unix.
+#[cfg(unix)]
+fn assert_disables_toolchain_downloads(command: &Command) {
+    let debug = format!("{command:?}");
+    assert!(debug.contains(r#"GOTOOLCHAIN="local""#), "{debug}");
+    assert!(debug.contains(r#"RUSTUP_AUTO_INSTALL="0""#), "{debug}");
+}
+
 #[test]
 fn detect_command_has_exact_argv_cache_root_and_repo_cwd() {
     let command = detect_command(Path::new("/cache/repos/key"), Path::new("/work/repo"));
@@ -28,6 +36,8 @@ fn detect_command_has_exact_argv_cache_root_and_repo_cwd() {
         ]
     );
     assert_eq!(command.get_current_dir(), Some(Path::new("/work/repo")));
+    #[cfg(unix)]
+    assert_disables_toolchain_downloads(&command);
 }
 
 #[test]
@@ -52,6 +62,8 @@ fn mount_command_has_exact_explicit_modes_dry_run_false_root_and_cwd() {
         ]
     );
     assert_eq!(command.get_current_dir(), Some(Path::new("/tmp/scratch")));
+    #[cfg(unix)]
+    assert_disables_toolchain_downloads(&command);
 }
 
 #[test]

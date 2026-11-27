@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::ffi::OsString;
 use std::fs;
 use std::future::Future;
@@ -17,7 +17,7 @@ use super::{
     CacheConfiguration, CacheScope, CacheSetupError, CacheSetupPlan, CacheSetupReport,
     CandidateKey, DetectedCacheModes, RepoCacheKey, RepoIdentity, RepositoryCacheSource,
     aggregate_mode_stats, construct_plan, create_retained_scratch_directory, is_valid_env_name,
-    produce_candidates, run_command_with_timeout, setup_cache,
+    produce_candidates, repository_mount_paths, run_command_with_timeout, setup_cache,
 };
 #[cfg(unix)]
 use super::{create_cache_dir_all, current_owner};
@@ -47,7 +47,56 @@ fn detection(source: RepositoryCacheSource, modes: &[&str]) -> DetectedCacheMode
         relative_cache_dir: Path::new("repos").join(key.as_str()),
         source,
         modes: modes.iter().map(ToString::to_string).collect(),
+        repository_mount_paths: None,
     }
+}
+
+fn child_detection(
+    root: &RepositoryCacheSource,
+    relative_path: &str,
+    modes: &[&str],
+    repository_mount_paths: &[&str],
+) -> DetectedCacheModes {
+    let mut source = root.clone();
+    source.cwd = root.cwd.join(relative_path);
+    fs::create_dir_all(&source.cwd).unwrap();
+    let mut detection =
+        with_repository_mount_paths(detection(source, modes), repository_mount_paths);
+    detection.order.normalized_relative_path = Some(PathBuf::from(relative_path));
+    detection.relative_cache_dir = detection
+        .relative_cache_dir
+        .join("nested")
+        .join(relative_path.replace('/', "-"));
+    detection
+}
+
+fn with_repository_mount_paths(
+    mut detection: DetectedCacheModes,
+    paths: &[&str],
+) -> DetectedCacheModes {
+    detection.repository_mount_paths = Some(paths.iter().map(PathBuf::from).collect());
+    detection
+}
+
+fn mount_at(mount_path: impl Into<PathBuf>) -> Mount {
+    Mount {
+        mode: "rust".to_owned(),
+        cache_path: PathBuf::new(),
+        mount_path: mount_path.into(),
+        cache_hit: false,
+    }
+}
+
+fn response_with_mounts(modes: &[&str], mount_paths: &[&Path]) -> Vec<u8> {
+    let mounts = mount_paths
+        .iter()
+        .map(|path| serde_json::json!({"mode": modes[0], "mount_path": path, "cache_hit": false}))
+        .collect::<Vec<_>>();
+    serde_json::to_vec(&serde_json::json!({
+        "input": {"modes": modes},
+        "output": {"mounts": mounts},
+    }))
+    .unwrap()
 }
 
 fn response(modes: &[&str], envs: &[(&str, &str)], mounts: &[(&str, bool)]) -> Vec<u8> {
@@ -686,6 +735,213 @@ fn plan_accepts_repeated_repo_keys_with_distinct_roots_and_cache_paths() {
 }
 
 #[test]
+fn plan_keeps_roots_and_children_with_unclaimed_destinations() {
+    let temp = tempfile::tempdir().unwrap();
+    let workspace = source(temp.path(), "github.com", "warp", "workspace");
+    let global_only = source(temp.path(), "github.com", "warp", "global-only");
+    let unknown = source(temp.path(), "github.com", "warp", "unknown");
+    let plan = construct_plan(
+        temp.path().join("cache"),
+        vec![
+            child_detection(&workspace, "crates/member", &["npm", "rust"], &["target"]),
+            with_repository_mount_paths(detection(workspace.clone(), &["rust"]), &["target"]),
+            child_detection(
+                &workspace,
+                "ruby",
+                &["ruby"],
+                &["ruby/vendor/bundle", "target"],
+            ),
+            with_repository_mount_paths(detection(global_only.clone(), &["go"]), &[]),
+            detection(unknown.clone(), &["go"]),
+        ],
+        Vec::new(),
+    )
+    .unwrap()
+    .unwrap();
+
+    let (global, repositories) = plan.configurations.split_last().unwrap();
+    assert_eq!(global.modes, ["go", "npm", "ruby", "rust"]);
+    let workspace_cwds = repositories
+        .iter()
+        .map(|configuration| configuration.cwd.clone())
+        .filter(|cwd| cwd.starts_with(&workspace.cwd))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        workspace_cwds,
+        [workspace.cwd.clone(), workspace.cwd.join("ruby")]
+    );
+    assert_eq!(
+        repositories
+            .iter()
+            .map(|configuration| configuration.cwd.clone())
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            workspace.cwd.clone(),
+            workspace.cwd.join("ruby"),
+            global_only.cwd,
+            unknown.cwd
+        ])
+    );
+}
+
+#[test]
+fn workspace_members_skip_real_mounts_while_repository_roots_are_kept() {
+    let temp = tempfile::tempdir().unwrap();
+    let workspace = source(temp.path(), "github.com", "warp", "workspace");
+    let tools = source(temp.path(), "github.com", "warp", "tools");
+    fs::write(workspace.cwd.join("Cargo.toml"), "").unwrap();
+    for member in ["crates/a", "crates/b"] {
+        fs::create_dir_all(workspace.cwd.join(member)).unwrap();
+        fs::write(workspace.cwd.join(member).join("Cargo.toml"), "").unwrap();
+    }
+    let workspace_root = workspace.cwd.clone();
+    let tools_root = tools.cwd.clone();
+    let expected_roots = BTreeSet::from([workspace_root.clone(), tools_root.clone()]);
+    let detects = Arc::new(AtomicUsize::new(0));
+    let mount_cwds = Arc::new(Mutex::new(Vec::new()));
+    let report = block_on(setup_cache(
+        temp.path().join("cache"),
+        vec![workspace, tools],
+        Vec::new(),
+        {
+            let detects = Arc::clone(&detects);
+            let mount_cwds = Arc::clone(&mount_cwds);
+            let workspace_root = workspace_root.clone();
+            move |command| {
+                let cwd = command.get_current_dir().unwrap().to_path_buf();
+                let registry = Path::new("/home/agent/.cargo/registry");
+                let response = if !is_detect(&command) {
+                    mount_cwds.lock().unwrap().push(cwd);
+                    response(&["rust"], &[], &[])
+                } else if cwd == tools_root {
+                    detects.fetch_add(1, Ordering::SeqCst);
+                    response_with_mounts(&["go"], &[Path::new("/home/agent/go/pkg/mod")])
+                } else if cwd == workspace_root {
+                    detects.fetch_add(1, Ordering::SeqCst);
+                    response_with_mounts(&["rust"], &[Path::new("./target"), registry])
+                } else {
+                    detects.fetch_add(1, Ordering::SeqCst);
+                    response_with_mounts(&["rust"], &[&workspace_root.join("target"), registry])
+                };
+                futures::future::ready(Ok(response))
+            }
+        },
+    ));
+
+    assert_eq!(detects.load(Ordering::SeqCst), 4);
+    let plan = report.plan.unwrap();
+    let global = plan.configurations.last().unwrap();
+    assert_eq!(global.modes, ["go", "rust"]);
+    let mount_cwds = mount_cwds.lock().unwrap();
+    let (last, repositories) = mount_cwds.split_last().unwrap();
+    assert_eq!(last, &global.cwd);
+    assert_eq!(repositories.len(), 2);
+    assert_eq!(
+        repositories.iter().cloned().collect::<BTreeSet<_>>(),
+        expected_roots
+    );
+}
+
+#[test]
+fn external_target_directories_keep_roots_and_distinct_child_mounts() {
+    let temp = tempfile::tempdir().unwrap();
+    let repo = source(temp.path(), "github.com", "warp", "project");
+    let root = repo.cwd.clone();
+    let first_child = root.join("crates/a");
+    let second_child = root.join("crates/b");
+    fs::create_dir_all(&first_child).unwrap();
+    fs::create_dir_all(&second_child).unwrap();
+    fs::write(root.join("Cargo.toml"), "").unwrap();
+    fs::write(first_child.join("Cargo.toml"), "").unwrap();
+    fs::write(second_child.join("Cargo.toml"), "").unwrap();
+    let child_target = temp.path().join("child-target");
+    let mount_cwds = Mutex::new(Vec::new());
+
+    let report = block_on(setup_cache(
+        temp.path().join("cache"),
+        vec![repo],
+        Vec::new(),
+        |command| {
+            let cwd = command.get_current_dir().unwrap().to_path_buf();
+            let bytes = if !is_detect(&command) {
+                mount_cwds.lock().unwrap().push(cwd);
+                response(&["rust"], &[], &[])
+            } else if cwd == root {
+                response_with_mounts(&["rust"], &[Path::new("../root-target")])
+            } else {
+                response_with_mounts(&["rust"], &[&child_target])
+            };
+            futures::future::ready(Ok(bytes))
+        },
+    ));
+
+    let plan = report.plan.unwrap();
+    let global = plan.configurations.last().unwrap();
+    assert_eq!(
+        *mount_cwds.lock().unwrap(),
+        [root, first_child, global.cwd.clone()]
+    );
+}
+
+#[test]
+fn repository_mount_paths_include_external_destinations() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("repo");
+    let child = root.join("sub");
+    let external_cache = temp.path().join("home/agent/.npm");
+    fs::create_dir_all(&child).unwrap();
+
+    let paths = repository_mount_paths(
+        &root,
+        &child,
+        &[
+            mount_at("./target"),
+            mount_at("../shared/out"),
+            mount_at(root.join("other")),
+            mount_at(&external_cache),
+            mount_at(temp.path().join("repo-sibling")),
+        ],
+    );
+
+    assert_eq!(
+        paths,
+        Some(BTreeSet::from([
+            PathBuf::from("sub/target"),
+            PathBuf::from("shared/out"),
+            PathBuf::from("other"),
+            external_cache,
+            temp.path().join("repo-sibling"),
+        ]))
+    );
+}
+
+#[test]
+fn repository_mount_paths_are_unknown_without_complete_destinations() {
+    let root = Path::new("/work/repo");
+    assert_eq!(repository_mount_paths(root, root, &[]), None);
+    assert_eq!(
+        repository_mount_paths(root, root, &[mount_at("./target"), mount_at("")]),
+        None
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn repository_mount_paths_accept_symlink_resolved_destinations() {
+    let temp = tempfile::tempdir().unwrap();
+    let real = temp.path().join("real");
+    fs::create_dir_all(real.join("repo")).unwrap();
+    std::os::unix::fs::symlink(&real, temp.path().join("link")).unwrap();
+    let root = temp.path().join("link/repo");
+    let canonical_target = fs::canonicalize(&root).unwrap().join("target");
+
+    assert_eq!(
+        repository_mount_paths(&root, &root, &[mount_at(canonical_target)]),
+        Some(BTreeSet::from([PathBuf::from("target")]))
+    );
+}
+
+#[test]
 fn plan_rejects_duplicate_repository_working_or_cache_directories() {
     let temp = tempfile::tempdir().unwrap();
     let repo = source(temp.path(), "github.com", "warp", "client");
@@ -773,7 +1029,7 @@ fn only_successful_real_mounts_contribute_usage_paths() {
         Vec::new(),
         move |command| {
             futures::future::ready(if is_detect(&command) {
-                Ok(br#"{"input":{"modes":["rust"]},"output":{"mounts":[{"cache_hit":true,"cache_path":"/dry-run","mount_path":"/work/dry-run","mode":"rust"}]}}"#.to_vec())
+                Ok(br#"{"input":{"modes":["rust"]},"output":{"mounts":[{"cache_hit":true,"cache_path":"/dry-run","mount_path":"./target","mode":"rust"}]}}"#.to_vec())
             } else if is_global(&command) {
                 Err(CacheSetupError::Timeout)
             } else {
