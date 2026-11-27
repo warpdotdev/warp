@@ -203,6 +203,23 @@ impl TabConfig {
     }
 }
 
+/// Returns the user-facing label for each config, in order. `name` is not unique across files, so
+/// repeated names after the first get a counter suffix: `Name`, `Name (1)`, `Name (2)`.
+pub fn display_names(configs: &[TabConfig]) -> Vec<String> {
+    let mut seen: HashMap<&str, usize> = HashMap::new();
+    configs
+        .iter()
+        .map(|config| {
+            let count = seen.entry(config.name.as_str()).or_default();
+            *count += 1;
+            match *count {
+                1 => config.name.clone(),
+                n => format!("{} ({})", config.name, n - 1),
+            }
+        })
+        .collect()
+}
+
 /// Renders a [`TabConfig`] with the given param values into a [`PaneTemplateType`]
 /// and an optional rendered title.
 ///

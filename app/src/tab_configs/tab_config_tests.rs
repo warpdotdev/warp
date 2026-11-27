@@ -903,3 +903,21 @@ directory = "~/a"
         panic!("Expected fallback PaneTemplate");
     }
 }
+
+#[test]
+fn test_display_names_disambiguate_repeated_names_in_order() {
+    let config = |name: &str| TabConfig {
+        name: name.to_owned(),
+        title: None,
+        color: None,
+        panes: Vec::new(),
+        params: HashMap::new(),
+        source_path: None,
+    };
+    let configs = [config("Dev"), config("Ops"), config("Dev"), config("Dev")];
+
+    assert_eq!(
+        display_names(&configs),
+        ["Dev", "Ops", "Dev (1)", "Dev (2)"]
+    );
+}
