@@ -393,9 +393,6 @@ pub enum FeatureFlag {
     /// A context chip that shows when the PWD is inside of a git repository.
     CodeModeChip,
 
-    /// Enables the prompt chip that displays the GitHub PR for the current branch.
-    GithubPrPromptChip,
-
     /// A button on the homepage for easily creating new projects.
     CreateProjectFlow,
 
