@@ -9,7 +9,7 @@ use nom::bytes::complete::{
 use nom::character::complete::{char, one_of, satisfy, space0, space1};
 use nom::character::is_digit;
 use nom::combinator::{
-    all_consuming, consumed, eof, fail, flat_map, map, map_parser, recognize, value, verify,
+    all_consuming, consumed, eof, fail, flat_map, map, map_parser, opt, recognize, value, verify,
 };
 use nom::error::{ContextError, ErrorKind, ParseError, context, make_error};
 use nom::multi::{fold_many_m_n, fold_many1, many_m_n, many0};
@@ -201,37 +201,78 @@ fn parse_markdown_internal<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
             continue;
         }
 
-        let (remaining_after_block, mut line) = block(remaining)?;
+        let (remaining_after_block, line) = block(remaining)?;
         remaining = remaining_after_block;
 
-        // Clear indentation context for non-list content and handle ordered list numbering
-        match &mut line {
-            FormattedTextLine::LineBreak => {
-                // Line breaks don't reset context
-            }
-            FormattedTextLine::UnorderedList(_) | FormattedTextLine::TaskList(_) => {
-                // List items already update indentation context during parsing
-            }
-            FormattedTextLine::OrderedList(list_item) => {
-                // For ordered lists, only the starting item's number is applied. We reset the number for
-                // subsequent items here because, in isolation, we don't know if a given list item starts a
-                // list or not.
-                if let Some(FormattedTextLine::OrderedList(prev_list_item)) = lines.last()
-                    && prev_list_item.indented_text.indent_level
-                        >= list_item.indented_text.indent_level
-                {
-                    list_item.number = None;
+        for mut line in split_paragraph_at_breaks(line) {
+            // Clear indentation context for non-list content and handle ordered list numbering
+            match &mut line {
+                FormattedTextLine::LineBreak => {
+                    // Line breaks don't reset context
+                }
+                FormattedTextLine::UnorderedList(_) | FormattedTextLine::TaskList(_) => {
+                    // List items already update indentation context during parsing
+                }
+                FormattedTextLine::OrderedList(list_item) => {
+                    // For ordered lists, only the starting item's number is applied. We reset the number for
+                    // subsequent items here because, in isolation, we don't know if a given list item starts a
+                    // list or not.
+                    if let Some(FormattedTextLine::OrderedList(prev_list_item)) = lines.last()
+                        && prev_list_item.indented_text.indent_level
+                            >= list_item.indented_text.indent_level
+                    {
+                        list_item.number = None;
+                    }
+                }
+                _ => {
+                    // Non-list content resets indentation context
+                    indentation_context.borrow_mut().clear();
                 }
             }
-            _ => {
-                // Non-list content resets indentation context
-                indentation_context.borrow_mut().clear();
-            }
+            lines.push(line);
         }
-        lines.push(line);
     }
 
     Ok((remaining, lines))
+}
+
+/// Split a parsed paragraph at `<br>` line breaks, which inline parsing emits as `\n`
+/// characters inside fragment text, into separate [`FormattedTextLine::Line`] entries.
+/// Empty segments become [`FormattedTextLine::LineBreak`]. Other line kinds are returned
+/// unchanged.
+fn split_paragraph_at_breaks(line: FormattedTextLine) -> Vec<FormattedTextLine> {
+    let FormattedTextLine::Line(inline) = line else {
+        return vec![line];
+    };
+    if !inline.iter().any(|fragment| fragment.text.contains('\n')) {
+        return vec![FormattedTextLine::Line(inline)];
+    }
+
+    let mut lines = Vec::new();
+    let mut current: FormattedTextInline = Vec::new();
+    for fragment in inline {
+        for (i, part) in fragment.text.split('\n').enumerate() {
+            if i > 0 {
+                lines.push(if current.is_empty() {
+                    FormattedTextLine::LineBreak
+                } else {
+                    FormattedTextLine::Line(std::mem::take(&mut current))
+                });
+            }
+            if !part.is_empty() {
+                current.push(FormattedTextFragment {
+                    text: part.to_string(),
+                    styles: fragment.styles.clone(),
+                });
+            }
+        }
+    }
+    // A `<br>` at end of line marks the wrap itself; the next input line continues the
+    // paragraph, so the empty trailing segment doesn't produce a blank line.
+    if !current.is_empty() {
+        lines.push(FormattedTextLine::Line(current));
+    }
+    lines
 }
 
 /// Parse a single paragraph of Markdown text.
@@ -626,7 +667,19 @@ fn parse_table_row<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
 
     let (input, _) = alt((value((), parse_line_ending), value((), eof)))(input)?;
 
-    let parsed_cells = cells.iter().map(|cell| parse_cell_content(cell)).collect();
+    // Table cells are single-line, so `<br>` line breaks degrade to a separating space.
+    let parsed_cells = cells
+        .iter()
+        .map(|cell| {
+            parse_cell_content(cell)
+                .into_iter()
+                .map(|mut fragment| {
+                    fragment.text = fragment.text.replace('\n', " ");
+                    fragment
+                })
+                .collect()
+        })
+        .collect();
     Ok((input, parsed_cells))
 }
 
@@ -1078,6 +1131,9 @@ fn parse_inline<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
             }
             InlineToken::UnderlineEnd => {
                 input = parse_underline(&mut state, remaining);
+            }
+            InlineToken::LineBreak => {
+                state.push_closed_node(FormattedTextFragment::plain_text("\n"));
             }
         }
     }
@@ -1596,6 +1652,7 @@ fn parse_inline_token<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
             parse_inline_token_autolink,
             parse_inline_token_underline_start,
             parse_inline_token_underline_end,
+            parse_inline_token_line_break,
             whitespace,
             text,
             // This _must_ be the last parser in the chain. It unconditionally consumes a single
@@ -1701,6 +1758,21 @@ fn parse_inline_token_underline_end<'a, E: ContextError<&'a str> + ParseError<&'
     )(input)
 }
 
+/// Parse an inline `<br>` tag (`<br>`, `<br/>`, `<br />`), which produces an explicit line
+/// break in the paragraph. The break is emitted as a `\n` inside fragment text and split
+/// into separate lines by [`split_paragraph_at_breaks`].
+fn parse_inline_token_line_break<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
+    input: &'a str,
+) -> IResult<&'a str, InlineToken<'a>, E> {
+    context(
+        "line_break",
+        value(
+            InlineToken::LineBreak,
+            tuple((tag_no_case("<br"), space0, opt(char('/')), tag(">"))),
+        ),
+    )(input)
+}
+
 /// Helper to parse a run of delimiters.
 fn parse_delimiter_run<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
     kind: DelimiterKind,
@@ -1747,6 +1819,8 @@ enum InlineToken<'a> {
     LinkEnd,
     /// A closing </u>, which triggers underline parsing.
     UnderlineEnd,
+    /// A `<br>` tag, which produces an explicit line break.
+    LineBreak,
     /// An HTML comment, which is discarded rather than rendered.
     Comment,
 }
