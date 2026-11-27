@@ -2,6 +2,8 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::thread::JoinHandle;
 
+#[cfg(not(target_family = "wasm"))]
+use ::preview_proxy::IngressTokenValidation;
 use ::preview_proxy::{PortSource, PreviewRecord, Proxy};
 use anyhow::Context as _;
 use tokio_util::sync::CancellationToken;
@@ -83,6 +85,22 @@ impl Manager {
 }
 
 impl PortSource for Client {
+    #[cfg(not(target_family = "wasm"))]
+    async fn validate_ingress_token(
+        &self,
+        request: IngressTokenValidation<'_>,
+    ) -> anyhow::Result<()> {
+        self.client
+            .validate_preview_ingress_token(
+                &self.task_id,
+                self.execution_id,
+                request.preview_id,
+                request.port,
+                request.ingress_token,
+            )
+            .await
+    }
+
     async fn previews(&self) -> anyhow::Result<Vec<PreviewRecord>> {
         let response = self.client.list_run_previews(&self.task_id).await?;
         preview_records(response, self.execution_id)

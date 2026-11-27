@@ -1592,6 +1592,16 @@ pub struct UpdateMemoryResponse {
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
 pub trait AIClient: 'static + Send + Sync {
+    #[cfg(not(target_family = "wasm"))]
+    async fn validate_preview_ingress_token(
+        &self,
+        task_id: &AmbientAgentTaskId,
+        execution_id: i64,
+        preview_id: uuid::Uuid,
+        port: u16,
+        ingress_token: &str,
+    ) -> anyhow::Result<()>;
+
     async fn list_run_previews(
         &self,
         task_id: &AmbientAgentTaskId,
@@ -2386,12 +2396,51 @@ fn convert_upload_field(
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
 impl AIClient for ServerApi {
+    #[cfg(not(target_family = "wasm"))]
+    async fn validate_preview_ingress_token(
+        &self,
+        task_id: &AmbientAgentTaskId,
+        execution_id: i64,
+        preview_id: uuid::Uuid,
+        port: u16,
+        ingress_token: &str,
+    ) -> anyhow::Result<()> {
+        self.base_client
+            .validate_preview_ingress_token(
+                &task_id.to_string(),
+                execution_id,
+                preview_id,
+                port,
+                ingress_token,
+            )
+            .await
+    }
+
     async fn list_run_previews(
         &self,
         task_id: &AmbientAgentTaskId,
     ) -> anyhow::Result<ListRunPreviewsResponse> {
-        self.get_public_api_response_for_task(task_id, &format!("agent/runs/{task_id}/previews"))
-            .await?
+        let auth_token = self.get_or_refresh_access_token().await?;
+        let url = format!(
+            "{}/api/v1/agent/runs/{task_id}/previews",
+            crate::ChannelState::server_root_url()
+        );
+        let mut request = self
+            .base_client
+            .http_client()
+            .get(&url)
+            .timeout(Duration::from_secs(5));
+        if let Some(token) = auth_token.as_bearer_token() {
+            request = request.bearer_auth(token);
+        }
+        for (name, value) in self.ambient_agent_headers_for_task(task_id).await? {
+            request = request.header(name, value);
+        }
+        let response = request.send().await?;
+        if !response.status().is_success() {
+            return Err(Self::error_from_response(response).await);
+        }
+        response
             .json::<ListRunPreviewsResponse>()
             .await
             .map_err(Into::into)

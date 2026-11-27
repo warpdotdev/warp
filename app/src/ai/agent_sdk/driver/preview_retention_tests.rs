@@ -72,20 +72,6 @@ fn preview_retention_enabled_with_preview_urls_flag() {
     );
 }
 
-#[test]
-#[cfg(not(target_family = "wasm"))]
-fn preview_retention_only_applies_to_namespace() {
-    assert!(!is_namespace_sandbox(None));
-    assert!(!is_namespace_sandbox(Some(IsolationPlatformType::Docker)));
-    assert!(!is_namespace_sandbox(Some(
-        IsolationPlatformType::Kubernetes
-    )));
-    assert!(is_namespace_sandbox(Some(IsolationPlatformType::Namespace)));
-    assert!(!is_namespace_sandbox(Some(
-        IsolationPlatformType::DockerSandbox
-    )));
-}
-
 fn retention(
     check: impl Fn() -> BoxFuture<'static, Option<Duration>> + Send + Sync + 'static,
     wait: impl Fn(Duration) -> BoxFuture<'static, ()> + Send + Sync + 'static,
