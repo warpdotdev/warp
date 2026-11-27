@@ -247,6 +247,7 @@ mod full_text_searcher {
     use std::collections::HashMap;
 
     use itertools::Itertools;
+    use parking_lot::Mutex;
     use warp_search_core::define_search_schema;
     use warpui::{AppContext, ModelHandle};
 
@@ -257,7 +258,9 @@ mod full_text_searcher {
     };
     use crate::search::command_palette::navigation::search_item::SearchItem;
     use crate::search::data_source::QueryResult;
-    use crate::search::searcher::{DEFAULT_MEMORY_BUDGET, SCORE_CONVERSION_FACTOR};
+    use crate::search::searcher::{
+        SimpleFullTextSearcher, DEFAULT_MEMORY_BUDGET, SCORE_CONVERSION_FACTOR,
+    };
     use crate::session_management::{SessionNavigationData, SessionSource};
 
     define_search_schema!(
@@ -271,6 +274,9 @@ mod full_text_searcher {
 
     pub struct FullTextSessionSearcher {
         pub(crate) session_source_handle: ModelHandle<SessionSource>,
+        /// Cached Tantivy searcher, reused across queries to avoid allocating a new
+        /// 50 MB `IndexWriter` (and spawning merge threads) on every search call.
+        searcher: Mutex<SimpleFullTextSearcher<SessionSearchConfig>>,
     }
 
     impl SessionSearcher for FullTextSessionSearcher {
@@ -279,7 +285,7 @@ mod full_text_searcher {
             search_term: &str,
             app: &AppContext,
         ) -> anyhow::Result<Vec<QueryResult<SearcherAction>>> {
-            let searcher = SESSION_SEARCH_SCHEMA.create_searcher(DEFAULT_MEMORY_BUDGET);
+            let mut searcher = self.searcher.lock();
 
             let mut sessions = HashMap::new();
             let documents =
@@ -297,6 +303,14 @@ mod full_text_searcher {
                         }
                     });
 
+            // Reuse the cached searcher: clear the existing index then rebuild with
+            // the current session list. This avoids creating a new Tantivy
+            // `IndexWriter` (and 2 background merge threads) on every call.
+            if let Err(e) = searcher.clear_search_index() {
+                log::warn!("Failed to clear session search index, rebuilding from scratch: {e}");
+                // If the clear fails, create a fresh searcher to recover.
+                *searcher = SESSION_SEARCH_SCHEMA.create_searcher(DEFAULT_MEMORY_BUDGET);
+            }
             searcher.build_index(documents)?;
 
             let active_session_id = match self.session_source_handle.as_ref(app) {
@@ -355,6 +369,7 @@ mod full_text_searcher {
         pub fn new(session_source_handle: ModelHandle<SessionSource>) -> Self {
             Self {
                 session_source_handle,
+                searcher: Mutex::new(SESSION_SEARCH_SCHEMA.create_searcher(DEFAULT_MEMORY_BUDGET)),
             }
         }
     }
