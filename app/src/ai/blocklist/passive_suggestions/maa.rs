@@ -485,13 +485,21 @@ impl PassiveSuggestionsModel {
 
         // Startup commands run while bootstrapping an Oz cloud environment, so we skip
         // passive prompt suggestion generation for them to avoid unnecessary requests.
-        let is_oz_environment_startup_command = FeatureFlag::CloudModeSetupV2.is_enabled()
-            && self
-                .terminal_model
-                .lock()
-                .block_list()
-                .block_at(block_completed.index)
-                .is_some_and(|block| block.is_oz_environment_startup_command());
+        let (is_oz_environment_startup_command, conversation_id) = {
+            let model = self.terminal_model.lock();
+            let block_list = model.block_list();
+            let Some(block) = block_completed
+                .current_index(block_list)
+                .and_then(|index| block_list.block_at(index))
+            else {
+                return;
+            };
+            (
+                FeatureFlag::CloudModeSetupV2.is_enabled()
+                    && block.is_oz_environment_startup_command(),
+                block.agent_view_visibility().agent_view_conversation_id(),
+            )
+        };
         if is_oz_environment_startup_command {
             return;
         }
@@ -509,15 +517,11 @@ impl PassiveSuggestionsModel {
         // Note: the lock is dropped before calling `BlockContext::from_completed_block` below,
         // since that (like `UserBlockCompleted`'s other accessors) locks `self.terminal_model`
         // itself if needed, and `FairMutex` isn't reentrant.
-        let conversation_id = {
-            let model = self.terminal_model.lock();
-            let Some(block) = model.block_list().block_at(block_completed.index) else {
-                return;
-            };
-            block.agent_view_visibility().agent_view_conversation_id()
+        let Some(block_context) =
+            BlockContext::from_completed_block(block_completed, &self.terminal_model)
+        else {
+            return;
         };
-        let block_context =
-            BlockContext::from_completed_block(block_completed, &self.terminal_model);
 
         // If passive code diffs are enabled, check for any files that were read.
         #[cfg(feature = "local_fs")]

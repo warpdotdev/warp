@@ -161,6 +161,236 @@ fn classifies_next_block_ids_relative_to_the_active_block() {
         NextBlockIdDisposition::ActiveDuplicate
     );
 }
+
+#[test]
+fn completed_live_block_retention_is_bounded() {
+    let mut block_list =
+        new_bootstrapped_block_list(None, None, ChannelEventListener::new_for_test());
+    let first_live_block_id = block_list.active_block_id().clone();
+
+    for _ in 0..=MAX_RETAINED_COMPLETED_LIVE_BLOCKS {
+        block_list.start_active_block();
+        block_list.preexec(Default::default());
+        command_finished_and_precmd(&mut block_list);
+    }
+
+    let newest_completed_block_id = block_list.blocks()[block_list.active_block_index().0 - 1]
+        .id()
+        .clone();
+    assert_eq!(
+        block_list.blocks().len(),
+        MAX_RETAINED_COMPLETED_LIVE_BLOCKS + 3
+    );
+    assert!(
+        block_list
+            .block_index_for_id(&first_live_block_id)
+            .is_none()
+    );
+    assert!(
+        block_list
+            .block_index_for_id(&newest_completed_block_id)
+            .is_some()
+    );
+    assert!(!block_list.active_block().finished());
+    for (index, block) in block_list.blocks().iter().enumerate() {
+        assert_eq!(block.index(), BlockIndex(index));
+        assert_eq!(
+            block_list.block_index_for_id(block.id()),
+            Some(BlockIndex(index))
+        );
+    }
+}
+
+#[test]
+fn inserted_restored_blocks_are_not_live_eviction_candidates() {
+    let mut block_list =
+        new_bootstrapped_block_list(None, None, ChannelEventListener::new_for_test());
+    let mut restored_block = SerializedBlock::new_for_test(
+        "restored conversation command".into(),
+        "restored conversation output".into(),
+    );
+    restored_block.is_local = Some(true);
+    let restored_block_id = restored_block.id.clone();
+    block_list.insert_restored_block(&restored_block);
+
+    for index in 0..=MAX_RETAINED_COMPLETED_LIVE_BLOCKS {
+        insert_block(
+            &mut block_list,
+            &format!("live command {index}"),
+            &format!("live output {index}"),
+        );
+    }
+
+    let restored_block = block_list
+        .block_with_id(&restored_block_id)
+        .expect("inserted restored block should survive live block eviction");
+    assert!(restored_block.is_restored());
+    assert_eq!(
+        restored_block.bootstrap_stage(),
+        BootstrapStage::PostBootstrapPrecmd
+    );
+}
+
+#[test]
+fn queued_completion_payloads_remain_resolvable_after_live_eviction() {
+    let (events_tx, events_rx) = async_channel::unbounded();
+    let event_proxy = ChannelEventListener::builder_for_test()
+        .with_terminal_events_tx(events_tx)
+        .build();
+    let mut block_list = new_bootstrapped_block_list(None, None, event_proxy);
+    while events_rx.try_recv().is_ok() {}
+    let first_queued_block_id = block_list.active_block_id().clone();
+    let mut second_queued_block = None;
+
+    let mut expected_commands = Vec::new();
+    for index in 0..=MAX_RETAINED_COMPLETED_LIVE_BLOCKS {
+        if index == 1 {
+            second_queued_block = Some((
+                block_list.active_block_id().clone(),
+                block_list.active_block_index(),
+            ));
+        }
+        let command = format!("queued command {index}");
+        let output = format!("queued output {index}");
+        insert_block(&mut block_list, &command, &output);
+        expected_commands.extend([command, output]);
+    }
+
+    let mut resolved_payloads = Vec::new();
+    while let Ok(event) = events_rx.try_recv() {
+        let (block_event_identity, completed) = match event {
+            Event::BlockCompleted(event) => {
+                let current_index = event.current_index(&block_list);
+                match event.block_type {
+                    BlockType::User(completed) => {
+                        (Some((event.block_id, current_index)), completed)
+                    }
+                    _ => continue,
+                }
+            }
+            Event::AfterBlockCompleted(event) => match event.block_type {
+                BlockType::User(completed) => (None, completed),
+                _ => continue,
+            },
+            _ => continue,
+        };
+        let serialized_block = completed.serialized_block.get(&block_list);
+        assert_eq!(serialized_block.id, completed.block_id);
+        if let Some((block_id, current_index)) = block_event_identity {
+            assert_eq!(block_id, completed.block_id);
+            assert_eq!(current_index, completed.current_index(&block_list));
+        }
+        assert_eq!(
+            completed.current_index(&block_list),
+            block_list.block_index_for_id(&completed.block_id)
+        );
+        if let Some(current_index) = completed.current_index(&block_list) {
+            assert_eq!(
+                block_list
+                    .block_at(current_index)
+                    .expect("resolved completion index should exist")
+                    .id(),
+                &completed.block_id
+            );
+        }
+        let command = completed.command.get(&block_list);
+        let command_with_obfuscated_secrets =
+            completed.command_with_obfuscated_secrets.get(&block_list);
+        let output = completed.output_truncated.get(&block_list);
+        let output_with_obfuscated_secrets = completed
+            .output_truncated_with_obfuscated_secrets
+            .get(&block_list);
+        assert_eq!(command_with_obfuscated_secrets, command);
+        assert_eq!(output_with_obfuscated_secrets, output);
+        assert!(!serialized_block.stylized_command.is_empty());
+        assert!(!serialized_block.stylized_output.is_empty());
+        resolved_payloads.extend([command.clone(), output.clone()]);
+    }
+    expected_commands.extend(expected_commands.clone());
+
+    expected_commands.sort_unstable();
+    resolved_payloads.sort_unstable();
+    assert_eq!(resolved_payloads, expected_commands);
+
+    assert!(
+        block_list
+            .block_index_for_id(&first_queued_block_id)
+            .is_none(),
+        "queued events for evicted blocks must not resolve to the block shifted into their old slot"
+    );
+    let (second_queued_block_id, second_original_index) =
+        second_queued_block.expect("the second queued block should have been recorded");
+    let second_current_index = block_list
+        .block_index_for_id(&second_queued_block_id)
+        .expect("the second queued block should remain retained");
+    assert_eq!(second_current_index.0 + 1, second_original_index.0);
+}
+
+#[test]
+fn live_block_eviction_preserves_unfinished_background_and_active_conversation_blocks() {
+    let mut block_list =
+        new_bootstrapped_block_list(None, None, ChannelEventListener::new_for_test());
+    let conversation_id = AIConversationId::new();
+    block_list.enter_conversation_context(conversation_id, false, false);
+    let oldest_live_block_id = block_list.active_block_id().clone();
+
+    for _ in 0..MAX_RETAINED_COMPLETED_LIVE_BLOCKS {
+        block_list.start_active_block();
+        block_list.preexec(Default::default());
+        command_finished_and_precmd(&mut block_list);
+    }
+
+    input_string(&mut block_list, "background output");
+    block_list.on_finish_byte_processing(&ansi::ProcessorInput::new(&[]));
+    let background_block_id = block_list
+        .background_block_mut()
+        .expect("background output should create an unfinished block")
+        .id()
+        .clone();
+
+    block_list.start_active_block();
+    block_list.preexec(Default::default());
+    let newest_completed_block_id = block_list.active_block_id().clone();
+    block_list.active_block_mut().finish(0);
+    block_list.create_new_block(
+        BlockId::new(),
+        BootstrapStage::PostBootstrapPrecmd,
+        None,
+        None,
+    );
+    let active_block_id = block_list.active_block_id().clone();
+    block_list.evict_completed_live_blocks();
+
+    let background_block = block_list
+        .block_with_id(&background_block_id)
+        .expect("unfinished background block should remain");
+    assert!(background_block.is_background());
+    assert!(!background_block.finished());
+    assert_eq!(
+        block_list.blocks().len(),
+        MAX_RETAINED_COMPLETED_LIVE_BLOCKS + 4
+    );
+    assert!(
+        block_list
+            .block_index_for_id(&oldest_live_block_id)
+            .is_none()
+    );
+    assert!(
+        block_list
+            .block_index_for_id(&newest_completed_block_id)
+            .is_some()
+    );
+    assert_eq!(block_list.active_block_id(), &active_block_id);
+    assert!(!block_list.active_block().finished());
+    assert!(matches!(
+        block_list.active_block().agent_view_visibility(),
+        AgentViewVisibility::Agent {
+            origin_conversation_id,
+            ..
+        } if *origin_conversation_id == conversation_id
+    ));
+}
+
 fn drain_terminal_events(events_rx: &async_channel::Receiver<Event>) -> Vec<Event> {
     let mut events = Vec::new();
     while let Ok(event) = events_rx.try_recv() {
@@ -2201,11 +2431,13 @@ pub fn test_emits_after_block_completed_event() {
             .build(),
     );
     block_list.start_active_block_for_in_band_command();
+    let in_band_block_id = block_list.active_block_id().clone();
     block_list.preexec(PreexecValue {
         command: "warp_run_generator_command 1234 foo".to_owned(),
         session_id: None,
     });
     command_finished_and_precmd(&mut block_list);
+    assert!(block_list.block_index_for_id(&in_band_block_id).is_none());
 
     block_list.start_active_block();
     block_list.preexec(PreexecValue {
@@ -2232,6 +2464,21 @@ pub fn test_emits_after_block_completed_event() {
         after_block_completed_events[1].block_type,
         BlockType::User(..)
     ));
+}
+#[test]
+fn retains_visible_in_band_command_blocks() {
+    let mut block_list =
+        new_bootstrapped_block_list(None, None, ChannelEventListener::new_for_test());
+    block_list.set_show_in_band_command_blocks(true);
+    block_list.start_active_block_for_in_band_command();
+    let in_band_block_id = block_list.active_block_id().clone();
+    block_list.preexec(PreexecValue {
+        command: "warp_run_generator_command 1234 foo".to_owned(),
+        session_id: None,
+    });
+    command_finished_and_precmd(&mut block_list);
+
+    assert!(block_list.block_index_for_id(&in_band_block_id).is_some());
 }
 
 #[test]
@@ -2302,9 +2549,9 @@ fn test_background_blocks_finished() {
     // There's now a completion event for the first user block, one for the
     // background block, and one for the second user block. Likewise, the block
     // list now contains the bootstrap blocks, the first user block, the background
-    // block, the in-band generator block, the second user block, and the active block.
+    // block, the second user block, and the active block.
     assert_eq!(block_completed_events.len(), 3);
-    assert_eq!(block_list.blocks().len(), 8);
+    assert_eq!(block_list.blocks().len(), 7);
 
     match &block_completed_events[1].block_type {
         BlockType::Background(block) => {
