@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use settings::Setting as _;
+use warp_errors::report_if_error;
 use warpui::elements::{
     Border, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Element,
     Fill as ElementFill, Flex, MainAxisAlignment, MainAxisSize, MouseStateHandle, Padding,
@@ -29,6 +31,7 @@ use crate::ai::persisted_workspace::PersistedWorkspace;
 use crate::appearance::Appearance;
 use crate::editor::{EditorView, Event as EditorEvent, SingleLineEditorOptions};
 use crate::modal::ModalAction;
+use crate::settings::WorktreeSettings;
 use crate::tab_configs::branch_picker::BranchPicker;
 use crate::tab_configs::repo_picker::{RepoPicker, RepoPickerEvent};
 
@@ -66,20 +69,27 @@ const ESC_BADGE_CORNER_RADIUS: Radius = Radius::Pixels(3.);
 const CLOSE_ICON_SIZE: f32 = 14.;
 /// Font size for inline validation error messages.
 const ERROR_FONT_SIZE: f32 = 12.;
-/// Error shown when the user-entered worktree branch name contains invalid characters.
+/// Error shown when the user-entered worktree branch name is not a valid branch name.
 const INVALID_BRANCH_NAME_ERROR: &str =
-    "Name can only contain letters, numbers, hyphens, and underscores";
+    "Use letters, numbers, and - _ . / (for example, feature/login)";
 
-/// Returns `true` if `name` is a valid worktree branch name.
+/// Returns `true` if `name` is a valid name for a new worktree branch.
 ///
-/// Valid names contain only ASCII letters, digits, hyphens, and underscores.
-/// The name must also be non-empty after trimming whitespace.
+/// This is a conservative subset of `git check-ref-format --branch`: ASCII letters, digits, and
+/// `- _ . /`, with no empty, hidden, or `.lock` path components and no `..`. Restricting the
+/// character set also keeps the name safe to splice into the generated shell commands.
 fn is_valid_worktree_branch_name(name: &str) -> bool {
-    let trimmed = name.trim();
-    !trimmed.is_empty()
-        && trimmed
+    let name = name.trim();
+    !name.is_empty()
+        && !name.starts_with('-')
+        && !name.ends_with('.')
+        && !name.contains("..")
+        && name
             .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '/'))
+        && name
+            .split('/')
+            .all(|part| !part.is_empty() && !part.starts_with('.') && !part.ends_with(".lock"))
 }
 
 /// Body view for the "New worktree" modal.
@@ -90,12 +100,13 @@ pub struct NewWorktreeModal {
     repo_picker: ViewHandle<RepoPicker>,
     branch_picker: ViewHandle<BranchPicker>,
     worktree_name_editor: ViewHandle<EditorView>,
-    autogenerate_branch_name: bool,
+    /// Whether the worktree starts from the base branch freshly fetched from `origin`.
+    fetch_latest: bool,
     selected_repo: Option<String>,
     selected_branch: Option<String>,
     cancel_button_mouse_state: MouseStateHandle,
     open_button_mouse_state: MouseStateHandle,
-    checkbox_mouse_state: MouseStateHandle,
+    fetch_checkbox_mouse_state: MouseStateHandle,
     close_button_mouse_state: MouseStateHandle,
 }
 
@@ -105,10 +116,11 @@ pub enum NewWorktreeModalEvent {
         repo: String,
         /// The base branch to create the worktree from.
         branch: String,
-        /// `None` when autogenerate is enabled (the workspace handler
+        /// `None` when the name field is left empty (the workspace handler
         /// will generate a name); `Some(name)` when the user typed a
         /// name manually.
         worktree_branch_name: Option<String>,
+        fetch_latest: bool,
     },
     /// The user clicked "+ Add new repo..." in the repo picker; the workspace
     /// should open a folder picker and call [`NewWorktreeModal::on_new_repo_selected`].
@@ -119,7 +131,7 @@ pub enum NewWorktreeModalEvent {
 pub enum NewWorktreeModalAction {
     Cancel,
     Open,
-    ToggleAutogenerate,
+    ToggleFetchLatest,
     Escape,
 }
 
@@ -133,12 +145,12 @@ impl NewWorktreeModal {
             repo_picker,
             branch_picker,
             worktree_name_editor,
-            autogenerate_branch_name: true,
+            fetch_latest: *WorktreeSettings::as_ref(ctx).fetch_before_creating_worktree,
             selected_repo: None,
             selected_branch: None,
             cancel_button_mouse_state: Default::default(),
             open_button_mouse_state: Default::default(),
-            checkbox_mouse_state: Default::default(),
+            fetch_checkbox_mouse_state: Default::default(),
             close_button_mouse_state: Default::default(),
         }
     }
@@ -180,7 +192,7 @@ impl NewWorktreeModal {
         let editor = ctx.add_typed_action_view(|ctx| {
             let options = SingleLineEditorOptions::default();
             let mut editor = EditorView::single_line(options, ctx);
-            editor.set_placeholder_text("my-feature-branch", ctx);
+            editor.set_placeholder_text("Leave empty to autogenerate a name", ctx);
             editor
         });
         ctx.subscribe_to_view(&editor, |me, _, event, ctx| match event {
@@ -194,7 +206,7 @@ impl NewWorktreeModal {
 
     /// Called by the workspace before making the modal visible.
     pub fn on_open(&mut self, cwd: Option<PathBuf>, ctx: &mut ViewContext<Self>) {
-        self.autogenerate_branch_name = true;
+        self.fetch_latest = *WorktreeSettings::as_ref(ctx).fetch_before_creating_worktree;
         self.selected_repo = None;
         self.selected_branch = None;
         self.worktree_name_editor.update(ctx, |e, ctx| {
@@ -263,20 +275,20 @@ impl NewWorktreeModal {
             return;
         };
 
-        let worktree_branch_name = if self.autogenerate_branch_name {
+        let text = self.worktree_name_editor.as_ref(ctx).buffer_text(ctx);
+        let worktree_branch_name = if text.trim().is_empty() {
             None
-        } else {
-            let text = self.worktree_name_editor.as_ref(ctx).buffer_text(ctx);
-            if !is_valid_worktree_branch_name(&text) {
-                return;
-            }
+        } else if is_valid_worktree_branch_name(&text) {
             Some(text.trim().to_string())
+        } else {
+            return;
         };
 
         ctx.emit(NewWorktreeModalEvent::Submit {
             repo,
             branch,
             worktree_branch_name,
+            fetch_latest: self.fetch_latest,
         });
     }
 
@@ -314,12 +326,13 @@ impl View for NewWorktreeModal {
         let has_branch = self.selected_branch.is_some()
             || self.branch_picker.as_ref(app).selected_value(app).is_some();
         let worktree_name_text = self.worktree_name_editor.as_ref(app).buffer_text(app);
-        let worktree_name_valid =
-            self.autogenerate_branch_name || is_valid_worktree_branch_name(&worktree_name_text);
-        let worktree_name_has_error = !self.autogenerate_branch_name
-            && !worktree_name_text.trim().is_empty()
+        let worktree_name_has_error = !worktree_name_text.trim().is_empty()
             && !is_valid_worktree_branch_name(&worktree_name_text);
-        let can_submit = has_repo && has_branch && worktree_name_valid;
+        let can_submit = has_repo && has_branch && !worktree_name_has_error;
+        let base_branch = self
+            .selected_branch
+            .clone()
+            .or_else(|| self.branch_picker.as_ref(app).selected_value(app));
 
         // ── Header (custom — Modal wrapper has no title) ────────────────
         let header = {
@@ -411,13 +424,36 @@ impl View for NewWorktreeModal {
 
         // Branch picker (with gap)
         body.add_child(
-            Container::new(Self::render_section_label("Select branch", appearance))
+            Container::new(Self::render_section_label("Base branch", appearance))
                 .with_margin_top(SECTION_GAP)
                 .finish(),
         );
         body.add_child(ChildView::new(&self.branch_picker).finish());
 
-        // Checkbox
+        // New branch name
+        body.add_child(
+            Container::new(Self::render_section_label("New branch name", appearance))
+                .with_margin_top(SECTION_GAP)
+                .finish(),
+        );
+        body.add_child(ChildView::new(&self.worktree_name_editor).finish());
+        if worktree_name_has_error {
+            body.add_child(
+                Container::new(
+                    Text::new_inline(
+                        INVALID_BRANCH_NAME_ERROR.to_string(),
+                        appearance.ui_font_family(),
+                        ERROR_FONT_SIZE,
+                    )
+                    .with_color(theme.ui_error_color())
+                    .finish(),
+                )
+                .with_margin_top(LABEL_BOTTOM_MARGIN)
+                .finish(),
+            );
+        }
+
+        // Fetch checkbox
         let checkbox_label_color = theme.sub_text_color(theme.background());
         // Figma: 16px outer, 12px inner container, rounded 1.333px,
         // checked state: accent background, white checkmark.
@@ -443,31 +479,41 @@ impl View for NewWorktreeModal {
             ..Default::default()
         };
         let checkbox_element = Checkbox::new(
-            self.checkbox_mouse_state.clone(),
+            self.fetch_checkbox_mouse_state.clone(),
             checkbox_default,
             None,
             Some(checkbox_checked),
             None,
         )
-        .check(self.autogenerate_branch_name)
+        .check(self.fetch_latest)
         .build()
         .on_click(|ctx, _, _| {
-            ctx.dispatch_typed_action(NewWorktreeModalAction::ToggleAutogenerate);
+            ctx.dispatch_typed_action(NewWorktreeModalAction::ToggleFetchLatest);
         })
         .with_cursor(Cursor::PointingHand)
         .finish();
 
+        let fetch_label = match base_branch.as_deref() {
+            Some(branch) if !branch.is_empty() => {
+                format!("Fetch latest {branch} from origin first")
+            }
+            _ => "Fetch latest base branch from origin first".to_string(),
+        };
         let checkbox_row = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_spacing(4.)
             .with_child(checkbox_element)
             .with_child(
-                Text::new_inline(
-                    "Autogenerate worktree branch name".to_string(),
-                    appearance.ui_font_family(),
-                    appearance.ui_font_size(),
+                Shrinkable::new(
+                    1.,
+                    Text::new_inline(
+                        fetch_label,
+                        appearance.ui_font_family(),
+                        appearance.ui_font_size(),
+                    )
+                    .with_color(checkbox_label_color.into())
+                    .finish(),
                 )
-                .with_color(checkbox_label_color.into())
                 .finish(),
             )
             .finish();
@@ -477,35 +523,6 @@ impl View for NewWorktreeModal {
                 .with_margin_top(SECTION_GAP)
                 .finish(),
         );
-
-        // Worktree branch name text field — shown when autogenerate is unchecked.
-        if !self.autogenerate_branch_name {
-            body.add_child(
-                Container::new(Self::render_section_label(
-                    "Worktree branch name",
-                    appearance,
-                ))
-                .with_margin_top(SECTION_GAP)
-                .finish(),
-            );
-            body.add_child(ChildView::new(&self.worktree_name_editor).finish());
-
-            if worktree_name_has_error {
-                body.add_child(
-                    Container::new(
-                        Text::new_inline(
-                            INVALID_BRANCH_NAME_ERROR.to_string(),
-                            appearance.ui_font_family(),
-                            ERROR_FONT_SIZE,
-                        )
-                        .with_color(theme.ui_error_color())
-                        .finish(),
-                    )
-                    .with_margin_top(LABEL_BOTTOM_MARGIN)
-                    .finish(),
-                );
-            }
-        }
 
         let body_container = Container::new(body.finish())
             .with_padding(
@@ -627,10 +644,22 @@ impl TypedActionView for NewWorktreeModal {
                 ctx.emit(NewWorktreeModalEvent::Close);
             }
             NewWorktreeModalAction::Open => self.try_submit(ctx),
-            NewWorktreeModalAction::ToggleAutogenerate => {
-                self.autogenerate_branch_name = !self.autogenerate_branch_name;
+            NewWorktreeModalAction::ToggleFetchLatest => {
+                self.fetch_latest = !self.fetch_latest;
+                let fetch_latest = self.fetch_latest;
+                WorktreeSettings::handle(ctx).update(ctx, |settings, ctx| {
+                    report_if_error!(
+                        settings
+                            .fetch_before_creating_worktree
+                            .set_value(fetch_latest, ctx)
+                    );
+                });
                 ctx.notify();
             }
         }
     }
 }
+
+#[cfg(test)]
+#[path = "new_worktree_modal_tests.rs"]
+mod tests;

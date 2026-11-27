@@ -63,11 +63,13 @@ use crate::workspace::view::conversation_list::view::{
 use crate::workspace::view::global_search::view::{
     Event as GlobalSearchViewEvent, GlobalSearchEntryFocus, GlobalSearchView,
 };
+use crate::workspace::view::worktree_panel::WorktreePanelView;
 use crate::workspace::view::{
     LEFT_PANEL_AGENT_CONVERSATIONS_BINDING_NAME, LEFT_PANEL_GLOBAL_SEARCH_BINDING_NAME,
     LEFT_PANEL_PROJECT_EXPLORER_BINDING_NAME, LEFT_PANEL_WARP_DRIVE_BINDING_NAME,
     OPEN_GLOBAL_SEARCH_BINDING_NAME, TOGGLE_CONVERSATION_LIST_VIEW_BINDING_NAME,
     TOGGLE_PROJECT_EXPLORER_BINDING_NAME, TOGGLE_WARP_DRIVE_BINDING_NAME,
+    TOGGLE_WORKTREE_PANEL_BINDING_NAME,
 };
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
@@ -77,6 +79,7 @@ struct MouseStateHandles {
     conversation_list_view_button: MouseStateHandle,
     global_search_button: MouseStateHandle,
     warp_drive_button: MouseStateHandle,
+    worktrees_button: MouseStateHandle,
     sign_in_button: MouseStateHandle,
 }
 
@@ -86,6 +89,7 @@ pub enum LeftPanelAction {
     GlobalSearch { entry_focus: GlobalSearchEntryFocus },
     WarpDrive,
     ConversationListView,
+    Worktrees,
     SignIn,
 }
 
@@ -99,9 +103,9 @@ pub(crate) enum ToolPanelAvailability {
 impl ToolPanelView {
     fn availability(self, app: &AppContext) -> ToolPanelAvailability {
         match self {
-            ToolPanelView::ProjectExplorer | ToolPanelView::GlobalSearch { .. } => {
-                ToolPanelAvailability::Available
-            }
+            ToolPanelView::ProjectExplorer
+            | ToolPanelView::GlobalSearch { .. }
+            | ToolPanelView::Worktrees => ToolPanelAvailability::Available,
             ToolPanelView::WarpDrive => {
                 if WarpDriveSettings::is_warp_drive_available(app) {
                     ToolPanelAvailability::Available
@@ -151,6 +155,7 @@ pub enum ToolPanelView {
     GlobalSearch { entry_focus: GlobalSearchEntryFocus },
     WarpDrive,
     ConversationListView,
+    Worktrees,
 }
 
 /// Encapsulates the active view state to enforce that all mutations go through
@@ -191,6 +196,7 @@ mod active_view_state {
         }
 
         left_panel.update_active_file_tree_subscription_state(ctx);
+        left_panel.update_worktree_panel_visibility(ctx);
     }
 }
 
@@ -218,6 +224,7 @@ pub struct LeftPanelView {
     close_button_mouse_state: MouseStateHandle,
     warp_drive_view: ViewHandle<DrivePanel>,
     conversation_list_view: ViewHandle<ConversationListView>,
+    worktree_panel: ViewHandle<WorktreePanelView>,
     active_view: active_view_state::ActiveViewState,
     toolbelt_buttons: Vec<ToolbeltButtonConfig>,
     active_pane_group: Option<WeakViewHandle<PaneGroup>>,
@@ -270,11 +277,14 @@ impl LeftPanelView {
             (
                 ToolPanelView::ProjectExplorer
                 | ToolPanelView::GlobalSearch { .. }
-                | ToolPanelView::WarpDrive,
+                | ToolPanelView::WarpDrive
+                | ToolPanelView::Worktrees,
                 ToolPanelAvailability::RequiresAi,
             )
             | (
-                ToolPanelView::ProjectExplorer | ToolPanelView::GlobalSearch { .. },
+                ToolPanelView::ProjectExplorer
+                | ToolPanelView::GlobalSearch { .. }
+                | ToolPanelView::Worktrees,
                 ToolPanelAvailability::RequiresAccount,
             )
             | (_, ToolPanelAvailability::Available) => {
@@ -337,6 +347,7 @@ impl LeftPanelView {
     }
     pub fn new(
         working_directories_model: ModelHandle<WorkingDirectoriesModel>,
+        worktree_panel: ViewHandle<WorktreePanelView>,
         views: Vec<ToolPanelView>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
@@ -468,6 +479,7 @@ impl LeftPanelView {
             close_button_mouse_state: Default::default(),
             warp_drive_view,
             conversation_list_view,
+            worktree_panel,
             active_view: active_view_state::new(active_view),
             toolbelt_buttons,
             active_pane_group: None,
@@ -589,6 +601,19 @@ impl LeftPanelView {
                     active_icon: None,
                     tooltip_text: "Warp Drive".to_string(),
                     action: LeftPanelAction::WarpDrive,
+                    render_with_active_state: false,
+                    tooltip_keybinding: toolbelt_tooltip_keybinding(&tooltip_keybinding_names, ctx),
+                    tooltip_keybinding_names,
+                }
+            }
+            ToolPanelView::Worktrees => {
+                let tooltip_keybinding_names = vec![TOGGLE_WORKTREE_PANEL_BINDING_NAME];
+
+                ToolbeltButtonConfig {
+                    icon: Icon::GitBranch,
+                    active_icon: None,
+                    tooltip_text: "Worktrees".to_string(),
+                    action: LeftPanelAction::Worktrees,
                     render_with_active_state: false,
                     tooltip_keybinding: toolbelt_tooltip_keybinding(&tooltip_keybinding_names, ctx),
                     tooltip_keybinding_names,
@@ -874,6 +899,7 @@ impl LeftPanelView {
                     view.on_left_panel_focused(ctx);
                 });
             }
+            ToolPanelView::Worktrees => ctx.focus(&self.worktree_panel),
         }
     }
 
@@ -1040,6 +1066,7 @@ impl LeftPanelView {
                 LeftPanelAction::ConversationListView => {
                     self.active_view.get() == ToolPanelView::ConversationListView
                 }
+                LeftPanelAction::Worktrees => self.active_view.get() == ToolPanelView::Worktrees,
                 LeftPanelAction::SignIn => false,
             };
         }
@@ -1186,6 +1213,9 @@ impl LeftPanelView {
                     send_telemetry_from_ctx!(TelemetryEvent::ConversationListViewOpened, ctx);
                 }
             }
+            LeftPanelAction::Worktrees => {
+                active_view_state::set(self, ToolPanelView::Worktrees, ctx);
+            }
             LeftPanelAction::SignIn => {
                 ctx.emit(LeftPanelEvent::SignInRequested);
             }
@@ -1198,6 +1228,20 @@ impl LeftPanelView {
         }
 
         self.update_active_file_tree_subscription_state(ctx);
+        self.update_worktree_panel_visibility(ctx);
+    }
+
+    /// Lets the worktree view poll git and agent activity only while it is on screen.
+    fn update_worktree_panel_visibility(&self, ctx: &mut ViewContext<Self>) {
+        let is_left_panel_open = self
+            .active_pane_group
+            .as_ref()
+            .and_then(|pane_group| pane_group.upgrade(ctx))
+            .is_some_and(|pane_group| pane_group.as_ref(ctx).left_panel_open);
+        let is_visible = is_left_panel_open && self.active_view.get() == ToolPanelView::Worktrees;
+        self.worktree_panel.update(ctx, |panel, ctx| {
+            panel.set_is_visible(is_visible, ctx);
+        });
     }
 
     fn deactivate_file_tree_view_for_pane_group(
@@ -1294,6 +1338,7 @@ impl View for LeftPanelView {
                 }
                 ToolPanelView::WarpDrive => ctx.focus(&self.warp_drive_view),
                 ToolPanelView::ConversationListView => ctx.focus(&self.conversation_list_view),
+                ToolPanelView::Worktrees => ctx.focus(&self.worktree_panel),
             }
         }
     }
@@ -1308,6 +1353,7 @@ impl View for LeftPanelView {
                 .clone(),
             self.mouse_state_handles.global_search_button.clone(),
             self.mouse_state_handles.warp_drive_button.clone(),
+            self.mouse_state_handles.worktrees_button.clone(),
         ];
 
         // If there is only one button in the toolbelt row,
@@ -1371,6 +1417,9 @@ impl View for LeftPanelView {
                 ToolPanelView::ConversationListView => {
                     Shrinkable::new(1.0, ChildView::new(&self.conversation_list_view).finish())
                         .finish()
+                }
+                ToolPanelView::Worktrees => {
+                    Shrinkable::new(1.0, ChildView::new(&self.worktree_panel).finish()).finish()
                 }
             }
         };

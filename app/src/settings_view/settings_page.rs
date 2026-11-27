@@ -50,6 +50,7 @@ use super::teams_page::TeamsPageView;
 use super::warp_agent_page::WarpAgentPageView;
 use super::warp_drive_page::WarpDriveSettingsPageView;
 use super::warpify_page::WarpifyPageView;
+use super::worktrees_page::WorktreesSettingsPageView;
 use crate::appearance::Appearance;
 use crate::settings::CloudPreferencesSettings;
 use crate::themes::theme::Fill;
@@ -122,6 +123,7 @@ pub enum SettingsPageViewHandle {
     Warpify(ViewHandle<WarpifyPageView>),
     Referrals(ViewHandle<ReferralsPageView>),
     Scripting(ViewHandle<ScriptingSettingsPageView>),
+    Worktrees(ViewHandle<WorktreesSettingsPageView>),
     WarpAgent(ViewHandle<WarpAgentPageView>),
     AgentProfiles(ViewHandle<AgentProfilesPageView>),
     Knowledge(ViewHandle<KnowledgePageView>),
@@ -150,6 +152,7 @@ impl SettingsPageViewHandle {
             Warpify(view_handle) => ChildView::new(view_handle).finish(),
             Referrals(view_handle) => ChildView::new(view_handle).finish(),
             Scripting(view_handle) => ChildView::new(view_handle).finish(),
+            Worktrees(view_handle) => ChildView::new(view_handle).finish(),
             WarpAgent(view_handle) => ChildView::new(view_handle).finish(),
             AgentProfiles(view_handle) => ChildView::new(view_handle).finish(),
             Knowledge(view_handle) => ChildView::new(view_handle).finish(),
