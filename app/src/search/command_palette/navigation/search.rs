@@ -279,7 +279,13 @@ mod full_text_searcher {
             search_term: &str,
             app: &AppContext,
         ) -> anyhow::Result<Vec<QueryResult<SearcherAction>>> {
-            let searcher = SESSION_SEARCH_SCHEMA.create_searcher(DEFAULT_MEMORY_BUDGET);
+            // NOTE: This searcher is intentionally recreated on every search call so the
+            // session data is always fresh. We must call `wait_for_merge_completion` before
+            // dropping it to prevent background tantivy merge threads from accumulating
+            // in-RAM index data across repeated searches (one per keystroke). Without this,
+            // each search leaves orphaned merge threads holding multi-GB RAM directories,
+            // causing process memory to grow proportionally to the number of keystrokes.
+            let mut searcher = SESSION_SEARCH_SCHEMA.create_searcher(DEFAULT_MEMORY_BUDGET);
 
             let mut sessions = HashMap::new();
             let documents =
@@ -304,8 +310,8 @@ mod full_text_searcher {
                 SessionSource::Set { active_pane_id, .. } => Some(*active_pane_id),
             };
 
-            if search_term.is_empty() {
-                return Ok(sessions
+            let result = if search_term.is_empty() {
+                Ok(sessions
                     .into_iter()
                     .sorted_by_key(|(_, (session, ..))| session.last_focus_ts())
                     .map(|(_, (session, ..))| {
@@ -315,32 +321,41 @@ mod full_text_searcher {
                         };
                         SearchItem::new(matched_session, active_session_id).into()
                     })
-                    .collect());
-            }
+                    .collect())
+            } else {
+                let matched_sessions = searcher.search_id(search_term)?;
+                Ok(matched_sessions
+                    .into_iter()
+                    .filter_map(|search_match| {
+                        let (session, highlight, search_string) = sessions
+                            .remove(&SessionSearchId(search_match.values.search_id as usize))?;
 
-            let matched_sessions = searcher.search_id(search_term)?;
-            Ok(matched_sessions
-                .into_iter()
-                .filter_map(|search_match| {
-                    let (session, highlight, search_string) = sessions
-                        .remove(&SessionSearchId(search_match.values.search_id as usize))?;
+                        let char_indices = byte_indices_to_char_indices(
+                            &search_string,
+                            search_match.highlights.session,
+                        );
+                        let highlight_indices =
+                            SessionHighlightIndices::new(char_indices, highlight);
+                        let match_result = SessionMatchResult {
+                            score: (search_match.score * SCORE_CONVERSION_FACTOR) as i64,
+                            highlight_indices,
+                        };
+                        let matched_session = MatchedSession {
+                            session,
+                            match_result,
+                        };
+                        Some(SearchItem::new(matched_session, active_session_id).into())
+                    })
+                    .collect())
+            };
 
-                    let char_indices = byte_indices_to_char_indices(
-                        &search_string,
-                        search_match.highlights.session,
-                    );
-                    let highlight_indices = SessionHighlightIndices::new(char_indices, highlight);
-                    let match_result = SessionMatchResult {
-                        score: (search_match.score * SCORE_CONVERSION_FACTOR) as i64,
-                        highlight_indices,
-                    };
-                    let matched_session = MatchedSession {
-                        session,
-                        match_result,
-                    };
-                    Some(SearchItem::new(matched_session, active_session_id).into())
-                })
-                .collect())
+            // Wait for background merge threads to complete before dropping the searcher.
+            // Tantivy spawns merge threads after each commit; without this, those threads
+            // keep the in-RAM index alive past the end of this function, causing memory
+            // to accumulate across repeated search() calls (see APP-XXXX).
+            let _ = searcher.wait_for_merge_completion();
+
+            result
         }
 
         fn active_session_id(&self, app: &AppContext) -> Option<PaneId> {
