@@ -855,11 +855,6 @@ impl OneTimeModalModel {
     }
 
     fn check_and_trigger_openwarp_launch_modal(&mut self, ctx: &mut ModelContext<Self>) -> bool {
-        // Only show if the feature flag is enabled.
-        if !FeatureFlag::OpenWarpLaunchModal.is_enabled() {
-            return false;
-        }
-
         let general_settings = GeneralSettings::as_ref(ctx);
         let openwarp_modal_shown = *general_settings
             .did_check_to_trigger_openwarp_launch_modal
