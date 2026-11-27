@@ -57,6 +57,14 @@ pub(super) fn chunk_code<'a>(
         nix::libc::malloc_trim(0);
     }
 
+    // On macOS with jemalloc, flush this thread's tcache so that freed
+    // tree-sitter objects are returned to the arena and become eligible
+    // for the dirty-decay purge cycle.
+    //
+    // See: https://github.com/tree-sitter/tree-sitter/issues/3129
+    #[cfg(all(feature = "jemalloc", target_os = "macos"))]
+    flush_jemalloc_thread_cache();
+
     Ok(fragments)
 }
 
@@ -166,6 +174,38 @@ impl<'a> Fragment<'a> {
             end_byte_index: fragment.end_byte_index,
             file_path: fragment.file_path,
         }
+    }
+}
+
+/// Flushes the current thread's jemalloc tcache, returning cached objects
+/// to the arena so they can be purged by the dirty-decay timer.
+///
+/// This is the macOS+jemalloc equivalent of `malloc_trim(0)` on Linux/glibc.
+/// Calling this from rayon worker threads is safe — `thread.tcache.flush` is
+/// a thread-local operation with no global locking.
+///
+/// `je_mallctl` is resolved at link time via tikv-jemallocator (app crate).
+///
+/// See: https://github.com/tree-sitter/tree-sitter/issues/3129
+#[cfg(all(feature = "jemalloc", target_os = "macos"))]
+fn flush_jemalloc_thread_cache() {
+    extern "C" {
+        fn je_mallctl(
+            name: *const std::ffi::c_char,
+            oldp: *mut std::ffi::c_void,
+            oldlenp: *mut usize,
+            newp: *mut std::ffi::c_void,
+            newlen: usize,
+        ) -> std::ffi::c_int;
+    }
+    unsafe {
+        let _ = je_mallctl(
+            b"thread.tcache.flush\0".as_ptr() as *const std::ffi::c_char,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            0,
+        );
     }
 }
 
