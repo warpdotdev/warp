@@ -102,8 +102,8 @@ impl RuleEditorView {
             editor.set_placeholder_text(RULE_NAME_PLACEHOLDER_TEXT, ctx);
             editor
         });
-        ctx.subscribe_to_view(&name_editor, |me, _editor, event, ctx| {
-            me.handle_editor_event(event, ctx);
+        ctx.subscribe_to_view(&name_editor, |me, editor, event, ctx| {
+            me.handle_editor_event(&editor, event, ctx);
         });
 
         let content_editor = ctx.add_typed_action_view(|ctx| {
@@ -129,8 +129,8 @@ impl RuleEditorView {
             editor.set_placeholder_text(RULE_DESCRIPTION_PLACEHOLDER_TEXT, ctx);
             editor
         });
-        ctx.subscribe_to_view(&content_editor, |me, _editor, event, ctx| {
-            me.handle_editor_event(event, ctx);
+        ctx.subscribe_to_view(&content_editor, |me, editor, event, ctx| {
+            me.handle_editor_event(&editor, event, ctx);
         });
 
         let save_button = ctx.add_typed_action_view(|ctx| {
@@ -195,7 +195,12 @@ impl RuleEditorView {
         ctx.notify();
     }
 
-    fn handle_editor_event(&mut self, event: &EditorEvent, ctx: &mut ViewContext<Self>) {
+    fn handle_editor_event(
+        &mut self,
+        editor: &ViewHandle<EditorView>,
+        event: &EditorEvent,
+        ctx: &mut ViewContext<Self>,
+    ) {
         let (current_editor, next_editor, next_editor_type) = match self.current_editor {
             EditorType::Name => (&self.name_editor, &self.content_editor, EditorType::Content),
             EditorType::Content => (&self.content_editor, &self.name_editor, EditorType::Name),
@@ -203,11 +208,14 @@ impl RuleEditorView {
 
         match event {
             EditorEvent::Focused => {
-                self.current_editor = if self.name_editor.is_focused(ctx) {
+                self.current_editor = if editor == &self.name_editor {
                     EditorType::Name
                 } else {
                     EditorType::Content
                 };
+            }
+            EditorEvent::ClearParentSelections => {
+                self.clear_other_editor_selections(editor, ctx);
             }
             EditorEvent::Navigate(NavigationKey::Tab)
             | EditorEvent::Navigate(NavigationKey::ShiftTab) => {
@@ -232,6 +240,24 @@ impl RuleEditorView {
                 });
             }
             _ => {}
+        }
+    }
+
+    fn clear_other_editor_selections(
+        &mut self,
+        editor: &ViewHandle<EditorView>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if editor != &self.name_editor {
+            self.name_editor.update(ctx, |editor, ctx| {
+                editor.clear_selections(ctx);
+            });
+        }
+
+        if editor != &self.content_editor {
+            self.content_editor.update(ctx, |editor, ctx| {
+                editor.clear_selections(ctx);
+            });
         }
     }
 
