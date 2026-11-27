@@ -47,6 +47,8 @@ pub enum Artifact {
     },
     #[serde(rename = "EXTERNAL_REFERENCE")]
     ExternalReference {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        origin: Option<String>,
         reference_type: String,
         url: String,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -103,6 +105,7 @@ struct PullRequestData {
 
 #[derive(serde::Deserialize)]
 struct ExternalReferenceData {
+    origin: Option<String>,
     reference_type: String,
     url: String,
     title: Option<String>,
@@ -165,12 +168,14 @@ impl<'de> serde::Deserialize<'de> for Artifact {
             }
             "EXTERNAL_REFERENCE" => {
                 let ExternalReferenceData {
+                    origin,
                     reference_type,
                     url,
                     title,
                     metadata,
                 } = parse_artifact_data::<_, D::Error>(envelope.data)?;
                 Artifact::ExternalReference {
+                    origin,
                     reference_type,
                     url,
                     title,

@@ -203,6 +203,7 @@ fn report_shutdown_abnormal_serializes_exit_code() {
 #[test]
 fn external_reference_artifact_serializes_to_expected_wire_format() {
     let artifact = Artifact::ExternalReference {
+        origin: None,
         reference_type: "LINEAR_ISSUE".to_string(),
         url: "https://linear.app/warpdotdev/issue/REMOTE-2253".to_string(),
         title: None,
@@ -225,6 +226,7 @@ fn external_reference_artifact_serializes_to_expected_wire_format() {
 #[test]
 fn external_reference_artifact_includes_optional_title_and_metadata() {
     let artifact = Artifact::ExternalReference {
+        origin: Some("factory_agent".to_string()),
         reference_type: "GITHUB_PR".to_string(),
         url: "https://github.com/warpdotdev/warp/pull/1".to_string(),
         title: Some("My pull request".to_string()),
@@ -236,6 +238,7 @@ fn external_reference_artifact_includes_optional_title_and_metadata() {
         serde_json::json!({
             "artifact_type": "EXTERNAL_REFERENCE",
             "data": {
+                "origin": "factory_agent",
                 "reference_type": "GITHUB_PR",
                 "url": "https://github.com/warpdotdev/warp/pull/1",
                 "title": "My pull request",
@@ -250,6 +253,7 @@ fn external_reference_artifact_includes_optional_title_and_metadata() {
 #[test]
 fn external_reference_artifact_round_trips() {
     let artifact = Artifact::ExternalReference {
+        origin: None,
         reference_type: "LINEAR_ISSUE".to_string(),
         url: "https://linear.app/warpdotdev/issue/REMOTE-2253".to_string(),
         title: Some("Add report-external-reference CLI subcommand".to_string()),

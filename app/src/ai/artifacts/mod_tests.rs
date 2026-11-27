@@ -182,12 +182,14 @@ fn artifact_round_trips_all_variants() {
             number: Some(123),
         },
         Artifact::ExternalReference {
+            origin: None,
             reference_type: "linear_issue".to_string(),
             url: "https://linear.app/team/issue/ABC-1".to_string(),
             title: Some("An issue".to_string()),
             metadata: Some(serde_json::json!({"key": "value"})),
         },
         Artifact::ExternalReference {
+            origin: None,
             reference_type: "linear_issue".to_string(),
             url: "https://linear.app/team/issue/ABC-2".to_string(),
             title: None,
